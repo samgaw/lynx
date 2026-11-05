@@ -51,6 +51,62 @@ defmodule Lynx.Rust.CallModels do
            %{"Ident" => ["core", 0]},
            %{"Ident" => ["num", 0]},
            %{"Impl" => %{"Ty" => %{"skip_binder" => parent}}},
+           %{"Ident" => ["checked_add", 0]}
+         ], [scalar, scalar], %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}} ->
+          if scalar == %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}} and
+               parent_type(parent, refs) == scalar and generic_shape?(generics, 0, 0) and
+               args == %{
+                 "regions" => [],
+                 "types" => [scalar],
+                 "const_generics" => [],
+                 "trait_refs" => []
+               } and
+               Enum.any?(translated["type_decls"], fn type ->
+                 type && type["def_id"] == id &&
+                   type["item_meta"]["name"] ==
+                     [
+                       %{"Ident" => ["core", 0]},
+                       %{"Ident" => ["option", 0]},
+                       %{"Ident" => ["Option", 0]}
+                     ] &&
+                   match?(
+                     %{
+                       "Enum" => [
+                         %{
+                           "id" => 0,
+                           "name" => "None",
+                           "fields" => [],
+                           "discriminant" => %{"Signed" => ["Isize", "0"]}
+                         },
+                         %{
+                           "id" => 1,
+                           "name" => "Some",
+                           "fields" => [_],
+                           "discriminant" => %{"Signed" => ["Isize", "1"]}
+                         }
+                       ]
+                     },
+                     type["kind"]
+                   ) &&
+                   expand(hd(Enum.at(type["kind"]["Enum"], 1)["fields"])["ty"], refs) == %{
+                     "TypeVar" => %{"Free" => 0}
+                   }
+               end) do
+            %{
+              rust_name: "core::num::{u64}::checked_add",
+              lean: "Aeneas.Std.U64.checked_add",
+              builtin: true,
+              can_fail: false,
+              lift: true,
+              label:
+                "Aeneas u64 checked addition model; overflow returns None; Rust core implementation not verified"
+            }
+          end
+
+        {[
+           %{"Ident" => ["core", 0]},
+           %{"Ident" => ["num", 0]},
+           %{"Impl" => %{"Ty" => %{"skip_binder" => parent}}},
            %{"Ident" => ["saturating_add", 0]}
          ], [scalar, scalar], scalar} ->
           if scalar == %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}} and
@@ -135,10 +191,11 @@ defmodule Lynx.Rust.CallModels do
            %{"Ident" => ["core", 0]},
            %{"Ident" => ["num", 0]},
            %{"Impl" => _},
-           %{"Ident" => ["saturating_add", 0]}
+           %{"Ident" => [operation, 0]}
          ],
          _
-       ),
+       )
+       when operation in ["saturating_add", "checked_add"],
        do: true
 
   defp candidate?(

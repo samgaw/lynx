@@ -1,0 +1,8 @@
+[package]
+name = "effects-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+effects-core = { path = "../core" }
+rustler = "=0.39.0"
