@@ -8,82 +8,11 @@ defmodule Lynx.Rust.Extraction do
         key not in [:external_types, :external_calls],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
 
-    unless roots != [] && Enum.all?(roots, &is_binary/1),
-      do: raise(ArgumentError, "Rust extraction requires explicit function roots")
-
-    unless Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*$/, module),
-      do: raise(ArgumentError, "invalid generated Lean module prefix: #{inspect(module)}")
+    %{document: document, llbc: llbc, first_party: first_party, models: models} =
+      describe!(context, tools, roots, output, module, Keyword.take(opts, [:external_types]))
 
     tools = Path.expand(tools)
     output = Path.expand(output)
-    File.mkdir_p!(output)
-    charon = Path.join(tools, "charon")
-    {toolchain, 0} = System.cmd(charon, ["toolchain-version"], stderr_to_stdout: true)
-
-    unless String.trim(toolchain) == context.toolchain,
-      do: raise("Charon toolchain does not match the Cargo compilation")
-
-    first_party = Lynx.Rust.LLBC.crate_names!(context.workspace)
-    models = Keyword.get(opts, :external_types, [])
-
-    for model <- models do
-      unless is_binary(model.rust) and
-               Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+$/, model.rust) and
-               hd(String.split(model.rust, "::")) not in first_party and
-               is_binary(model.lean) and is_binary(model.label) and
-               Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/, model.lean) and
-               Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/, model.import),
-             do:
-               raise(
-                 ArgumentError,
-                 "invalid external Rust type model or first-party type replacement"
-               )
-    end
-
-    unless length(models) == MapSet.size(MapSet.new(models, & &1.rust)),
-      do: raise(ArgumentError, "duplicate external Rust type model")
-
-    root_args = Enum.flat_map(roots, &["--start-from", &1])
-    includes = Enum.flat_map(first_party, &["--include", &1])
-    llbc = Path.join(output, String.replace(module, ".", "_") <> ".llbc")
-
-    args =
-      [
-        "rustc",
-        "--sysroot",
-        "default",
-        "--preset=aeneas",
-        "--opaque",
-        "core",
-        "--opaque",
-        "alloc",
-        "--opaque",
-        "std",
-        "--include",
-        "core::result::Result",
-        "--include",
-        "core::option::Option",
-        "--include",
-        "core::ops::control_flow::ControlFlow",
-        "--include",
-        "core::fmt::Error",
-        "--dest-file",
-        llbc
-      ] ++
-        root_args ++
-        includes ++
-        Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++
-        Enum.flat_map(models, &["--opaque", &1.rust]) ++
-        ["--"] ++ Lynx.Rust.Cargo.extraction_arguments(context, output)
-
-    diagnostics =
-      run!(charon, args,
-        cd: context.record["directory"],
-        env: Lynx.Rust.Cargo.environment(context)
-      )
-
-    document = read_llbc!(llbc, diagnostics)
-    validate_target!(document)
     requested_calls = Keyword.get(opts, :external_calls, [])
 
     if :rustler_binary_as_slice in requested_calls and
@@ -187,6 +116,95 @@ defmodule Lynx.Rust.Extraction do
       output: output,
       module: module
     }
+  end
+
+  # This stage discovers resolved Rust identities, including unsupported code.
+  # It makes no verification claim. run!/6 always applies the full audit before
+  # invoking Aeneas or producing an implementation/proof linkage.
+  @doc false
+  def describe!(context, tools, roots, output, module, opts \\ []) do
+    for key <- Keyword.keys(opts),
+        key != :external_types,
+        do: raise(ArgumentError, "unknown Rust discovery option: #{key}")
+
+    unless roots != [] && Enum.all?(roots, &is_binary/1),
+      do: raise(ArgumentError, "Rust extraction requires explicit function roots")
+
+    unless Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*$/, module),
+      do: raise(ArgumentError, "invalid generated Lean module prefix: #{inspect(module)}")
+
+    tools = Path.expand(tools)
+    output = Path.expand(output)
+    File.mkdir_p!(output)
+    charon = Path.join(tools, "charon")
+    {toolchain, 0} = System.cmd(charon, ["toolchain-version"], stderr_to_stdout: true)
+
+    unless String.trim(toolchain) == context.toolchain,
+      do: raise("Charon toolchain does not match the Cargo compilation")
+
+    first_party = Lynx.Rust.LLBC.crate_names!(context.workspace)
+    models = Keyword.get(opts, :external_types, [])
+
+    for model <- models do
+      unless is_binary(model.rust) and
+               Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+$/, model.rust) and
+               hd(String.split(model.rust, "::")) not in first_party and
+               is_binary(model.lean) and is_binary(model.label) and
+               Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/, model.lean) and
+               Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/, model.import),
+             do:
+               raise(
+                 ArgumentError,
+                 "invalid external Rust type model or first-party type replacement"
+               )
+    end
+
+    unless length(models) == MapSet.size(MapSet.new(models, & &1.rust)),
+      do: raise(ArgumentError, "duplicate external Rust type model")
+
+    root_args = Enum.flat_map(roots, &["--start-from", &1])
+    includes = Enum.flat_map(first_party, &["--include", &1])
+    llbc = Path.join(output, String.replace(module, ".", "_") <> ".llbc")
+
+    args =
+      [
+        "rustc",
+        "--sysroot",
+        "default",
+        "--preset=aeneas",
+        "--opaque",
+        "core",
+        "--opaque",
+        "alloc",
+        "--opaque",
+        "std",
+        "--include",
+        "core::result::Result",
+        "--include",
+        "core::option::Option",
+        "--include",
+        "core::ops::control_flow::ControlFlow",
+        "--include",
+        "core::fmt::Error",
+        "--dest-file",
+        llbc
+      ] ++
+        root_args ++
+        includes ++
+        Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++
+        Enum.flat_map(models, &["--opaque", &1.rust]) ++
+        ["--"] ++ Lynx.Rust.Cargo.extraction_arguments(context, output)
+
+    diagnostics =
+      run!(charon, args,
+        cd: context.record["directory"],
+        env: Lynx.Rust.Cargo.environment(context)
+      )
+
+    document = read_llbc!(llbc, diagnostics)
+    validate_target!(document)
+
+    %{document: document, llbc: llbc, first_party: first_party, models: models}
   end
 
   @doc false
