@@ -43,6 +43,13 @@ defmodule Lynx.Rust.Report do
          ])}
       end)
 
+    constants = Map.get(extraction, :constants, %{})
+
+    initializer_names =
+      Map.new(constants, fn {_id, model} ->
+        {Lynx.Rust.Constants.initializer_id(model["declaration"]), model["rust_name"]}
+      end)
+
     directory = Keyword.fetch!(opts, :source_dir)
 
     implementations =
@@ -59,7 +66,11 @@ defmodule Lynx.Rust.Report do
           line: source["begin_line"],
           dependencies:
             Enum.map(dependencies[implementation["def_id"]], fn id ->
-              if models[id], do: models[id]["rust_name"], else: Map.fetch!(external, id).rust_name
+              cond do
+                models[id] -> models[id]["rust_name"]
+                external[id] -> external[id].rust_name
+                true -> Map.fetch!(initializer_names, id)
+              end
             end),
           external_dependencies:
             external_dependencies(implementation["def_id"], dependencies, external, MapSet.new())
@@ -119,6 +130,15 @@ defmodule Lynx.Rust.Report do
     %{
       report_module: List.last(reports).module,
       implementations: implementations,
+      constants:
+        constants
+        |> Map.values()
+        |> Enum.map(fn model ->
+          model
+          |> Map.take(~w(def_id rust_name lean_name lean_file can_fail source))
+          |> Map.put("status", :extracted)
+        end)
+        |> Enum.sort_by(& &1["rust_name"]),
       guarantees: verified ++ composed,
       properties: properties,
       fingerprint: extraction.fingerprint,
