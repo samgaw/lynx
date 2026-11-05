@@ -72,6 +72,9 @@ defmodule Lynx.Laws do
 
   @typedoc "The verification result for a translated module."
   @type report :: %{
+          optional(:guarantees) => [map()],
+          optional(:trusted_boundary) => [String.t()],
+          optional(:external_models) => [String.t()],
           status: :ok | :error | :skipped,
           file: String.t(),
           module: String.t(),
@@ -129,6 +132,27 @@ defmodule Lynx.Laws do
   Pass `postludes: [source, ...]` to load `Lynx.Lean` declaration blocks after
   translated definitions and before proofs, as with `Lynx.Case.postlude/1`.
 
+  Pass `native: {Lynx.Rustler, workspace: "native", package: "my-nif"}` to
+  prepare native semantics as part of this verification. The backend creates a
+  `lynx-proofs` Lake project when needed and discovers bindings from the compiled
+  Rustler facade. See `Lynx.Rustler.prepare!/3` for proof modules and build options.
+  Native reports include `:guarantees`, their exact stated properties, trusted
+  boundaries and external primitive models. Only checked properties are labelled
+  verified; extracted functions without a property are listed separately.
+  Native preparation failures raise with backend diagnostics before law translation;
+  dependent Elixir proof failures are returned as ordinary reports.
+
+  Translation backends can pass `externals: [bundle, ...]`, where each bundle is
+  a `Lynx.External` containing pure remote implementations and their Lean input
+  files. Registered modules are supplied entirely by the backend; calls to an
+  unregistered function in one of those modules fail instead of translating its
+  BEAM fallback. Builtins cannot be replaced. Backend correspondence checks are
+  required in addition to law verification; see `Lynx.External`.
+
+  Pass `lean_project: directory` when a backend needs additional Lake dependencies.
+  That project must depend on Lynx and use the same Lean toolchain. This selects
+  the runner's Lake environment, including for independent proof exports.
+
   Pass `options: [name: value]` to set Lean options, such as `maxHeartbeats` or
   `maxRecDepth`, at the top of every translated module. Names are passed to
   Lean as given. Proofs remain kernel-checked.
@@ -152,6 +176,11 @@ defmodule Lynx.Laws do
   """
   @spec verify([module() | binary()], keyword()) :: [report()]
   def verify(modules, opts \\ []) when is_list(modules) do
+    Lynx.External.with_native_lock(opts, fn -> do_verify(modules, opts) end)
+  end
+
+  defp do_verify(modules, opts) do
+    {opts, native_verification} = Lynx.External.prepare_options!(opts)
     {names, source} = Enum.split_with(modules, &is_atom/1)
     # Cached modules are not elaborated, so exports always verify from scratch.
     opts = if opts[:export], do: Keyword.put(opts, :cache, false), else: opts
@@ -164,8 +193,11 @@ defmodule Lynx.Laws do
       end)
       |> Lynx.Translation.assemble(opts)
 
+    project = Keyword.get(opts, :lean_project, @lean_dir)
     opts = Keyword.take(opts, [:options, :export, :debug_dir, :debug])
-    Lynx.Commands.verify!(@lean_dir, files, opts)
+
+    Lynx.Commands.verify!(project, files, opts)
+    |> Lynx.External.attach_guarantees(files, native_verification)
   end
 
   defmacro __using__(_opts) do

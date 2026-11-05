@@ -3,6 +3,220 @@ defmodule Lynx.TranslationTest do
 
   alias Lynx.Translation
 
+  test "compiled native inventories permit ordinary helpers and imported local calls" do
+    native = %Lynx.External{
+      bindings: [{:mixed_native, :native, 1}],
+      implementation_modules: %{mixed_native: "Erlang.mixed_native.Native"},
+      native_exports: %{mixed_native: [native: 1, missing: 1]},
+      files: [
+        %{
+          "module" => "Erlang.mixed_native.Native",
+          "file" => "native.lean",
+          "imports" => [],
+          "contents" => []
+        }
+      ],
+      fingerprint: String.duplicate("a", 64)
+    }
+
+    source =
+      cerl("""
+      -module(mixed_native).
+      -export([native/1, missing/1, helper/1, remote_helper/1, capture/0, bad/1, bad_capture/0]).
+      native(X) -> erlang:nif_error(X).
+      missing(X) -> X.
+      helper(X) -> native(X).
+      remote_helper(X) -> mixed_native:native(X).
+      capture() -> fun native/1.
+      bad(X) -> missing(X).
+      bad_capture() -> fun missing/1.
+      init() -> erlang:load_nif("unused", 0).
+      """)
+
+    base = Translation.new(externals: [native]) |> Translation.add({"mixed.erl", source})
+
+    translated =
+      Translation.translate(base, :mixed_native, helper: 1, remote_helper: 1, capture: 0)
+
+    assert %{purity: :pure, dispatches: false} =
+             translated.modules.mixed_native.translations[{:helper, 1}]
+
+    assert [
+             _,
+             %{
+               "module" => "Erlang.mixed_native",
+               "imports" => ["Erlang.mixed_native.Native"],
+               "contents" => contents
+             },
+             %{
+               "module" => "Erlang.program",
+               "contents" => [%{"kind" => "fun_table", "entries" => [_]}]
+             }
+           ] =
+             Translation.assemble(translated)
+
+    refute Enum.any?(contents, &(&1["name"] in ["native", "missing"]))
+
+    assert %{
+             "body" => %{
+               "kind" => "remote_call",
+               "module" => "Erlang.mixed_native",
+               "name" => "native",
+               "purity" => "pure"
+             }
+           } = Enum.find(contents, &(&1["name"] == "helper"))
+
+    for functions <- [[bad: 1], [bad_capture: 0], [missing: 1]] do
+      assert_raise CompileError,
+                   ~r/unregistered external implementation :mixed_native.missing\/1/,
+                   fn ->
+                     Translation.translate(base, :mixed_native, functions)
+                   end
+    end
+
+    client =
+      cerl("""
+      -module(mixed_client).
+      -export([call/1]).
+      call(X) -> mixed_native:helper(mixed_native:native(X)).
+      """)
+
+    assert [
+             _,
+             %{"module" => "Erlang.mixed_native"},
+             %{
+               "module" => "Erlang.mixed_client",
+               "imports" => ["Erlang.mixed_native", "Erlang.mixed_native.Native"]
+             }
+           ] =
+             base
+             |> Translation.add({"client.erl", client})
+             |> Translation.translate(:mixed_client, call: 1)
+             |> Translation.assemble()
+
+    for invalid <- [
+          %{mixed_native: [missing: 1]},
+          %{mixed_native: [native: 1, native: 1]},
+          %{mixed_native: []},
+          %{unknown: [native: 1]}
+        ] do
+      assert_raise ArgumentError, ~r/native export inventory/, fn ->
+        Translation.new(externals: [%{native | native_exports: invalid}])
+      end
+    end
+
+    assert_raise ArgumentError, ~r/module mapping/, fn ->
+      Translation.new(externals: [%{native | implementation_modules: %{unknown: "Unknown"}}])
+    end
+  end
+
+  test "external implementations resolve before BEAM lookup and retain purity" do
+    file = %{
+      "module" => "Erlang.native_fixture",
+      "file" => "native.lean",
+      "imports" => [],
+      "contents" => [],
+      "cache_key" => String.duplicate("a", 64)
+    }
+
+    external = %Lynx.External{bindings: [{:native_fixture, :calculate, 1}], files: [file]}
+
+    core =
+      cerl("""
+      -module(client).
+      -export([call/1, missing/1]).
+      call(X) -> native_fixture:calculate(X).
+      missing(X) -> native_fixture:missing(X).
+      """)
+
+    translation = Translation.new(externals: [external]) |> Translation.add({"client.erl", core})
+    translated = Translation.translate(translation, :client, [{:call, 1}])
+
+    assert %{purity: :pure, dispatches: false} =
+             translated.modules.client.translations[{:call, 1}]
+
+    assert [external_file, %{"imports" => ["Erlang.native_fixture"]}] =
+             Translation.assemble(translated)
+
+    refute Map.has_key?(external_file, "cache_key")
+
+    prelude = %Lynx.Lean{source: "", file: "prelude.lean", span: 1, indentation: 0}
+
+    assert [_, %{"module" => "Erlang.prelude", "imports" => ["Erlang.native_fixture"]}, _] =
+             Translation.new(externals: [external], preludes: [prelude])
+             |> Translation.add({"client.erl", core})
+             |> Translation.translate(:client, [{:call, 1}])
+             |> Translation.assemble()
+
+    assert_raise CompileError, ~r/unregistered external implementation/, fn ->
+      Translation.translate(translation, :client, [{:missing, 1}])
+    end
+
+    assert_raise ArgumentError, ~r/duplicate external implementation/, fn ->
+      Translation.new(externals: [external, external])
+    end
+  end
+
+  test "versioned native bundles propagate cache invalidation and honor cache disabling" do
+    native = %Lynx.External{
+      bindings: [{:versioned_native, :identity, 1}],
+      files: [
+        %{
+          "module" => "Erlang.versioned_native",
+          "file" => "native.lean",
+          "imports" => [],
+          "contents" => []
+        }
+      ]
+    }
+
+    core =
+      cerl("""
+      -module(versioned_client).
+      -export([call/1]).
+      call(X) -> versioned_native:identity(X).
+      """)
+
+    assemble = fn fingerprint, opts ->
+      Translation.new(externals: [%{native | fingerprint: fingerprint}])
+      |> Translation.add({"client.erl", core})
+      |> Translation.translate(:versioned_client, [{:call, 1}])
+      |> Translation.assemble(opts)
+    end
+
+    assert [%{"cache_key" => native_key}, %{"cache_key" => client_key}] =
+             assemble.(String.duplicate("a", 64), [])
+
+    assert [%{"cache_key" => changed_native}, %{"cache_key" => changed_client}] =
+             assemble.(String.duplicate("b", 64), [])
+
+    refute native_key == changed_native
+    refute client_key == changed_client
+
+    assert Enum.all?(
+             assemble.(String.duplicate("a", 64), cache: false),
+             &(not Map.has_key?(&1, "cache_key"))
+           )
+
+    assert_raise ArgumentError, ~r/fingerprint must be/, fn -> assemble.("invalid", []) end
+  end
+
+  test "rejects declared NIFs without a visible loader" do
+    core =
+      cerl("""
+      -module(declared_native).
+      -export([native/1]).
+      -nifs([native/1]).
+      native(X) -> X.
+      """)
+
+    assert_raise CompileError, ~r/unregistered native implementation/, fn ->
+      Translation.new()
+      |> Translation.add({"declared_native.erl", core})
+      |> Translation.translate(:declared_native, [{:native, 1}])
+    end
+  end
+
   test "elaborators precede clients and changes invalidate dependent cache keys" do
     core =
       cerl("""
@@ -1144,25 +1358,25 @@ defmodule Lynx.TranslationTest do
       assert error.description =~ "unsupported binary segment"
     end
 
-    test "falls back to the function line for compiler-generated NIF primops" do
+    test "rejects NIF loaders and ordinary-looking native fallback bodies" do
       core =
         cerl("""
         -module(example).
-        -export([entry/0]).
+        -export([entry/0, fallback/1]).
         entry() -> erlang:load_nif("example_nif", 0).
+        fallback(X) -> X.
         """)
 
-      error =
-        assert_raise CompileError, fn ->
-          Translation.new()
-          |> Translation.add({"example.erl", core})
-          |> Translation.translate(:example, [{:entry, 0}])
-        end
+      for root <- [{:entry, 0}, {:fallback, 1}] do
+        error =
+          assert_raise CompileError, ~r/unregistered native implementation/, fn ->
+            Translation.new()
+            |> Translation.add({"example.erl", core})
+            |> Translation.translate(:example, [root])
+          end
 
-      assert %CompileError{file: "example.erl", line: 3} = error
-
-      assert error.description ==
-               "unsupported Core expression:\n    \n    primop 'nif_start'\n        ()"
+        assert error.file == "example.erl"
+      end
     end
 
     test "validates remote modules" do
