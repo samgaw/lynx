@@ -64,6 +64,7 @@ defmodule Lynx.Rust.Report do
           file:
             if(is_binary(source["file"]), do: Path.expand(source["file"], directory), else: nil),
           line: source["begin_line"],
+          drop_effects: Map.get(extraction.audit.drops.sites, implementation["def_id"], []),
           dependencies:
             Enum.map(dependencies[implementation["def_id"]], fn id ->
               cond do
@@ -142,11 +143,18 @@ defmodule Lynx.Rust.Report do
       guarantees: verified ++ composed,
       properties: properties,
       fingerprint: extraction.fingerprint,
-      trusted_boundary: @trusted,
+      trusted_boundary:
+        @trusted ++
+          if(map_size(extraction.audit.drops.erasures) > 0,
+            do: ["Lynx compiler-generated structural drop erasure audit"],
+            else: []
+          ),
+      structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
           Enum.map(Map.get(extraction, :external_types, []), & &1.label) ++
           Enum.map(Map.values(external), & &1.label) ++
+          Enum.map(Lynx.Rust.DropModels.report(extraction.audit.drops), & &1.label) ++
           if(
             Enum.any?(extraction.audit.translated["type_decls"], fn
               %{

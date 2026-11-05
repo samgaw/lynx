@@ -59,8 +59,15 @@ defmodule Lynx.Rust.LLBC do
     if functions == [],
       do: raise(ArgumentError, "no first-party function implementations were extracted")
 
-    ids = Enum.map(functions, & &1["def_id"])
+    all_functions = functions
+    ids = Enum.map(all_functions, & &1["def_id"])
+
+    if length(ids) != MapSet.size(MapSet.new(ids)),
+      do: raise(ArgumentError, "duplicate LLBC function identity")
+
     refs = references(document, %{})
+
+    {generated_drops, functions} = Enum.split_with(functions, &Lynx.Rust.DropModels.generated?/1)
 
     {initializers, ordinary} =
       Enum.split_with(
@@ -96,10 +103,10 @@ defmodule Lynx.Rust.LLBC do
         {:error, function, message} -> failure!(function, translated, message)
       end
 
-    allowed = %{functions: MapSet.new(ids ++ Map.keys(modelled)), constants: constants}
-
-    if length(ids) != MapSet.size(MapSet.new(ids)),
-      do: raise(ArgumentError, "duplicate LLBC function identity")
+    allowed = %{
+      functions: MapSet.new(Enum.map(functions, & &1["def_id"]) ++ Map.keys(modelled)),
+      constants: constants
+    }
 
     for function <- functions do
       unless match?(
@@ -124,6 +131,14 @@ defmodule Lynx.Rust.LLBC do
       check_calls!(function["body"], allowed, function, translated)
     end
 
+    # Preserve direct-call diagnostics before examining cleanup reached by those
+    # calls. No extraction can proceed until the separate drop audit succeeds.
+    drops =
+      case Lynx.Rust.DropModels.audit(functions, generated_drops, translated, refs, first_party) do
+        {:ok, drops} -> drops
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
     for type <- translated["type_decls"], type != nil, first_party?(type, first_party) do
       unless is_map(type["kind"]) &&
                Enum.any?(~w(Struct Enum Alias), &Map.has_key?(type["kind"], &1)),
@@ -142,6 +157,7 @@ defmodule Lynx.Rust.LLBC do
       constant_initializers: initializers,
       callback_dependencies: callback_dependencies,
       trait_dependencies: trait_dependencies,
+      drops: drops,
       constants: constants,
       external_functions: external,
       external_calls: modelled,
@@ -165,6 +181,7 @@ defmodule Lynx.Rust.LLBC do
           )
 
     Lynx.Rust.Constants.link!(audit.constants, translation)
+    Lynx.Rust.DropModels.link!(audit.drops, translation)
 
     linked =
       for function <- audit.functions, into: %{} do
@@ -277,10 +294,10 @@ defmodule Lynx.Rust.LLBC do
 
   defp first_party?(_, _), do: false
 
-  # The initial backend admits direct first-party calls only. Charon can emit
+  # Calls require first-party bodies or closed, explicitly audited models. Charon can emit
   # unused standard-library declarations; those are distinct from a call that
   # would actually rely on an unverified external model. Destructors are also
-  # rejected because Aeneas otherwise defaults to ignoring drops.
+  # rejected unless the structural-erasure audit justifies Aeneas ownership removal.
   defp check_calls!(%{"Call" => call} = node, ids, function, translated) do
     case get_in(call, ["call", "func"]) do
       %{"Regular" => %{"kind" => %{"Fun" => id}}} ->
@@ -318,8 +335,9 @@ defmodule Lynx.Rust.LLBC do
     Enum.each(Map.values(node), &check_calls!(&1, allowed, function, translated))
   end
 
-  defp check_calls!(%{"Drop" => _}, _, function, translated),
-    do: failure!(function, translated, "Rust destructors are not yet supported")
+  defp check_calls!(%{"Drop" => _drop} = node, allowed, function, translated) do
+    Enum.each(Map.values(node), &check_calls!(&1, allowed, function, translated))
+  end
 
   defp check_calls!(
          %{"Global" => %{"id" => id, "generics" => generics}},

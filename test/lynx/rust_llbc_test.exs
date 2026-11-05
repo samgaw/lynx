@@ -251,6 +251,16 @@ defmodule Lynx.Rust.LLBCTest do
                  end
   end
 
+  test "unverified calls are diagnosed before their unsupported cleanup" do
+    call = %{"Call" => %{"call" => %{"func" => %{"Regular" => %{"kind" => %{"Fun" => 99}}}}}}
+    body = %{"statements" => [%{"kind" => call}, %{"kind" => %{"Drop" => %{}}}]}
+    caller = put_in(function(), ["body", "Structured"], body)
+
+    assert_raise CompileError, ~r/unverified external Rust call/, fn ->
+      LLBC.audit!(document([caller]), ["first_party"])
+    end
+  end
+
   test "missing body diagnostics retain the Rust source location" do
     function =
       function()
