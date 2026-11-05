@@ -205,6 +205,30 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
+  test "unverified call diagnostics identify the foreign callee" do
+    call = %{"Call" => %{"call" => %{"func" => %{"Regular" => %{"kind" => %{"Fun" => 99}}}}}}
+    caller = put_in(function(), ["body", "Structured"], call)
+
+    foreign = %{
+      "def_id" => 99,
+      "item_meta" => %{
+        "name" => [
+          %{"Ident" => ["core", 0]},
+          %{"Ident" => ["result", 0]},
+          %{"Impl" => %{"Trait" => 6}},
+          %{"Ident" => ["branch", 0]}
+        ]
+      },
+      "body" => "Opaque"
+    }
+
+    assert_raise CompileError,
+                 ~r/unverified external Rust call core::result::\{impl\}::branch/,
+                 fn ->
+                   LLBC.audit!(document([caller, foreign]), ["first_party"])
+                 end
+  end
+
   test "missing body diagnostics retain the Rust source location" do
     function =
       function()
