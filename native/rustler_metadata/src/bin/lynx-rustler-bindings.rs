@@ -49,10 +49,14 @@ fn single_literal(expression: &Expr) -> Result<Lit, String> {
     }
 }
 
-fn supported_type(ty: &Type) -> Result<Value, String> {
+fn supported_type(ty: &Type, output: bool) -> Result<Value, String> {
     if let Type::Tuple(tuple) = ty {
         if tuple.elems.len() <= 7 {
-            let fields: Result<Vec<_>, _> = tuple.elems.iter().map(supported_type).collect();
+            let fields: Result<Vec<_>, _> = tuple
+                .elems
+                .iter()
+                .map(|ty| supported_type(ty, output))
+                .collect();
             return Ok(json!({"tuple": fields?}));
         }
     }
@@ -93,7 +97,7 @@ fn supported_type(ty: &Type) -> Result<Value, String> {
                         .args
                         .iter()
                         .map(|argument| match argument {
-                            syn::GenericArgument::Type(ty) => supported_type(ty),
+                            syn::GenericArgument::Type(ty) => supported_type(ty, output),
                             _ => Err("unsupported Rustler Result argument".into()),
                         })
                         .collect();
@@ -111,6 +115,21 @@ fn supported_type(ty: &Type) -> Result<Value, String> {
             {
                 return Ok(json!(name));
             }
+        }
+        // This is a discovery hint, not an approved codec. The backend must
+        // resolve the compiled return type and extract its actual Encoder.
+        if output
+            && path.qself.is_none()
+            && !names.is_empty()
+            && !["f32", "f64", "i128", "u128", "isize", "usize", "str"]
+                .contains(&names.last().expect("nonempty path").as_str())
+            && path
+                .path
+                .segments
+                .iter()
+                .all(|segment| matches!(segment.arguments, syn::PathArguments::None))
+        {
+            return Ok(json!({"native": names}));
         }
     }
     Err("unsupported Rustler parameter or return type".into())
@@ -194,7 +213,7 @@ impl Bindings {
             .inputs
             .iter()
             .map(|arg| match arg {
-                FnArg::Typed(typed) => supported_type(&typed.ty),
+                FnArg::Typed(typed) => supported_type(&typed.ty, false),
                 _ => Err("Rustler receiver parameters are unsupported".into()),
             })
             .collect();
@@ -203,7 +222,7 @@ impl Bindings {
             return Err("Rustler export arity differs from its computation signature".into());
         }
         let result = match &function.sig.output {
-            ReturnType::Type(_, result) => supported_type(result)?,
+            ReturnType::Type(_, result) => supported_type(result, true)?,
             ReturnType::Default => json!({"tuple": []}),
         };
         Ok(json!({"name": name, "arity": arity, "flags": flags,
@@ -372,6 +391,31 @@ mod tests {
         let unit = discover("fn native() {}", 0);
         assert!(unit.errors.is_empty(), "{:?}", unit.errors);
         assert_eq!(unit.entries[0]["result"], json!({"tuple":[]}));
+    }
+
+    #[test]
+    fn discovers_nominal_return_hints_without_accepting_custom_arguments() {
+        let bindings = discover(
+            "fn native(a: u64) -> Result<(), errors::BridgeError> { todo!() }",
+            1,
+        );
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(
+            bindings.entries[0]["result"],
+            json!({"result": [{"tuple": []}, {"native": ["errors", "BridgeError"]}]})
+        );
+        for signature in [
+            "fn native(a: BridgeError) -> bool { true }",
+            "fn native() -> f64 { 0.0 }",
+            "fn native() -> Error<u64> { todo!() }",
+        ] {
+            assert_eq!(
+                discover(signature, u32::from(signature.contains("a:")))
+                    .errors
+                    .len(),
+                1
+            );
+        }
     }
 
     #[test]
