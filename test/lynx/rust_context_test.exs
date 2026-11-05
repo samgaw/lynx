@@ -30,6 +30,15 @@ defmodule Lynx.Rust.ContextTest do
     const _: () = assert!(option_env!("LYNX_RECORD_FILE").is_none());
     """)
 
+    # Build scripts keep the application's wrapper policy. Lynx selects an
+    # explicit compiler driver rather than injecting a workspace wrapper.
+    File.write!(Path.join(tmp, "build.rs"), """
+    fn main() {
+        assert!(std::env::var_os("RUSTC_WORKSPACE_WRAPPER").is_none());
+        assert!(std::env::var_os("RUSTC_WRAPPER").is_none());
+    }
+    """)
+
     {output, status} =
       System.cmd("cargo", ["generate-lockfile", "--manifest-path", manifest],
         stderr_to_stdout: true

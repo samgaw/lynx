@@ -39,6 +39,11 @@ defmodule Lynx.Rust.Cargo do
       end
 
     recorder = recorder!()
+
+    compiler =
+      command!("rustup", ["which", "--toolchain", @toolchain, "rustc"]) |> String.trim()
+
+    crates = Lynx.Rust.LLBC.crate_names!(workspace)
     # A recorder change must also invalidate compiler metadata retained for dependencies.
     hash = recorder |> File.read!() |> digest()
     target_dir = Path.join(directory, "cargo-" <> String.slice(hash, 0, 16))
@@ -88,7 +93,9 @@ defmodule Lynx.Rust.Cargo do
             feature_args ++ build_args(opts),
           cd: Path.dirname(manifest),
           env: [
-            {"RUSTC_WORKSPACE_WRAPPER", recorder},
+            {"RUSTC", recorder},
+            {"LYNX_RECORD_COMPILER", compiler},
+            {"LYNX_RECORD_CRATES", JSON.encode!(crates)},
             {"LYNX_RECORD_CRATE", target["name"]},
             {"LYNX_RECORD_FILE", record_file},
             {"LYNX_RECORD_BASELINE", baseline_file}
