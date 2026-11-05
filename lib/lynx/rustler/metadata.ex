@@ -4,7 +4,7 @@ defmodule Lynx.Rustler.Metadata do
   @manifest Path.expand("../../../native/rustler_metadata/Cargo.toml", __DIR__)
 
   # Reading metadata opens the native library and executes its initializers.
-  # Call only for the application's just-built Rustler 0.39 artifacts.
+  # Call only for the application's just-built, version-audited Rustler artifacts.
   def inspect!(library) do
     ensure_loaded!()
 

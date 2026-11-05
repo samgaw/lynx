@@ -174,7 +174,7 @@ defmodule Lynx.Rust.Report do
   end
 
   @doc false
-  def rustler(report, bindings) do
+  def rustler(report, bindings, version) do
     module = :lynx_core_to_leanj.module_name(String.to_atom(bindings.module))
 
     adapters =
@@ -214,10 +214,11 @@ defmodule Lynx.Rust.Report do
         trusted_boundary:
           report.trusted_boundary ++
             [
-              "Rustler 0.39 wrapper, unsafe FFI, native code and BEAM NIF API",
+              "Rustler #{version} wrapper, unsafe FFI, native code and BEAM NIF API",
               "configured native artifact is installed by the application loader"
             ]
     }
+    |> Map.put(:rustler_version, version)
     |> Map.put(:unverified_nif_exports, unverified)
   end
 

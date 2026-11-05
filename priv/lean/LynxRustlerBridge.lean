@@ -45,7 +45,7 @@ theorem binaryAsSlice_outOfBounds (bytes : Binary)
   exact dite_eq_right outside
 
 /-- Rustler's signed integer decoder followed by Rust's narrowing `as` cast.
-For i8/i16, Rustler 0.39 decodes i32 and then truncates; i32/i64 do not narrow. -/
+For i8/i16, Rustler 0.38/0.39 decode i32 and then truncates; i32/i64 do not narrow. -/
 @[expose] def decodeSigned (ty : IScalarTy) (decoderBits : Nat) :
     Term → Except Exception (IScalar ty)
   | .integer value =>

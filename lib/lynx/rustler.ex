@@ -9,7 +9,7 @@ defmodule Lynx.Rustler do
   using an explicit FFI type model. The immutable `as_slice` accessor and standard
   slice length have explicitly reported external models; other Binary methods
   remain rejected.
-  Rustler 0.39.0 and the pinned
+  Rustler 0.38.0 or 0.39.0 and the pinned
   Charon/Aeneas toolchain are required; see `docs/rust-verification-investigation.md`.
 
   `prepare!/3` builds the selected library, discovers its compiled exports,
@@ -88,7 +88,7 @@ defmodule Lynx.Rustler do
     build_dir = opts[:build_dir] || Path.join([Mix.Project.build_path(), "lynx", "rust", package])
     proofs = Keyword.get(opts, :proof_modules, [])
     context = Lynx.Rust.Cargo.build!(workspace, package, build_dir, Keyword.get(opts, :cargo, []))
-    require_rustler!(context)
+    rustler_version = require_rustler!(context)
     require_unwind!(context)
 
     project =
@@ -133,7 +133,8 @@ defmodule Lynx.Rustler do
             rust: "rustler::types::binary::Binary",
             lean: "Lynx.Rustler.Binary",
             import: bridge,
-            label: "Rustler 0.39 Binary decoded as immutable bytes at the unverified FFI boundary"
+            label:
+              "Rustler 0.38/0.39 Binary decoded as immutable bytes at the unverified FFI boundary"
           }
         ]
       else
@@ -185,7 +186,7 @@ defmodule Lynx.Rustler do
       reports: reports,
       verification:
         Lynx.Rust.Report.build!(extraction, reports, source_dir: context.record["directory"])
-        |> Lynx.Rust.Report.rustler(bindings),
+        |> Lynx.Rust.Report.rustler(bindings, rustler_version),
       project: project,
       library: native,
       native_binary_hash: Lynx.Rust.Fingerprint.file!(native),
@@ -196,7 +197,7 @@ defmodule Lynx.Rustler do
       trusted_boundary: [
         "rustc, Charon and Aeneas extraction",
         "reproducible Cargo build and macro expansion",
-        "Rustler 0.39.0 wrapper, FFI, native code and BEAM",
+        "Rustler #{rustler_version} wrapper, FFI, native code and BEAM",
         "configured native artifact is installed by the application loader",
         "Lean kernel and standard logical axioms"
       ]
@@ -229,11 +230,13 @@ defmodule Lynx.Rustler do
           package["name"] == "rustler",
           do: package["version"]
 
-    unless versions == ["0.39.0"],
+    unless versions in [["0.38.0"], ["0.39.0"]],
       do:
         raise(
           ArgumentError,
-          "native adapter requires a direct Rustler 0.39.0 dependency; found #{inspect(versions)}"
+          "native adapter requires a direct Rustler 0.38.0 or 0.39.0 dependency; found #{inspect(versions)}"
         )
+
+    hd(versions)
   end
 end
