@@ -135,8 +135,8 @@ defmodule Lynx.Rust.Report do
         |> Map.values()
         |> Enum.map(fn model ->
           model
-          |> Map.take(~w(def_id rust_name lean_name lean_file can_fail source))
-          |> Map.put("status", :extracted)
+          |> Map.take(~w(def_id rust_name lean_name lean_file can_fail source initializer_id))
+          |> Map.put("status", if(model["inlined"], do: :inlined, else: :extracted))
         end)
         |> Enum.sort_by(& &1["rust_name"]),
       guarantees: verified ++ composed,

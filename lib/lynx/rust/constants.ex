@@ -1,7 +1,7 @@
 defmodule Lynx.Rust.Constants do
   @moduledoc false
 
-  # Only immutable, monomorphic scalar constants and promoted string literals.
+  # Immutable, monomorphic scalars, promoted scalar borrows and string literals.
   # Initializer bodies are checked by LLBC alongside ordinary implementations.
   def audit!(globals, initializers, refs, types) do
     declarations = Map.new(globals, &{&1["def_id"], &1})
@@ -19,11 +19,12 @@ defmodule Lynx.Rust.Constants do
       type = unwrap(global["ty"], refs)
 
       case {global["global_kind"], constant_value(global["value"])} do
-        {"NamedConst",
-         [%{"Call" => [%{"kind" => %{"Fun" => id}, "generics" => args}, []]}, value_type]} ->
+        {kind, [%{"Call" => [%{"kind" => %{"Fun" => id}, "generics" => args}, []]}, value_type]}
+        when kind in ["NamedConst", "AnonConst"] ->
           initializer = Enum.find(initializers, &(&1["def_id"] == id))
 
-          unless scalar?(type) and unwrap(value_type, refs) == type and empty_arguments?(args) and
+          unless supported_initializer_type?(global, type, refs) and
+                   unwrap(value_type, refs) == type and empty_arguments?(args) and
                    initializer != nil and
                    get_in(initializer, ["src", "GlobalInitializer", "id"]) == global["def_id"] and
                    empty_arguments?(get_in(initializer, ["src", "GlobalInitializer", "generics"])) and
@@ -43,14 +44,14 @@ defmodule Lynx.Rust.Constants do
 
         _ ->
           raise ArgumentError,
-                "unsupported Rust global: only scalar const initializers and promoted string literals are supported (#{inspect(global["global_kind"])})"
+                "unsupported Rust global: only scalar const initializers, promoted shared scalar borrows and string literals are supported (#{inspect(global["global_kind"])})"
       end
     end
 
     for initializer <- initializers do
       id = get_in(initializer, ["src", "GlobalInitializer", "id"])
 
-      unless Map.has_key?(declarations, id) and declarations[id]["global_kind"] == "NamedConst" and
+      unless Map.has_key?(declarations, id) and
                initializer_id(declarations[id]) == initializer["def_id"],
              do: raise(ArgumentError, "orphaned Rust constant initializer: #{inspect(id)}")
     end
@@ -59,11 +60,31 @@ defmodule Lynx.Rust.Constants do
   end
 
   def link!(declarations, translation) do
-    for {id, global} <- declarations, global["global_kind"] == "NamedConst", into: %{} do
+    for {id, global} <- declarations, initializer_id(global) != nil, into: %{} do
       matches = Enum.filter(Map.get(translation, "globals", []), &(&1["def_id"] == id))
 
-      case matches do
-        [%{"lean_name" => name, "lean_file" => file, "can_fail" => can_fail} = model]
+      case {global["global_kind"], matches} do
+        {"AnonConst", []} ->
+          # Pinned Aeneas replaces promoted reads with calls and inlines the
+          # checked initializer (anon_consts_to_calls / inline_anon_const_initializers).
+          # There is deliberately no invented Lean declaration for that initializer.
+          name =
+            Enum.map_join(global["item_meta"]["name"], "::", fn
+              %{"Ident" => [name, _]} -> name
+              %{"Builtin" => ["PromotedConst", index]} -> "{promoted const##{index}}"
+              other -> JSON.encode!(other)
+            end)
+
+          {id,
+           %{
+             "def_id" => id,
+             "rust_name" => name,
+             "inlined" => true,
+             "initializer_id" => initializer_id(global),
+             "declaration" => global
+           }}
+
+        {_, [%{"lean_name" => name, "lean_file" => file, "can_fail" => can_fail} = model]}
         when is_binary(name) and is_binary(file) and is_boolean(can_fail) ->
           {id, Map.put(model, "declaration", global)}
 
@@ -79,6 +100,22 @@ defmodule Lynx.Rust.Constants do
       _ -> nil
     end
   end
+
+  defp supported_initializer_type?(%{"global_kind" => "NamedConst"}, type, _refs),
+    do: scalar?(type)
+
+  defp supported_initializer_type?(
+         %{"global_kind" => "AnonConst", "item_meta" => %{"name" => name}},
+         %{"Ref" => ["Erased", element, "Shared"]},
+         refs
+       ) do
+    match?(
+      %{"Builtin" => ["PromotedConst", index]} when is_integer(index) and index >= 0,
+      List.last(name)
+    ) and scalar?(unwrap(element, refs))
+  end
+
+  defp supported_initializer_type?(_, _, _), do: false
 
   defp str_type?(%{"Adt" => %{"id" => id, "builtin" => "Str", "generics" => args}}, types, refs) do
     empty_arguments?(args) and

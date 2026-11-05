@@ -99,6 +99,72 @@ defmodule Lynx.Rust.ConstantsTest do
     end
   end
 
+  defp promoted(type) do
+    document = input()
+    promoted_name = name("read") ++ [%{"Builtin" => ["PromotedConst", 0]}]
+    [global] = document["translated"]["global_decls"]
+    [caller, initializer] = document["translated"]["fun_decls"]
+    meta = %{global["item_meta"] | "name" => promoted_name}
+
+    global =
+      %{global | "global_kind" => "AnonConst", "item_meta" => meta, "ty" => type}
+      |> put_in(["value", "Value", Access.at(1), Access.at(1)], type)
+
+    initializer =
+      %{initializer | "item_meta" => meta}
+      |> put_in(["signature", "output"], type)
+
+    document
+    |> put_in(["translated", "global_decls"], [global])
+    |> put_in(["translated", "fun_decls"], [caller, initializer])
+  end
+
+  test "promoted shared scalar borrows retain initializer dependencies through Aeneas inlining" do
+    audit = LLBC.audit!(promoted(%{"Ref" => ["Erased", scalar(), "Shared"]}), ["first_party"])
+    assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
+
+    assert %{
+             10 => %{
+               "inlined" => true,
+               "initializer_id" => 11,
+               "rust_name" => "first_party::read::{promoted const#0}"
+             }
+           } = Lynx.Rust.Constants.link!(audit.constants, %{"globals" => []})
+
+    assert %{10 => %{"lean_name" => "first_party.read.promoted"}} =
+             Lynx.Rust.Constants.link!(audit.constants, %{
+               "globals" => [
+                 %{
+                   "def_id" => 10,
+                   "lean_name" => "first_party.read.promoted",
+                   "lean_file" => "Native/Funs.lean",
+                   "can_fail" => true
+                 }
+               ]
+             })
+  end
+
+  test "promoted scalar borrows reject mutation, non-scalar payloads and unresolved lifetimes" do
+    for type <- [
+          %{"Ref" => ["Erased", scalar(), "Mut"]},
+          %{"Ref" => [%{"Var" => %{"Free" => 0}}, scalar(), "Shared"]},
+          %{"Ref" => ["Erased", %{"Adt" => %{"id" => 0}}, "Shared"]},
+          scalar()
+        ] do
+      assert_raise ArgumentError, ~r/constant initializer/, fn ->
+        LLBC.audit!(promoted(type), ["first_party"])
+      end
+    end
+
+    document =
+      promoted(%{"Ref" => ["Erased", scalar(), "Shared"]})
+      |> put_in(["translated", "global_decls", Access.at(0), "item_meta", "name"], name("read"))
+
+    assert_raise ArgumentError, ~r/constant initializer/, fn ->
+      LLBC.audit!(document, ["first_party"])
+    end
+  end
+
   test "rejects static, missing, mismatched and opaque constant definitions" do
     for document <- [
           put_in(input(), ["translated", "global_decls", Access.at(0), "global_kind"], %{
