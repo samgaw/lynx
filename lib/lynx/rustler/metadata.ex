@@ -55,6 +55,28 @@ defmodule Lynx.Rustler.Metadata do
     }
   end
 
+  # This is structural metadata, not verification or permission to model a
+  # first-party function. The consumer must also validate the resolved LLBC
+  # identities and report the cache/FFI boundary before using these atoms.
+  def atom_caches!(expanded_file, modules) do
+    unless is_list(modules) and
+             Enum.all?(modules, &(is_list(&1) and Enum.all?(&1, fn name -> is_binary(name) end))),
+           do: raise(ArgumentError, "Rustler atom cache selection must contain module paths")
+
+    ensure_loaded!()
+    parser = :persistent_term.get({__MODULE__, :parser})
+
+    {output, status} =
+      System.cmd(parser, [expanded_file, "--atoms", JSON.encode!(Enum.uniq(modules))],
+        stderr_to_stdout: true
+      )
+
+    if status != 0,
+      do: raise("cannot discover Rustler atom caches in #{expanded_file}:\n#{output}")
+
+    JSON.decode!(output)
+  end
+
   defp select!(exports, only) do
     available = Enum.map(exports, fn {name, arity, _flags} -> {name, arity} end)
 
