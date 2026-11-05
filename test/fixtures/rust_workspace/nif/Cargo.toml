@@ -1,0 +1,17 @@
+[package]
+name = "experiment-nif"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+unsupported-float = []
+composite = []
+binary = []
+unsupported-binary-method = ["binary"]
+
+[dependencies]
+experiment-analysis = { path = "../analysis" }
+rustler = "=0.39.0"

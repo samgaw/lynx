@@ -1,0 +1,374 @@
+defmodule Lynx.Rust.LLBC do
+  @moduledoc false
+
+  @library_kinds ~w(lib rlib dylib cdylib staticlib)
+
+  def crate_names!(workspace) do
+    names =
+      for crate <- workspace.crates,
+          target <- crate.targets,
+          Enum.any?(target["kind"], &(&1 in @library_kinds)),
+          do: target["name"]
+
+    if length(names) != MapSet.size(MapSet.new(names)),
+      do: raise(ArgumentError, "ambiguous first-party Rust crate identities")
+
+    members = MapSet.new(Enum.map(workspace.crates, & &1.id))
+
+    foreign_names =
+      for {id, package} <- workspace.packages,
+          not MapSet.member?(members, id),
+          target <- package["targets"],
+          Enum.any?(target["kind"], &(&1 in @library_kinds)),
+          do: target["name"]
+
+    if Enum.any?(names, &(&1 in ~w(core alloc std proc_macro test) or &1 in foreign_names)),
+      do:
+        raise(ArgumentError, "ambiguous Rust crate name shared with a standard or external crate")
+
+    names
+  end
+
+  def audit!(document, first_party, opts \\ []) do
+    unless match?(
+             %{
+               "charon_version" => "0.1.304",
+               "has_errors" => false,
+               "translated" => %{"fun_decls" => _, "type_decls" => _}
+             },
+             document
+           ),
+           do:
+             raise(
+               ArgumentError,
+               "incomplete LLBC or unsupported Charon version (expected 0.1.304)"
+             )
+
+    translated = document["translated"]
+
+    {functions, external} =
+      translated["fun_decls"]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.split_with(&first_party?(&1, first_party))
+
+    if functions == [],
+      do: raise(ArgumentError, "no first-party function implementations were extracted")
+
+    ids = Enum.map(functions, & &1["def_id"])
+    refs = references(document, %{})
+
+    modelled =
+      Lynx.Rust.CallModels.resolve(
+        external,
+        translated,
+        refs,
+        Keyword.get(opts, :external_calls, [])
+      )
+      |> Map.take(Enum.flat_map(functions, &calls(&1["body"])))
+
+    allowed = MapSet.new(ids ++ Map.keys(modelled))
+
+    if length(ids) != MapSet.size(MapSet.new(ids)),
+      do: raise(ArgumentError, "duplicate LLBC function identity")
+
+    for function <- functions do
+      unless match?(
+               %{
+                 "body" => %{"Structured" => _},
+                 "item_meta" => %{"opacity" => "Transparent"},
+                 "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"}
+               },
+               function
+             ) do
+        failure!(function, translated, "missing or unsupported first-party implementation")
+      end
+
+      check_calls!(function["body"], allowed, function, translated)
+    end
+
+    for type <- translated["type_decls"], type != nil, first_party?(type, first_party) do
+      unless is_map(type["kind"]) &&
+               Enum.any?(~w(Struct Enum Alias), &Map.has_key?(type["kind"], &1)),
+             do: failure!(type, translated, "missing or unsupported first-party type definition")
+    end
+
+    for global <- translated["global_decls"],
+        global != nil,
+        first_party?(global, first_party),
+        do: failure!(global, translated, "first-party globals are not yet supported")
+
+    %{
+      functions: functions,
+      external_functions: external,
+      external_calls: modelled,
+      crate: translated["crate_name"],
+      references: refs,
+      translated: translated
+    }
+  end
+
+  def link!(audit, translation) do
+    unless translation["charon_version"] == "0.1.304" && translation["crate"] == audit.crate &&
+             translation["aeneas_version"] == "nightly-2026.11.04-2b9e3ea",
+           do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
+
+    for id <- Map.keys(audit.external_calls),
+        Enum.any?(translation["functions"], &(&1["def_id"] == id)),
+        do:
+          raise(
+            ArgumentError,
+            "external Rust call model was not applied by Aeneas (function #{id})"
+          )
+
+    linked =
+      for function <- audit.functions, into: %{} do
+        matches = Enum.filter(translation["functions"], &(&1["def_id"] == function["def_id"]))
+
+        case matches do
+          [%{"is_opaque" => false, "lean_name" => name} = mapping] when is_binary(name) ->
+            {function["def_id"], Map.put(mapping, "declaration", function)}
+
+          _ ->
+            failure!(
+              function,
+              audit.translated,
+              "missing, ambiguous or opaque Aeneas implementation"
+            )
+        end
+      end
+
+    names = Enum.map(Map.values(linked), & &1["lean_name"])
+
+    if length(names) != MapSet.size(MapSet.new(names)),
+      do: raise(ArgumentError, "different Rust bodies map to the same Lean implementation")
+
+    linked
+  end
+
+  def dependencies(audit) do
+    Map.new(audit.functions, fn function ->
+      {function["def_id"], calls(function["body"]) |> Enum.uniq() |> Enum.sort()}
+    end)
+  end
+
+  defp calls(
+         %{"Call" => %{"call" => %{"func" => %{"Regular" => %{"kind" => %{"Fun" => id}}}}}} = node
+       ) do
+    [id | Enum.flat_map(Map.values(node), &calls/1)]
+  end
+
+  defp calls(node) when is_map(node), do: Enum.flat_map(Map.values(node), &calls/1)
+  defp calls(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &calls/1)
+  defp calls(_), do: []
+
+  def signature!(function, audit) do
+    signature = function["signature"]
+
+    {Enum.map(signature["inputs"], &signature_type!(&1, audit)),
+     signature_type!(signature["output"], audit)}
+  end
+
+  defp first_party?(%{"item_meta" => %{"name" => [%{"Ident" => [crate, _]} | _]}}, first_party),
+    do: crate in first_party
+
+  defp first_party?(_, _), do: false
+
+  # The initial backend admits direct first-party calls only. Charon can emit
+  # unused standard-library declarations; those are distinct from a call that
+  # would actually rely on an unverified external model. Destructors are also
+  # rejected because Aeneas otherwise defaults to ignoring drops.
+  defp check_calls!(%{"Call" => call} = node, ids, function, translated) do
+    case get_in(call, ["call", "func"]) do
+      %{"Regular" => %{"kind" => %{"Fun" => id}}} ->
+        unless MapSet.member?(ids, id),
+          do: failure!(function, translated, "unverified external Rust call (function #{id})")
+
+      _ ->
+        failure!(function, translated, "unsupported indirect Rust call")
+    end
+
+    Enum.each(Map.values(node), &check_calls!(&1, ids, function, translated))
+  end
+
+  defp check_calls!(%{"Drop" => _}, _, function, translated),
+    do: failure!(function, translated, "Rust destructors are not yet supported")
+
+  defp check_calls!(%{"Global" => _}, _, function, translated),
+    do: failure!(function, translated, "Rust global references are not yet supported")
+
+  defp check_calls!(node, ids, function, translated) when is_map(node),
+    do: Enum.each(Map.values(node), &check_calls!(&1, ids, function, translated))
+
+  defp check_calls!(nodes, ids, function, translated) when is_list(nodes),
+    do: Enum.each(nodes, &check_calls!(&1, ids, function, translated))
+
+  defp check_calls!(_, _, _, _), do: :ok
+
+  # Charon uses separate hash-cons tables for types, trait references, etc.
+  # Recognize Ty variants only; IDs in other families must not overwrite these.
+  defp references(%{"Value" => [id, value]}, refs)
+       when is_integer(id) and is_map(value) and
+              (is_map_key(value, "Scalar") or is_map_key(value, "Adt") or
+                 is_map_key(value, "TypeVar") or is_map_key(value, "Ref") or
+                 is_map_key(value, "Slice")) do
+    case Map.fetch(refs, id) do
+      {:ok, existing} when existing != value ->
+        raise ArgumentError, "inconsistent LLBC shared type identity"
+
+      _ ->
+        references(value, Map.put(refs, id, value))
+    end
+  end
+
+  defp references(map, refs) when is_map(map),
+    do: Enum.reduce(Map.values(map), refs, &references/2)
+
+  defp references(list, refs) when is_list(list), do: Enum.reduce(list, refs, &references/2)
+  defp references(_, refs), do: refs
+
+  defp signature_type!(%{"Value" => [_, value]}, audit), do: signature_type!(value, audit)
+
+  defp signature_type!(%{"Deduplicated" => id}, audit),
+    do: signature_type!(Map.fetch!(audit.references, id), audit)
+
+  defp signature_type!(%{"Scalar" => "Bool"}, _), do: "bool"
+
+  defp signature_type!(%{"Scalar" => %{"Integer" => %{"Signed" => width}}}, _)
+       when width in ~w(I8 I16 I32 I64),
+       do: String.downcase(width)
+
+  defp signature_type!(%{"Scalar" => %{"Integer" => %{"Unsigned" => width}}}, _)
+       when width in ~w(U8 U16 U32 U64),
+       do: String.downcase(width)
+
+  defp signature_type!(
+         %{
+           "Adt" => %{
+             "id" => id,
+             "builtin" => nil,
+             "generics" => %{
+               "types" => [],
+               "regions" => [_],
+               "const_generics" => [],
+               "trait_refs" => []
+             }
+           }
+         },
+         audit
+       ) do
+    declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
+    models = Map.get(audit, :external_types, [])
+
+    case declaration do
+      %{
+        "kind" => "Opaque",
+        "item_meta" => %{
+          "name" => [
+            %{"Ident" => ["rustler", 0]},
+            %{"Ident" => ["types", 0]},
+            %{"Ident" => ["binary", 0]},
+            %{"Ident" => ["Binary", 0]}
+          ]
+        }
+      } ->
+        if Enum.any?(
+             models,
+             &(&1.rust == "rustler::types::binary::Binary" and &1.lean == "Lynx.Rustler.Binary")
+           ),
+           do: "binary",
+           else: raise(ArgumentError, "Rustler Binary requires its explicit FFI type model")
+
+      _ ->
+        raise ArgumentError, "unsupported lifetime-bearing NIF type in extracted signature"
+    end
+  end
+
+  defp signature_type!(
+         %{
+           "Adt" => %{
+             "id" => id,
+             "builtin" => builtin,
+             "generics" => %{
+               "types" => types,
+               "regions" => [],
+               "const_generics" => [],
+               "trait_refs" => []
+             }
+           }
+         },
+         audit
+       ) do
+    cond do
+      builtin == "Tuple" and length(types) <= 7 ->
+        %{"tuple" => Enum.map(types, &signature_type!(&1, audit))}
+
+      builtin == nil and length(types) == 2 and result_type?(id, audit) ->
+        %{"result" => Enum.map(types, &signature_type!(&1, audit))}
+
+      true ->
+        raise ArgumentError, "unsupported NIF ADT identity or tuple arity in extracted signature"
+    end
+  end
+
+  defp signature_type!(type, _),
+    do: raise(ArgumentError, "unsupported NIF type in extracted signature: #{inspect(type)}")
+
+  defp result_type?(id, audit) do
+    case Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id)) do
+      %{
+        "item_meta" => %{
+          "name" => [
+            %{"Ident" => ["core", 0]},
+            %{"Ident" => ["result", 0]},
+            %{"Ident" => ["Result", 0]}
+          ]
+        },
+        "generics" => %{
+          "regions" => [],
+          "types" => [%{"index" => 0}, %{"index" => 1}],
+          "const_generics" => [],
+          "trait_clauses" => [],
+          "outlives" => [],
+          "trait_type_constraints" => []
+        },
+        "kind" => %{
+          "Enum" => [
+            %{
+              "id" => 0,
+              "name" => "Ok",
+              "fields" => [%{"ty" => ok}],
+              "discriminant" => %{"Signed" => ["Isize", "0"]}
+            },
+            %{
+              "id" => 1,
+              "name" => "Err",
+              "fields" => [%{"ty" => err}],
+              "discriminant" => %{"Signed" => ["Isize", "1"]}
+            }
+          ]
+        }
+      } ->
+        unshare_type(ok, audit.references) == %{"TypeVar" => %{"Free" => 0}} and
+          unshare_type(err, audit.references) == %{"TypeVar" => %{"Free" => 1}}
+
+      _ ->
+        false
+    end
+  end
+
+  defp unshare_type(%{"Value" => [_, value]}, refs), do: unshare_type(value, refs)
+  defp unshare_type(%{"Deduplicated" => id}, refs), do: unshare_type(Map.fetch!(refs, id), refs)
+  defp unshare_type(value, _), do: value
+
+  defp failure!(item, translated, message) do
+    meta = item["item_meta"]
+    span = get_in(meta, ["span", "Untagged", "data"]) || get_in(meta, ["span", "data"]) || %{}
+    file = Enum.find(translated["files"], &(&1["id"] == span["file_id"]))
+    name = if file, do: file["name"] |> Map.values() |> List.first(), else: "native"
+
+    raise CompileError,
+      file: name,
+      line: get_in(span, ["beg", "line"]),
+      description: "#{message}: #{inspect(meta["name"])}"
+  end
+end

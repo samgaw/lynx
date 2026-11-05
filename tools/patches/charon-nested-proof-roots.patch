@@ -1,0 +1,89 @@
+diff --git i/charon/src/bin/charon-driver/translate/resolve_path.rs w/charon/src/bin/charon-driver/translate/resolve_path.rs
+index 9b57968ceb59..53a32a863cb8 100644
+--- i/charon/src/bin/charon-driver/translate/resolve_path.rs
++++ w/charon/src/bin/charon-driver/translate/resolve_path.rs
+@@ -150,7 +150,33 @@ pub fn def_path_def_ids<'a, 'tcx>(
+         } else {
+             let nameable_children = items.iter().copied().flat_map(|def_id| {
+                 let hax_def: Arc<hax::FullDef<'tcx>> = def_id.sinto(s).full_def(s);
+-                hax_def.nameable_children(s)
++                let mut children = hax_def.nameable_children(s);
++                // Constants, statics, closures and function bodies can contain
++                // named items too. They are not exposed by FullDef's module
++                // traversal. Include direct local children so precise proof
++                // roots can reach them without translating their containers.
++                if def_id.is_local() {
++                    for child in tcx.iter_local_def_id() {
++                        let child = child.to_def_id();
++                        if tcx.opt_parent(child) == Some(def_id)
++                            && matches!(
++                                tcx.def_kind(child),
++                                rustc_hir::def::DefKind::Fn
++                                    | rustc_hir::def::DefKind::Const
++                                    | rustc_hir::def::DefKind::Static { .. }
++                                    | rustc_hir::def::DefKind::Closure
++                            )
++                        {
++                            let name = tcx
++                                .opt_item_name(child)
++                                .unwrap_or_else(|| Symbol::intern("_"));
++                            children.push((name, child.sinto(s)));
++                        }
++                    }
++                }
++                children
++                    .into_iter()
++                    .unique_by(|(_, child)| child.as_real_def_id())
+             });
+             match elem {
+                 PatElem::Ident { name: elem, .. } => {
+diff --git i/charon/tests/ui/nested-function-proof-root.out w/charon/tests/ui/nested-function-proof-root.out
+new file mode 100644
+index 000000000000..14c21a4b09fe
+--- /dev/null
++++ w/charon/tests/ui/nested-function-proof-root.out
+@@ -0,0 +1,20 @@
++# Final LLBC before serialization:
++
++// Full name: test_crate::_::INVENTORY::nif_func::wrapper::{closure}::compute
++fn compute(value: bool) -> bool
++{
++    let _0: bool; // return
++    let value: bool; // arg #1
++    let _2: bool; // anonymous local
++
++    storage_live(_0)
++    storage_live(_2)
++    _2 = copy value
++    _0 = ~(move _2)
++    storage_dead(_2)
++    storage_dead(value)
++    return
++}
++
++
++
+diff --git i/charon/tests/ui/nested-function-proof-root.rs w/charon/tests/ui/nested-function-proof-root.rs
+new file mode 100644
+index 000000000000..3a97c33b27e9
+--- /dev/null
++++ w/charon/tests/ui/nested-function-proof-root.rs
+@@ -0,0 +1,18 @@
++//@ charon-arg=--start-from=crate::_::INVENTORY::nif_func::wrapper::_::compute
++
++const _: () = {
++    static INVENTORY: fn(bool) -> bool = {
++        fn nif_func(value: bool) -> bool {
++            fn wrapper(value: bool) -> bool {
++                (move || {
++                    fn compute(value: bool) -> bool {
++                        !value
++                    }
++                    compute(value)
++                })()
++            }
++            wrapper(value)
++        }
++        nif_func
++    };
++};
