@@ -6,7 +6,7 @@ public section
 
 namespace Lynx.Rustler
 
-/-- Rustler 0.39 accepts only the atoms `true` and `false` as booleans. -/
+/-- Rustler 0.38/0.39 accept only the atoms `true` and `false` as booleans. -/
 @[expose] def decodeBool : Term → Except Exception Bool
   | .atom "true" => .ok true
   | .atom "false" => .ok false
