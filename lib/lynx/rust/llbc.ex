@@ -181,7 +181,12 @@ defmodule Lynx.Rust.LLBC do
     case get_in(call, ["call", "func"]) do
       %{"Regular" => %{"kind" => %{"Fun" => id}}} ->
         unless MapSet.member?(ids, id),
-          do: failure!(function, translated, "unverified external Rust call (function #{id})")
+          do:
+            failure!(
+              function,
+              translated,
+              "unverified external Rust call #{callee_label(id, translated)} (function #{id})"
+            )
 
       _ ->
         failure!(function, translated, "unsupported indirect Rust call")
@@ -203,6 +208,20 @@ defmodule Lynx.Rust.LLBC do
     do: Enum.each(nodes, &check_calls!(&1, ids, function, translated))
 
   defp check_calls!(_, _, _, _), do: :ok
+
+  defp callee_label(id, translated) do
+    case Enum.find(translated["fun_decls"], &(&1 != nil and &1["def_id"] == id)) do
+      nil ->
+        "<missing declaration>"
+
+      callee ->
+        Enum.map_join(callee["item_meta"]["name"], "::", fn
+          %{"Ident" => [name, _]} -> name
+          %{"Impl" => _} -> "{impl}"
+          other -> inspect(other)
+        end)
+    end
+  end
 
   # Charon uses separate hash-cons tables for types, trait references, etc.
   # Recognize Ty variants only; IDs in other families must not overwrite these.
