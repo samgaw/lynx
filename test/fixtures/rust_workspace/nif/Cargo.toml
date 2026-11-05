@@ -11,6 +11,7 @@ unsupported-float = []
 composite = []
 binary = []
 unsupported-binary-method = ["binary"]
+custom-encoder = []
 
 [dependencies]
 experiment-analysis = { path = "../analysis" }

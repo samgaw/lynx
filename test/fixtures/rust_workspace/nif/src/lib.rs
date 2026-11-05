@@ -133,6 +133,43 @@ fn binary_owned_length(value: rustler::Binary<'_>) -> u64 {
     value.to_owned().as_slice().len() as u64
 }
 
+#[cfg(feature = "custom-encoder")]
+mod custom_encoding {
+    use rustler::{Encoder, Env, Term};
+
+    rustler::atoms! {
+        invalid,
+        missing,
+    }
+
+    #[derive(Debug)]
+    enum Error {
+        Invalid(String),
+        Missing,
+    }
+
+    impl Encoder for Error {
+        fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+            match self {
+                Self::Invalid(message) => (invalid(), message).encode(env),
+                Self::Missing => missing().encode(env),
+            }
+        }
+    }
+
+    /// Exercises a custom error encoder after an ordinary cross-crate call.
+    #[rustler::nif]
+    fn custom_validate(value: u8) -> Result<(), Error> {
+        if experiment_analysis::restore(value > 1) {
+            Ok(())
+        } else if value == 0 {
+            Err(Error::Missing)
+        } else {
+            Err(Error::Invalid("custom error".to_string()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -148,6 +185,7 @@ mod tests {
                 + if cfg!(feature = "composite") { 5 } else { 0 }
                 + 2 * usize::from(cfg!(feature = "binary"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
+                + usize::from(cfg!(feature = "custom-encoder"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -203,6 +241,7 @@ mod tests {
             );
         }
         for (enabled, name) in [
+            (cfg!(feature = "custom-encoder"), "custom_validate"),
             (cfg!(feature = "binary"), "echo_binary"),
             (cfg!(feature = "binary"), "binary_length"),
             (
