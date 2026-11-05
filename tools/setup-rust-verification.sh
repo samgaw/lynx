@@ -53,6 +53,6 @@ IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
 cp target/release/charon target/release/charon-driver "$install_dir/"
 printf '%s\n' 'aeneas=nightly-2026.11.04-2b9e3ea' \
   'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots' \
-  'aeneas_runtime=lynx-bounded-default-format-v1' \
+  'aeneas_runtime=lynx-bounded-default-format-v2' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"

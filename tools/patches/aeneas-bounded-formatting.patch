@@ -1,5 +1,5 @@
 diff --git i/backends/lean/Aeneas/Std/Core/Fmt.lean w/backends/lean/Aeneas/Std/Core/Fmt.lean
-index 002f3a5ac4fc..65e811331ebc 100644
+index 002f3a5ac4fc..0126091047e7 100644
 --- i/backends/lean/Aeneas/Std/Core/Fmt.lean
 +++ w/backends/lean/Aeneas/Std/Core/Fmt.lean
 @@ -10,9 +10,10 @@ namespace Aeneas.Std
@@ -16,7 +16,7 @@ index 002f3a5ac4fc..65e811331ebc 100644
 
  @[rust_trait "core::fmt::Debug"]
  structure core.fmt.Debug (T : Type u) where
-@@ -45,27 +46,92 @@ def core.result.Result.unwrap.mut {T E : Type _}
+@@ -45,27 +46,113 @@ def core.result.Result.unwrap.mut {T E : Type _}
    | .Err _ => .fail .panic
 
 
@@ -96,6 +96,25 @@ index 002f3a5ac4fc..65e811331ebc 100644
 +  simp only [writeBytes, valid]
 +  exact append_eq fmt text bound
 +
++/-- Check the supported subset before admitting the unsafe Rust constructor. -/
++@[expose] def validTemplate : Nat → List UInt8 → Nat → Nat → Bool
++  | 0, _, _, _ => false
++  | _ + 1, [], _, _ => false
++  | fuel + 1, tag :: rest, count, index =>
++    let literal (size : Nat) (tail : List UInt8) :=
++      size ≤ tail.length &&
++        (String.fromUTF8? ⟨(tail.take size).toArray⟩).isSome &&
++        validTemplate fuel (tail.drop size) count index
++    if tag.toNat = 0 then rest.isEmpty
++    else if tag.toNat < 128 then literal tag.toNat rest
++    else if tag.toNat = 128 then
++      match rest with
++      | lo :: hi :: tail => literal (lo.toNat + 256 * hi.toNat) tail
++      | _ => false
++    else if tag.toNat = 192 then index < count && validTemplate fuel rest count (index + 1)
++    else false
++
++
 +end Formatting
 
  @[expose, rust_fun "core::fmt::{core::fmt::Arguments<'a>}::from_str"]
@@ -110,7 +129,9 @@ index 002f3a5ac4fc..65e811331ebc 100644
 -  RustM.ok ()
 +  (template : Std.Array Std.U8 N) (args : Std.Array core.fmt.rt.Argument M) : RustM core.fmt.Arguments :=
 +  let program := (Formatting.bytes template.val).toList
-+  .ok (Formatting.run (program.length + 1) program args.val 0)
++  if Formatting.validTemplate (program.length + 1) program args.val.length 0 then
++    .ok (Formatting.run (program.length + 1) program args.val 0)
++  else .fail .undef
 
  @[expose, rust_fun "core::fmt::rt::{core::fmt::rt::Argument<'0>}::new_debug"]
  def core.fmt.rt.Argument.new_debug
@@ -122,7 +143,7 @@ index 002f3a5ac4fc..65e811331ebc 100644
 
  @[rust_trait "core::fmt::Display"]
  structure core.fmt.Display (Self : Type _) where
-@@ -77,23 +143,43 @@ structure core.fmt.LowerHex (Self : Type _) where
+@@ -77,23 +164,43 @@ structure core.fmt.LowerHex (Self : Type _) where
 
  @[expose, rust_fun "core::fmt::rt::{core::fmt::rt::Argument<'0>}::new_lower_hex"]
  def core.fmt.rt.Argument.new_lower_hex
@@ -178,7 +199,7 @@ index 002f3a5ac4fc..65e811331ebc 100644
 
  @[expose, rust_fun "core::fmt::{core::fmt::Debug<&'0 @T>}::fmt"]
  def core.fmt.DebugShared.fmt {T : Type _} (DebugInst : core.fmt.Debug T) (x : T)
-@@ -194,9 +280,7 @@ def core.fmt.DebugBool : core.fmt.Debug Bool := {
+@@ -194,9 +301,7 @@ def core.fmt.DebugBool : core.fmt.Debug Bool := {
 
  @[expose, rust_fun "core::fmt::rt::{core::fmt::rt::Argument<'0>}::new_display"]
  def core.fmt.rt.Argument.new_display
