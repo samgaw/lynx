@@ -3,6 +3,22 @@ defmodule Lynx.Rustler.AtomCaches do
 
   alias Lynx.Rust.CallModels
 
+  def modules(document) do
+    crate = document["translated"]["crate_name"]
+
+    for type <- document["translated"]["type_decls"],
+        type != nil,
+        name = type["item_meta"]["name"],
+        match?([%{"Ident" => [^crate, 0]} | _], name),
+        List.last(name) == %{"Ident" => ["RustlerAtoms", 0]},
+        Enum.all?(name, &match?(%{"Ident" => [_, 0]}, &1)),
+        do:
+          name
+          |> Enum.drop(1)
+          |> Enum.drop(-1)
+          |> Enum.map(fn %{"Ident" => [part, 0]} -> part end)
+  end
+
   # Structural expansion metadata does not resolve names: even std and rustler
   # may be shadowed by application modules. Check the compiler's nominal types
   # and calls before considering a generated cache as an FFI model candidate.
