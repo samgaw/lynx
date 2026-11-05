@@ -523,7 +523,10 @@ defmodule Lynx.Rust.FormatModels do
         "Display requires a monomorphic extracted implementation or approved typed renderer with matching dictionary, method identity and signature; external renderers are not implicitly approved"
       )
 
-  defp method_identity?(function, impl, trait, ctx) do
+  # Shared by the closed Encoder catalogue: this is a generic compiler method
+  # identity/binder check, independent of formatting semantics.
+  @doc false
+  def method_identity?(function, impl, trait, ctx) do
     id = function["def_id"]
     impl_id = impl["def_id"]
 

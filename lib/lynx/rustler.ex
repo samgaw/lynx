@@ -223,7 +223,8 @@ defmodule Lynx.Rustler do
         )
   end
 
-  defp require_rustler!(context) do
+  @doc false
+  def require_rustler!(context) do
     versions =
       for dep <- context.package.resolved_dependencies,
           package = context.workspace.packages[dep["pkg"]],

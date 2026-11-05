@@ -118,6 +118,17 @@ defmodule Lynx.Rust.LLBC do
         {:error, function, message} -> failure!(function, translated, message)
       end
 
+    encoder_dependencies =
+      case Lynx.Rustler.EncoderModels.audit(functions, available_models, translated, refs) do
+        {:ok, dependencies} -> dependencies
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
+    trait_dependencies =
+      Map.merge(trait_dependencies, encoder_dependencies, fn _id, renderers, encoders ->
+        Enum.uniq(renderers ++ encoders)
+      end)
+
     modelled =
       Map.take(
         available_models,
