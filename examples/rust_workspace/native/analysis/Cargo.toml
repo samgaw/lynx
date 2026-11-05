@@ -1,0 +1,7 @@
+[package]
+name = "example-analysis"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+example-core = { path = "../core" }
