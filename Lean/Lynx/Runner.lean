@@ -27,7 +27,8 @@ Each verification diagnostic has `file`, `module`, nullable `declaration`, `seve
 Requests include `cache_dir` and may include `options`, an object of Lean options set
 at the top of every translated module. Values are natural numbers, Booleans, or strings.
 Input files may include a hexadecimal `cache_key` incorporating dependencies; cached
-artifacts are kept separately for each set of options.
+artifacts are kept separately for each set of options. Actual transitive imported
+artifacts (including private proofs and interpreter code) also contribute to the key.
 Requests may include `debug_dir`, a directory where the rendered source of every module
 is written by module path, such as `Erlang/json.lean`, when a file does not verify.
 With `debug` set to `"lean"` or `"olean"`, they are written even when every file verifies.
@@ -42,6 +43,9 @@ Files without a key and their dependents are verified without persistent caching
 Verified artifacts are cached below `cache_dir/lean-VERSION-HASH`, using Lake’s compiled artifact hashes.
 Only successful elaboration and axiom audits are cached; updates include a `cached` Boolean.
 Input files are an ordered array of {file, module, imports, contents, cache_key} objects.
+An optional `audit_modules` array names implementation/proof modules to audit in full.
+They must be the current module or declared imports. Private declarations are loaded
+only in a separate post-elaboration audit environment, never exposed to client proofs.
 A prelude file has empty contents and a preludes array of {source, file, span,
 indentation} blocks, joined in order into one module. The first block begins with
 the module header, whose imports are loaded before the blocks are parsed and
@@ -1818,6 +1822,7 @@ structure DecodedFile where
   private proofSources : Array (Name × String)
   private reexportImports : Bool
   private preludes : Array Json
+  private auditModules : Array String
 
 /-- Immutable runtime imports, reused without retaining translated declarations. -/
 private structure Runtime where
@@ -1924,11 +1929,14 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
     let preludes ← IO.ofExcept <| match field entry "preludes" with
       | .error _ => pure #[]
       | .ok value => value.getArr?
+    let auditModules ← IO.ofExcept <| match field entry "audit_modules" with
+      | .error _ => pure #[]
+      | .ok value => value.getArr? >>= (·.mapM Json.getStr?)
     if !preludes.isEmpty && !(← IO.ofExcept (arr entry "contents")).isEmpty then
       throw (IO.userError "prelude modules cannot contain translated declarations")
     let (moduleName, imports, commands, state, reexportImports) ← IO.ofExcept do
       fields entry ["file", "module", "imports", "contents", "cache_key", "preludes",
-        "dispatcher_purity"]
+        "dispatcher_purity", "audit_modules"]
       let dispatcherPurity ← match field entry "dispatcher_purity" with
         | .error _ => pure none
         | .ok value => do
@@ -1977,7 +1985,7 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
     let commands := commands.map fun command => ⟨eraseScopes command.raw⟩
     return ⟨file, moduleName, imports, map, commands, key,
       state.spans, state.diagnostics, state.theorems, state.proofSources,
-      reexportImports, preludes⟩
+      reexportImports, preludes, auditModules⟩
   catch err => throw (IO.userError s!"{file}: {err}")
 
 private def parsingDiagnostics (file : DecodedFile) : Array Json :=
@@ -2109,6 +2117,33 @@ private def runtimeFingerprint : IO UInt64 := do
       ← IO.FS.readFile path))
   return result
 
+/-- Fingerprint the actual imported implementations, including private proof data
+and interpreter code. A caller-supplied source key alone cannot identify imports
+loaded from another Lake package. Runtime imports have their own versioned key.
+Memoization is request-local; successful cache artifacts are immutable. -/
+private def importedFingerprint (runtime : Runtime) (env : Lean.Environment)
+    (artifacts : NameMap ImportArtifacts) (memo : IO.Ref (Std.HashMap String UInt64)) : IO UInt64 := do
+  let mut result := hash ("lynx-imports-1" : String)
+  for moduleName in env.header.moduleNames do
+    if runtime.env.header.moduleNames.contains moduleName then continue
+    let paths ← if let some paths := artifacts.find? moduleName then
+        pure paths.toArrays.flatten
+      else do
+        let path ← findOLean moduleName
+        pure #[path, path.withExtension "olean.server", path.withExtension "olean.private",
+          path.withExtension "ir.sig", path.withExtension "ir"]
+    result := mixHash result (hash moduleName)
+    for path in paths do
+      let key := path.toString
+      let digest ← if let some digest := (← memo.get)[key]? then pure digest else do
+        let digest ← if ← path.pathExists then
+            pure (hash (← IO.FS.readBinFile path))
+          else pure (hash ("absent" : String))
+        memo.modify (·.insert key digest)
+        pure digest
+      result := mixHash result (hash (path.extension, digest))
+  return result
+
 /-- Publish complete, successfully audited entries atomically on the cache filesystem. -/
 private def writeCached (directory : System.FilePath) (env : Lean.Environment)
     (diagnostics : Array Json) : IO Unit := do
@@ -2211,10 +2246,10 @@ private def layoutArtifacts (root : System.FilePath) (modules : Array Name)
   for module in modules do
     let some paths := artifacts.find? module | continue
     for file in paths.toArrays.flatten do
-      -- Artifacts are named `module.<extension>`, such as `module.olean.private`.
-      let some name := file.fileName | continue
       unless ← file.pathExists do continue
-      let target := modToFilePath root module (name.drop "module.".length).toString
+      let some extension := #["olean.server", "olean.private", "olean", "ir.sig", "ir"].find?
+          (fun extension => file.toString.endsWith ("." ++ extension)) | continue
+      let target := modToFilePath root module extension
       IO.FS.createDirAll (target.parent.getD root)
       IO.FS.writeBinFile target (← IO.FS.readBinFile file)
 
@@ -2234,7 +2269,22 @@ private def exportModules (path : System.FilePath) (modules : Array Name)
     pure name
   -- `leanexport` finds modules by name, so lay out the artifacts as a search path.
   let root := temporary / "export"
-  layoutArtifacts root modules artifacts
+  -- A temporary namespace directory shadows the same namespace on later Lean
+  -- search paths. Include on-disk dependencies sharing an input namespace too.
+  let namespaceRoots := modules.map fun moduleName => (moduleName.toString.splitOn ".").head!
+  let mut exportArtifacts := artifacts
+  let mut layoutModules := modules
+  for moduleName in env.header.moduleNames do
+    if (exportArtifacts.find? moduleName).isSome then continue
+    unless namespaceRoots.any (fun namespaceRoot =>
+      moduleName.toString == namespaceRoot || moduleName.toString.startsWith (namespaceRoot ++ ".")) do continue
+    let importedPath ← findOLean moduleName
+    let paths := ImportArtifacts.ofArrays #[#[importedPath,
+      importedPath.withExtension "olean.server", importedPath.withExtension "olean.private"],
+      #[importedPath.withExtension "ir.sig", importedPath.withExtension "ir"]]
+    exportArtifacts := exportArtifacts.insert moduleName paths
+    layoutModules := layoutModules.push moduleName
+  layoutArtifacts root layoutModules exportArtifacts
   let searchPath := (← IO.getEnv "LEAN_PATH").map (System.SearchPath.separator.toString ++ ·)
   let output ← IO.Process.output {
     cmd := ((← findSysroot) / "bin" / "leanexport").toString
@@ -2264,11 +2314,57 @@ private def writeSources (dir : System.FilePath) (sources : Array (Name × Strin
     IO.FS.createDirAll (path.parent.getD dir)
     IO.FS.writeFile path source
 
+/-- Load private declarations only for auditing, in a separate environment after
+client elaboration. This never expands the proof interface visible to clients. -/
+private def auditImplementationModules (file : DecodedFile) (env : Lean.Environment)
+    (runtime : Runtime) (artifacts : NameMap ImportArtifacts)
+    (temporary : System.FilePath) : IO (Array Json) := do
+  let mut errors := #[]
+  let mut names : Array Name := #[]
+  let mut imports := runtimeImports
+  for moduleString in file.auditModules do
+    let moduleName ← IO.ofExcept <| (identifier moduleString).run env |>.run' {}
+    let moduleName := moduleName.getId
+    if moduleName != env.mainModule && (env.getModuleIdx? moduleName).isNone then
+      errors := errors.push (diagnostic file.fileName file.moduleName "error"
+        s!"unknown audit module: {moduleName}" .unknown none)
+    else
+      names := names.push moduleName
+      imports := imports.push { module := moduleName, importAll := true, isExported := false }
+  unless errors.isEmpty do return errors
+  let mut auditArtifacts := artifacts
+  if names.contains env.mainModule then
+    let directory := temporary / s!"audit-{hash env.mainModule}"
+    IO.FS.createDirAll directory
+    writeModule env (directory / "module.olean")
+    auditArtifacts := auditArtifacts.insert env.mainModule (cachedArtifacts directory)
+  let auditEnv ← importFile runtime imports auditArtifacts
+  let action : CoreM (Array Json) := do
+    let env := (← getEnv).setExporting false
+    let mut errors := #[]
+    for moduleName in names do
+      let moduleIdx := env.getModuleIdx? moduleName
+      let declarations := env.constants.toList.filterMap fun (name, _) =>
+        if (env.find? name).isSome && env.getModuleIdxFor? name == moduleIdx then
+          some name else none
+      if declarations.isEmpty then
+        errors := errors.push (diagnostic file.fileName file.moduleName "error"
+          s!"audit module has no declarations: {moduleName}" .unknown none)
+      for name in declarations do
+        for axiomName in ← collectAxioms name do
+          unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
+            errors := errors.push (diagnostic file.fileName file.moduleName "error"
+              s!"unexpected axiom in {name}: {axiomName}" .unknown (some name))
+    return errors
+  (action.run' { fileName := file.fileName, fileMap := file.fileMap }
+    { env := auditEnv }).toIO (fun _ => IO.userError "native module axiom audit failed")
+
 /-- Verify against explicit imports, reusing only successfully audited module artifacts. -/
 private def verify (files : Array Json) (options : Array (TSyntax `command)) (runtime : Runtime)
     (cacheDirectory : System.FilePath) (export? : Option System.FilePath)
     (debug? : Option Debug) (checkSource : Bool) (emit : Json → IO Unit) : IO Unit := do
   IO.FS.withTempDir fun temporary => do
+    let importHashes ← IO.mkRef ({} : Std.HashMap String UInt64)
     let mut artifacts : NameMap ImportArtifacts := {}
     let mut sources : Array (Name × String) := #[]
     let mut exported : Array Name := #[]
@@ -2316,7 +2412,9 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
       unless missingImport do
         let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
         let mainModule := moduleName.getId
-        let key := if file.imports.any uncached.contains then none else file.cacheKey
+        let sourceKey := if file.imports.any uncached.contains then none else file.cacheKey
+        let key ← sourceKey.mapM fun key => do
+          return s!"{key}-{← importedFingerprint runtime env artifacts importHashes}"
         let directory := key.map (cacheDirectory / ·) |>.getD (temporary / toString (hash mainModule))
         if let some saved ← if fileFailed || key.isNone then pure none else cachedDiagnostics directory then
           diagnostics := saved
@@ -2348,6 +2446,10 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
               return errors
             let errors ← (audit.run' { fileName := file.fileName, fileMap := file.fileMap }
               { env := state.env }).toIO (fun _ => IO.userError "law axiom audit failed")
+            if !errors.isEmpty then fileFailed := true
+            diagnostics := diagnostics ++ errors
+          unless fileFailed || file.auditModules.isEmpty do
+            let errors ← auditImplementationModules file state.env runtime artifacts temporary
             if !errors.isEmpty then fileFailed := true
             diagnostics := diagnostics ++ errors
           unless fileFailed do
