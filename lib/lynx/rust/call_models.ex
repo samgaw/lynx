@@ -11,6 +11,7 @@ defmodule Lynx.Rust.CallModels do
     for function <- functions,
         model =
           Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
+            Lynx.Rust.FormatModels.resolve(function, translated, refs) ||
             match_function(function, translated, refs, enabled),
         model != nil,
         into: %{} do
