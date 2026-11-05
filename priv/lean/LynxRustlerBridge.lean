@@ -33,7 +33,7 @@ cutoff; successful allocation is assumed at this modelled FFI boundary. -/
   if value.toUTF8.size ≤ 4294967295 then .ok (.bitstring value.toUTF8 0) else .fail .undef
 
 @[expose] def str (value : Str) (env : Env) : RustM NativeTerm :=
-  match String.fromUTF8? (Formatting.bytes value.val) with
+  match String.fromUTF8? ⟨(value.val.map (fun byte => UInt8.ofNat byte.val)).toArray⟩ with
   | some text => string text env
   | none => .fail .undef
 
@@ -151,6 +151,17 @@ For i8/i16, Rustler 0.38/0.39 decode i32 and then truncates; i32/i64 do not narr
     core.result.Result α β → Term
   | .Ok value => .tuple #[.atom "ok", encodeOk value]
   | .Err value => .tuple #[.atom "error", encodeErr value]
+
+/-- Ordinary Result tags around actual monadic custom encoders. A panic or
+verification cutoff from the selected encoder propagates through execution. -/
+@[expose] def encodeResultM {α β : Type} (encodeOk : α → RustM Term)
+    (encodeErr : β → RustM Term) : core.result.Result α β → RustM Term
+  | .Ok value => do
+    let encoded ← encodeOk value
+    .ok (.tuple #[.atom "ok", encoded])
+  | .Err value => do
+    let encoded ← encodeErr value
+    .ok (.tuple #[.atom "error", encoded])
 
 @[simp] theorem decodeResult_encodeResult {α β : Type}
     (decodeOk : Term → Except Exception α) (decodeErr : Term → Except Exception β)

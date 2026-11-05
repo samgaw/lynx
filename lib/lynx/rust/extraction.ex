@@ -20,6 +20,11 @@ defmodule Lynx.Rust.Extraction do
           {discovery, []}
 
         modules ->
+          modules =
+            if modules == :discover,
+              do: Lynx.Rustler.AtomCaches.modules(discovery.document),
+              else: modules
+
           expanded =
             Path.join(Path.expand(output), String.replace(module, ".", "_") <> ".atoms.rs")
 

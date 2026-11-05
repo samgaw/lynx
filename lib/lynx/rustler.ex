@@ -4,11 +4,20 @@ defmodule Lynx.Rustler do
 
   The adapter supports booleans, signed/unsigned fixed-width integers through
   64 bits, tuples of zero through seven fields, and ordinary `Result<T, E>`
-  values composed from those types. `NifResult<T>` and other signatures fail
-  explicitly. Immutable `rustler::Binary<'_>` values can be passed and returned
+  values composed from those types. Return values can also contain monomorphic
+  first-party structs/enums whose actual `Encoder` implementations can be
+  extracted. The compiler resolves their types, encoder roots and generated atom
+  caches automatically; no per-export Lean adapter or name mapping is required.
+  Supported stateless runtime encoders include atoms, u64, strings, borrowed str,
+  shared references, pairs and Vec. Custom arguments, `NifResult<T>` and other
+  unsupported signatures fail explicitly. Immutable `rustler::Binary<'_>` values can be passed and returned
   using an explicit FFI type model. The immutable `as_slice` accessor and standard
   slice length have explicitly reported external models; other Binary methods
   remain rejected.
+  Native environment/term handles, allocation and atom-cache initialization are
+  explicitly reported FFI models. Strings and lists exceeding the supported
+  4,294,967,295 byte/element bound produce verification exhaustion. Generated
+  atom caches currently must be in the facade crate's expanded source.
   Rustler 0.38.0 or 0.39.0 and the pinned
   Charon/Aeneas toolchain are required; see `docs/rust-verification-investigation.md`.
 
@@ -123,11 +132,16 @@ defmodule Lynx.Rustler do
         )
       end
 
+    binary? =
+      Enum.any?(
+        discovered.bindings,
+        &(contains_binary?(&1["arguments"]) or contains_binary?(&1["result"]))
+      )
+
+    custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
+
     models =
-      if Enum.any?(
-           discovered.bindings,
-           &(contains_binary?(&1["arguments"]) or contains_binary?(&1["result"]))
-         ) do
+      if binary? do
         [
           %{
             rust: "rustler::types::binary::Binary",
@@ -141,10 +155,42 @@ defmodule Lynx.Rustler do
         []
       end
 
+    {discovered, roots, models} =
+      if custom? do
+        raw =
+          Lynx.Rust.Extraction.describe!(context, tools, roots, project, prefix <> ".Discovery",
+            external_types: models
+          )
+
+        resolved =
+          Lynx.Rustler.Bindings.resolve!(discovered, raw.document, raw.first_party, models)
+
+        codecs =
+          for {rust, lean} <- [
+                {"rustler::env::Env", "Env"},
+                {"rustler::term::Term", "NativeTerm"},
+                {"rustler::types::atom::Atom", "Atom"}
+              ],
+              do: %{
+                rust: rust,
+                lean: "Lynx.Rustler." <> lean,
+                import: bridge,
+                label:
+                  "Stateless Rustler term-construction FFI model; handles, allocation and native runtime unverified"
+              }
+
+        {resolved, roots ++ Lynx.Rustler.Bindings.encoder_roots(resolved), models ++ codecs}
+      else
+        {discovered, roots, models}
+      end
+
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         external_types: models,
-        external_calls: if(models == [], do: [], else: [:rustler_binary_as_slice])
+        external_calls:
+          if(binary?, do: [:rustler_binary_as_slice], else: []) ++
+            if(custom?, do: [:rustler_encoders], else: []),
+        rustler_atoms: if(custom?, do: :discover, else: [])
       )
 
     bindings = Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation)

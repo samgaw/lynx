@@ -195,6 +195,7 @@ defmodule Lynx.Rust.LLBC do
       external_functions: external,
       external_calls: modelled,
       crate: translated["crate_name"],
+      first_party: first_party,
       references: refs,
       translated: translated
     }
@@ -324,6 +325,9 @@ defmodule Lynx.Rust.LLBC do
     {Enum.map(signature["inputs"], &signature_type!(&1, audit)),
      signature_type!(signature["output"], audit)}
   end
+
+  @doc false
+  def nif_type!(type, audit), do: signature_type!(type, audit)
 
   defp first_party?(%{"item_meta" => %{"name" => [%{"Ident" => [crate, _]} | _]}}, first_party),
     do: crate in first_party
