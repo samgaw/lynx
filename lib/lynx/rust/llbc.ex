@@ -401,6 +401,9 @@ defmodule Lynx.Rust.LLBC do
 
   # Charon uses separate hash-cons tables for types, trait references, etc.
   # Recognize Ty variants only; IDs in other families must not overwrite these.
+  @doc false
+  def type_references!(document), do: references(document, %{})
+
   defp references(%{"Value" => [id, value]}, refs)
        when is_integer(id) and is_map(value) and
               (is_map_key(value, "Scalar") or is_map_key(value, "Adt") or
