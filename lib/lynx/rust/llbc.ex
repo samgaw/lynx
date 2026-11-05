@@ -57,6 +57,17 @@ defmodule Lynx.Rust.LLBC do
     ids = Enum.map(functions, & &1["def_id"])
     refs = references(document, %{})
 
+    {initializers, ordinary} =
+      Enum.split_with(
+        functions,
+        &(is_map(&1["src"]) && Map.has_key?(&1["src"], "GlobalInitializer"))
+      )
+
+    globals =
+      Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
+
+    constants = Lynx.Rust.Constants.audit!(globals, initializers, refs, translated["type_decls"])
+
     modelled =
       Lynx.Rust.CallModels.resolve(
         external,
@@ -66,7 +77,7 @@ defmodule Lynx.Rust.LLBC do
       )
       |> Map.take(Enum.flat_map(functions, &calls(&1["body"])))
 
-    allowed = MapSet.new(ids ++ Map.keys(modelled))
+    allowed = %{functions: MapSet.new(ids ++ Map.keys(modelled)), constants: constants}
 
     if length(ids) != MapSet.size(MapSet.new(ids)),
       do: raise(ArgumentError, "duplicate LLBC function identity")
@@ -92,13 +103,12 @@ defmodule Lynx.Rust.LLBC do
              do: failure!(type, translated, "missing or unsupported first-party type definition")
     end
 
-    for global <- translated["global_decls"],
-        global != nil,
-        first_party?(global, first_party),
-        do: failure!(global, translated, "first-party globals are not yet supported")
+    check_constant_cycles!(functions, constants, translated)
 
     %{
-      functions: functions,
+      functions: ordinary,
+      constant_initializers: initializers,
+      constants: constants,
       external_functions: external,
       external_calls: modelled,
       crate: translated["crate_name"],
@@ -119,6 +129,8 @@ defmodule Lynx.Rust.LLBC do
             ArgumentError,
             "external Rust call model was not applied by Aeneas (function #{id})"
           )
+
+    Lynx.Rust.Constants.link!(audit.constants, translation)
 
     linked =
       for function <- audit.functions, into: %{} do
@@ -146,9 +158,61 @@ defmodule Lynx.Rust.LLBC do
   end
 
   def dependencies(audit) do
-    Map.new(audit.functions, fn function ->
-      {function["def_id"], calls(function["body"]) |> Enum.uniq() |> Enum.sort()}
+    Map.new(audit.functions ++ Map.get(audit, :constant_initializers, []), fn function ->
+      initializer_calls =
+        for id <- global_ids(function["body"]),
+            global = Map.fetch!(audit.constants, id),
+            initializer = Lynx.Rust.Constants.initializer_id(global),
+            initializer != nil,
+            do: initializer
+
+      {function["def_id"],
+       (calls(function["body"]) ++ initializer_calls) |> Enum.uniq() |> Enum.sort()}
     end)
+  end
+
+  defp global_ids(%{"Global" => %{"id" => id}}), do: [id]
+  defp global_ids(value) when is_map(value), do: Enum.flat_map(Map.values(value), &global_ids/1)
+  defp global_ids(value) when is_list(value), do: Enum.flat_map(value, &global_ids/1)
+  defp global_ids(_), do: []
+
+  defp check_constant_cycles!(_functions, constants, _translated) when map_size(constants) == 0,
+    do: :ok
+
+  defp check_constant_cycles!(functions, constants, translated) do
+    graph = :digraph.new()
+
+    try do
+      ids = MapSet.new(functions, & &1["def_id"])
+      for id <- ids, do: :digraph.add_vertex(graph, {:function, id})
+      for id <- Map.keys(constants), do: :digraph.add_vertex(graph, {:constant, id})
+
+      for {id, global} <- constants,
+          initializer = Lynx.Rust.Constants.initializer_id(global),
+          initializer != nil,
+          do: :digraph.add_edge(graph, {:constant, id}, {:function, initializer})
+
+      for function <- functions do
+        for id <- calls(function["body"]),
+            MapSet.member?(ids, id),
+            do: :digraph.add_edge(graph, {:function, function["def_id"]}, {:function, id})
+
+        for id <- global_ids(function["body"]),
+            do: :digraph.add_edge(graph, {:function, function["def_id"]}, {:constant, id})
+      end
+
+      for component <- :digraph_utils.strong_components(graph),
+          length(component) > 1,
+          {:constant, id} <- component do
+        failure!(
+          Map.fetch!(constants, id),
+          translated,
+          "cyclic Rust constant dependencies are unsupported"
+        )
+      end
+    after
+      :digraph.delete(graph)
+    end
   end
 
   defp calls(
@@ -180,7 +244,7 @@ defmodule Lynx.Rust.LLBC do
   defp check_calls!(%{"Call" => call} = node, ids, function, translated) do
     case get_in(call, ["call", "func"]) do
       %{"Regular" => %{"kind" => %{"Fun" => id}}} ->
-        unless MapSet.member?(ids, id),
+        unless MapSet.member?(ids.functions, id),
           do:
             failure!(
               function,
@@ -195,11 +259,40 @@ defmodule Lynx.Rust.LLBC do
     Enum.each(Map.values(node), &check_calls!(&1, ids, function, translated))
   end
 
+  defp check_calls!(%{"Assign" => [place, value]}, allowed, function, translated) do
+    if contains_global?(place),
+      do: failure!(function, translated, "Rust constant mutation is unsupported")
+
+    check_calls!(value, allowed, function, translated)
+  end
+
+  defp check_calls!(
+         %{"Ref" => %{"place" => place, "kind" => kind}} = node,
+         allowed,
+         function,
+         translated
+       ) do
+    if kind != "Shared" and contains_global?(place),
+      do: failure!(function, translated, "mutable Rust constant borrows are unsupported")
+
+    Enum.each(Map.values(node), &check_calls!(&1, allowed, function, translated))
+  end
+
   defp check_calls!(%{"Drop" => _}, _, function, translated),
     do: failure!(function, translated, "Rust destructors are not yet supported")
 
+  defp check_calls!(
+         %{"Global" => %{"id" => id, "generics" => generics}},
+         allowed,
+         function,
+         translated
+       ) do
+    unless Map.has_key?(allowed.constants, id) and Lynx.Rust.Constants.empty_arguments?(generics),
+      do: failure!(function, translated, "missing or unsupported Rust constant reference #{id}")
+  end
+
   defp check_calls!(%{"Global" => _}, _, function, translated),
-    do: failure!(function, translated, "Rust global references are not yet supported")
+    do: failure!(function, translated, "missing or unsupported Rust constant reference")
 
   defp check_calls!(node, ids, function, translated) when is_map(node),
     do: Enum.each(Map.values(node), &check_calls!(&1, ids, function, translated))
@@ -208,6 +301,14 @@ defmodule Lynx.Rust.LLBC do
     do: Enum.each(nodes, &check_calls!(&1, ids, function, translated))
 
   defp check_calls!(_, _, _, _), do: :ok
+
+  defp contains_global?(%{"Global" => _}), do: true
+
+  defp contains_global?(value) when is_map(value),
+    do: Enum.any?(Map.values(value), &contains_global?/1)
+
+  defp contains_global?(value) when is_list(value), do: Enum.any?(value, &contains_global?/1)
+  defp contains_global?(_), do: false
 
   defp callee_label(id, translated) do
     case Enum.find(translated["fun_decls"], &(&1 != nil and &1["def_id"] == id)) do

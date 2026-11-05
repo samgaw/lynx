@@ -159,6 +159,7 @@ defmodule Lynx.Rust.Extraction do
       audit: audit,
       translation: translation,
       implementations: implementations,
+      constants: Lynx.Rust.Constants.link!(audit.constants, translation),
       external_types: models,
       fingerprint:
         Lynx.Rust.Fingerprint.extraction!(context, tools, llbc, translation_bytes, first_party)
