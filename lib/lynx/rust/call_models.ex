@@ -11,6 +11,8 @@ defmodule Lynx.Rust.CallModels do
     for function <- functions,
         model =
           Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
+            Lynx.Rust.SliceModels.resolve(function, translated, refs) ||
+            Lynx.Rust.BytesModels.resolve(function, translated, refs) ||
             Lynx.Rust.FormatModels.resolve(function, translated, refs) ||
             if(:rustler_encoders in enabled,
               do: Lynx.Rustler.EncoderModels.resolve(function, translated, refs)

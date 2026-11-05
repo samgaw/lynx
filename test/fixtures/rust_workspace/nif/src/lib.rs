@@ -126,6 +126,20 @@ fn binary_length(value: rustler::Binary<'_>) -> u64 {
     experiment_analysis::byte_length(value.as_slice())
 }
 
+/// Parses a versioned, length-prefixed UTF-8 frame across workspace crates.
+#[cfg(feature = "protocol")]
+#[rustler::nif]
+fn parse_frame(value: rustler::Binary<'_>) -> Result<u64, u8> {
+    experiment_analysis::parse_frame(value.as_slice())
+}
+
+/// Returns exact UTF-8 error positions through the verified binary adapter.
+#[cfg(feature = "protocol")]
+#[rustler::nif]
+fn utf8_status(value: rustler::Binary<'_>) -> Result<u64, (u64, u8)> {
+    experiment_analysis::utf8_status(value.as_slice())
+}
+
 /// An unmodelled owned conversion must not silently become verified.
 #[cfg(feature = "unsupported-binary-method")]
 #[rustler::nif]
@@ -184,6 +198,7 @@ mod tests {
             10 + usize::from(cfg!(feature = "unsupported-float"))
                 + if cfg!(feature = "composite") { 5 } else { 0 }
                 + 2 * usize::from(cfg!(feature = "binary"))
+                + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
         );
@@ -244,6 +259,8 @@ mod tests {
             (cfg!(feature = "custom-encoder"), "custom_validate"),
             (cfg!(feature = "binary"), "echo_binary"),
             (cfg!(feature = "binary"), "binary_length"),
+            (cfg!(feature = "protocol"), "parse_frame"),
+            (cfg!(feature = "protocol"), "utf8_status"),
             (
                 cfg!(feature = "unsupported-binary-method"),
                 "binary_owned_length",

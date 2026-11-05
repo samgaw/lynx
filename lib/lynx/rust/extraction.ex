@@ -88,6 +88,7 @@ defmodule Lynx.Rust.Extraction do
       )
 
     audit = Map.put(audit, :external_types, models)
+    audit = Lynx.Rust.BytesModels.scope(audit, module)
 
     model_args =
       if models == [] and map_size(audit.external_calls) == 0 do
@@ -153,6 +154,7 @@ defmodule Lynx.Rust.Extraction do
     translation = JSON.decode!(translation_bytes)
     implementations = Lynx.Rust.LLBC.link!(audit, translation)
     Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)
+    Lynx.Rust.BytesModels.install!(audit, translation, output, module)
     # Keep per-root metadata, since several extractions can share one Lean package.
     File.write!(
       Path.join(output, String.replace(module, ".", "_") <> ".translation.json"),
@@ -184,7 +186,8 @@ defmodule Lynx.Rust.Extraction do
         end),
       llbc: llbc,
       output: output,
-      module: module
+      module: module,
+      model_modules: Lynx.Rust.BytesModels.modules(audit, module)
     }
   end
 
@@ -260,6 +263,8 @@ defmodule Lynx.Rust.Extraction do
         "core::ops::control_flow::ControlFlow",
         "--include",
         "core::fmt::Error",
+        "--include",
+        "core::str::error::Utf8Error",
         "--dest-file",
         llbc
       ] ++

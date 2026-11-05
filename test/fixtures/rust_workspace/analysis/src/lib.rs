@@ -41,3 +41,13 @@ pub fn preserve<T>(value: T) -> T {
 pub fn byte_length(value: &[u8]) -> u64 {
     experiment_core::byte_length(value)
 }
+
+/// Parses a bounded frame through another first-party crate.
+pub fn parse_frame(value: &[u8]) -> Result<u64, u8> {
+    experiment_core::protocol::parse_frame(value)
+}
+
+/// Preserves detailed UTF-8 validation results across the crate boundary.
+pub fn utf8_status(value: &[u8]) -> Result<u64, (u64, u8)> {
+    experiment_core::protocol::utf8_status(value)
+}
