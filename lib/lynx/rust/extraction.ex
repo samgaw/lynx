@@ -5,11 +5,52 @@ defmodule Lynx.Rust.Extraction do
   # clients must kernel-check their properties and audit the generated modules.
   def run!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key not in [:external_types, :external_calls],
+        key not in [:external_types, :external_calls, :rustler_atoms],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
 
-    %{document: document, llbc: llbc, first_party: first_party, models: models} =
+    discovery =
       describe!(context, tools, roots, output, module, Keyword.take(opts, [:external_types]))
+
+    {discovery, caches} =
+      case Keyword.get(opts, :rustler_atoms, []) do
+        [] ->
+          {discovery, []}
+
+        modules ->
+          expanded =
+            Path.join(Path.expand(output), String.replace(module, ".", "_") <> ".atoms.rs")
+
+          File.write!(expanded, Lynx.Rust.Cargo.expand!(context))
+          metadata = Lynx.Rustler.Metadata.atom_caches!(expanded, modules)
+          caches = Lynx.Rustler.AtomCaches.resolve!(discovery.document, metadata)
+
+          unless length(caches) == length(Enum.uniq(modules)),
+            do: raise(ArgumentError, "missing selected Rustler atom cache")
+
+          opaque = Enum.map(caches, & &1.opaque_pattern)
+
+          {describe!(
+             context,
+             tools,
+             roots,
+             output,
+             module,
+             Keyword.take(opts, [:external_types]),
+             opaque
+           ), caches}
+      end
+
+    %{document: document, llbc: llbc, first_party: first_party, models: models} = discovery
+
+    cache_models = Lynx.Rustler.AtomCaches.models!(document, caches, module)
+
+    if caches != [] and
+         not Enum.any?(
+           models,
+           &(&1.rust == "rustler::types::atom::Atom" and
+               &1.lean == "Lynx.Rustler.Atom")
+         ),
+       do: raise(ArgumentError, "Rustler atom caches require the explicit Atom FFI type model")
 
     tools = Path.expand(tools)
     output = Path.expand(output)
@@ -22,7 +63,12 @@ defmodule Lynx.Rust.Extraction do
          ),
        do: raise(ArgumentError, "Rustler as_slice requires the explicit Binary FFI type model")
 
-    audit = Lynx.Rust.LLBC.audit!(document, first_party, external_calls: requested_calls)
+    audit =
+      Lynx.Rust.LLBC.audit!(document, first_party,
+        external_calls: requested_calls,
+        rustler_atom_caches: {caches, module}
+      )
+
     audit = Map.put(audit, :external_types, models)
 
     model_args =
@@ -83,6 +129,7 @@ defmodule Lynx.Rust.Extraction do
     translation_bytes = File.read!(Path.join(output, "translation.json"))
     translation = JSON.decode!(translation_bytes)
     implementations = Lynx.Rust.LLBC.link!(audit, translation)
+    Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)
     # Keep per-root metadata, since several extractions can share one Lean package.
     File.write!(
       Path.join(output, String.replace(module, ".", "_") <> ".translation.json"),
@@ -127,6 +174,10 @@ defmodule Lynx.Rust.Extraction do
         key != :external_types,
         do: raise(ArgumentError, "unknown Rust discovery option: #{key}")
 
+    describe!(context, tools, roots, output, module, opts, [])
+  end
+
+  defp describe!(context, tools, roots, output, module, opts, opaque) do
     unless roots != [] && Enum.all?(roots, &is_binary/1),
       do: raise(ArgumentError, "Rust extraction requires explicit function roots")
 
@@ -193,6 +244,7 @@ defmodule Lynx.Rust.Extraction do
         includes ++
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++
         Enum.flat_map(models, &["--opaque", &1.rust]) ++
+        Enum.flat_map(opaque, &["--opaque", &1]) ++
         ["--"] ++ Lynx.Rust.Cargo.extraction_arguments(context, output)
 
     diagnostics =

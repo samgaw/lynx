@@ -8,6 +8,10 @@ public section
 namespace Lynx.Rustler
 open Aeneas Aeneas.Std
 
+/-- Logical atom identity at the unverified Rustler FFI boundary. Native atom
+handles, allocation and OnceLock initialization are not verified by this model. -/
+@[expose] abbrev Atom := String
+
 /-- Immutable bytes at Rustler's FFI boundary. This models the decoded value,
 not the native pointer/term representation or unsafe runtime implementation. -/
 @[expose] abbrev Binary := ByteArray
