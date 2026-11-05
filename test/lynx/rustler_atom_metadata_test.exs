@@ -140,6 +140,96 @@ defmodule Lynx.RustlerAtomMetadataTest do
         Lynx.Rust.LLBC.audit!(document, ["experiment_nif"])
       end
 
+      project = Path.join(tmp, "proofs")
+      packages = Path.join(@fixture, "proofs/.lake/packages")
+
+      if File.dir?(packages) do
+        File.mkdir_p!(Path.join(project, ".lake"))
+        File.ln_s!(packages, Path.join(project, ".lake/packages"))
+      end
+
+      project = Lynx.Rust.Project.ensure!(project, "AtomCache.Extraction", @tools)
+
+      bridge = Lynx.Rustler.Bridge.install!(project, "AtomCache.Extraction")
+
+      extraction =
+        Lynx.Rust.Extraction.run!(
+          context,
+          @tools,
+          [
+            "experiment_nif::custom_encoding::invalid",
+            "experiment_nif::custom_encoding::missing"
+          ],
+          project,
+          "AtomCache.Extraction",
+          rustler_atoms: [["custom_encoding"]],
+          external_types: [
+            %{
+              rust: "rustler::types::atom::Atom",
+              lean: "Lynx.Rustler.Atom",
+              import: bridge,
+              label: "Rustler logical atom FFI model"
+            }
+          ]
+        )
+
+      File.write!(Path.join(project, "AtomCache/Properties.lean"), """
+      module
+      public import AtomCache.Extraction.Funs
+      public section
+      open Aeneas Aeneas.Std
+      namespace AtomCache.Properties
+      theorem invalid : experiment_nif.custom_encoding.invalid = RustM.ok "invalid" := by
+        simp [experiment_nif.custom_encoding.invalid, AtomCache.Extraction.RustlerAtomCache.cache_0]
+      theorem missing : experiment_nif.custom_encoding.missing = RustM.ok "missing" := by
+        simp [experiment_nif.custom_encoding.missing, AtomCache.Extraction.RustlerAtomCache.cache_0]
+      end AtomCache.Properties
+      """)
+
+      Lynx.Rust.Project.build!(project, ["AtomCache.Properties"])
+
+      proof =
+        Lynx.Rust.Proofs.file!(extraction, ["AtomCache.Properties"],
+          required_properties: ["AtomCache.Properties.invalid", "AtomCache.Properties.missing"]
+        )
+
+      export = Path.join(tmp, "atoms.export")
+      reports = Lynx.Commands.verify!(project, [proof], export: export)
+      assert Enum.all?(reports, &(&1.status == :ok))
+
+      evidence =
+        Lynx.Rust.Report.build!(extraction, reports, source_dir: context.record["directory"])
+
+      assert length(evidence.guarantees) == 2
+
+      assert [%{implementation_verified: false, status: :modelled}] =
+               evidence.unverified_external_calls
+
+      sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+
+      {status, output} =
+        Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+
+      assert status == 0, output
+
+      File.write!(Path.join(project, "AtomCache/Wrong.lean"), """
+      module
+      public import AtomCache.Extraction.Funs
+      public section
+      open Aeneas Aeneas.Std
+      theorem wrong_atom : experiment_nif.custom_encoding.invalid = RustM.ok "missing" := by
+        simp [experiment_nif.custom_encoding.invalid, AtomCache.Extraction.RustlerAtomCache.cache_0]
+      """)
+
+      {output, status} =
+        System.cmd("lake", ["env", "lean", "AtomCache/Wrong.lean"],
+          cd: project,
+          stderr_to_stdout: true
+        )
+
+      assert status != 0
+      assert output =~ "unsolved goals"
+
       assert [] = Lynx.Rustler.Metadata.atom_caches!(expanded, [["elsewhere"]])
 
       # Metadata discovery alone does not admit this unimplemented codec.
