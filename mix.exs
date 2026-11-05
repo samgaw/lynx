@@ -9,7 +9,10 @@ defmodule Lynx.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: [],
-      test_ignore_filters: ["test/fixtures/translations/regenerate.exs"],
+      test_ignore_filters: [
+        "test/fixtures/translations/regenerate.exs",
+        ~r{test/fixtures/rust_workspace/}
+      ],
       aliases: [
         compile: [&build_lean/1, "compile"],
         precommit: ["format", "test.all"],
