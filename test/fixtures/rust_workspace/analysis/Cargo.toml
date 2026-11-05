@@ -1,0 +1,6 @@
+[package]
+name = "experiment-analysis"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+experiment-core = { path = "../core" }

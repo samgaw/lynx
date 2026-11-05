@@ -1,0 +1,16 @@
+name = "lynx-rust-workspace-fixture"
+version = "0.1.0"
+defaultTargets = ["RustWorkspace"]
+
+[[lean_lib]]
+name = "RustWorkspace"
+
+[[require]]
+name = "aeneas"
+git = "https://github.com/pereq-dev/aeneas"
+rev = "2b9e3ea4662b48c19262be759dbb704f20c24364"
+subDir = "backends/lean"
+
+[[require]]
+name = "Lynx"
+path = "../../../../Lean"
