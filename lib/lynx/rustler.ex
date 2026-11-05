@@ -199,6 +199,7 @@ defmodule Lynx.Rustler do
 
     external =
       Lynx.Rustler.Adapter.external!(bindings, extraction.implementations,
+        audit_modules: extraction.model_modules,
         proof_modules: proofs,
         bridge_module: bridge,
         implementation_module: prefix <> ".RustlerAdapter",

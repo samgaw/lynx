@@ -1,3 +1,5 @@
+pub mod protocol;
+
 pub fn evaluate(value: i64) -> Option<i64> {
     value.checked_mul(2)
 }

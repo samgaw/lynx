@@ -43,7 +43,10 @@ defmodule Lynx.Rustler.Adapter do
       "file" => file_name,
       "imports" => [],
       "contents" => [],
-      "audit_modules" => [implementation, bridge | modules ++ proof_modules],
+      "audit_modules" => [
+        implementation,
+        bridge | modules ++ proof_modules ++ Keyword.get(opts, :audit_modules, [])
+      ],
       "preludes" => [
         %{"source" => source, "file" => file_name, "span" => [1], "indentation" => 0}
       ]
