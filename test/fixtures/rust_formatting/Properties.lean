@@ -83,7 +83,7 @@ theorem array_arguments :
   have size : "actual".utf8ByteSize = 6 := by decide +kernel
   have program : (⟨#[192, 0]⟩ : ByteArray).toList = [192, 0] := by decide +kernel
   simp [core.fmt.Arguments.new, core.fmt.Formatter.write_fmt, Formatting.bytes,
-    Formatting.run, Formatting.append, Array.make, size, program]
+    Formatting.run, Formatting.validTemplate, Formatting.append, Array.make, size, program]
 
 /-- ToString returns the actual writer output rather than an erased placeholder. -/
 theorem to_string_output :
@@ -102,5 +102,28 @@ theorem output_bound (initial text : String)
     (large : 4294967295 < (initial ++ text).toUTF8.size) :
     Formatting.append initial text = RustM.fail .undef := by
   simp only [Formatting.append, ite_eq_right (Nat.not_le_of_lt large)]
+
+
+/-- Unsafe construction cannot succeed with a missing argument, even if never rendered. -/
+theorem constructor_missing_argument : core.fmt.Arguments.new
+    (Array.make (Usize.ofNat 2) [192#u8, 0#u8])
+    (Array.make (Usize.ofNat 0) []) = RustM.fail .undef := by
+  have bytes : (Formatting.bytes [192#u8, 0#u8]).toList = [192, 0] := by decide +kernel
+  simp [core.fmt.Arguments.new, Array.make, bytes, Formatting.validTemplate]
+
+theorem valid_utf8_template : Formatting.validTemplate 5 [2, 195, 169, 0] 0 0 = true := by
+  decide +kernel
+
+theorem invalid_utf8_template : Formatting.validTemplate 4 [1, 255, 0] 0 0 = false := by
+  decide +kernel
+
+theorem missing_terminator : Formatting.validTemplate 3 [1, 97] 0 0 = false := by
+  decide +kernel
+
+theorem trailing_bytes : Formatting.validTemplate 3 [0, 0] 0 0 = false := by
+  decide +kernel
+
+theorem unsupported_template_options : Formatting.validTemplate 5 [194, 5, 0, 0] 0 0 = false := by
+  decide +kernel
 
 end RustWorkspace.Formatting
