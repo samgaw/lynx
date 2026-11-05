@@ -2,6 +2,28 @@ defmodule Lynx.Rust.LLBCTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.LLBC
 
+  test "Cargo dependencies cannot masquerade as standard model crates" do
+    library = fn name -> %{"name" => name, "kind" => ["lib"]} end
+
+    workspace = %{
+      crates: [%{id: "first", targets: [library.("first_party")]}],
+      packages: %{
+        "first" => %{"targets" => [library.("first_party")]},
+        "foreign" => %{"targets" => [library.("other")]}
+      }
+    }
+
+    assert ["first_party"] = LLBC.crate_names!(workspace)
+
+    for name <- ~w(core alloc std proc_macro test) do
+      invalid = put_in(workspace, [:packages, "foreign", "targets"], [library.(name)])
+
+      assert_raise ArgumentError, ~r/ambiguous Rust crate name/, fn ->
+        LLBC.crate_names!(invalid)
+      end
+    end
+  end
+
   defp function do
     %{
       "def_id" => 0,
