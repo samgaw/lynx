@@ -232,10 +232,17 @@ defmodule Lynx.RustlerAtomMetadataTest do
 
       assert [] = Lynx.Rustler.Metadata.atom_caches!(expanded, [["elsewhere"]])
 
-      # Metadata discovery alone does not admit this unimplemented codec.
-      assert_raise RuntimeError, ~r/cannot discover Rustler bindings/, fn ->
-        Lynx.Rustler.Metadata.bindings!(expanded, compiled, custom_validate: 1)
-      end
+      # Nominal paths are discovery hints; compiled identity and the actual
+      # extracted Encoder are validated by preparation, not this parser.
+      assert %{
+               bindings: [
+                 %{
+                   "name" => "custom_validate",
+                   "result" => %{"result" => [%{"tuple" => []}, %{"native" => ["Error"]}]}
+                 }
+               ]
+             } =
+               Lynx.Rustler.Metadata.bindings!(expanded, compiled, custom_validate: 1)
 
       original = File.read!(expanded)
       changed = String.replace(original, "RUSTLER_ATOMS.get_or_init", "RUSTLER_ATOMS.get")
