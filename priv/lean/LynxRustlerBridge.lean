@@ -12,6 +12,57 @@ open Aeneas Aeneas.Std
 handles, allocation and OnceLock initialization are not verified by this model. -/
 @[expose] abbrev Atom := String
 
+/-- Environment token for stateless term construction only. Native lifetime,
+allocation and term-handle correctness remain unverified FFI assumptions. -/
+@[expose] abbrev Env := Unit
+@[expose] abbrev NativeTerm := Term
+
+/-- The resolved Rustler Encoder dictionary. First-party methods remain actual
+extracted functions; only catalogued runtime methods are modelled. -/
+structure Encoder (Self : Type) where
+  encode : Self → Env → RustM NativeTerm
+
+namespace Encoding
+
+@[expose] def atom (value : Atom) (_ : Env) : RustM NativeTerm := .ok (.atom value)
+@[expose] def u64 (value : U64) (_ : Env) : RustM NativeTerm := .ok (.integer value.val)
+
+/-- Rustler encodes strings as UTF-8 binaries. The size bound is a verification
+cutoff; successful allocation is assumed at this modelled FFI boundary. -/
+@[expose] def string (value : String) (_ : Env) : RustM NativeTerm :=
+  if value.toUTF8.size ≤ 4294967295 then .ok (.bitstring value.toUTF8 0) else .fail .undef
+
+@[expose] def str (value : Str) (env : Env) : RustM NativeTerm :=
+  match String.fromUTF8? (Formatting.bytes value.val) with
+  | some text => string text env
+  | none => .fail .undef
+
+@[expose] def shared {T : Type} (encoder : Encoder T) (value : T) (env : Env) :
+    RustM NativeTerm := encoder.encode value env
+
+@[expose] def pair {A B : Type} (first : Encoder A) (second : Encoder B)
+    (value : A × B) (env : Env) : RustM NativeTerm := do
+  let left ← first.encode value.1 env
+  let right ← second.encode value.2 env
+  .ok (.tuple #[left, right])
+
+private def encodeList {T : Type} (encoder : Encoder T) (env : Env) :
+    List T → RustM (List Term)
+  | [] => .ok []
+  | head :: tail => do
+    let encoded ← encoder.encode head env
+    let rest ← encodeList encoder env tail
+    .ok (encoded :: rest)
+
+def vec {T : Type} (encoder : Encoder T) (value : alloc.vec.Vec T) (env : Env) :
+    RustM NativeTerm := do
+  if value.val.length ≤ 4294967295 then
+    let encoded ← encodeList encoder env value.val
+    .ok (Term.list encoded)
+  else .fail .undef
+
+end Encoding
+
 /-- Immutable bytes at Rustler's FFI boundary. This models the decoded value,
 not the native pointer/term representation or unsafe runtime implementation. -/
 @[expose] abbrev Binary := ByteArray
