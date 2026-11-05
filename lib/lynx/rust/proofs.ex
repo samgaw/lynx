@@ -63,7 +63,7 @@ defmodule Lynx.Rust.Proofs do
       "file" => name <> ".lean",
       "imports" => imports,
       "contents" => [],
-      "audit_modules" => [name | imports],
+      "audit_modules" => Enum.uniq([name | imports] ++ Map.get(extraction, :model_modules, [])),
       "preludes" => [
         %{"source" => source, "file" => name <> ".lean", "span" => [1], "indentation" => 0}
       ]

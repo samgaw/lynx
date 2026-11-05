@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 unsupported-float = []
 composite = []
 binary = []
+protocol = ["binary"]
 unsupported-binary-method = ["binary"]
 custom-encoder = []
 
