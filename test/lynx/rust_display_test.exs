@@ -303,9 +303,11 @@ defmodule Lynx.Rust.DisplayTest do
         })
       end)
 
-    assert_raise CompileError, ~r/monomorphic extracted Display/, fn ->
-      LLBC.audit!(foreign, ["format_base", "format_analysis"])
-    end
+    assert_raise CompileError,
+                 ~r/monomorphic extracted implementation or approved typed renderer/,
+                 fn ->
+                   LLBC.audit!(foreign, ["format_base", "format_analysis"])
+                 end
   end
 
   defp change(document, kind, id, fun) do
