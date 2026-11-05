@@ -61,6 +61,8 @@ defmodule Lynx.Rust.Extraction do
         "std",
         "--include",
         "core::result::Result",
+        "--include",
+        "core::ops::control_flow::ControlFlow",
         "--dest-file",
         llbc
       ] ++
@@ -69,8 +71,13 @@ defmodule Lynx.Rust.Extraction do
         Enum.flat_map(models, &["--opaque", &1.rust]) ++
         ["--"] ++ Lynx.Rust.Cargo.extraction_arguments(context, output)
 
-    run!(charon, args, cd: context.record["directory"], env: Lynx.Rust.Cargo.environment(context))
-    document = JSON.decode!(File.read!(llbc))
+    diagnostics =
+      run!(charon, args,
+        cd: context.record["directory"],
+        env: Lynx.Rust.Cargo.environment(context)
+      )
+
+    document = read_llbc!(llbc, diagnostics)
     validate_target!(document)
     requested_calls = Keyword.get(opts, :external_calls, [])
 
@@ -174,6 +181,20 @@ defmodule Lynx.Rust.Extraction do
       output: output,
       module: module
     }
+  end
+
+  @doc false
+  def read_llbc!(path, diagnostics) do
+    document = JSON.decode!(File.read!(path))
+
+    if document["has_errors"] == true,
+      do:
+        raise(
+          ArgumentError,
+          "Charon reported extraction errors for #{path}:\n#{diagnostics}"
+        )
+
+    document
   end
 
   # The pinned Aeneas usize/isize models use Lean's host pointer width. Reject
