@@ -201,6 +201,118 @@ defmodule Lynx.TranslationTest do
     assert_raise ArgumentError, ~r/fingerprint must be/, fn -> assemble.("invalid", []) end
   end
 
+  test "external state and scheduling effects propagate through local, remote and captured calls" do
+    source =
+      cerl("""
+      -module(effect_native).
+      -export([native/1, local/1, remote/1, capture/0, run/1]).
+      native(X) -> erlang:nif_error(X).
+      local(X) -> native(X).
+      remote(X) -> effect_native:native(X).
+      capture() -> fun native/1.
+      run(X) -> F = capture(), F(X).
+      init() -> erlang:load_nif("unused", 0).
+      """)
+
+    base = %Lynx.External{
+      bindings: [{:effect_native, :native, 1}],
+      native_exports: %{effect_native: [native: 1]},
+      implementation_modules: %{effect_native: "Erlang.effect_native.Native"},
+      fingerprint: String.duplicate("a", 64),
+      files: [
+        %{
+          "module" => "Erlang.effect_native.Native",
+          "file" => "native.lean",
+          "imports" => [],
+          "contents" => []
+        }
+      ]
+    }
+
+    outputs =
+      for purity <- [:sequential, :concurrent] do
+        effect =
+          if purity == :sequential,
+            do:
+              ".set { env with currentProcess := { env.currentProcess with pdict := [(input, input)] } } (.ok input)",
+            else: ".send env.currentPid input (.ok input)"
+
+        [file] = base.files
+
+        file =
+          Map.put(file, "preludes", [
+            %{
+              "source" => """
+              module
+              public import Lynx
+              public section
+              namespace Erlang.effect_native
+              def «native/1» (_dispatcher : Lynx.Dispatcher) (input : Lynx.Term) : Lynx.Result Lynx.Term :=
+                .get fun env => #{effect}
+              end Erlang.effect_native
+              """,
+              "file" => "native.lean",
+              "span" => [1],
+              "indentation" => 0
+            }
+          ])
+
+        bundle = %{base | files: [file], purities: %{{:effect_native, :native, 1} => purity}}
+
+        translated =
+          Translation.new(externals: [bundle])
+          |> Translation.add({"effects.erl", source})
+          |> Translation.translate(:effect_native, local: 1, remote: 1, run: 1)
+
+        for function <- [:local, :remote],
+            do:
+              assert(
+                %{purity: ^purity} = translated.modules.effect_native.translations[{function, 1}]
+              )
+
+        assert %{dispatches: true} = translated.modules.effect_native.translations[{:run, 1}]
+        assembled = Translation.assemble(translated)
+
+        assert Enum.any?(
+                 assembled,
+                 &(&1["module"] == "Erlang.effect_native" and
+                     &1["dispatcher_purity"] == Atom.to_string(purity))
+               )
+
+        reports = Lynx.Commands.verify!(Path.expand("../../Lean", __DIR__), assembled)
+        assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+        assembled
+      end
+
+    [sequential, concurrent] = outputs
+    refute Enum.map(sequential, & &1["cache_key"]) == Enum.map(concurrent, & &1["cache_key"])
+
+    # The provider key must change even when only effect metadata changes.
+    provider_keys =
+      for purity <- [:pure, :sequential, :concurrent] do
+        [provider | _] =
+          Translation.new(
+            externals: [%{base | purities: %{{:effect_native, :native, 1} => purity}}]
+          )
+          |> Translation.add({"effects.erl", source})
+          |> Translation.translate(:effect_native, local: 1)
+          |> Translation.assemble()
+
+        provider["cache_key"]
+      end
+
+    assert length(Enum.uniq(provider_keys)) == 3
+
+    for invalid <- [
+          %{{:effect_native, :missing, 1} => :concurrent},
+          %{{:effect_native, :native, 1} => :unknown}
+        ] do
+      assert_raise ArgumentError, ~r/invalid external implementation purity/, fn ->
+        Translation.new(externals: [%{base | purities: invalid}])
+      end
+    end
+  end
+
   test "rejects declared NIFs without a visible loader" do
     core =
       cerl("""

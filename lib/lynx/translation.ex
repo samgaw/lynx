@@ -11,6 +11,7 @@ defmodule Lynx.Translation do
             external_calls: %{},
             builtin_modules: %{},
             external_bindings: MapSet.new(),
+            external_purities: %{},
             external_modules: %{},
             external_imports: %{},
             native_exports: %{},
@@ -81,9 +82,20 @@ defmodule Lynx.Translation do
         bindings: bindings,
         files: files,
         implementation_modules: modules,
-        native_exports: exports
+        native_exports: exports,
+        purities: purities
       }
-      when is_list(bindings) and is_list(files) and is_map(modules) and is_map(exports) ->
+      when is_list(bindings) and is_list(files) and is_map(modules) and is_map(exports) and
+             is_map(purities) ->
+        for {binding, purity} <- purities do
+          unless binding in bindings and purity in [:pure, :sequential, :concurrent],
+            do:
+              raise(
+                ArgumentError,
+                "invalid external implementation purity: #{inspect({binding, purity})}"
+              )
+        end
+
         Enum.each(bindings, fn
           {module, function, arity}
           when is_atom(module) and is_atom(function) and is_integer(arity) and arity >= 0 ->
@@ -137,6 +149,12 @@ defmodule Lynx.Translation do
     bindings =
       for %Lynx.External{bindings: bindings} <- externals, binding <- bindings, do: binding
 
+    purities =
+      for bundle <- externals,
+          binding <- bundle.bindings,
+          into: %{},
+          do: {binding, Map.get(bundle.purities, binding, :pure)}
+
     external_modules =
       for bundle <- externals,
           {module, _, _} = binding <- bundle.bindings,
@@ -172,7 +190,7 @@ defmodule Lynx.Translation do
               cache_hash(
                 :erlang.term_to_binary(
                   {file, fingerprint, bundle.bindings, bundle.implementation_modules,
-                   bundle.native_exports},
+                   bundle.native_exports, bundle.purities},
                   [:deterministic]
                 )
               )
@@ -200,6 +218,7 @@ defmodule Lynx.Translation do
 
     %__MODULE__{
       external_bindings: MapSet.new(bindings),
+      external_purities: purities,
       external_modules: external_modules,
       native_exports:
         Map.new(inventories, fn {module, inventory} -> {module, MapSet.new(inventory)} end),
@@ -304,7 +323,7 @@ defmodule Lynx.Translation do
         {{function, arity},
          %{
            external: true,
-           purity: :pure,
+           purity: Map.fetch!(translation.external_purities, {name, function, arity}),
            dispatches: false,
            local_calls: [],
            size_calls: [],
@@ -344,8 +363,8 @@ defmodule Lynx.Translation do
         end
 
         imported_names =
-          MapSet.new(Map.keys(imported), fn {function, arity} ->
-            {Atom.to_string(function), arity}
+          Map.new(imported, fn {{function, arity}, definition} ->
+            {{Atom.to_string(function), arity}, Atom.to_string(definition.purity)}
           end)
 
         functions =
@@ -424,7 +443,8 @@ defmodule Lynx.Translation do
           MapSet.put(imports || MapSet.new(), implementation)
         end)
 
-      {{:pure, false}, translation.funs, translation}
+      {{Map.fetch!(translation.external_purities, {module, function, arity}), false},
+       translation.funs, translation}
     else
       remote_beam_call(translation, module, function, arity, span_anno)
     end
@@ -586,12 +606,12 @@ defmodule Lynx.Translation do
 
     case value do
       %{"kind" => "local_call", "name" => name, "args" => args} ->
-        if MapSet.member?(imported, {name, length(args)}),
+        if purity = Map.get(imported, {name, length(args)}),
           do:
             Map.merge(value, %{
               "kind" => "remote_call",
               "module" => :lynx_core_to_leanj.module_name(module),
-              "purity" => "pure"
+              "purity" => purity
             }),
           else: value
 

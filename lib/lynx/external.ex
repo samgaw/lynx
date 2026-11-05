@@ -2,7 +2,7 @@ defmodule Lynx.External do
   @moduledoc """
   An external implementation bundle supplied by a translation backend.
 
-  `bindings` lists pure `{module, function, arity}` implementations defined by
+  `bindings` lists `{module, function, arity}` implementations defined by
   `files`, in the runner's input format. The backend is responsible for the
   correspondence to the external program and for preparing its Lean dependencies.
   Registration alone does not establish that correspondence. Lynx checks the
@@ -10,6 +10,12 @@ defmodule Lynx.External do
   Every external input module is also audited in full, including unused and
   private declarations. Backends can include `"audit_modules"` in input files
   to audit imported implementation and proof modules in the same way.
+
+  `purities` maps registered bindings to `:pure`, `:sequential` or `:concurrent`.
+  The default is `:pure` for stateless implementations. Stateful implementations
+  must declare their effects and use Lynx's effectful function signature; they
+  cannot be registered as pure snapshots of mutable state. Purity propagates
+  through remote calls, local calls and function captures.
 
   `fingerprint` optionally identifies the freshly extracted external program and
   its build inputs with a lowercase SHA-256 digest. A backend must recompute this
@@ -34,7 +40,15 @@ defmodule Lynx.External do
   """
 
   @enforce_keys [:bindings, :files]
-  defstruct [:bindings, :files, :fingerprint, implementation_modules: %{}, native_exports: %{}]
+  defstruct [
+    :bindings,
+    :files,
+    :fingerprint,
+    implementation_modules: %{},
+    native_exports: %{},
+    purities: %{}
+  ]
+
   @doc false
   def with_native_lock(opts, fun) do
     if opts[:native], do: with_preparation_lock(fun), else: fun.()
