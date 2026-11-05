@@ -85,14 +85,16 @@ defmodule Lynx.Rust.LLBC do
 
     constants = Lynx.Rust.Constants.audit!(globals, initializers, refs, translated["type_decls"])
 
-    modelled =
+    available_models =
       Lynx.Rust.CallModels.resolve(
         external,
         translated,
         refs,
         Keyword.get(opts, :external_calls, [])
       )
-      |> Map.take(Enum.flat_map(functions, &calls(&1["body"])))
+
+    direct_calls = Enum.flat_map(functions, &calls(&1["body"]))
+    modelled = Map.take(available_models, direct_calls)
 
     callback_dependencies =
       case Lynx.Rust.ResultModels.audit(functions, modelled, translated, refs) do
@@ -103,10 +105,16 @@ defmodule Lynx.Rust.LLBC do
     callback_ids = callback_dependencies |> Map.values() |> List.flatten() |> MapSet.new()
 
     trait_dependencies =
-      case Lynx.Rust.FormatModels.audit(functions, modelled, translated, refs) do
+      case Lynx.Rust.FormatModels.audit(functions, available_models, translated, refs) do
         {:ok, dependencies} -> dependencies
         {:error, function, message} -> failure!(function, translated, message)
       end
+
+    modelled =
+      Map.take(
+        available_models,
+        direct_calls ++ (trait_dependencies |> Map.values() |> List.flatten())
+      )
 
     allowed = %{
       functions: MapSet.new(Enum.map(functions, & &1["def_id"]) ++ Map.keys(modelled)),
@@ -394,7 +402,7 @@ defmodule Lynx.Rust.LLBC do
        when is_integer(id) and is_map(value) and
               (is_map_key(value, "Scalar") or is_map_key(value, "Adt") or
                  is_map_key(value, "TypeVar") or is_map_key(value, "Ref") or
-                 is_map_key(value, "Slice")) do
+                 is_map_key(value, "Slice") or is_map_key(value, "Array")) do
     case Map.fetch(refs, id) do
       {:ok, existing} when existing != value ->
         raise ArgumentError, "inconsistent LLBC shared type identity"

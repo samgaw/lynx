@@ -1,34 +1,58 @@
 defmodule Lynx.Rust.FormatModels do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, Constants, LLBC}
+  alias Lynx.Rust.{Constants, LLBC}
 
   # The bounded runtime is not permission to use arbitrary formatting operations.
-  # Start with default ToString and write_str, checking the nominal types and
-  # actual Display dictionary. Debug, options and custom writers stay closed.
+  # Check default format constructors, writers and every concrete Display
+  # dictionary. Debug, options and custom writers stay closed.
   def resolve(function, translated, refs) do
-    ctx = %{translated: translated, refs: refs}
+    ctx = %{translated: translated, refs: refs, constants: constant_references(translated, %{})}
 
     with %{
            "body" => "Opaque",
-           "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"},
+           "signature" => %{"is_unsafe" => unsafe, "is_variadic" => false, "abi" => "Rust"},
            "item_meta" => %{"name" => name}
          } <- function do
-      case name do
-        [
-          %{"Ident" => ["alloc", 0]},
-          %{"Ident" => ["string", 0]},
-          %{"Impl" => %{"Trait" => impl}},
-          %{"Ident" => ["to_string", 0]}
-        ] ->
+      case {unsafe, name} do
+        {false,
+         [
+           %{"Ident" => ["alloc", 0]},
+           %{"Ident" => ["string", 0]},
+           %{"Impl" => %{"Trait" => impl}},
+           %{"Ident" => ["to_string", 0]}
+         ]} ->
           to_string_model(function, impl, ctx)
 
-        [
-          %{"Ident" => ["core", 0]},
-          %{"Ident" => ["fmt", 0]},
-          %{"Impl" => %{"Ty" => %{"skip_binder" => parent, "params" => params}}},
-          %{"Ident" => ["write_str", 0]}
-        ] ->
+        {false,
+         [
+           %{"Ident" => ["core", 0]},
+           %{"Ident" => ["fmt", 0]},
+           %{"Impl" => %{"Ty" => %{"skip_binder" => parent, "params" => params}}},
+           %{"Ident" => ["write_str", 0]}
+         ]} ->
           write_str_model(function, parent, params, ctx)
+
+        {false,
+         [
+           %{"Ident" => ["core", 0]},
+           %{"Ident" => ["fmt", 0]},
+           %{"Ident" => ["rt", 0]},
+           %{"Impl" => %{"Ty" => %{"skip_binder" => parent, "params" => params}}},
+           %{"Ident" => ["new_display", 0]}
+         ]} ->
+          new_display_model(function, parent, params, ctx)
+
+        {unsafe,
+         [
+           %{"Ident" => ["core", 0]},
+           %{"Ident" => ["fmt", 0]},
+           %{"Impl" => %{"Ty" => %{"skip_binder" => parent, "params" => params}}},
+           %{"Ident" => [method, 0]}
+         ]} ->
+          formatter_model(function, unsafe, method, parent, params, ctx)
+
+        {false, name} ->
+          standard_display_model(function, name, ctx)
 
         _ ->
           nil
@@ -100,13 +124,262 @@ defmodule Lynx.Rust.FormatModels do
     end
   end
 
+  defp new_display_model(function, parent, params, ctx) do
+    sig = expand(function["signature"], ctx)
+    generics = expand(function["generics"], ctx)
+
+    with true <- plain_parameters?(params, 1, 0),
+         true <-
+           named_type?(
+             parent |> expand(ctx) |> free_bound(),
+             ~w(core fmt rt Argument),
+             [region(0)],
+             ctx
+           ),
+         true <- parameters?(generics, 2, 1),
+         [clause] <- generics["trait_clauses"],
+         {:ok, display} <- display_clause(clause, ctx),
+         true <- generics["outlives"] == [outlives(%{"Lub" => variable(0)}, region(1))],
+         true <- sig["inputs"] == [reference(region(1), variable(0), "Shared")],
+         true <- named_type?(sig["output"], ~w(core fmt rt Argument), [region(1)], ctx) do
+      model(
+        "core::fmt::rt::{core::fmt::rt::Argument<'0>}::new_display",
+        "Aeneas.Std.core.fmt.rt.Argument.new_display",
+        true,
+        "Bounded default Display argument retaining the actual audited renderer; Rust core implementation not verified"
+      )
+      |> Map.merge(%{display_trait: display, display_regions: 2})
+    else
+      _ -> nil
+    end
+  end
+
+  defp formatter_model(function, unsafe, method, parent, params, ctx) do
+    sig = expand(function["signature"], ctx)
+    generics = expand(function["generics"], ctx)
+    parent = parent |> expand(ctx) |> free_bound()
+
+    cond do
+      method == "write_fmt" and unsafe == false and plain_parameters?(params, 1, 0) and
+        named_type?(parent, ~w(core fmt Formatter), [region(0)], ctx) and
+          plain_parameters?(generics, 3, 0, [outlives(region(0), region(1))]) ->
+        case sig["inputs"] do
+          [writer, args] ->
+            if writer == reference(region(1), parent, "Mut") and
+                 named_type?(args, ~w(core fmt Arguments), [region(2)], ctx) and
+                 fmt_result?(sig["output"], ctx),
+               do:
+                 model(
+                   "core::fmt::{core::fmt::Formatter<'a>}::write_fmt",
+                   "Aeneas.Std.core.fmt.Formatter.write_fmt",
+                   true,
+                   "Bounded default-format execution of checked template and actual renderers; allocation success assumed; Rust core implementation not verified"
+                 )
+
+          _ ->
+            nil
+        end
+
+      method == "new" and unsafe == true and plain_parameters?(params, 1, 0) and
+          named_type?(parent, ~w(core fmt Arguments), [region(0)], ctx) ->
+        arguments_constructor_model(sig, generics, ctx)
+
+      true ->
+        nil
+    end
+  end
+
+  defp arguments_constructor_model(sig, generics, ctx) do
+    usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+    u8 = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+
+    with %{
+           "regions" => [r],
+           "types" => [],
+           "const_generics" => [n, m],
+           "trait_clauses" => [],
+           "outlives" => [],
+           "trait_type_constraints" => []
+         } <- generics,
+         true <- r["index"] == 0 and n["index"] == 0 and m["index"] == 1,
+         true <- n["ty"] == usize and m["ty"] == usize,
+         [template, args] <- sig["inputs"],
+         true <-
+           template ==
+             reference(
+               region(0),
+               %{"Array" => [u8, [%{"Var" => %{"Free" => 0}}, usize], nil]},
+               "Shared"
+             ),
+         %{"Ref" => [arg_region, %{"Array" => [argument, size, nil]}, "Shared"]} <- args,
+         true <- arg_region == region(0) and size == [%{"Var" => %{"Free" => 1}}, usize],
+         true <- named_type?(argument, ~w(core fmt rt Argument), [region(0)], ctx),
+         true <- named_type?(sig["output"], ~w(core fmt Arguments), [region(0)], ctx) do
+      model(
+        "core::fmt::{core::fmt::Arguments<'a>}::new",
+        "Aeneas.Std.core.fmt.Arguments.new",
+        true,
+        "Bounded format-argument constructor: supported UTF-8 template and argument indices checked before success; unsupported/invalid inputs cut off; Rust core implementation not verified"
+      )
+    else
+      _ -> nil
+    end
+  end
+
+  defp standard_display_model(function, name, ctx) do
+    source =
+      case name do
+        [
+          %{"Ident" => ["core", 0]},
+          %{"Ident" => ["fmt", 0]},
+          %{"Ident" => ["num", 0]},
+          %{"Ident" => ["imp", 0]},
+          %{"Impl" => %{"Trait" => id}},
+          %{"Ident" => ["fmt", 0]}
+        ] ->
+          {:scalar, id}
+
+        [
+          %{"Ident" => ["alloc", 0]},
+          %{"Ident" => ["string", 0]},
+          %{"Impl" => %{"Trait" => id}},
+          %{"Ident" => ["fmt", 0]}
+        ] ->
+          {:string, id}
+
+        [
+          %{"Ident" => ["core", 0]},
+          %{"Ident" => ["fmt", 0]},
+          %{"Impl" => %{"Trait" => id}},
+          %{"Ident" => ["fmt", 0]}
+        ] ->
+          {:core, id}
+
+        _ ->
+          nil
+      end
+
+    if source do
+      {kind, id} = source
+      ctx = Map.put(ctx, :traits, trait_references(ctx.translated, %{}))
+
+      with %{
+             "src" => "Normal",
+             "is_negative" => false,
+             "is_unsafe" => false,
+             "consts" => [],
+             "types" => [],
+             "implied_trait_refs" => [],
+             "impl_trait" => %{"id" => trait, "generics" => args}
+           } = impl <- declaration(ctx, "trait_impls", id),
+           true <- display_trait?(trait, ctx),
+           %{"regions" => [], "const_generics" => [], "trait_refs" => [], "types" => [self]} <-
+             expand(args, ctx),
+           true <- method_identity?(function, impl, trait, ctx) do
+        standard_display_kind(function, impl, kind, self, trait, ctx)
+      else
+        _ -> nil
+      end
+    end
+  end
+
+  defp standard_display_kind(function, impl, kind, self, trait, ctx) do
+    if plain_parameters?(impl["generics"], 0, 0) and display_signature?(function, self, ctx) do
+      spec =
+        case {kind, self} do
+          {:scalar, %{"Scalar" => %{"Integer" => %{"Signed" => width}}}}
+          when width in ~w(I8 I16 I32 I64 I128 Isize) ->
+            {"core::fmt::num::imp::{core::fmt::Display<#{String.downcase(width)}>}::fmt",
+             "Aeneas.Std.core.fmt.num.imp.Display#{width}.fmt", true}
+
+          {:scalar, %{"Scalar" => %{"Integer" => %{"Unsigned" => width}}}}
+          when width in ~w(U8 U16 U32 U64 U128 Usize) ->
+            {"core::fmt::num::imp::{core::fmt::Display<#{String.downcase(width)}>}::fmt",
+             "Aeneas.Std.core.fmt.num.imp.Display#{width}.fmt", true}
+
+          {:string, _} ->
+            if named_type?(self, ~w(alloc string String), [], ctx),
+              do:
+                {"alloc::string::{core::fmt::Display<alloc::string::String>}::fmt",
+                 "Aeneas.Std.alloc.string.DisplayString.fmt", false}
+
+          {:core, _} ->
+            if str_type?(self),
+              do:
+                {"core::fmt::{core::fmt::Display<str>}::fmt",
+                 "Aeneas.Std.core.fmt.DisplayStr.fmt", false}
+
+          _ ->
+            nil
+        end
+
+      if spec do
+        {rust, lean, builtin} = spec
+
+        model(
+          rust,
+          lean,
+          builtin,
+          "Bounded default integer/string Display writer model; allocation success assumed; Rust implementation not verified"
+        )
+        |> Map.put(:display_renderer, true)
+      end
+    else
+      if kind == :core, do: shared_display_model(function, impl, self, trait, ctx)
+    end
+  end
+
+  defp shared_display_model(function, impl, self, trait, ctx) do
+    fp = expand(function["generics"], ctx)
+    ip = expand(impl["generics"], ctx)
+    sig = expand(function["signature"], ctx)
+
+    with true <- parameters?(ip, 1, 1),
+         true <- parameters?(fp, 4, 1),
+         [ic] <- ip["trait_clauses"],
+         [fc] <- fp["trait_clauses"],
+         {:ok, ^trait} <- display_clause(ic, ctx),
+         {:ok, ^trait} <- display_clause(fc, ctx),
+         true <- ip["outlives"] == [outlives(%{"Lub" => variable(0)}, region(0))],
+         true <-
+           fp["outlives"] == [
+             outlives(region(0), region(1)),
+             outlives(%{"Lub" => variable(0)}, region(0)),
+             outlives(region(3), region(2))
+           ],
+         true <- self == reference(region(0), variable(0), "Shared"),
+         [input, writer] <- sig["inputs"],
+         true <- input == reference(region(1), self, "Shared"),
+         %{"Ref" => [r, formatter, "Mut"]} <- writer,
+         true <- r == region(2),
+         true <- named_type?(formatter, ~w(core fmt Formatter), [region(3)], ctx),
+         true <- fmt_result?(sig["output"], ctx) do
+      model(
+        "core::fmt::{core::fmt::Display<&'0 @T>}::fmt",
+        "Aeneas.Std.core.fmt.DisplayShared.fmt",
+        false,
+        "Default shared-reference Display delegates to the actual audited inner dictionary; Rust core implementation not verified"
+      )
+      |> Map.merge(%{
+        display_renderer: true,
+        display_delegate: trait,
+        display_trait: trait,
+        display_regions: 4
+      })
+    else
+      _ -> nil
+    end
+  end
+
   def audit(functions, models, translated, refs) do
     ctx = %{
       translated: translated,
       refs: refs,
+      constants: constant_references(translated, %{}),
       models: models,
       traits: trait_references(translated, %{}),
-      functions: Map.new(functions, &{&1["def_id"], &1})
+      functions: Map.new(Enum.reject(translated["fun_decls"], &is_nil/1), &{&1["def_id"], &1}),
+      implementations: MapSet.new(functions, & &1["def_id"])
     }
 
     Enum.reduce_while(functions, {:ok, %{}}, fn function, {:ok, dependencies} ->
@@ -131,8 +404,11 @@ defmodule Lynx.Rust.FormatModels do
        ) do
     direct =
       case ctx.models[id] do
-        %{display_trait: trait} -> [display_method!(args, trait, ctx)]
-        _ -> []
+        %{display_trait: trait} = model ->
+          display_methods!(args, trait, Map.get(model, :display_regions, 1), ctx)
+
+        _ ->
+          []
       end
 
     direct ++ Enum.flat_map(Map.values(node), &dispatches(&1, ctx))
@@ -144,41 +420,108 @@ defmodule Lynx.Rust.FormatModels do
   defp dispatches(nodes, ctx) when is_list(nodes), do: Enum.flat_map(nodes, &dispatches(&1, ctx))
   defp dispatches(_, _), do: []
 
-  # Initially accept monomorphic Display implementations only. In particular,
-  # this does not silently use Aeneas builtin renderers found via dictionaries.
-  defp display_method!(args, trait, ctx) do
-    with %{"regions" => [_], "types" => [self], "const_generics" => [], "trait_refs" => [ref]} <-
+  # A dictionary is not a verified contract. Follow its actual implementation
+  # method, and permit standard renderers only through the closed typed catalogue.
+  defp display_methods!(args, trait, regions, ctx) do
+    with %{"regions" => rs, "types" => [self], "const_generics" => [], "trait_refs" => [ref]} <-
            args,
-         %{
-           "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => impl_args}},
+         true <- is_list(rs) and length(rs) == regions do
+      display_reference!(ref, trait, expand(self, ctx), ctx, [])
+    else
+      _ -> display_failure!()
+    end
+  end
+
+  defp display_reference!(ref, trait, self, ctx, seen) do
+    with %{
+           "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => actual_args}},
            "trait_decl_ref" => %{"id" => ^trait, "generics" => trait_args}
          } <- trait_reference(ref, ctx.traits),
-         true <- Constants.empty_arguments?(impl_args),
-         true <- expand(trait_args, ctx) == arguments([expand(self, ctx)]),
+         true <- expand(trait_args, ctx) == arguments([self]),
+         true <- {impl_id, self} not in seen,
          %{
+           "src" => "Normal",
            "is_negative" => false,
            "is_unsafe" => false,
-           "src" => "Normal",
-           "generics" => params,
-           "impl_trait" => impl_trait,
            "consts" => [],
            "types" => [],
            "implied_trait_refs" => [],
-           "methods" => [%{"skip_binder" => %{"id" => method_id}}]
+           "impl_trait" => impl_trait,
+           "generics" => params,
+           "methods" => [%{"skip_binder" => %{"id" => method}}]
          } = impl <- declaration(ctx, "trait_impls", impl_id),
-         true <- plain_parameters?(params, 0, 0),
+         true <- instance_arguments?(actual_args, params),
          true <-
-           expand(impl_trait, ctx) == %{"id" => trait, "generics" => expand(trait_args, ctx)},
-         %{} = function <- ctx.functions[method_id],
-         true <- method_identity?(function, impl, trait, ctx),
-         true <- display_signature?(function, expand(self, ctx), ctx) do
-      method_id
+           instantiate(expand(impl_trait, ctx), actual_args, ctx) == %{
+             "id" => trait,
+             "generics" => arguments([self])
+           },
+         %{} = function <- ctx.functions[method],
+         true <- method_identity?(function, impl, trait, ctx) do
+      case ctx.models[method] do
+        %{display_delegate: ^trait} ->
+          with %{
+                 "regions" => [_],
+                 "types" => [inner],
+                 "const_generics" => [],
+                 "trait_refs" => [nested]
+               } <- actual_args do
+            [
+              method
+              | display_reference!(nested, trait, expand(inner, ctx), ctx, [
+                  {impl_id, self} | seen
+                ])
+            ]
+          else
+            _ -> display_failure!()
+          end
+
+        %{display_renderer: true} ->
+          [method]
+
+        _ ->
+          if MapSet.member?(ctx.implementations, method) and plain_parameters?(params, 0, 0) and
+               Constants.empty_arguments?(actual_args) and display_signature?(function, self, ctx) do
+            [method]
+          else
+            display_failure!()
+          end
+      end
     else
-      _ ->
-        raise ArgumentError,
-              "ToString requires a monomorphic extracted Display implementation with matching dictionary type, method identity and signature; external renderers are not implicitly approved"
+      _ -> display_failure!()
     end
   end
+
+  defp instance_arguments?(
+         %{"regions" => rs, "types" => ts, "const_generics" => [], "trait_refs" => refs},
+         params
+       )
+       when is_list(rs) and is_list(ts) and is_list(refs) do
+    length(rs) == length(params["regions"]) and length(ts) == length(params["types"]) and
+      length(refs) == length(params["trait_clauses"])
+  end
+
+  defp instance_arguments?(_, _), do: false
+
+  defp instantiate(%{"TypeVar" => %{"Free" => index}}, args, ctx),
+    do: expand(Enum.at(args["types"], index), ctx)
+
+  defp instantiate(%{"Var" => %{"Free" => index}}, args, _), do: Enum.at(args["regions"], index)
+
+  defp instantiate(map, args, ctx) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {k, instantiate(v, args, ctx)} end)
+
+  defp instantiate(list, args, ctx) when is_list(list),
+    do: Enum.map(list, &instantiate(&1, args, ctx))
+
+  defp instantiate(value, _, _), do: value
+
+  defp display_failure!,
+    do:
+      raise(
+        ArgumentError,
+        "Display requires a monomorphic extracted implementation or approved typed renderer with matching dictionary, method identity and signature; external renderers are not implicitly approved"
+      )
 
   defp method_identity?(function, impl, trait, ctx) do
     id = function["def_id"]
@@ -219,8 +562,14 @@ defmodule Lynx.Rust.FormatModels do
   defp generic_arguments?(args, impl, ctx, kind, function) do
     n = length(function["generics"]["regions"]) - length(impl["generics"]["regions"])
 
+    inherited = Enum.map(impl["generics"]["regions"], &region(&1["index"]))
+
     regions =
-      if kind == :method, do: Enum.map(indices(n), &%{"Var" => %{"Bound" => [0, &1]}}), else: []
+      inherited ++
+        if(kind == :method,
+          do: Enum.map(indices(n), &%{"Var" => %{"Bound" => [0, &1]}}),
+          else: []
+        )
 
     expected =
       arguments(Enum.map(impl["generics"]["types"], &variable(&1["index"])))
@@ -457,7 +806,50 @@ defmodule Lynx.Rust.FormatModels do
       label: label
     }
 
-  defp expand(value, ctx), do: CallModels.expand(value, ctx.refs)
+  defp expand(%{"Array" => [element, size, rest]}, ctx),
+    do: %{"Array" => [expand(element, ctx), expand_constant(size, ctx), rest]}
+
+  defp expand(%{"Value" => [_, value]}, ctx), do: expand(value, ctx)
+
+  defp expand(%{"Deduplicated" => id}, ctx) do
+    case ctx.refs[id] do
+      nil -> %{"UnknownTypeReference" => id}
+      value -> expand(value, ctx)
+    end
+  end
+
+  defp expand(map, ctx) when is_map(map), do: Map.new(map, fn {k, v} -> {k, expand(v, ctx)} end)
+  defp expand(list, ctx) when is_list(list), do: Enum.map(list, &expand(&1, ctx))
+  defp expand(value, _), do: value
+
+  defp expand_constant(%{"Value" => [_, [kind, type]]}, ctx), do: [kind, expand(type, ctx)]
+
+  defp expand_constant(%{"Deduplicated" => id}, ctx) do
+    case ctx.constants[id] do
+      [kind, type] -> [kind, expand(type, ctx)]
+      _ -> %{"UnknownConstantReference" => id}
+    end
+  end
+
+  defp expand_constant(_, _), do: nil
+
+  defp constant_references(%{"Value" => [id, [kind, _] = value]}, refs)
+       when is_map(kind) and
+              (is_map_key(kind, "Var") or is_map_key(kind, "Integer") or
+                 is_map_key(kind, "Discriminant")) do
+    if Map.has_key?(refs, id) and refs[id] != value,
+      do: raise(ArgumentError, "inconsistent LLBC shared constant identity")
+
+    Map.put(refs, id, value)
+  end
+
+  defp constant_references(map, refs) when is_map(map),
+    do: Enum.reduce(Map.values(map), refs, &constant_references/2)
+
+  defp constant_references(list, refs) when is_list(list),
+    do: Enum.reduce(list, refs, &constant_references/2)
+
+  defp constant_references(_, refs), do: refs
 
   defp declaration(ctx, key, id),
     do: Enum.find(ctx.translated[key] || [], &(&1 && &1["def_id"] == id))
