@@ -3,6 +3,7 @@ module
 meta import Lean
 public import Lynx.Runner
 public import Lynx
+public import Lynx.Rustler
 public import Lynx.Modules.Erlang.erlang
 public import Lynx.Modules.Erlang.binary
 public import Lynx.Modules.Erlang.lists
@@ -689,6 +690,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.toExcept",
   "Lynx.Result.toExceptRead",
   "Lynx.Result.tryWith",
+  "Lynx.Rustler.decodeBool",
+  "Lynx.Rustler.encodeBool",
   "Lynx.ScheduleChoice",
   "Lynx.ScheduleChoice.current",
   "Lynx.ScheduleChoice.swap",
