@@ -1,0 +1,94 @@
+diff --git i/src/interp/InterpJoin.ml w/src/interp/InterpJoin.ml
+index 46328d4464e0..cc68785cb171 100644
+--- i/src/interp/InterpJoin.ml
++++ w/src/interp/InterpJoin.ml
+@@ -36,6 +36,73 @@ let reborrow_ashared_loans (span : Meta.span) (loop_id : LoopId.id option)
+   (* Map from the fresh sids to the original symbolic values *)
+   let sid_subst = ref [] in
+
++  let fresh_absl = ref [] in
++
++  (* Refreshing a shared symbolic value also duplicates its hidden static
++     borrows. Keep a projection connecting them to their original loans. *)
++  let reborrow_static (sv : symbolic_value) nsid =
++    let owned = RegionSet.singleton RStatic in
++    if ty_has_regions_in_set ctx.type_ctx.type_infos owned sv.sv_ty then
++      let ty = sv.sv_ty in
++      let borrow =
++        AProjBorrows { proj = { sv_id = sv.sv_id; proj_ty = ty }; loans = [] }
++      in
++      let loan =
++        AProjLoans
++          { proj = { sv_id = nsid; proj_ty = ty }; consumed = []; borrows = [] }
++      in
++      let cont =
++        if not with_abs_conts then None
++        else if
++          ty_has_mut_borrow_for_region_in_set ctx.type_ctx.type_infos owned ty
++        then
++          let borrow =
++            EProjBorrows
++              { proj = { sv_id = sv.sv_id; proj_ty = ty }; loans = [] }
++          in
++          let loan =
++            EProjLoans
++              {
++                proj = { sv_id = nsid; proj_ty = ty };
++                consumed = [];
++                borrows = [];
++              }
++          in
++          Some
++            {
++              output = Some { value = ESymbolic (PNone, borrow); ty };
++              input = Some { value = ESymbolic (PNone, loan); ty };
++            }
++        else
++          Some
++            {
++              output = Some (mk_etuple ~borrow_proj:true []);
++              input = Some (mk_etuple ~borrow_proj:false []);
++            }
++      in
++      let kind =
++        match loop_id with
++        | Some id -> Loop id
++        | None -> WithCont
++      in
++      fresh_absl :=
++        {
++          abs_id = ctx.fresh_abs_id ();
++          kind;
++          can_end = true;
++          parents = AbsId.Set.empty;
++          regions = { owned };
++          ended_subabs = AbsLevelSet.empty;
++          avalues =
++            List.map
++              (fun value ->
++                ({ value = ASymbolic (PNone, value); ty } : tavalue))
++              [ borrow; loan ];
++          cont;
++        }
++        :: !fresh_absl
++  in
++
+   (* Return the same value but where:
+      - the shared loans have been removed
+      - the symbolic values have been replaced with fresh symbolic values
+@@ -62,14 +129,13 @@ let reborrow_ashared_loans (span : Meta.span) (loop_id : LoopId.id option)
+             let nid = ctx.fresh_symbolic_value_id () in
+             let sv = SymbolicValueId.Map.find id absl_id_maps.sids_to_values in
+             sid_subst := (nid, sv) :: !sid_subst;
++            reborrow_static sv nid;
+             nid);
+         sbsubst = (fun _ -> ctx.fresh_shared_borrow_id ());
+       }
+       v
+   in
+
+-  let fresh_absl = ref [] in
+-
+   (* Auxiliary function to create a new abstraction for a shared value.
+
+      Example:

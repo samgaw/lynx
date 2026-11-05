@@ -183,7 +183,10 @@ defmodule Lynx.Rust.LLBC do
 
   def link!(audit, translation) do
     unless translation["charon_version"] == "0.1.304" && translation["crate"] == audit.crate &&
-             translation["aeneas_version"] == "nightly-2026.11.04-2b9e3ea",
+             translation["aeneas_version"] in [
+               "nightly-2026.11.04-2b9e3ea",
+               "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1"
+             ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
     for id <- Map.keys(audit.external_calls),

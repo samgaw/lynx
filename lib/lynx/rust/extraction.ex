@@ -62,6 +62,8 @@ defmodule Lynx.Rust.Extraction do
         "--include",
         "core::result::Result",
         "--include",
+        "core::option::Option",
+        "--include",
         "core::ops::control_flow::ControlFlow",
         "--include",
         "core::fmt::Error",

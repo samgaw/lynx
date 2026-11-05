@@ -79,6 +79,22 @@ defmodule Lynx.Rust.LLBCTest do
     assert %{0 => %{"lean_name" => "first_party.compute"}} = LLBC.link!(audit, translation())
   end
 
+  test "accepts only the explicitly pinned Aeneas builds" do
+    audit = LLBC.audit!(document([function()]), ["first_party"])
+
+    assert %{0 => %{"lean_name" => "first_party.compute"}} =
+             LLBC.link!(audit, %{
+               translation()
+               | "aeneas_version" => "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1"
+             })
+
+    for version <- ["2b9e3ea4662b-dirty", "nightly-2026.11.04-2b9e3ea+unknown", nil] do
+      assert_raise ArgumentError, ~r/does not match/, fn ->
+        LLBC.link!(audit, %{translation() | "aeneas_version" => version})
+      end
+    end
+  end
+
   test "composite signatures retain tuple structure and require the standard Result identity" do
     boolean = %{"Value" => [0, %{"Scalar" => "Bool"}]}
 
