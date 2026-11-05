@@ -1,0 +1,6 @@
+/.build/
+/native/target/
+/proofs/*
+!/proofs/WorkspaceExample/
+/proofs/WorkspaceExample/*
+!/proofs/WorkspaceExample/Properties.lean
