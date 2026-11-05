@@ -2,6 +2,7 @@ defmodule Lynx.Rust.LLBC do
   @moduledoc false
 
   @library_kinds ~w(lib rlib dylib cdylib staticlib)
+  @standard_crates ~w(core alloc std proc_macro test)
 
   def crate_names!(workspace) do
     names =
@@ -22,9 +23,13 @@ defmodule Lynx.Rust.LLBC do
           Enum.any?(target["kind"], &(&1 in @library_kinds)),
           do: target["name"]
 
-    if Enum.any?(names, &(&1 in ~w(core alloc std proc_macro test) or &1 in foreign_names)),
-      do:
-        raise(ArgumentError, "ambiguous Rust crate name shared with a standard or external crate")
+    if Enum.any?(foreign_names, &(&1 in @standard_crates)) or
+         Enum.any?(names, &(&1 in @standard_crates or &1 in foreign_names)),
+       do:
+         raise(
+           ArgumentError,
+           "ambiguous Rust crate name shared with a standard or external crate"
+         )
 
     names
   end
@@ -77,6 +82,13 @@ defmodule Lynx.Rust.LLBC do
       )
       |> Map.take(Enum.flat_map(functions, &calls(&1["body"])))
 
+    callback_dependencies =
+      case Lynx.Rust.ResultModels.audit(functions, modelled, translated, refs) do
+        {:ok, dependencies} -> dependencies
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
+    callback_ids = callback_dependencies |> Map.values() |> List.flatten() |> MapSet.new()
     allowed = %{functions: MapSet.new(ids ++ Map.keys(modelled)), constants: constants}
 
     if length(ids) != MapSet.size(MapSet.new(ids)),
@@ -90,7 +102,15 @@ defmodule Lynx.Rust.LLBC do
                  "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"}
                },
                function
-             ) do
+             ) or
+               (MapSet.member?(callback_ids, function["def_id"]) and
+                  match?(
+                    %{
+                      "body" => %{"Structured" => _},
+                      "item_meta" => %{"opacity" => "Transparent"}
+                    },
+                    function
+                  )) do
         failure!(function, translated, "missing or unsupported first-party implementation")
       end
 
@@ -103,11 +123,12 @@ defmodule Lynx.Rust.LLBC do
              do: failure!(type, translated, "missing or unsupported first-party type definition")
     end
 
-    check_constant_cycles!(functions, constants, translated)
+    check_constant_cycles!(functions, constants, translated, callback_dependencies)
 
     %{
       functions: ordinary,
       constant_initializers: initializers,
+      callback_dependencies: callback_dependencies,
       constants: constants,
       external_functions: external,
       external_calls: modelled,
@@ -167,7 +188,11 @@ defmodule Lynx.Rust.LLBC do
             do: initializer
 
       {function["def_id"],
-       (calls(function["body"]) ++ initializer_calls) |> Enum.uniq() |> Enum.sort()}
+       (calls(function["body"]) ++
+          initializer_calls ++
+          Map.get(Map.get(audit, :callback_dependencies, %{}), function["def_id"], []))
+       |> Enum.uniq()
+       |> Enum.sort()}
     end)
   end
 
@@ -176,10 +201,11 @@ defmodule Lynx.Rust.LLBC do
   defp global_ids(value) when is_list(value), do: Enum.flat_map(value, &global_ids/1)
   defp global_ids(_), do: []
 
-  defp check_constant_cycles!(_functions, constants, _translated) when map_size(constants) == 0,
-    do: :ok
+  defp check_constant_cycles!(_functions, constants, _translated, _callbacks)
+       when map_size(constants) == 0,
+       do: :ok
 
-  defp check_constant_cycles!(functions, constants, translated) do
+  defp check_constant_cycles!(functions, constants, translated, callbacks) do
     graph = :digraph.new()
 
     try do
@@ -193,7 +219,7 @@ defmodule Lynx.Rust.LLBC do
           do: :digraph.add_edge(graph, {:constant, id}, {:function, initializer})
 
       for function <- functions do
-        for id <- calls(function["body"]),
+        for id <- calls(function["body"]) ++ Map.get(callbacks, function["def_id"], []),
             MapSet.member?(ids, id),
             do: :digraph.add_edge(graph, {:function, function["def_id"]}, {:function, id})
 
@@ -433,7 +459,7 @@ defmodule Lynx.Rust.LLBC do
   defp signature_type!(type, _),
     do: raise(ArgumentError, "unsupported NIF type in extracted signature: #{inspect(type)}")
 
-  defp result_type?(id, audit) do
+  def result_type?(id, audit) do
     case Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id)) do
       %{
         "item_meta" => %{
