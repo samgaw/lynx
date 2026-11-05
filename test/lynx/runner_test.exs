@@ -7,6 +7,154 @@ defmodule Lynx.RunnerTest do
   @moduletag timeout: to_timeout(minute: 10)
 
   @tag :tmp_dir
+  test "cache keys include imported implementation and private proof artifacts", %{tmp_dir: tmp} do
+    File.cp!(Path.join(@lean_dir, "../lean-toolchain"), Path.join(tmp, "lean-toolchain"))
+
+    File.write!(Path.join(tmp, "lakefile.toml"), """
+    name = "native-cache-audit"
+    [[lean_lib]]
+    name = "NativeDependency"
+    [[require]]
+    name = "Lynx"
+    path = #{JSON.encode!(@lean_dir)}
+    """)
+
+    {output, status} = System.cmd("lake", ["update"], cd: tmp, stderr_to_stdout: true)
+    assert status == 0, output
+    dependency = Path.join(tmp, "NativeDependency.lean")
+    source = "module\npublic section\n@[expose] def NativeDependency.value : Bool := true\n"
+
+    build = fn source ->
+      File.write!(dependency, source)
+
+      {output, status} =
+        System.cmd("lake", ["build", "NativeDependency"], cd: tmp, stderr_to_stdout: true)
+
+      assert status == 0, output
+    end
+
+    build.(source)
+
+    property = %{
+      "source" =>
+        "module\npublic import NativeDependency\ntheorem native : NativeDependency.value = true := by rfl\n",
+      "file" => "imported-property.lean",
+      "span" => [1],
+      "indentation" => 0
+    }
+
+    input =
+      file("imported-property.lean", "NativeDependency.Property", [])
+      |> Map.put("preludes", [property])
+      |> Map.put("audit_modules", ["NativeDependency", "NativeDependency.Property"])
+      |> Map.put("cache_key", :crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower))
+
+    assert [%{status: :ok, cached: false}] = Lynx.Commands.verify!(tmp, [input])
+    assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(tmp, [input])
+    export = Path.join(tmp, "shared-namespace.export")
+    assert [%{status: :ok}] = Lynx.Commands.verify!(tmp, [input], export: export)
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(tmp, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    # The client and its supplied source key stay identical. A private unused
+    # declaration still changes the imported audit boundary.
+    build.(source <> "private axiom unproved_dependency : True\n")
+
+    assert [%{status: :error, cached: false, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(tmp, [input])
+
+    assert Enum.any?(diagnostics, &(&1.message =~ "unexpected axiom"))
+
+    build.(String.replace(source, ":= true", ":= false"))
+    assert [%{status: :error, cached: false}] = Lynx.Commands.verify!(tmp, [input])
+  end
+
+  test "audits whole native modules, including unused axioms and unfinished proofs" do
+    for declaration <- [
+          "private axiom unused_native : True",
+          "private theorem unfinished_native : True := by sorry"
+        ] do
+      source = %{
+        "source" => "module\npublic import Lynx\npublic section\n" <> declaration,
+        "file" => "native.lean",
+        "span" => [1],
+        "indentation" => 0
+      }
+
+      native =
+        file("native.lean", "NativeAudit", [])
+        |> Map.put("preludes", [source])
+        |> Map.put("audit_modules", ["NativeAudit"])
+
+      assert [%{status: :error, diagnostics: diagnostics}] =
+               Lynx.Commands.verify!(@lean_dir, [native])
+
+      assert Enum.any?(diagnostics, &(&1.message =~ "unexpected axiom"))
+    end
+  end
+
+  test "native audits inspect private declarations in imported proof modules" do
+    source = %{
+      "source" => "module\npublic import Lynx\nprivate axiom unproved : True\n",
+      "file" => "native-proof.lean",
+      "span" => [1],
+      "indentation" => 0
+    }
+
+    proof = file("native-proof.lean", "NativeProof", []) |> Map.put("preludes", [source])
+
+    adapter =
+      file("native-adapter.lean", "NativeAdapter", [], ["NativeProof"])
+      |> Map.put("audit_modules", ["NativeProof"])
+
+    assert [%{status: :ok}, %{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, [proof, adapter])
+
+    assert Enum.any?(diagnostics, &(&1.message =~ "unexpected axiom"))
+  end
+
+  test "private audit imports do not expand the interface available to client proofs" do
+    source = %{
+      "source" => """
+      module
+      public import Lynx
+      namespace NativePrivate
+      private theorem hidden : True := True.intro
+      public theorem visible : True := True.intro
+      end NativePrivate
+      """,
+      "file" => "private-proof.lean",
+      "span" => [1],
+      "indentation" => 0
+    }
+
+    proof = file("private-proof.lean", "NativePrivate", []) |> Map.put("preludes", [source])
+
+    auditor =
+      file("auditor.lean", "NativeAuditor", [], ["NativePrivate"])
+      |> Map.put("audit_modules", ["NativePrivate"])
+
+    client_source = %{
+      source
+      | "source" => """
+        module
+        public import NativePrivate
+        example : True := NativePrivate.hidden
+        """
+    }
+
+    client =
+      file("client.lean", "NativeClient", [], ["NativePrivate", "NativeAuditor"])
+      |> Map.put("preludes", [client_source])
+
+    assert [%{status: :ok}, %{status: :ok}, %{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, [proof, auditor, client])
+
+    assert Enum.any?(diagnostics, &(&1.message =~ "Unknown identifier `NativePrivate.hidden`"))
+  end
+
+  @tag :tmp_dir
   test "only exposes declared imports and their dependencies", %{tmp_dir: tmp_dir} do
     calls = [
       definition("source", call("Erlang.maps", "value")),
