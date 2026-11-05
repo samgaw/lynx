@@ -9,7 +9,9 @@ defmodule Lynx.Rust.CallModels do
         do: raise(ArgumentError, "unknown external Rust call model: #{inspect(key)}")
 
     for function <- functions,
-        model = match_function(function, translated, refs, enabled),
+        model =
+          Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
+            match_function(function, translated, refs, enabled),
         model != nil,
         into: %{} do
       {function["def_id"],
@@ -218,20 +220,20 @@ defmodule Lynx.Rust.CallModels do
 
   defp binary_type?(_, _), do: false
 
-  defp expand(%{"Value" => [_, value]}, refs), do: expand(value, refs)
+  def expand(%{"Value" => [_, value]}, refs), do: expand(value, refs)
 
-  defp expand(%{"Deduplicated" => id}, refs) do
+  def expand(%{"Deduplicated" => id}, refs) do
     case Map.fetch(refs, id) do
       {:ok, type} -> expand(type, refs)
       :error -> %{"UnknownTypeReference" => id}
     end
   end
 
-  defp expand(value, refs) when is_map(value),
+  def expand(value, refs) when is_map(value),
     do: Map.new(value, fn {key, value} -> {key, expand(value, refs)} end)
 
-  defp expand(values, refs) when is_list(values), do: Enum.map(values, &expand(&1, refs))
-  defp expand(value, _), do: value
+  def expand(values, refs) when is_list(values), do: Enum.map(values, &expand(&1, refs))
+  def expand(value, _), do: value
 
   # The impl's parent type is under its own binder, while its method signature
   # uses free generic indices. Compare them in the same context.
