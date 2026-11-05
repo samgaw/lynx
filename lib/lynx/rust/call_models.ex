@@ -110,7 +110,7 @@ defmodule Lynx.Rust.CallModels do
               can_fail: true,
               lift: true,
               label:
-                "Rustler 0.39 as_slice: immutable bytes and valid pointer assumed at the unverified FFI boundary; size bounded by isize::MAX"
+                "Rustler 0.38/0.39 as_slice: immutable bytes and valid pointer assumed at the unverified FFI boundary; size bounded by isize::MAX"
             }
           end
 

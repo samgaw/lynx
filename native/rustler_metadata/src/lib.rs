@@ -1,4 +1,4 @@
-//! Reads Rustler 0.39 NIF export metadata inside the BEAM process.
+//! Reads supported Rustler NIF export metadata inside the BEAM process.
 //!
 //! Opening a library executes its initializers. This tool is intended only for
 //! application libraries built by the verification workflow, not untrusted files.
@@ -14,7 +14,7 @@ fn failure(message: impl ToString) -> rustler::Error {
 /// Copies the actual module name and export table from a compiled NIF library.
 #[rustler::nif]
 fn read_exports(path: String) -> rustler::NifResult<Exports> {
-    // SAFETY: The caller supplies a freshly built Rustler 0.39 library. Its
+    // SAFETY: The caller supplies a freshly built Rustler 0.38/0.39 library. Its
     // nif_init function has the Unix Erlang NIF ABI and returns an ErlNifEntry
     // with static NUL-terminated names and a table valid while the library is
     // loaded. All data is copied before the Library is dropped. The BEAM
