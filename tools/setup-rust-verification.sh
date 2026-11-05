@@ -37,6 +37,7 @@ if [ "$actual" != "$checksum" ]; then
   exit 1
 fi
 tar -xzf "$archive" -C "$install_dir"
+git -C "$install_dir" apply "$script_dir/patches/aeneas-saturating-add-spec.patch"
 source_dir="$install_dir/charon-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/charon "$source_dir"
 git -C "$source_dir" checkout --detach 7b462d9159db2ed3015162352183906a30bfafc6
@@ -51,5 +52,6 @@ IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
 cp target/release/charon target/release/charon-driver "$install_dir/"
 printf '%s\n' 'aeneas=nightly-2026.11.04-2b9e3ea' \
   'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots' \
+  'aeneas_runtime=lynx-saturating-add-spec-v1' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"

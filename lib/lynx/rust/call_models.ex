@@ -41,6 +41,25 @@ defmodule Lynx.Rust.CallModels do
       case {name, inputs, output} do
         {[
            %{"Ident" => ["core", 0]},
+           %{"Ident" => ["num", 0]},
+           %{"Impl" => %{"Ty" => %{"skip_binder" => parent}}},
+           %{"Ident" => ["saturating_add", 0]}
+         ], [scalar, scalar], scalar} ->
+          if scalar == %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}} and
+               parent_type(parent, refs) == scalar and generic_shape?(generics, 0, 0) do
+            %{
+              rust_name: "core::num::{u64}::saturating_add",
+              lean: "Aeneas.Std.core.num.U64.saturating_add",
+              builtin: true,
+              can_fail: false,
+              lift: true,
+              label:
+                "Aeneas bounded u64 saturating addition model; Rust core implementation not verified"
+            }
+          end
+
+        {[
+           %{"Ident" => ["core", 0]},
            %{"Ident" => ["slice", 0]},
            %{"Impl" => %{"Ty" => %{"skip_binder" => parent}}},
            %{"Ident" => ["len", 0]}
@@ -102,6 +121,17 @@ defmodule Lynx.Rust.CallModels do
   end
 
   defp match_function(_, _, _, _), do: nil
+
+  defp candidate?(
+         [
+           %{"Ident" => ["core", 0]},
+           %{"Ident" => ["num", 0]},
+           %{"Impl" => _},
+           %{"Ident" => ["saturating_add", 0]}
+         ],
+         _
+       ),
+       do: true
 
   defp candidate?(
          [

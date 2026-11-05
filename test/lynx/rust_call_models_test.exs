@@ -70,6 +70,43 @@ defmodule Lynx.Rust.CallModelsTest do
     end
   end
 
+  test "u64 saturation reuses the typed primitive model and rejects type or parent mismatches" do
+    scalar = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
+    original = slice_length()
+
+    function =
+      original
+      |> put_in(["item_meta", "name"], [
+        %{"Ident" => ["core", 0]},
+        %{"Ident" => ["num", 0]},
+        %{"Impl" => %{"Ty" => %{"skip_binder" => scalar}}},
+        %{"Ident" => ["saturating_add", 0]}
+      ])
+      |> put_in(["signature", "inputs"], [scalar, scalar])
+      |> put_in(["signature", "output"], scalar)
+      |> put_in(["generics", "regions"], [])
+      |> put_in(["generics", "types"], [])
+
+    assert %{
+             7 => %{
+               implementation_verified: false,
+               status: :modelled,
+               rust_name: "core::num::{u64}::saturating_add"
+             }
+           } = resolve(function)
+
+    for rejected <- [
+          put_in(function, ["signature", "inputs"], [scalar]),
+          put_in(function, ["signature", "output"], %{"Scalar" => "Bool"}),
+          put_in(function, ["generics", "types"], [%{"index" => 0}]),
+          put_in(function, ["item_meta", "name", Access.at(2), "Impl", "Ty", "skip_binder"], %{
+            "Scalar" => "Bool"
+          })
+        ] do
+      assert resolve(rejected) == %{}
+    end
+  end
+
   test "unknown model switches fail closed" do
     assert_raise ArgumentError, ~r/unknown external Rust call model/, fn ->
       CallModels.resolve([], %{}, %{}, [:unknown])
