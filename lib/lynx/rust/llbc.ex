@@ -50,11 +50,18 @@ defmodule Lynx.Rust.LLBC do
              )
 
     translated = document["translated"]
+    {cache_candidates, cache_module} = Keyword.get(opts, :rustler_atom_caches, {[], ""})
+    cache_models = Lynx.Rustler.AtomCaches.models!(document, cache_candidates, cache_module)
 
     {functions, external} =
       translated["fun_decls"]
       |> Enum.reject(&is_nil/1)
       |> Enum.split_with(&first_party?(&1, first_party))
+
+    {caches, functions} = Enum.split_with(functions, &Map.has_key?(cache_models, &1["def_id"]))
+
+    unless MapSet.new(caches, & &1["def_id"]) == MapSet.new(Map.keys(cache_models)),
+      do: raise(ArgumentError, "missing compiled Rustler atom-cache factory")
 
     if functions == [],
       do: raise(ArgumentError, "no first-party function implementations were extracted")
@@ -92,6 +99,7 @@ defmodule Lynx.Rust.LLBC do
         refs,
         Keyword.get(opts, :external_calls, [])
       )
+      |> Map.merge(cache_models)
 
     direct_calls = Enum.flat_map(functions, &calls(&1["body"]))
     modelled = Map.take(available_models, direct_calls)
