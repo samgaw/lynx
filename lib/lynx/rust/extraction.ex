@@ -8,6 +8,9 @@ defmodule Lynx.Rust.Extraction do
         key not in [:external_types, :external_calls, :rustler_atoms],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
 
+    if :rustler_encoders in Keyword.get(opts, :external_calls, []),
+      do: Lynx.Rustler.require_rustler!(context)
+
     discovery =
       describe!(context, tools, roots, output, module, Keyword.take(opts, [:external_types]))
 
@@ -56,6 +59,16 @@ defmodule Lynx.Rust.Extraction do
     output = Path.expand(output)
     requested_calls = Keyword.get(opts, :external_calls, [])
 
+    if :rustler_encoders in requested_calls do
+      for {rust, lean} <- [
+            {"rustler::env::Env", "Lynx.Rustler.Env"},
+            {"rustler::term::Term", "Lynx.Rustler.NativeTerm"},
+            {"rustler::types::atom::Atom", "Lynx.Rustler.Atom"}
+          ],
+          not Enum.any?(models, &(&1.rust == rust and &1.lean == lean)),
+          do: raise(ArgumentError, "Rustler Encoder requires the explicit #{rust} FFI type model")
+    end
+
     if :rustler_binary_as_slice in requested_calls and
          not Enum.any?(
            models,
@@ -79,26 +92,31 @@ defmodule Lynx.Rust.Extraction do
 
         File.write!(
           path,
-          JSON.encode!(%{
-            "types" =>
-              Enum.map(
-                models,
-                &%{
-                  "rust_pattern" => &1.rust,
-                  "extract_name" => &1.lean
-                }
-              ),
-            "functions" =>
-              Enum.map(
-                Enum.reject(Map.values(audit.external_calls), & &1.builtin),
-                &%{
-                  "rust_pattern" => &1.rust_name,
-                  "extract_name" => &1.lean,
-                  "can_fail" => &1.can_fail,
-                  "lift" => &1.lift
-                }
-              )
-          })
+          JSON.encode!(
+            Map.merge(
+              %{
+                "types" =>
+                  Enum.map(
+                    models,
+                    &%{
+                      "rust_pattern" => &1.rust,
+                      "extract_name" => &1.lean
+                    }
+                  ),
+                "functions" =>
+                  Enum.map(
+                    Enum.reject(Map.values(audit.external_calls), & &1.builtin),
+                    &%{
+                      "rust_pattern" => &1.rust_name,
+                      "extract_name" => &1.lean,
+                      "can_fail" => &1.can_fail,
+                      "lift" => &1.lift
+                    }
+                  )
+              },
+              Lynx.Rustler.EncoderModels.external_names(audit.external_calls)
+            )
+          )
         )
 
         ["-external-names", path] ++
