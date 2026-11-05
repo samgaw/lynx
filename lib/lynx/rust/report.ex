@@ -61,6 +61,11 @@ defmodule Lynx.Rust.Report do
           lean_name: implementation["lean_name"],
           definition_id: implementation["def_id"],
           status: :extracted,
+          source_kind:
+            if(implementation["def_id"] in extraction.audit.library_helpers,
+              do: :included_library_helper,
+              else: :workspace
+            ),
           file:
             if(is_binary(source["file"]), do: Path.expand(source["file"], directory), else: nil),
           line: source["begin_line"],

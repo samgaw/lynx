@@ -59,6 +59,11 @@ defmodule Lynx.Rust.LLBC do
     if functions == [],
       do: raise(ArgumentError, "no first-party function implementations were extracted")
 
+    {library_helpers, external} =
+      Enum.split_with(external, &Lynx.Rust.LibraryHelpers.selected?(&1, translated))
+
+    functions = functions ++ library_helpers
+
     all_functions = functions
     ids = Enum.map(all_functions, & &1["def_id"])
 
@@ -154,6 +159,7 @@ defmodule Lynx.Rust.LLBC do
 
     %{
       functions: ordinary,
+      library_helpers: Enum.map(library_helpers, & &1["def_id"]),
       constant_initializers: initializers,
       callback_dependencies: callback_dependencies,
       trait_dependencies: trait_dependencies,
