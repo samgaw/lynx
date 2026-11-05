@@ -71,6 +71,9 @@ defmodule Lynx.Rustler.Adapter do
     decoded = Enum.map(args, &("decoded_" <> &1))
     types = Enum.map(binding["arguments"], &type!/1)
 
+    if Enum.any?(types, &is_nil(&1.decode)),
+      do: raise(ArgumentError, "custom Rustler decoders are unsupported")
+
     params =
       Enum.zip_with(args, types, fn arg, type -> "(#{arg} : #{type.lean})" end) |> Enum.join(" ")
 
@@ -102,13 +105,33 @@ defmodule Lynx.Rustler.Adapter do
 
     @[expose] def #{wrapper} #{term_params} : Except Lynx.Exception Lynx.Term := do
     #{decode}
-      Lynx.Rustler.execute (#{invocation}) #{result.encode}
+      #{execute(invocation, result)}
 
     theorem #{adapter_theorem} #{term_params} :
         #{wrapper_call} = (do
     #{decode}
-      Lynx.Rustler.execute (#{direct}) #{result.encode}) := rfl
+      #{execute(direct, result)}) := rfl
     """
+  end
+
+  defp execute(call, %{encode_m: encoder}) do
+    "Lynx.Rustler.execute (do let value ← (#{call}); #{encoder} value) id"
+  end
+
+  defp execute(call, type), do: "Lynx.Rustler.execute (#{call}) #{type.encode}"
+
+  defp monadic_encoder(%{encode_m: encoder}), do: encoder
+  defp monadic_encoder(type), do: "(fun value => RustM.ok (#{type.encode} value))"
+
+  defp type!(%{"native" => _, "lean" => lean, "encoder" => encoder}) do
+    type = identifier!(lean)
+
+    %{
+      lean: type,
+      decode: nil,
+      encode: nil,
+      encode_m: "(fun (value : #{type}) => #{identifier!(encoder)} value ())"
+    }
   end
 
   defp type!("bool"),
@@ -185,22 +208,67 @@ defmodule Lynx.Rustler.Adapter do
       ["let #{fields_var} ← Lynx.Rustler.decodeTuple #{length(types)} input"] ++
         decodings ++ ["pure #{tuple}"]
 
-    %{
+    type = %{
       lean: lean,
-      decode: "(fun (input : Lynx.Term) => do #{Enum.join(statements, "; ")})",
+      decode:
+        if(Enum.any?(types, &is_nil(&1.decode)),
+          do: nil,
+          else: "(fun (input : Lynx.Term) => do #{Enum.join(statements, "; ")})"
+        ),
       encode: "(fun (#{value_var} : #{lean}) => Lynx.Term.tuple #[#{encoded}])"
     }
+
+    if Enum.any?(types, &Map.has_key?(&1, :encode_m)) do
+      values = for index <- indices(length(types)), do: "encoded#{index}"
+
+      steps =
+        Enum.zip(types, values)
+        |> Enum.with_index()
+        |> Enum.map(fn {{type, name}, index} ->
+          projection =
+            cond do
+              length(types) == 1 -> "value"
+              index == length(types) - 1 -> "value" <> String.duplicate(".2", index)
+              true -> "value" <> String.duplicate(".2", index) <> ".1"
+            end
+
+          "let #{name} ← #{monadic_encoder(type)} (#{projection})"
+        end)
+
+      Map.merge(type, %{
+        encode: nil,
+        encode_m:
+          "(fun (value : #{lean}) => do " <>
+            Enum.join(steps ++ [".ok (Lynx.Term.tuple #[#{Enum.join(values, ", ")}])"], "; ") <>
+            ")"
+      })
+    else
+      type
+    end
   end
 
   defp type!(%{"result" => [ok, err]}) do
     ok = type!(ok)
     err = type!(err)
 
-    %{
+    type = %{
       lean: "(core.result.Result #{ok.lean} #{err.lean})",
-      decode: "Lynx.Rustler.decodeResult (#{ok.decode}) (#{err.decode})",
+      decode:
+        if(is_nil(ok.decode) or is_nil(err.decode),
+          do: nil,
+          else: "Lynx.Rustler.decodeResult (#{ok.decode}) (#{err.decode})"
+        ),
       encode: "(Lynx.Rustler.encodeResult (#{ok.encode}) (#{err.encode}))"
     }
+
+    if Map.has_key?(ok, :encode_m) or Map.has_key?(err, :encode_m),
+      do:
+        Map.merge(type, %{
+          encode: nil,
+          encode_m:
+            "(Lynx.Rustler.encodeResultM (#{monadic_encoder(ok)}) (#{monadic_encoder(err)}))"
+        }),
+      else: type
   end
 
   defp type!(type), do: raise(ArgumentError, "unsupported Rustler adapter type: #{inspect(type)}")

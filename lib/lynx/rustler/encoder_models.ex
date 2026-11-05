@@ -59,6 +59,43 @@ defmodule Lynx.Rustler.EncoderModels do
 
   def resolve(_, _, _), do: nil
 
+  def binding!(type_id, audit, translation) do
+    ctx = context(audit.translated, audit.references)
+    self = %{"Adt" => %{"id" => type_id, "builtin" => nil, "generics" => arguments([])}}
+
+    candidates =
+      Enum.filter(audit.functions, fn function ->
+        with %{
+               "TraitImpl" => %{"impl_ref" => %{"id" => impl_id}, "trait_ref" => %{"id" => trait}}
+             } <- function["src"],
+             %{} = impl <- declaration(ctx, "trait_impls", impl_id) do
+          trait?(trait, ctx) and
+            impl["src"] == "Normal" and impl["is_negative"] == false and
+            impl["is_unsafe"] == false and
+            impl["consts"] == [] and impl["types"] == [] and impl["implied_trait_refs"] == [] and
+            expand(impl["impl_trait"], ctx) == %{"id" => trait, "generics" => arguments([self])} and
+            Enum.all?(Map.values(impl["generics"]), &(&1 == [])) and
+            parameters?(function["generics"], 2, 0, trait, ctx) and
+            function["generics"]["outlives"] == [] and
+            signature?(function, self, 0, ctx) and
+            FormatModels.method_identity?(function, impl, trait, ctx)
+        else
+          _ -> false
+        end
+      end)
+
+    with [function] <- candidates,
+         [%{"is_opaque" => false, "lean_name" => encoder}] <-
+           Enum.filter(translation["functions"], &(&1["def_id"] == function["def_id"])),
+         [%{"lean_name" => type}] <- Enum.filter(translation["types"], &(&1["def_id"] == type_id)) do
+      %{"lean" => type, "encoder" => encoder, "encoder_definition_id" => function["def_id"]}
+    else
+      _ ->
+        raise ArgumentError,
+              "missing, opaque or mismatched first-party Rustler Encoder for result type #{type_id}"
+    end
+  end
+
   def external_names(models) do
     if Enum.any?(Map.values(models), &Map.has_key?(&1, :encoder_trait)) do
       %{
