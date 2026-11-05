@@ -261,6 +261,13 @@ defmodule Lynx.Case do
       translated module of the group, including its laws. Names are passed to
       Lean as given. Proofs remain kernel-checked.
 
+  Pass `native: {Lynx.Rustler, workspace: "native", package: "my-nif"}` to
+  prepare and verify native implementations when the group runs. Additional
+  backend options select proof modules, Cargo features and the Lean project.
+  Preparation and law verification share a Mix OS concurrency lock to
+  prevent concurrent groups or Mix invocations from overwriting generated models.
+  `:lean_project` and `:externals` may also be supplied directly by a backend.
+
   ## Example
 
       laws "checked" do
@@ -316,7 +323,7 @@ defmodule Lynx.Case do
 
     options = Keyword.get(opts, :options, [])
 
-    for key <- Keyword.keys(opts), key != :options do
+    for key <- Keyword.keys(opts), key not in [:options, :native, :lean_project, :externals] do
       raise ArgumentError, "unknown laws option #{inspect(key)}"
     end
 
@@ -350,7 +357,8 @@ defmodule Lynx.Case do
 
       {name, group_laws, Module.get_attribute(module, :lynx_termination_suffixes),
        Module.get_attribute(module, :lynx_cutoffs),
-       Enum.reverse(Module.get_attribute(module, :lynx_preludes)), options}
+       Enum.reverse(Module.get_attribute(module, :lynx_preludes)),
+       Keyword.take(opts, [:options, :native, :lean_project, :externals])}
     after
       Module.delete_attribute(module, :lynx_laws)
       Module.delete_attribute(module, :lynx_termination_suffixes)
@@ -367,7 +375,15 @@ defmodule Lynx.Case do
   end
 
   @doc false
-  def __verify__(module, name, laws, suffixes, cutoffs, preludes, options) do
+  def __verify__(module, name, laws, suffixes, cutoffs, preludes, verification_opts) do
+    Lynx.External.with_native_lock(verification_opts, fn ->
+      verify_group(module, name, laws, suffixes, cutoffs, preludes, verification_opts)
+    end)
+  end
+
+  defp verify_group(module, name, laws, suffixes, cutoffs, preludes, verification_opts) do
+    {verification_opts, native_verification} = Lynx.External.prepare_options!(verification_opts)
+
     export =
       case System.get_env("LYNX_EXPORT") do
         nil -> []
@@ -391,7 +407,13 @@ defmodule Lynx.Case do
     File.rm_rf!(dir)
 
     files =
-      Lynx.Translation.new(termination_suffixes: suffixes, cutoffs: cutoffs, preludes: preludes)
+      Lynx.Translation.new(
+        Keyword.merge(verification_opts,
+          termination_suffixes: suffixes,
+          cutoffs: cutoffs,
+          preludes: preludes
+        )
+      )
       |> Lynx.Translation.add(Lynx.Bytecode.fetch!(module))
       |> Lynx.Translation.verify(module, laws)
       |> Lynx.Translation.assemble(cache: cache)
@@ -405,10 +427,11 @@ defmodule Lynx.Case do
 
     reports =
       Lynx.Commands.verify!(
-        @lean_dir,
+        Keyword.get(verification_opts, :lean_project, @lean_dir),
         files,
-        [options: options, debug_dir: dir] ++ debug ++ export
+        [options: Keyword.get(verification_opts, :options, []), debug_dir: dir] ++ debug ++ export
       )
+      |> Lynx.External.attach_guarantees(files, native_verification)
 
     if debug != [] do
       for report <- reports do
@@ -421,6 +444,11 @@ defmodule Lynx.Case do
 
         cached = if report.cached, do: ", cached", else: ""
         IO.puts("#{prefix} #{report.module} in #{report.time_ms}ms (#{report.status}#{cached})")
+
+        for guarantee <- Map.get(report, :guarantees, []) do
+          target = guarantee[:rust_name] || guarantee[:theorem] || guarantee[:function]
+          IO.puts("  #{guarantee.label}: #{target}")
+        end
 
         last_index = length(report.theorems) - 1
 

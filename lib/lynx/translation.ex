@@ -8,6 +8,11 @@ defmodule Lynx.Translation do
             funs: %{},
             external_calls: %{},
             builtin_modules: %{},
+            external_bindings: MapSet.new(),
+            external_modules: %{},
+            external_imports: %{},
+            native_exports: %{},
+            external_files: [],
             stack: []
 
   # Runtime functions that are not pure use the process environment, except
@@ -40,7 +45,143 @@ defmodule Lynx.Translation do
   defp lean_bif(_, _, _), do: :error
 
   def new(opts \\ []) do
+    externals = Keyword.get(opts, :externals, [])
+
+    Enum.each(externals, fn
+      %Lynx.External{
+        bindings: bindings,
+        files: files,
+        implementation_modules: modules,
+        native_exports: exports
+      }
+      when is_list(bindings) and is_list(files) and is_map(modules) and is_map(exports) ->
+        Enum.each(bindings, fn
+          {module, function, arity}
+          when is_atom(module) and is_atom(function) and is_integer(arity) and arity >= 0 ->
+            :ok
+
+          binding ->
+            raise ArgumentError, "invalid external implementation binding: #{inspect(binding)}"
+        end)
+
+        Enum.each(files, fn
+          %{"module" => name, "imports" => imports, "contents" => contents}
+          when is_binary(name) and is_list(imports) and is_list(contents) ->
+            :ok
+
+          file ->
+            raise ArgumentError, "invalid external implementation file: #{inspect(file)}"
+        end)
+
+        for {module, implementation} <- modules do
+          unless is_atom(module) and is_binary(implementation) and
+                   Enum.any?(bindings, fn {target, _, _} -> target == module end),
+                 do: raise(ArgumentError, "invalid external implementation module mapping")
+        end
+
+        for {module, inventory} <- exports do
+          unless is_atom(module) and is_list(inventory) and inventory != [] and
+                   Enum.all?(inventory, fn
+                     {function, arity}
+                     when is_atom(function) and is_integer(arity) and arity >= 0 ->
+                       true
+
+                     _ ->
+                       false
+                   end) and length(inventory) == MapSet.size(MapSet.new(inventory)) and
+                   Enum.any?(bindings, fn {target, _, _} -> target == module end) and
+                   Enum.all?(bindings, fn
+                     {^module, function, arity} -> {function, arity} in inventory
+                     _ -> true
+                   end),
+                 do:
+                   raise(
+                     ArgumentError,
+                     "invalid complete native export inventory for #{inspect(module)}"
+                   )
+        end
+
+      bundle ->
+        raise ArgumentError, "invalid external implementation bundle: #{inspect(bundle)}"
+    end)
+
+    bindings =
+      for %Lynx.External{bindings: bindings} <- externals, binding <- bindings, do: binding
+
+    external_modules =
+      for bundle <- externals,
+          {module, _, _} = binding <- bundle.bindings,
+          into: %{},
+          do:
+            {binding,
+             Map.get(
+               bundle.implementation_modules,
+               module,
+               :lynx_core_to_leanj.module_name(module)
+             )}
+
+    inventories = for bundle <- externals, entry <- bundle.native_exports, do: entry
+
+    unless length(inventories) == MapSet.size(MapSet.new(inventories, &elem(&1, 0))),
+      do: raise(ArgumentError, "duplicate complete native export inventory")
+
+    files =
+      for %Lynx.External{files: files, fingerprint: fingerprint} = bundle <- externals,
+          file <- files do
+        if fingerprint &&
+             !(is_binary(fingerprint) && Regex.match?(~r/^[0-9a-f]{64}$/, fingerprint)),
+           do: raise(ArgumentError, "external fingerprint must be a lowercase SHA-256 digest")
+
+        # An unversioned backend cannot opt into caching through a raw file key.
+        file = Map.delete(file, "cache_key")
+
+        if fingerprint,
+          do:
+            Map.put(
+              file,
+              "cache_key",
+              cache_hash(
+                :erlang.term_to_binary(
+                  {file, fingerprint, bundle.bindings, bundle.implementation_modules,
+                   bundle.native_exports},
+                  [:deterministic]
+                )
+              )
+              |> Base.encode16(case: :lower)
+            ),
+          else: file
+      end
+
+    unless length(bindings) == MapSet.size(MapSet.new(bindings)) &&
+             length(files) == MapSet.size(MapSet.new(files, & &1["module"])) do
+      raise ArgumentError, "duplicate external implementation binding or module"
+    end
+
+    for {module, function, arity} <- bindings do
+      if lean_bif(module, function, arity) != :error do
+        raise ArgumentError, "cannot replace a builtin with an external implementation"
+      end
+
+      unless is_atom(module) && is_atom(function) && is_integer(arity) && arity >= 0 &&
+               Enum.any?(files, &(&1["module"] == external_modules[{module, function, arity}])) do
+        raise ArgumentError,
+              "external binding has no implementation module: #{inspect({module, function, arity})}"
+      end
+    end
+
     %__MODULE__{
+      external_bindings: MapSet.new(bindings),
+      external_modules: external_modules,
+      native_exports:
+        Map.new(inventories, fn {module, inventory} -> {module, MapSet.new(inventory)} end),
+      external_files:
+        Enum.map(files, fn file ->
+          file
+          |> Map.put(
+            "audit_modules",
+            Enum.uniq([file["module"] | Map.get(file, "audit_modules", [])])
+          )
+        end),
       preludes: Keyword.get(opts, :preludes, []),
       termination_suffixes: Keyword.get(opts, :termination_suffixes, %{}),
       cutoffs: MapSet.new(Keyword.get(opts, :cutoffs, []))
@@ -92,12 +233,26 @@ defmodule Lynx.Translation do
   def translate(%__MODULE__{stack: stack} = translation, name, names) do
     {module, translation} = fetch_module!(translation, name, fn -> [] end)
 
+    if module.native and not Map.has_key?(translation.native_exports, name) do
+      raise CompileError,
+        file: module.file,
+        description:
+          "unregistered native implementation in #{inspect(name)}; register verified external semantics instead of translating NIF fallback bodies"
+    end
+
+    for {function, arity} <- names,
+        native_unregistered?(translation, name, function, arity) do
+      unregistered_native!(name, function, arity, file: module.file)
+    end
+
     for {function, arity} <- names do
       validate_function!(module, name, function, arity, fn -> [file: module.file] end)
     end
 
+    definitions = native_definitions(module.definitions, name, translation)
+
     definitions =
-      Enum.reduce(translation.cutoffs, module.definitions, fn
+      Enum.reduce(translation.cutoffs, definitions, fn
         {^name, function, arity}, definitions ->
           validate_function!(module, name, function, arity, fn -> [file: module.file] end)
 
@@ -109,6 +264,27 @@ defmodule Lynx.Translation do
           definitions
       end)
 
+    # Pre-translated entries describe declarations supplied by audited imports.
+    # Core's existing local-call and function-value paths can reuse them without
+    # ever visiting their BEAM fallback bodies. They are never emitted as defs.
+    imported =
+      for {^name, function, arity} <- translation.external_bindings, into: %{} do
+        {{function, arity},
+         %{
+           external: true,
+           purity: :pure,
+           dispatches: false,
+           local_calls: [],
+           size_calls: [],
+           translation: %{
+             "name" => Atom.to_string(function),
+             "params" => for(index <- 1..arity//1, do: "arg#{index}")
+           }
+         }}
+      end
+
+    module = %{module | translations: Map.merge(module.translations, imported)}
+    translation = put_in(translation.modules[name], module)
     context = {%{translation | stack: [name | stack]}, &remote_call/6}
     %{translations: translations, literals: literals} = module
     %{funs: funs} = translation
@@ -128,6 +304,30 @@ defmodule Lynx.Translation do
            context
          ) do
       {:ok, functions, literals, laws, funs, translation} ->
+        for {{function, arity}, _definition} <- functions,
+            native_unregistered?(translation, name, function, arity) do
+          unregistered_native!(name, function, arity, file: module.file)
+        end
+
+        imported_names =
+          MapSet.new(Map.keys(imported), fn {function, arity} ->
+            {Atom.to_string(function), arity}
+          end)
+
+        functions =
+          if map_size(imported) == 0 do
+            functions
+          else
+            Map.new(functions, fn {key, definition} ->
+              {key,
+               Map.update!(
+                 definition,
+                 :translation,
+                 &resolve_imported_calls(&1, name, imported_names)
+               )}
+            end)
+          end
+
         updated = %{
           module
           | translations: propagate_purity(functions),
@@ -159,6 +359,34 @@ defmodule Lynx.Translation do
        ) do
     translation = %{translation | funs: funs}
 
+    if native_unregistered?(translation, module, function, arity),
+      do:
+        unregistered_native!(
+          module,
+          function,
+          arity,
+          source_location(span_anno, translation.modules[caller].file)
+        )
+
+    if implementation = translation.external_modules[{module, function, arity}] do
+      translation =
+        update_in(translation.external_imports[caller], fn imports ->
+          MapSet.put(imports || MapSet.new(), implementation)
+        end)
+
+      {{:pure, false}, translation.funs, translation}
+    else
+      remote_beam_call(translation, module, function, arity, span_anno)
+    end
+  end
+
+  defp remote_beam_call(
+         %__MODULE__{stack: [caller | _]} = translation,
+         module,
+         function,
+         arity,
+         span_anno
+       ) do
     translation =
       if module == caller do
         translation
@@ -191,6 +419,17 @@ defmodule Lynx.Translation do
          span_anno
        ) do
     location = fn -> source_location(span_anno, translation.modules[caller].file) end
+
+    if not Map.has_key?(translation.native_exports, module) and
+         Enum.any?(translation.external_bindings, fn {target, _, _} -> target == module end) do
+      raise CompileError,
+            location.() ++
+              [
+                description:
+                  "unregistered external implementation #{Exception.format_mfa(module, function, arity)}"
+              ]
+    end
+
     {target, translation} = fetch_module!(translation, module, location)
     validate_function!(target, module, function, arity, location)
 
@@ -212,6 +451,98 @@ defmodule Lynx.Translation do
 
     {{purity, dispatches}, translation.funs, translation}
   end
+
+  defp native_unregistered?(translation, module, function, arity) do
+    MapSet.member?(Map.get(translation.native_exports, module, MapSet.new()), {function, arity}) and
+      not MapSet.member?(translation.external_bindings, {module, function, arity})
+  end
+
+  defp native_definitions(definitions, module, translation) do
+    case translation.native_exports do
+      %{^module => exports} ->
+        Map.new(definitions, fn
+          {{function, arity} = name, {:function, core}} ->
+            core =
+              if MapSet.member?(exports, name) do
+                if native_unregistered?(translation, module, function, arity) do
+                  # Reaching this body invokes the existing rejection callback;
+                  # neither a fallback nor an assumed implementation can escape.
+                  call =
+                    :cerl.ann_c_call(
+                      :cerl.get_ann(core),
+                      :cerl.c_atom(module),
+                      :cerl.c_atom(function),
+                      :cerl.fun_vars(core)
+                    )
+
+                  :cerl.update_c_fun(core, :cerl.fun_vars(core), call)
+                else
+                  core
+                end
+              else
+                # OTP inserts nif_start into every function in loader modules.
+                # For functions absent from the complete compiled export table,
+                # this dispatch check cannot replace their ordinary BEAM body.
+                :cerl_trees.map(
+                  fn node ->
+                    if :cerl.type(node) == :seq do
+                      arg = :cerl.seq_arg(node)
+
+                      if :cerl.type(arg) == :primop and
+                           :cerl.concrete(:cerl.primop_name(arg)) == :nif_start and
+                           :cerl.primop_args(arg) == [], do: :cerl.seq_body(node), else: node
+                    else
+                      node
+                    end
+                  end,
+                  core
+                )
+              end
+
+            {name, {:function, core}}
+
+          entry ->
+            entry
+        end)
+
+      _ ->
+        definitions
+    end
+  end
+
+  defp unregistered_native!(module, function, arity, location) do
+    raise CompileError,
+          location ++
+            [
+              description:
+                "unregistered external implementation #{Exception.format_mfa(module, function, arity)}"
+            ]
+  end
+
+  defp resolve_imported_calls(value, module, imported) when is_map(value) do
+    value =
+      Map.new(value, fn {key, child} -> {key, resolve_imported_calls(child, module, imported)} end)
+
+    case value do
+      %{"kind" => "local_call", "name" => name, "args" => args} ->
+        if MapSet.member?(imported, {name, length(args)}),
+          do:
+            Map.merge(value, %{
+              "kind" => "remote_call",
+              "module" => :lynx_core_to_leanj.module_name(module),
+              "purity" => "pure"
+            }),
+          else: value
+
+      _ ->
+        value
+    end
+  end
+
+  defp resolve_imported_calls(value, module, imported) when is_list(value),
+    do: Enum.map(value, &resolve_imported_calls(&1, module, imported))
+
+  defp resolve_imported_calls(value, _module, _imported), do: value
 
   defp source_location(annotations, default_file) do
     file =
@@ -302,8 +633,46 @@ defmodule Lynx.Translation do
         raise CompileError, source_location(span_anno, file) ++ [description: reason]
 
       definitions ->
-        %{definitions: definitions, translations: %{}, literals: %{}, laws: %{}, file: file}
+        %{
+          definitions: definitions,
+          translations: %{},
+          literals: %{},
+          laws: %{},
+          file: file,
+          native: native_module?(core)
+        }
     end
+  end
+
+  # A module containing a loader may replace any of its exported functions.
+  # Its ordinary-looking fallback bodies are not evidence of native semantics.
+  defp native_module?(core) do
+    declared =
+      Enum.any?(:cerl.module_attrs(core), fn {key, _value} ->
+        :cerl.concrete(key) == :nifs
+      end)
+
+    declared ||
+      :cerl_trees.fold(
+        fn node, native ->
+          native ||
+            case :cerl.type(node) do
+              :primop ->
+                :cerl.concrete(:cerl.primop_name(node)) == :nif_start
+
+              :call ->
+                :cerl.is_literal(:cerl.call_module(node)) &&
+                  :cerl.is_literal(:cerl.call_name(node)) &&
+                  :cerl.concrete(:cerl.call_module(node)) == :erlang &&
+                  :cerl.concrete(:cerl.call_name(node)) == :load_nif
+
+              _ ->
+                false
+            end
+        end,
+        false,
+        core
+      )
   end
 
   defp validate_function!(target, module, function, arity, location) do
@@ -326,11 +695,20 @@ defmodule Lynx.Translation do
           termination_suffixes: suffixes,
           funs: funs,
           external_calls: external_calls,
-          builtin_modules: builtin_modules
+          external_imports: external_imports,
+          external_modules: external_modules,
+          builtin_modules: builtin_modules,
+          external_files: external_files
         },
         opts \\ []
       ) do
     cache = Keyword.get(opts, :cache, true)
+
+    for name <- Map.keys(modules),
+        Enum.any?(external_files, &(&1["module"] == :lynx_core_to_leanj.module_name(name))) do
+      raise ArgumentError,
+            "cannot translate a module with an external implementation: #{inspect(name)}"
+    end
 
     modules =
       Enum.reduce(suffixes, modules, fn {{module, function, arity}, %Lynx.Lean{} = suffix},
@@ -366,7 +744,27 @@ defmodule Lynx.Translation do
       end)
 
     dispatcher_purity = dispatcher_purity(modules, funs)
+
+    external_files =
+      if cache, do: external_files, else: Enum.map(external_files, &Map.delete(&1, "cache_key"))
+
+    external_keys =
+      for %{"module" => name, "cache_key" => key} <- external_files, into: %{}, do: {name, key}
+
     {support, keys, support_imports} = assemble_preludes(preludes, cache)
+    keys = Map.merge(keys, external_keys)
+    # Raw prelude headers may import backend modules without a Core call edge.
+    # Record that dependency too, so the runner never reuses a cached prelude
+    # (or its clients) across an uncached external implementation.
+    support =
+      Enum.map(support, fn file ->
+        Map.update!(
+          file,
+          "imports",
+          &(Enum.map(external_files, fn file -> file["module"] end) ++ &1)
+        )
+      end)
+
     graph = :digraph.new()
 
     try do
@@ -386,14 +784,21 @@ defmodule Lynx.Translation do
           imports = Map.get(external_calls, name, MapSet.new())
           imports = if builtin_modules[name], do: MapSet.put(imports, name), else: imports
 
+          native_imports =
+            for {{^name, _, _}, implementation} <- external_modules, do: implementation
+
+          imports =
+            imports
+            |> Enum.map(&:lynx_core_to_leanj.module_name/1)
+            |> Kernel.++(Enum.to_list(Map.get(external_imports, name, MapSet.new())))
+            |> Kernel.++(native_imports)
+            |> Enum.uniq()
+            |> Enum.sort()
+
           file = %{
             "module" => :lynx_core_to_leanj.module_name(name),
             "file" => module.file,
-            "imports" =>
-              imports
-              |> Enum.sort()
-              |> Enum.map(&:lynx_core_to_leanj.module_name/1)
-              |> then(&(support_imports ++ &1)),
+            "imports" => support_imports ++ imports,
             "contents" => assemble_module(module.translations)
           }
 
@@ -465,7 +870,7 @@ defmodule Lynx.Translation do
           end
         end)
 
-      support ++ files ++ program ++ laws
+      external_files ++ support ++ files ++ program ++ laws
     after
       :digraph.delete(graph)
     end
@@ -572,6 +977,9 @@ defmodule Lynx.Translation do
   defp join_purity(left, right), do: :lynx_core_to_leanj.join_purity(left, right)
 
   defp assemble_module(functions) do
+    functions =
+      Map.reject(functions, fn {_, definition} -> Map.get(definition, :external, false) end)
+
     graph = :digraph.new()
 
     try do
@@ -582,6 +990,7 @@ defmodule Lynx.Translation do
       # Edges point from callees to callers, so dependencies are emitted first.
       for {name, definition} <- functions,
           callee <- definition.local_calls,
+          Map.has_key?(functions, callee),
           callee != name do
         :digraph.add_edge(graph, callee, name)
       end
