@@ -1,4 +1,6 @@
 //! Reads Rustler's expanded inventory records without translating Rust bodies.
+#[path = "../atom_cache.rs"]
+mod atom_cache;
 use serde_json::{json, Value};
 use std::io::{self, Read};
 use syn::visit::{self, Visit};
@@ -244,6 +246,16 @@ fn run() -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     let file = syn::parse_file(&source).map_err(|e| format!("cannot parse expanded Rust: {e}"))?;
+    if std::env::args().nth(2).as_deref() == Some("--atoms") {
+        let selected: Vec<Vec<String>> = serde_json::from_str(
+            &std::env::args()
+                .nth(3)
+                .ok_or("--atoms requires a module selection")?,
+        )
+        .map_err(|e| e.to_string())?;
+        println!("{}", json!(atom_cache::discover(&file, &selected)?));
+        return Ok(());
+    }
     let selected = std::env::args()
         .nth(2)
         .map(|argument| serde_json::from_str(&argument).map_err(|e| e.to_string()))
