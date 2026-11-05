@@ -1,9 +1,13 @@
 #!/bin/sh
-# Install the pinned upstream extractor with Lynx's nested-root resolver fix.
+# Install pinned extractors with Lynx's resolver and static-loan fixes.
 set -eu
 
 if [ "$#" -ne 1 ]; then
   echo "usage: $0 NEW_INSTALL_DIRECTORY" >&2
+  exit 1
+fi
+if ! command -v opam >/dev/null 2>&1; then
+  echo "opam is required to build the patched Aeneas extractor" >&2
   exit 1
 fi
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -51,7 +55,24 @@ rustup run nightly-2026-09-17 cargo build --locked --release \
 IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
   --no-default-features --features rustc --test ui -- nested-function-proof-root
 cp target/release/charon target/release/charon-driver "$install_dir/"
-printf '%s\n' 'aeneas=nightly-2026.11.04-2b9e3ea' \
+
+aeneas_source="$install_dir/aeneas-source"
+git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/aeneas "$aeneas_source"
+git -C "$aeneas_source" checkout --detach 2b9e3ea4662b48c19262be759dbb704f20c24364
+git -C "$aeneas_source" apply "$script_dir/patches/aeneas-static-shared-loans.patch"
+ln -s "$source_dir" "$aeneas_source/charon"
+cp "$script_dir/aeneas.opam.locked" "$aeneas_source/src/aeneas.opam.locked"
+# Keep compiler packages and configuration inside this installation.
+opam_root="$install_dir/opam"
+opam init --root="$opam_root" --bare --no-setup --yes
+opam switch create --root="$opam_root" lynx-aeneas ocaml-base-compiler.5.3.0 --yes
+opam install --root="$opam_root" --switch=lynx-aeneas \
+  "$aeneas_source/src" --deps-only --locked --yes
+aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1
+AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aeneas -- \
+  dune build --root "$aeneas_source/src" main.exe
+cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
+printf '%s\n' "aeneas=$aeneas_version" \
   'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots' \
   'aeneas_runtime=lynx-bounded-default-format-v2' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
