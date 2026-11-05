@@ -63,6 +63,8 @@ defmodule Lynx.Rust.Extraction do
         "core::result::Result",
         "--include",
         "core::ops::control_flow::ControlFlow",
+        "--include",
+        "core::fmt::Error",
         "--dest-file",
         llbc
       ] ++

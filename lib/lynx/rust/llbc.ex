@@ -89,6 +89,13 @@ defmodule Lynx.Rust.LLBC do
       end
 
     callback_ids = callback_dependencies |> Map.values() |> List.flatten() |> MapSet.new()
+
+    trait_dependencies =
+      case Lynx.Rust.FormatModels.audit(functions, modelled, translated, refs) do
+        {:ok, dependencies} -> dependencies
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
     allowed = %{functions: MapSet.new(ids ++ Map.keys(modelled)), constants: constants}
 
     if length(ids) != MapSet.size(MapSet.new(ids)),
@@ -123,12 +130,18 @@ defmodule Lynx.Rust.LLBC do
              do: failure!(type, translated, "missing or unsupported first-party type definition")
     end
 
-    check_constant_cycles!(functions, constants, translated, callback_dependencies)
+    dispatch_dependencies =
+      Map.merge(callback_dependencies, trait_dependencies, fn _id, callbacks, methods ->
+        Enum.uniq(callbacks ++ methods)
+      end)
+
+    check_constant_cycles!(functions, constants, translated, dispatch_dependencies)
 
     %{
       functions: ordinary,
       constant_initializers: initializers,
       callback_dependencies: callback_dependencies,
+      trait_dependencies: trait_dependencies,
       constants: constants,
       external_functions: external,
       external_calls: modelled,
@@ -190,7 +203,8 @@ defmodule Lynx.Rust.LLBC do
       {function["def_id"],
        (calls(function["body"]) ++
           initializer_calls ++
-          Map.get(Map.get(audit, :callback_dependencies, %{}), function["def_id"], []))
+          Map.get(Map.get(audit, :callback_dependencies, %{}), function["def_id"], []) ++
+          Map.get(Map.get(audit, :trait_dependencies, %{}), function["def_id"], []))
        |> Enum.uniq()
        |> Enum.sort()}
     end)
