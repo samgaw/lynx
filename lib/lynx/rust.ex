@@ -49,7 +49,13 @@ defmodule Lynx.Rust do
   scalar payloads and monomorphic first-party structs of those scalars. Internal
   codecs are generated with kernel-checked roundtrips; they are not Rustler
   encoders or native memory layouts. Recursive, borrowed, generic and other
-  payloads are rejected. This does not admit locking, resource lifetimes or async.
+  payloads are rejected. Runtime extraction also admits blocking `Mutex::lock`
+  acquisition with an owned guard in both normal and poisoned results. Acquisition
+  atomically updates a shared cell; contention blocks on the existing scheduler.
+  Recursive acquisition exhausts verification. Standalone synchronous execution
+  contexts are mapped to local Lynx processes; this is not an OS thread identity
+  or async task/migration model. Guard access/release and resource lifetimes
+  remain unsupported, so returning a guard does not verify a critical section.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned Mutex<bool/unsigned scalar> values. These remove their
   cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined

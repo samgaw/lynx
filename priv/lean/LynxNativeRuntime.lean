@@ -7,8 +7,9 @@ public import Lynx.Term
 A native panic is retained as the `rust_panicked` marker. It must be converted by
 a native facade before becoming an Elixir-visible exception. Undefined behavior
 and divergence are verification exhaustion, never successful native returns.
-Mutex construction initializes logical shared cells. Lock acquisition, resource
-lifetimes, native executors and FFI execution require separate models. -/
+Mutex construction initializes logical shared cells. Bounded blocking acquisition
+uses atomic state waits; guard access/release, resource lifetimes, native
+executors and FFI execution require separate models. -/
 
 public section
 
@@ -263,3 +264,125 @@ instance {α : Type} [NativeCodec α] : NativeDrop (NativeMutex α) where
   drop := NativeMutex.dispose
 
 end Lynx
+
+namespace Lynx
+
+/-- An acquisition owns a unique token and a borrowed payload view. The payload
+is a value model; mutable-borrow updates must be reconstructed before release. -/
+structure NativeGuard (α : Type) where
+  mutex : NativeMutex α
+  token : Nat
+  ownerContext : PID
+  value : α
+
+/-- Rust's poisoned acquisition owns the acquired guard, rather than failing
+before acquisition. This is not an Elixir exception. -/
+structure NativePoisonError (α : Type) where
+  value : α
+
+namespace NativeMutex
+
+/-- Atomically inspect and acquire a typed shared cell. Another execution
+context's lock blocks; recursive acquisition and invalid cells exhaust the
+supported model. OS mutex, thread migration and FFI correctness are unverified. -/
+@[expose] def pollLock {α : Type} [NativeCodec α] (mutex : NativeMutex α)
+    (env : Environment) : Option (Except Exception
+      (core.result.Result (NativeGuard α) (NativePoisonError (NativeGuard α))) × Environment) :=
+  let invalid := some (.error .exhausted, env)
+  match env.nativeHeap.filter (fun cell => cell.1 == mutex.id) with
+  | [(_, storedType, .tuple fields)] =>
+    if storedType == typeName α then
+      if size : fields.size = 3 then
+        let lockState := fields[0]'(by omega)
+        let poisonState := fields[1]'(by omega)
+        let payload := fields[2]'(by omega)
+        match poisonState with
+        | .atom poison =>
+          if poison == "unpoisoned" || poison == "poisoned" then
+            match NativeCodec.decode (α := α) payload with
+            | none => invalid
+            | some value =>
+              match lockState with
+              | .atom "unlocked" =>
+                let token := env.refCounter + 1
+                if env.nativeHeap.any (fun cell => cell.1 == token) then invalid else
+                let guard : NativeGuard α := ⟨mutex, token, env.currentPid, value⟩
+                let contents := .tuple #[.tuple #[.atom "locked", .pid env.currentPid, .reference token],
+                  poisonState, payload]
+                let updated := { env with refCounter := token, nativeHeap := env.nativeHeap.map fun cell =>
+                  if cell.1 == mutex.id then (mutex.id, typeName α, contents) else cell }
+                some (.ok (if poison == "poisoned" then .Err ⟨guard⟩ else .Ok guard), updated)
+              | .tuple owner =>
+                if ownerSize : owner.size = 3 then
+                  let marker := owner[0]'(by omega)
+                  let context := owner[1]'(by omega)
+                  let token := owner[2]'(by omega)
+                  match marker, context, token with
+                  | .atom "locked", .pid current, .reference _ =>
+                    if current == env.currentPid then invalid else none
+                  | _, _, _ => invalid
+                else invalid
+              | _ => invalid
+          else invalid
+        | _ => invalid
+      else invalid
+    else invalid
+  | _ => invalid
+
+/-- Blocking acquisition shares the existing scheduler's atomic state waits.
+Successful poisoned acquisitions return an error containing the owned guard. -/
+@[expose] def lock {α : Type} [NativeCodec α] (mutex : NativeMutex α) :
+    NativeM (core.result.Result (NativeGuard α) (NativePoisonError (NativeGuard α))) :=
+  .wait (pollLock mutex) fun reply => match reply with
+    | .ok result => .ok result
+    | .error exception => .error exception
+
+end NativeMutex
+end Lynx
+
+namespace Lynx.NativeMutex
+
+/-- The locked representation records an acquisition token and its execution
+context; aliases of the same mutex refer to this one shared state. -/
+@[expose] def lockedContents {α : Type} [NativeCodec α]
+    (context : PID) (token : Nat) (poisoned : Bool) (value : α) : Term :=
+  .tuple #[.tuple #[.atom "locked", .pid context, .reference token],
+    .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value]
+
+/-- Acquisition preserves unrelated cells and returns ownership even when poisoned. -/
+theorem pollLock_unlocked {α : Type} [NativeCodec α] (mutex : NativeMutex α)
+    (value : α) (poisoned : Bool) (env : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id, typeName α, .tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    pollLock mutex env = some (.ok (
+      if poisoned then .Err ⟨⟨mutex, env.refCounter + 1, env.currentPid, value⟩⟩
+      else .Ok ⟨mutex, env.refCounter + 1, env.currentPid, value⟩),
+      { env with
+        refCounter := env.refCounter + 1
+        nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+          (mutex.id, typeName α, lockedContents env.currentPid (env.refCounter + 1) poisoned value)
+          else cell }) := by
+  cases poisoned <;> simp [pollLock, stored, fresh, NativeCodec.roundtrip, lockedContents]
+
+/-- In a standalone computation a ready acquisition returns its owned guard. -/
+theorem lock_unlocked {α : Type} [NativeCodec α] (mutex : NativeMutex α)
+    (value : α) (poisoned : Bool) (env : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id, typeName α, .tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    lock mutex env = (.ok (
+      if poisoned then .Err ⟨⟨mutex, env.refCounter + 1, env.currentPid, value⟩⟩
+      else .Ok ⟨mutex, env.refCounter + 1, env.currentPid, value⟩),
+      { env with
+        refCounter := env.refCounter + 1
+        nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+          (mutex.id, typeName α, lockedContents env.currentPid (env.refCounter + 1) poisoned value)
+          else cell }) := by
+  unfold lock
+  rw [Result.wait_ready_apply _ _ _ _ _ (pollLock_unlocked mutex value poisoned env stored fresh)]
+  simp
+
+end Lynx.NativeMutex

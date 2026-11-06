@@ -144,7 +144,10 @@ defmodule Lynx.Rust.Extraction do
         rustler_atom_caches: {caches, module}
       )
 
-    models = models ++ Lynx.Rust.MutexModels.type_models(audit.external_calls, module)
+    models =
+      models ++
+        Lynx.Rust.MutexModels.type_models(audit.external_calls, module) ++
+        Lynx.Rust.LockModels.type_models(audit.external_calls, module)
 
     unless length(models) == MapSet.size(MapSet.new(models, & &1.rust)),
       do: raise(ArgumentError, "conflicting native Rust type models")

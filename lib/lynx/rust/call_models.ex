@@ -13,6 +13,7 @@ defmodule Lynx.Rust.CallModels do
           if(execution == :runtime,
             do:
               Lynx.Rust.MutexModels.resolve(function, translated, refs) ||
+                Lynx.Rust.LockModels.resolve(function, translated, refs) ||
                 Lynx.Rust.NativeDrops.resolve(function, translated, refs)
           ) ||
             Lynx.Rust.ResultModels.resolve(function, translated, refs) ||

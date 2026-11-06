@@ -1,13 +1,15 @@
 defmodule Lynx.Rust.NativeLifetimes do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, LLBC, MutexModels}
+  alias Lynx.Rust.{CallModels, LLBC, MutexModels, LockModels}
 
   # Extraction can reconstruct assertions without their unwind drops. Logical
   # heap ownership still needs cleanup. Until unwind is interpreted, admit only
   # straight-line owner lifetimes without a potentially failing intervening step.
   def audit!(functions, models, translated, refs, opts \\ []) do
     mutexes =
-      for type <- translated["type_decls"], type && MutexModels.type?(type), do: type["def_id"]
+      for type <- translated["type_decls"],
+          type && (MutexModels.type?(type) or LockModels.guard?(type, refs)),
+          do: type["def_id"]
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
     implementations = MapSet.new(functions, & &1["def_id"])
@@ -37,6 +39,9 @@ defmodule Lynx.Rust.NativeLifetimes do
       end
     end
   end
+
+  # References borrow an owner; they do not own or destroy its native cell.
+  defp contains_native?(%{"Ref" => _}, _, _, _, _), do: false
 
   defp contains_native?(%{"Adt" => %{"id" => id} = adt}, mutexes, types, refs, seen) do
     id in mutexes or

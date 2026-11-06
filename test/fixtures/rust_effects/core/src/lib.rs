@@ -42,3 +42,13 @@ pub fn assert_then_release(mutex: std::sync::Mutex<u64>, accepted: bool) {
     assert!(accepted);
     drop(mutex);
 }
+
+/// Acquires shared counter state, retaining the guard in a poisoned result.
+///
+/// # Panics
+/// Native recursive acquisition can panic or block; verification rejects it.
+pub fn acquire_counter(
+    mutex: &std::sync::Mutex<Counter>,
+) -> std::sync::LockResult<std::sync::MutexGuard<'_, Counter>> {
+    mutex.lock()
+}

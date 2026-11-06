@@ -7,9 +7,9 @@ defmodule Lynx.Rust.NativeCodecs do
   def plan!(audit) do
     constructors =
       for {id, model} <- audit.external_calls,
-          model[:native_constructor] == true,
-          into: MapSet.new(),
-          do: id
+          model[:native_constructor] == true or model[:native_codec_input] == true,
+          into: %{},
+          do: {id, model[:native_codec_input] == true}
 
     roots = Enum.flat_map(audit.functions, &payloads(&1["body"], constructors))
     plan = Enum.reduce(roots, [], &visit!(&1, audit, &2, []))
@@ -22,16 +22,26 @@ defmodule Lynx.Rust.NativeCodecs do
   end
 
   defp payloads(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => generics}}, ids) do
-    if MapSet.member?(ids, id) do
-      case generics do
-        %{"types" => [type], "regions" => [], "const_generics" => [], "trait_refs" => []} ->
-          [type]
+    case {Map.fetch(ids, id), generics} do
+      {{:ok, false},
+       %{"types" => [type], "regions" => [], "const_generics" => [], "trait_refs" => []}} ->
+        [type]
 
-        _ ->
-          raise ArgumentError, "unsupported native mutex constructor arguments"
-      end
-    else
-      []
+      {{:ok, true},
+       %{
+         "types" => [type],
+         "regions" => [%{"Body" => region}],
+         "const_generics" => [],
+         "trait_refs" => []
+       }}
+      when is_integer(region) ->
+        [type]
+
+      {:error, _} ->
+        []
+
+      _ ->
+        raise ArgumentError, "unsupported native mutex constructor or acquisition arguments"
     end
   end
 
