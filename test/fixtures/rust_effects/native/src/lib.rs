@@ -1,6 +1,47 @@
 //! Real native APIs used to measure extraction support, not assumed models.
 use std::sync::Mutex;
 
+/// Reads a borrowed guard through another first-party crate.
+pub fn guard_read(guard: &std::sync::MutexGuard<'_, effects_core::Counter>) -> u64 {
+    effects_core::read_guard(guard)
+}
+
+/// Updates a borrowed guard through another first-party crate.
+pub fn guard_increment(
+    guard: &mut std::sync::MutexGuard<'_, effects_core::Counter>,
+    amount: u64,
+) -> bool {
+    effects_core::increment_guard(guard, amount)
+}
+
+/// Exercises mutation whose updated borrow would be lost on panic.
+///
+/// # Panics
+/// Panics when the request is rejected. Verification rejects this failure path.
+pub fn guard_increment_then_assert(
+    guard: &mut std::sync::MutexGuard<'_, effects_core::Counter>,
+    amount: u64,
+    accepted: bool,
+) {
+    effects_core::increment_guard(guard, amount);
+    assert!(accepted);
+}
+
+/// A guard contained in another first-party type still carries a mutable borrow.
+pub struct GuardEnvelope<'a> {
+    /// Guard owned by the envelope.
+    pub guard: std::sync::MutexGuard<'a, effects_core::Counter>,
+}
+
+/// Exercises the same unsupported failure path through a nested guard field.
+///
+/// # Panics
+/// Panics when the request is rejected, after updating the borrowed payload.
+pub fn guard_envelope_then_assert(envelope: &mut GuardEnvelope<'_>, amount: u64, accepted: bool) {
+    effects_core::increment_guard(&mut envelope.guard, amount);
+    assert!(accepted);
+}
+
 /// Shared resource containing the state protected by the native mutex.
 pub struct CounterResource {
     state: Mutex<effects_core::Counter>,
@@ -236,6 +277,19 @@ pub fn mutex_discard_custom(value: u64) {
 #[cfg(test)]
 mod tests {
     use super::mutex_new_incremented;
+
+    #[test]
+    fn borrowed_guard_update_preserves_rejected_state() {
+        let mutex = std::sync::Mutex::new(effects_core::Counter { value: 7 });
+        let mut guard = mutex.lock().expect("fresh mutex must be unlocked");
+        assert!(super::guard_increment(&mut guard, 3));
+        assert_eq!(super::guard_read(&guard), 10);
+        assert!(!super::guard_increment(&mut guard, u64::MAX));
+        assert_eq!(super::guard_read(&guard), 10);
+        assert!(mutex.try_lock().is_err());
+        drop(guard);
+        assert_eq!(mutex.lock().expect("release must preserve state").value, 10);
+    }
 
     #[test]
     fn mutex_initialization_contains_the_checked_update() {

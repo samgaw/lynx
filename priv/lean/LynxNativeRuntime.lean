@@ -8,7 +8,8 @@ A native panic is retained as the `rust_panicked` marker. It must be converted b
 a native facade before becoming an Elixir-visible exception. Undefined behavior
 and divergence are verification exhaustion, never successful native returns.
 Mutex construction initializes logical shared cells. Bounded blocking acquisition
-uses atomic state waits; guard access/release, resource lifetimes, native
+uses atomic state waits; borrowed guard views reconstruct payload updates.
+Guard release, resource lifetimes, native
 executors and FFI execution require separate models. -/
 
 public section
@@ -279,6 +280,19 @@ structure NativeGuard (α : Type) where
 before acquisition. This is not an Elixir exception. -/
 structure NativePoisonError (α : Type) where
   value : α
+
+namespace NativeGuard
+
+/-- Shared borrowing observes the guard's payload view. -/
+@[expose] def deref {α : Type} (guard : NativeGuard α) : α := guard.value
+
+/-- Ending a mutable borrow reconstructs the owner with its latest payload.
+This does not release the mutex or commit a payload to its shared cell. -/
+@[expose] def deref_mut {α : Type} (guard : NativeGuard α) :
+    α × (α → NativeGuard α) :=
+  (guard.value, fun value => { guard with value })
+
+end NativeGuard
 
 namespace NativeMutex
 

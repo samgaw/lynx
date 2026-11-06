@@ -93,23 +93,20 @@ defmodule Lynx.Rust.LockModels do
   def poison?(_), do: false
 
   def type_models(models, prefix) do
-    if Enum.any?(models, fn {_, model} -> model[:native_guard_type] end) do
-      module = (prefix |> String.split(".") |> hd()) <> ".NativeRuntime"
+    module = (prefix |> String.split(".") |> hd()) <> ".NativeRuntime"
 
-      for {rust, lean} <- [
-            {"std::sync::poison::mutex::MutexGuard", "Lynx.NativeGuard"},
-            {"std::sync::poison::PoisonError", "Lynx.NativePoisonError"}
-          ],
-          do: %{
-            rust: rust,
-            lean: lean,
-            import: module,
-            label:
-              "Validated native guard/poisoned-acquisition representation; Rust std and native layout unverified"
-          }
-    else
-      []
-    end
+    for {key, rust, lean} <- [
+          {:native_guard_type, "std::sync::poison::mutex::MutexGuard", "Lynx.NativeGuard"},
+          {:native_poison_type, "std::sync::poison::PoisonError", "Lynx.NativePoisonError"}
+        ],
+        Enum.any?(models, fn {_, model} -> model[key] end),
+        do: %{
+          rust: rust,
+          lean: lean,
+          import: module,
+          label:
+            "Validated native guard/poisoned-acquisition representation; Rust std and native layout unverified"
+        }
   end
 
   defp params?(
