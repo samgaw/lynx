@@ -44,6 +44,7 @@ defmodule Lynx.Rust.FutureModels do
           %{
             rust_name: "core::task::wake::{core::task::wake::Context<'a>}::waker",
             lean: "Lynx.NativeTaskContext.waker",
+            native_wake_operation: :context_waker,
             builtin: false,
             can_fail: false,
             lift: false,
@@ -58,6 +59,7 @@ defmodule Lynx.Rust.FutureModels do
           %{
             rust_name: "core::task::wake::{core::task::wake::Waker}::wake_by_ref",
             lean: "Lynx.NativeWaker.wakeByRef",
+            native_wake_operation: :wake_by_ref,
             builtin: false,
             can_fail: true,
             lift: true,

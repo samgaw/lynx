@@ -1237,3 +1237,96 @@ theorem decode_failure_cleanup_handled_next {α β γ : Type} [NativeCodec α]
 
 end NativeResourceArc
 end Lynx
+
+namespace Lynx
+
+/-- An identity for a supported, registered native wake callback. It is not a BEAM PID. -/
+structure NativeWaker where
+  id : Nat
+
+/-- Only the borrowed waker identity is exposed by the supported Context operations. -/
+structure NativeTaskContext where
+  waker : NativeWaker
+
+namespace NativeWaker
+
+@[expose] def typeName : String := "rust:future:waker"
+
+/-- Record a coalesced notification without changing the identity's other cells. -/
+@[expose] def notifiedEnv (waker : NativeWaker) (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}
+
+/-- Notification requests may coalesce. No executor or implicit repoll is assumed. -/
+@[expose] def pollWake (waker : NativeWaker) (env : Environment) :
+    Option (Except Exception Unit × Environment) :=
+  let cells := env.nativeHeap.filter fun cell => cell.1 == waker.id
+  if waker.id ≤ env.refCounter ∧ (cells == [(waker.id, typeName, .atom "idle")] ||
+      cells == [(waker.id, typeName, .atom "notified")]) then
+    some (.ok (), {env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell})
+  else some (.error .exhausted, env)
+
+/-- A valid callback requests a wake atomically; invalid identities exhaust verification. -/
+@[expose] def wakeByRef (waker : NativeWaker) : NativeM Unit :=
+  .wait (pollWake waker) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
+/-- Registered wake requests preserve all unrelated cells and every other runtime field. -/
+theorem wakeByRef_registered (waker : NativeWaker) (env : Environment)
+    (bounded : waker.id ≤ env.refCounter)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
+      [(waker.id, typeName, .atom "idle")]) :
+    wakeByRef waker env = (.ok (), {env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}) := by
+  have ready : pollWake waker env = some (.ok (), {env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}) := by
+    simp [pollWake, stored, bounded]
+  unfold wakeByRef
+  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+/-- The wake request composes with the actual caller's continuation. -/
+theorem wakeByRef_registered_next {α : Type} (waker : NativeWaker)
+    (next : Unit → Result α) (env : Environment)
+    (bounded : waker.id ≤ env.refCounter)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
+      [(waker.id, typeName, .atom "idle")]) :
+    (wakeByRef waker >>= next) env =
+      next () {env with nativeHeap := env.nativeHeap.map fun cell =>
+        if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell} := by
+  have ready : pollWake waker env = some (.ok (), {env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}) := by
+    simp [pollWake, stored, bounded]
+  unfold wakeByRef
+  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+/-- Requests coalesce in the logical notification cell. -/
+theorem notifiedEnv_idempotent (waker : NativeWaker) (env : Environment) :
+    notifiedEnv waker (notifiedEnv waker env) = notifiedEnv waker env := by
+  have maps : (env.nativeHeap.map (fun cell =>
+      if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell)).map
+      (fun cell => if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell) =
+      env.nativeHeap.map (fun cell =>
+        if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell) := by
+    rw [List.map_map]
+    apply List.map_congr_left
+    intro cell _
+    by_cases same : cell.1 = waker.id <;> simp [same]
+  simp only [notifiedEnv, maps]
+
+/-- A missing wake capability cannot complete a caller continuation. -/
+theorem wakeByRef_missing_next {α : Type} (waker : NativeWaker)
+    (next : Unit → Result α) (env : Environment)
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = []) :
+    (wakeByRef waker >>= next) env = (.error .exhausted, env) := by
+  have ready : pollWake waker env = some (.error .exhausted, env) := by
+    simp [pollWake, missing]
+  unfold wakeByRef
+  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+end NativeWaker
+end Lynx

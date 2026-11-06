@@ -15,9 +15,13 @@ defmodule Lynx.Rust.Extraction do
         ],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
 
-    if Keyword.get(opts, :futures, :reject) != :reject and
+    if Keyword.get(opts, :futures, :reject) == :immediate and
          Keyword.get(opts, :execution, :pure) != :pure,
        do: raise(ArgumentError, "immediate future extraction currently requires pure execution")
+
+    if Keyword.get(opts, :futures, :reject) == :polling and
+         Keyword.get(opts, :execution, :pure) != :runtime,
+       do: raise(ArgumentError, "stateful future polling requires runtime execution")
 
     unwind = Keyword.get(opts, :unwind, :reject)
     Lynx.Rust.NativeUnwind.charon_arguments(unwind)
@@ -148,7 +152,10 @@ defmodule Lynx.Rust.Extraction do
 
     tools = Path.expand(tools)
     output = Path.expand(output)
-    requested_calls = Keyword.get(opts, :external_calls, [])
+
+    requested_calls =
+      Keyword.get(opts, :external_calls, []) ++
+        if(Keyword.get(opts, :futures, :reject) == :polling, do: [:native_wakers], else: [])
 
     if :rustler_encoders in requested_calls do
       for {rust, lean} <- [
@@ -442,7 +449,8 @@ defmodule Lynx.Rust.Extraction do
     validate_target!(document)
 
     models =
-      models ++ Lynx.Rust.Futures.type_models!(Keyword.get(opts, :futures, :reject), document)
+      models ++
+        Lynx.Rust.Futures.type_models!(Keyword.get(opts, :futures, :reject), document, module)
 
     %{document: document, llbc: llbc, first_party: first_party, models: models}
   end
