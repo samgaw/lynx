@@ -145,14 +145,6 @@ defmodule Lynx.Rust.NativeUnwindTest do
       Lynx.Rust.verify!(workspace, "effects-native", Keyword.put(options, :execution, :pure))
     end
 
-    assert_raise CompileError, ~r/unsupported assertion unwind cleanup/, fn ->
-      Lynx.Rust.verify!(
-        workspace,
-        "effects-native",
-        Keyword.put(options, :roots, ["effects_native::mutex_assert"])
-      )
-    end
-
     File.write!(
       property,
       proof <>

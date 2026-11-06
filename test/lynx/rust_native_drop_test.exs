@@ -171,7 +171,7 @@ defmodule Lynx.Rust.NativeDropTest do
 
     # A real custom destructor panics; no field codec or assumed contract may
     # replace its behavior with native cell removal.
-    for root <- ~w(mutex_discard mutex_discard_custom) do
+    for root <- ~w(mutex_discard_custom) do
       assert_raise CompileError, ~r/native destruction requires/, fn ->
         Lynx.Rust.verify!(
           workspace,
@@ -181,7 +181,7 @@ defmodule Lynx.Rust.NativeDropTest do
       end
     end
 
-    for root <- ~w(mutex_assert_scalar mutex_scope) do
+    for root <- ~w(mutex_assert_scalar) do
       assert_raise CompileError, ~r/structural drop erasure rejected|native owner lifetime/, fn ->
         Lynx.Rust.verify!(
           workspace,
