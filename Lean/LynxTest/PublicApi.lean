@@ -19,6 +19,13 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
 private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
+-- State waits can be reasoned about without importing scheduler internals.
+private theorem readyStateWait (poll : Lynx.Environment → Option (β × Lynx.Environment))
+    (next : β → Lynx.Result α) (env updated : Lynx.Environment) (value : β)
+    (ready : poll env = some (value, updated)) :
+    (Lynx.Result.wait poll next) env = next value updated :=
+  Lynx.Result.wait_ready_apply poll next env updated value ready
+
 -- Bit-field proof interfaces are available through ordinary public imports.
 private theorem decodeBigEndian (value width : Nat) :
     Lynx.Term.Bitstring.decodeInteger (Lynx.Term.Bitstring.integerBits value width false) false =
@@ -691,6 +698,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.toExcept",
   "Lynx.Result.toExceptRead",
   "Lynx.Result.tryWith",
+  "Lynx.Result.wait",
   "Lynx.Rustler.decodeBool",
   "Lynx.Rustler.encodeBool",
   "Lynx.ScheduleChoice",
