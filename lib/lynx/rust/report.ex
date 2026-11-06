@@ -109,7 +109,7 @@ defmodule Lynx.Rust.Report do
       for property <- verified,
           callees =
             Enum.filter(
-              property.implementation_dependencies,
+              implementation_dependencies(property.definition_id, dependencies, models),
               &(crate(&1["rust_name"]) != crate(property.rust_name))
             ),
           callees != [] do
@@ -325,6 +325,29 @@ defmodule Lynx.Rust.Report do
   defp byte_vector?(_), do: false
 
   defp crate(name), do: name |> String.split("::") |> hd()
+
+  # Same-crate wrappers and compiler-generated poll/drop bodies can hide the
+  # cross-crate call from the root's immediate callees. Follow the extracted
+  # graph, stopping at external models, and retain actual implementation IDs.
+  defp implementation_dependencies(root, dependencies, models) do
+    dependencies
+    |> Map.fetch!(root)
+    |> reachable(dependencies, MapSet.new([root]))
+    |> MapSet.delete(root)
+    |> Enum.filter(&Map.has_key?(models, &1))
+    |> Enum.map(&Map.fetch!(models, &1))
+    |> Enum.sort_by(& &1["rust_name"])
+  end
+
+  defp reachable([], _dependencies, seen), do: seen
+
+  defp reachable([id | rest], dependencies, seen) do
+    if MapSet.member?(seen, id) do
+      reachable(rest, dependencies, seen)
+    else
+      reachable(Map.get(dependencies, id, []) ++ rest, dependencies, MapSet.put(seen, id))
+    end
+  end
 
   defp external_dependencies(id, dependencies, external, seen) do
     if MapSet.member?(seen, id) do
