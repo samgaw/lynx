@@ -1,0 +1,154 @@
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -244,13 +244,86 @@
+         }
+     }
+
++    /// Transfer the mutable reference out of a consumed standard Pin wrapper.
++    /// MIR spells this final use `Copy`; Aeneas must not duplicate a mutable loan.
++    /// Validate the complete executable body before changing that operand.
++    fn normalize_pin_get_mut(&self, def: &hax::FullDef<'tcx>, body: &mut mir::Body<'tcx>) {
++        if !matches!(def.kind(), hax::FullDefKind::AssocFn(_)) {
++            return;
++        }
++        let Some(id) = def.def_id().as_real_def_id() else {
++            return;
++        };
++        if self.tcx.item_name(id).as_str() != "get_mut" {
++            return;
++        }
++        let Some(parent) = self.tcx.impl_of_assoc(id) else {
++            return;
++        };
++        let parent_ty = self
++            .tcx
++            .type_of(parent)
++            .instantiate_identity()
++            .skip_normalization();
++        let ty::Adt(pin, args) = parent_ty.kind() else {
++            return;
++        };
++        if Some(pin.did()) != self.tcx.lang_items().pin_type()
++            || !matches!(
++                args.type_at(0).kind(),
++                ty::Ref(_, _, rustc_hir::Mutability::Mut)
++            )
++            || self.tcx.fn_sig(id).skip_binder().safety().is_unsafe()
++            || body.arg_count != 1
++            || body.basic_blocks.len() != 1
++        {
++            return;
++        }
++        let block = &body.basic_blocks[mir::START_BLOCK];
++        if !matches!(block.terminator().kind, mir::TerminatorKind::Return) {
++            return;
++        }
++        let mut assignment = None;
++        for (index, statement) in block.statements.iter().enumerate() {
++            match &statement.kind {
++                mir::StatementKind::StorageLive(_)
++                | mir::StatementKind::StorageDead(_)
++                | mir::StatementKind::Nop => {}
++                mir::StatementKind::Assign((
++                    dest,
++                    mir::Rvalue::Use(mir::Operand::Copy(source), _),
++                )) if dest.local == mir::RETURN_PLACE
++                    && dest.projection.is_empty()
++                    && source.local.as_usize() == 1
++                    && matches!(source.projection.as_ref(), [mir::ProjectionElem::Field(field, _)] if field.as_usize() == 0)
++                    && assignment.is_none() =>
++                {
++                    assignment = Some(index);
++                }
++                _ => return,
++            }
++        }
++        if let Some(index) = assignment {
++            let statement = &mut body.basic_blocks.as_mut()[mir::START_BLOCK].statements[index];
++            let mir::StatementKind::Assign((_, mir::Rvalue::Use(operand, _))) = &mut statement.kind
++            else {
++                unreachable!()
++            };
++            let mir::Operand::Copy(place) = operand else {
++                unreachable!()
++            };
++            *operand = mir::Operand::Move(*place);
++        }
++    }
++
+     fn translate_def_body_inner(
+         &mut self,
+         span: Span,
+         def: &hax::FullDef<'tcx>,
+     ) -> Result<Body, Error> {
+         // Retrieve the body
+-        if let Some(body) = self.get_mir(def.this(), span)? {
++        if let Some(mut body) = self.get_mir(def.this(), span)? {
++            self.normalize_pin_get_mut(def, &mut body);
+             Ok(self.translate_body(span, body, &def.source_text))
+         } else if let Some(value) =
+             def.evaluate(self.hax_state_with_id(), hax::ReadMode::Structured)
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1305,3 +1305,61 @@
+     assert_eq!(poll.generics.regions.len(), 3);
+     Ok(())
+ }
++
++#[test]
++fn pin_get_mut_transfers_only_the_standard_wrapper() -> anyhow::Result<()> {
++    let data = translate(
++        r#"//@ charon-args=--preset=aeneas --immediate-futures --sysroot=default --opaque=core --opaque=std --include=core::pin --monomorphize-mut=all
++pub fn view(value: std::pin::Pin<&mut u64>) -> &mut u64 { value.get_mut() }
++pub struct Shadow<'a> { pointer: &'a mut u64 }
++impl<'a> Shadow<'a> { pub fn get_mut(self) -> &'a mut u64 { self.pointer } }
++fn main() {}
++"#,
++    )?;
++    let getters: Vec<_> = data
++        .fun_decls
++        .iter()
++        .filter(|decl| {
++            let name = decl.item_meta.name.debug_repr(&data);
++            name.ends_with("::get_mut")
++                && (name.starts_with("core::pin::") || name.starts_with("test_crate::"))
++        })
++        .collect();
++    assert_eq!(getters.len(), 2);
++    for getter in getters {
++        let Body::Structured(body) = &getter.body else {
++            panic!("getter body");
++        };
++        let assignments: Vec<_> = body
++            .body
++            .statements
++            .iter()
++            .filter_map(|statement| {
++                if let StatementKind::Assign(_, value) = &statement.kind {
++                    Some(value)
++                } else {
++                    None
++                }
++            })
++            .collect();
++        if getter
++            .item_meta
++            .name
++            .debug_repr(&data)
++            .starts_with("core::pin::")
++        {
++            let [Rvalue::Use(Operand::Move(_), _)] = assignments.as_slice() else {
++                panic!("one transfer: {assignments:?}");
++            };
++        } else {
++            assert!(assignments.iter().any(|value| matches!(
++                value,
++                Rvalue::Ref {
++                    kind: BorrowKind::Mut,
++                    ..
++                }
++            )));
++        }
++    }
++    Ok(())
++}

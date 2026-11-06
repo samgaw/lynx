@@ -1,7 +1,7 @@
 defmodule Lynx.Rust.LibraryHelpers do
   @moduledoc false
 
-  # Only this small helper is retained from third-party dependency metadata.
+  # Only these narrowly selected helpers are retained from dependency metadata.
   # Inclusion is not a specification or an approval of its behavior: its actual
   # body goes through the same call audit, extraction and kernel checking as a
   # workspace function. Other dependency functions remain outside this scope.
@@ -64,5 +64,139 @@ defmodule Lynx.Rust.LibraryHelpers do
     end
   end
 
+  def selected?(
+        %{
+          "src" => "Normal",
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["pin", 0]},
+              %{"Impl" => %{"Ty" => %{"kind" => "InherentImplBlock"}}},
+              %{"Ident" => ["get_mut", 0]}
+            ]
+          },
+          "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+          "generics" => params,
+          "body" => %{
+            "Structured" => %{
+              "locals" => %{"arg_count" => 1, "locals" => [_, _]},
+              "body" => %{"statements" => statements}
+            }
+          }
+        },
+        translated
+      ) do
+    refs = Lynx.Rust.LLBC.type_references!(translated)
+    variable = %{"TypeVar" => %{"Free" => 0}}
+    region = %{"Var" => %{"Free" => 0}}
+
+    args = %{
+      "regions" => [region],
+      "types" => [variable],
+      "const_generics" => [],
+      "trait_refs" => []
+    }
+
+    with [%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => ^args}}] <-
+           Lynx.Rust.CallModels.expand(sig["inputs"], refs),
+         %{"Ref" => [^region, ^variable, "Mut"]} <-
+           Lynx.Rust.CallModels.expand(sig["output"], refs),
+         %{
+           "src" => "Normal",
+           "item_meta" => %{"name" => name},
+           "kind" => %{"Struct" => [%{"name" => "pointer", "ty" => field}]}
+         } <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
+         [
+           %{"Ident" => ["core", 0]},
+           %{"Ident" => ["pin", 0]},
+           %{"Ident" => ["Pin", 0]},
+           %{"Instantiated" => _}
+         ] <- name,
+         %{"Ref" => [^region, ^variable, "Mut"]} <- Lynx.Rust.CallModels.expand(field, refs),
+         true <- pin_unpin_bound?(params, variable, translated, refs) do
+      case Enum.reject(statements, &pin_storage?/1) do
+        [
+          %{
+            "kind" => %{
+              "Assign" => [
+                %{"kind" => %{"Local" => 0}},
+                %{
+                  "Use" => [
+                    %{
+                      "Move" => %{
+                        "kind" => %{
+                          "Projection" => [
+                            %{"kind" => %{"Local" => 1}},
+                            %{"Field" => [nil, 0]}
+                          ]
+                        }
+                      }
+                    },
+                    "No"
+                  ]
+                }
+              ]
+            }
+          },
+          %{"kind" => "Return"}
+        ] ->
+          true
+
+        _ ->
+          false
+      end
+    else
+      _ -> false
+    end
+  end
+
   def selected?(_, _), do: false
+
+  defp pin_storage?(%{"kind" => %{"StorageLive" => id}}) when id in [0, 1], do: true
+  defp pin_storage?(%{"kind" => %{"StorageDead" => id}}) when id in [0, 1], do: true
+  defp pin_storage?(_), do: false
+
+  defp pin_unpin_bound?(
+         %{
+           "types" => [_],
+           "regions" => [_],
+           "const_generics" => [],
+           "trait_type_constraints" => [],
+           "trait_clauses" => [%{"trait_" => trait}]
+         },
+         variable,
+         translated,
+         refs
+       ) do
+    with %{
+           "regions" => [],
+           "outlives" => [],
+           "skip_binder" => %{
+             "id" => id,
+             "generics" => %{
+               "regions" => [],
+               "types" => [^variable],
+               "const_generics" => [],
+               "trait_refs" => []
+             }
+           }
+         } <- Lynx.Rust.CallModels.expand(trait, refs),
+         %{
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["core", 0]},
+               %{"Ident" => ["marker", 0]},
+               %{"Ident" => ["Unpin", 0]}
+             ]
+           }
+         } <-
+           Enum.find(translated["trait_decls"], &(&1 && &1["def_id"] == id)) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp pin_unpin_bound?(_, _, _, _), do: false
 end
