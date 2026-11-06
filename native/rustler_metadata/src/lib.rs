@@ -5,7 +5,7 @@
 
 use std::ffi::CStr;
 
-type Exports = (String, Vec<(String, u32, u32)>);
+type Exports = (String, Vec<(String, u32, u32)>, bool);
 
 fn failure(message: impl ToString) -> rustler::Error {
     rustler::Error::RaiseTerm(Box::new(message.to_string()))
@@ -53,7 +53,7 @@ fn read_exports(path: String) -> rustler::NifResult<Exports> {
                 .to_owned();
             exports.push((name, export.arity, export.flags));
         }
-        Ok((module, exports))
+        Ok((module, exports, entry.load.is_some()))
     }
 }
 

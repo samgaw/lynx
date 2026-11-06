@@ -16,7 +16,7 @@ defmodule Lynx.Rustler.Metadata do
     copy = library <> ".lynx-#{System.pid()}-#{System.unique_integer([:positive])}"
     File.cp!(library, copy)
 
-    {module, exports} =
+    {module, exports, load} =
       try do
         read_exports(copy)
       after
@@ -25,7 +25,7 @@ defmodule Lynx.Rustler.Metadata do
 
     names = Enum.map(exports, fn {name, arity, _flags} -> {name, arity} end)
     if length(names) != MapSet.size(MapSet.new(names)), do: raise("duplicate NIF exports")
-    %{module: module, exports: Enum.sort(exports)}
+    %{module: module, exports: Enum.sort(exports), load: load}
   end
 
   def bindings!(expanded_file, compiled, only \\ nil) do
@@ -76,6 +76,26 @@ defmodule Lynx.Rustler.Metadata do
 
     JSON.decode!(output)
   end
+
+  def resources!(expanded_file, %{load: true, module: module}, crate) do
+    ensure_loaded!()
+    parser = :persistent_term.get({__MODULE__, :parser})
+
+    {output, status} =
+      System.cmd(
+        parser,
+        [expanded_file, "--resources", JSON.encode!(%{crate: crate, module: module})],
+        stderr_to_stdout: true
+      )
+
+    if status != 0,
+      do: raise(ArgumentError, "cannot validate Rustler resource registration:\n#{output}")
+
+    JSON.decode!(output)
+  end
+
+  def resources!(_, _, _),
+    do: raise(ArgumentError, "compiled NIF entry has no resource load callback")
 
   defp select!(exports, only) do
     available = Enum.map(exports, fn {name, arity, _flags} -> {name, arity} end)
