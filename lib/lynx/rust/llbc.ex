@@ -97,7 +97,8 @@ defmodule Lynx.Rust.LLBC do
         external,
         translated,
         refs,
-        Keyword.get(opts, :external_calls, [])
+        Keyword.get(opts, :external_calls, []),
+        Keyword.get(opts, :execution, :pure)
       )
       |> Map.merge(cache_models)
 

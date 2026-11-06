@@ -45,7 +45,11 @@ defmodule Lynx.Rust do
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`
   marker; undefined behavior and divergence are verification exhaustion. This
-  option alone does not admit resources, locks, async or new external calls.
+  mode admits `std::sync::Mutex::new` with typed shared cells for bool/unsigned
+  scalar payloads and monomorphic first-party structs of those scalars. Internal
+  codecs are generated with kernel-checked roundtrips; they are not Rustler
+  encoders or native memory layouts. Recursive, borrowed, generic and other
+  payloads are rejected. This does not admit locking, resource lifetimes or async.
   Native facade conversion and effectful external primitives require separate
   validated models. Guard destruction and native unwind cleanup remain unsupported.
   Unsupported recursive/trait combinations fail elaboration.
