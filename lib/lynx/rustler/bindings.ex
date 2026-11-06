@@ -60,17 +60,30 @@ defmodule Lynx.Rustler.Bindings do
         function = function!(audit, binding)
         signature = function["signature"]
 
-        unless Enum.map(signature["inputs"], &LLBC.nif_type!(&1, audit)) == binding["arguments"],
-          do:
-            raise(
-              ArgumentError,
-              "Rustler and LLBC signatures differ for #{binding["name"]}/#{binding["arity"]}"
-            )
+        arguments =
+          Enum.zip_with(binding["arguments"], signature["inputs"], fn hint, type ->
+            argument!(hint, type, audit, translation, Keyword.get(opts, :resource_types, []))
+          end)
+
+        unless length(arguments) == length(signature["inputs"]) and
+                 length(arguments) == binding["arity"],
+               do: raise(ArgumentError, "Rustler and LLBC argument counts differ")
 
         implementation = Map.fetch!(implementations, function["def_id"])
 
         Map.merge(binding, %{
-          "result" => result!(binding["result"], signature["output"], audit, :link, translation),
+          "arguments" => arguments,
+          "result" =>
+            if(match?(%{"resource" => _}, binding["result"]),
+              do:
+                resource!(
+                  binding["result"],
+                  signature["output"],
+                  audit,
+                  Keyword.get(opts, :resource_types, [])
+                ),
+              else: result!(binding["result"], signature["output"], audit, :link, translation)
+            ),
           "lean_name" => implementation["lean_name"],
           "definition_id" => function["def_id"],
           "lean_file" => implementation["lean_file"]
@@ -78,6 +91,37 @@ defmodule Lynx.Rustler.Bindings do
       end
 
     %{manifest | bindings: bindings}
+  end
+
+  defp argument!(%{"resource" => _} = hint, type, audit, _translation, resources),
+    do: resource!(hint, type, audit, resources)
+
+  defp argument!(hint, type, audit, _translation, _resources) do
+    unless LLBC.nif_type!(type, audit) == hint,
+      do: raise(ArgumentError, "Rustler and LLBC argument signatures differ")
+
+    hint
+  end
+
+  defp resource!(_hint, type, audit, resources) do
+    path =
+      case LLBC.nif_type!(type, audit) do
+        %{"resource" => path} ->
+          path
+
+        _ ->
+          raise ArgumentError,
+                "resource signature must resolve to the actual Rustler ResourceArc type"
+      end
+
+    case Enum.filter(resources, &(&1.rust_name == Enum.join(path, "::"))) do
+      [resource] ->
+        %{"resource" => path, "lean" => resource.lean_name}
+
+      _ ->
+        raise ArgumentError,
+              "resource signature requires a validated registration and audited concrete Resource implementation"
+    end
   end
 
   defp result!(%{"native" => hint}, type, audit, mode, translation) do

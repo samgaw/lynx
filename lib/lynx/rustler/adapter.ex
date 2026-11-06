@@ -88,6 +88,10 @@ defmodule Lynx.Rustler.Adapter do
     if Enum.any?(types, &is_nil(&1.decode)),
       do: raise(ArgumentError, "custom Rustler decoders are unsupported")
 
+    if execution_model != :runtime and
+         (result[:resource] == true or Enum.any?(types, & &1[:resource])),
+       do: raise(ArgumentError, "resource NIF codecs require runtime execution")
+
     runtime? = execution_model == :runtime
     monad = if runtime?, do: "Lynx.NativeM", else: "RustM"
 
@@ -109,10 +113,31 @@ defmodule Lynx.Rustler.Adapter do
     wrapper = atomic_identifier!(binding["name"] <> "/" <> Integer.to_string(binding["arity"]))
 
     decode =
-      Enum.zip([args, decoded, types])
-      |> Enum.map_join("\n", fn {arg, value, type} ->
+      Enum.with_index(Enum.zip([args, decoded, types]))
+      |> Enum.map_join("\n", fn {{arg, value, type}, index} ->
         decoder = "#{type.decode} #{arg}"
-        decoder = if runtime?, do: "Lynx.Result.ofExcept (#{decoder})", else: decoder
+
+        decoder =
+          if runtime? and !type[:resource], do: "Lynx.Result.ofExcept (#{decoder})", else: decoder
+
+        owned =
+          Enum.zip(decoded, types)
+          |> Enum.take(index)
+          |> Enum.filter(fn {_, t} -> t[:resource] end)
+          |> Enum.reverse()
+
+        decoder =
+          if owned == [] do
+            decoder
+          else
+            cleanup =
+              Enum.map_join(owned, "; ", fn {name, _} ->
+                "Lynx.NativeResourceArc.release #{name}"
+              end)
+
+            "Lynx.Result.handle (#{decoder}) (fun error => do #{cleanup}; Lynx.Result.error error)"
+          end
+
         "  let #{value} ← #{decoder}"
       end)
 
@@ -143,6 +168,10 @@ defmodule Lynx.Rustler.Adapter do
 
   defp lean_list(strings), do: "[" <> Enum.map_join(strings, ", ", &JSON.encode!/1) <> "]"
 
+  defp execute(call, %{resource: true}, :runtime) do
+    "Lynx.Rustler.executeNative (do let value ← (#{call}); let term ← Lynx.NativeResourceArc.encode value; Lynx.NativeResourceArc.release value; Lynx.Result.ok term) id"
+  end
+
   defp execute(call, %{encode_m: encoder}, :runtime) do
     "Lynx.Rustler.executeNative (do let value ← (#{call}); Lynx.NativeM.fromRust (#{encoder} value)) id"
   end
@@ -158,6 +187,17 @@ defmodule Lynx.Rustler.Adapter do
 
   defp monadic_encoder(%{encode_m: encoder}), do: encoder
   defp monadic_encoder(type), do: "(fun value => RustM.ok (#{type.encode} value))"
+
+  defp type!(%{"resource" => _, "lean" => lean}) do
+    payload = identifier!(lean)
+
+    %{
+      lean: "(Lynx.NativeResourceArc #{payload})",
+      resource: true,
+      decode: "Lynx.NativeResourceArc.decode (α := #{payload})",
+      encode: nil
+    }
+  end
 
   defp type!(%{"native" => _, "lean" => lean, "encoder" => encoder}) do
     type = identifier!(lean)
@@ -204,6 +244,10 @@ defmodule Lynx.Rustler.Adapter do
 
   defp type!(%{"tuple" => fields}) when is_list(fields) and length(fields) <= 7 do
     types = Enum.map(fields, &type!/1)
+
+    if Enum.any?(types, & &1[:resource]),
+      do:
+        raise(ArgumentError, "resource codecs currently require top-level NIF arguments/results")
 
     lean =
       case types do
@@ -294,6 +338,10 @@ defmodule Lynx.Rustler.Adapter do
   defp type!(%{"result" => [ok, err]}) do
     ok = type!(ok)
     err = type!(err)
+
+    if ok[:resource] == true or err[:resource] == true,
+      do:
+        raise(ArgumentError, "resource codecs currently require top-level NIF arguments/results")
 
     type = %{
       lean: "(core.result.Result #{ok.lean} #{err.lean})",

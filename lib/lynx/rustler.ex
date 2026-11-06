@@ -37,7 +37,13 @@ defmodule Lynx.Rustler do
   and the compiled entry's load-callback presence. Successful native loading,
   linker constructors and registration execution remain trusted FFI behavior.
   Custom loaders, named resource registrations, dependency-crate registrations
-  and resource handles crossing the NIF boundary remain unsupported.
+  remain unsupported. Top-level immutable, destructor-free ResourceArc arguments
+  and results are supported with runtime execution when their payloads occur in
+  audited new/clone/deref calls within the selected extraction. Encoding retains
+  a logical VM pin and decoding acquires an independent Rust owner. VM pins stay
+  live for the proof: garbage collection, process-death cleanup, serialization and
+  distributed resource terms remain unsupported. Resource fields nested inside
+  tuple/result codecs and signature-only resource payload discovery are rejected.
   Build scripts and procedural macros execute as part of the trusted build.
   Panic conversion requires an unwinding build; aborting builds are rejected.
   Integer decoding follows Rustler exactly, including its narrowing casts for
@@ -77,8 +83,9 @@ defmodule Lynx.Rustler do
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
       state and blocking waits in Lynx's runtime. Runtime bindings use concurrent
       purity, preserve effects before panic and convert `rust_panicked` to
-      `nif_panicked`. Resource handles, native task identity and custom return
-      encoders remain unsupported in this mode. Ordinary scalar/tuple/result and
+      `nif_panicked`. Top-level resource handles preserve shared identity through
+      modeled VM pins; native task identity and custom return encoders remain
+      unsupported in this mode. Ordinary scalar/tuple/result and
       byte-vector codecs retain their existing decoding rules and cutoffs.
     * `:unwind` — `:reject` by default; `:assertions` selects the existing bounded
       mutex assertion-cleanup adapter for destructor-free payloads with runtime
@@ -227,6 +234,12 @@ defmodule Lynx.Rustler do
         rustler_atoms: if(custom?, do: :discover, else: [])
       )
 
+    if rustler_version != "0.39.0" and
+         Enum.any?(extraction.audit.external_calls, fn {_, model} ->
+           model[:native_resource_type]
+         end),
+       do: raise(ArgumentError, "resource verification currently requires Rustler 0.39.0")
+
     registrations =
       Lynx.Rustler.Registrations.prepare!(
         extraction,
@@ -240,6 +253,7 @@ defmodule Lynx.Rustler do
 
     bindings =
       Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation,
+        resource_types: registrations.types,
         result_monad: if(execution == :runtime, do: "Lynx.NativeM", else: "RustM"),
         assertion_unwind_input: Keyword.get(opts, :unwind, :reject) == :assertions
       )

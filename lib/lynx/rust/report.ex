@@ -215,6 +215,11 @@ defmodule Lynx.Rust.Report do
 
     byte_vec? = Enum.any?(bindings.bindings, &byte_vector?([&1["arguments"], &1["result"]]))
 
+    resource_model =
+      "Rustler #{version} VM resource codec model: stable term identity, aggregate VM pin, fresh Rust owner per decode and bounded reference count; VM collection, owner death, serialization, physical reference counts and FFI correctness unverified"
+
+    resource? = Enum.any?(bindings.bindings, &resource?([&1["arguments"], &1["result"]]))
+
     adapters =
       for binding <- bindings.bindings do
         %{
@@ -232,7 +237,11 @@ defmodule Lynx.Rust.Report do
             if(byte_vector?([binding["arguments"], binding["result"]]),
               do: [byte_vec_model],
               else: []
-            ),
+            ) ++
+              if(resource?([binding["arguments"], binding["result"]]),
+                do: [resource_model],
+                else: []
+              ),
           lean_name: binding["lean_name"],
           theorem: module <> ".«#{binding["name"]}:adapter/#{binding["arity"]}»",
           statement: "modelled decoder, extracted computation and encoder correspondence"
@@ -255,7 +264,10 @@ defmodule Lynx.Rust.Report do
     %{
       report
       | guarantees: report.guarantees ++ adapters,
-        external_models: report.external_models ++ if(byte_vec?, do: [byte_vec_model], else: []),
+        external_models:
+          report.external_models ++
+            if(byte_vec?, do: [byte_vec_model], else: []) ++
+            if(resource?, do: [resource_model], else: []),
         trusted_boundary:
           report.trusted_boundary ++
             [
@@ -266,6 +278,11 @@ defmodule Lynx.Rust.Report do
     |> Map.put(:rustler_version, version)
     |> Map.put(:unverified_nif_exports, unverified)
   end
+
+  defp resource?(%{"resource" => _}), do: true
+  defp resource?(map) when is_map(map), do: Enum.any?(Map.values(map), &resource?/1)
+  defp resource?(list) when is_list(list), do: Enum.any?(list, &resource?/1)
+  defp resource?(_), do: false
 
   defp byte_vector?(%{"vec" => "u8"}), do: true
   defp byte_vector?(map) when is_map(map), do: Enum.any?(Map.values(map), &byte_vector?/1)

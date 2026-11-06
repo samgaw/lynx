@@ -73,8 +73,8 @@ defmodule Lynx.Rust do
   cleanup; fields alone never establish the absence of a user destructor. Install
   the pinned `needs-drop-v1` Charon patch for this metadata. These operations remove
   their cells without invoking a payload destructor. Projected, user-defined
-  and general unwind drops remain rejected. Resource-handle conversion and
-  general native unwind cleanup require separate validated semantics.
+  and general unwind drops remain rejected. General native unwind cleanup
+  requires separate validated semantics.
   Rustler 0.39 `ResourceArc` allocation, clone, immutable dereference, explicit
   release and local scope cleanup are supported for monomorphic first-party
   payloads with native codecs and compiler-certified `needs_drop = false`.
@@ -82,13 +82,17 @@ defmodule Lynx.Rust do
   Resource payloads share a heap identity; each Rust-owned handle has a distinct
   consuming token. Properties must state loader registration explicitly using
   `Environment.nativeResourceTypes`; this does not verify compiled registration.
-  Reference counts have a 1024-handle verification bound. VM-held references,
-  resource codecs and custom callbacks remain unsupported. Resource extraction
+  Reference counts have a 1024-owner verification bound. The runtime models
+  aggregate VM pins, stable resource-term identities and fresh Rust ownership on
+  decoding. Collection, owner death, serialization and custom callbacks remain
+  unsupported. Resource extraction
   requires the pinned `global-names-v1` backend. Rustler adapters can supply
   registration capabilities for facade-declared resources after checking the
   generated default loader, inventory constructors and compiler-resolved types.
   Custom loaders, named registrations and dependency-crate registrations remain
-  unsupported. Resource values crossing NIF calls still require VM ownership codecs.
+  unsupported. Runtime adapters support top-level ResourceArc arguments/results
+  for payloads identified by audited resource operations in the selected extraction;
+  nested resource codecs and signature-only payload discovery remain rejected.
   Owners may move into actual extracted first-party callees when no other owner
   remains live in the caller. The callee undergoes the same lifetime audit;
   effects and post-consumption failures compose through the runtime monad.
@@ -106,8 +110,8 @@ defmodule Lynx.Rust do
   critical sections have parametric proofs preserving both successful updates
   under those schedules. This does not establish arbitrary-schedule safety,
   fairness, general liveness or native task identity. `Lynx.Rustler` runtime
-  adapters can compose supported scalar interfaces with these effects; resource
-  handles and effectful custom encoders remain unsupported.
+  adapters can compose supported scalar and immutable resource interfaces with
+  these effects; effectful custom encoders remain unsupported.
 
   `unwind: :assertions` additionally preserves compiler assertion cleanup for
   local owned mutexes with the same destructor-free payload subset. It requires `execution: :runtime`
