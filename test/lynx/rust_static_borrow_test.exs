@@ -45,7 +45,8 @@ defmodule Lynx.Rust.StaticBorrowTest do
 
     assert result.extraction.translation["aeneas_version"] in [
              "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1",
-             "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1"
+             "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1",
+             "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1"
            ]
 
     export = Path.join(tmp, "static-borrow.export")

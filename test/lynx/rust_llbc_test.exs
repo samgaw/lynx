@@ -120,6 +120,34 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
+  test "binds assertion unwind provenance to the explicit extraction mode" do
+    audit = LLBC.audit!(document([function()]), ["first_party"])
+
+    native =
+      translation()
+      |> Map.put(
+        "aeneas_version",
+        "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1"
+      )
+      |> Map.put("result_monad", "Lynx.NativeM")
+      |> Map.put("assertion_unwind_input", true)
+
+    assert %{0 => _} =
+             LLBC.link!(audit, native, result_monad: "Lynx.NativeM", assertion_unwind_input: true)
+
+    for {model, expected} <- [
+          {native, false},
+          {Map.delete(native, "assertion_unwind_input"), true},
+          {Map.put(native, "assertion_unwind_input", "true"), true},
+          {Map.put(native, "aeneas_version", "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1"),
+           true}
+        ] do
+      assert_raise ArgumentError, ~r/assertion unwind input/, fn ->
+        LLBC.link!(audit, model, result_monad: "Lynx.NativeM", assertion_unwind_input: expected)
+      end
+    end
+  end
+
   test "composite signatures retain tuple structure and require the standard Result identity" do
     boolean = %{"Value" => [0, %{"Scalar" => "Bool"}]}
 
