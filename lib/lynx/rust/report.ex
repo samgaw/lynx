@@ -40,7 +40,8 @@ defmodule Lynx.Rust.Report do
            :label,
            :status,
            :implementation_verified,
-           :native_cutoff_only
+           :native_cutoff_only,
+           :native_wake_operation
          ])}
       end)
 
@@ -152,6 +153,12 @@ defmodule Lynx.Rust.Report do
       fingerprint: extraction.fingerprint,
       trusted_boundary:
         @trusted ++
+          if(Enum.any?(Map.values(extraction.audit.external_calls), & &1[:native_wake_operation]),
+            do: [
+              "Registered nonpanicking wake callback relation; native Context/Waker registration, vtables, allocation and executor correctness unverified"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :native_unwind, []) != [],
             do: ["Lynx validated native cleanup lowering and nonpanicking-call analysis"],
             else: []

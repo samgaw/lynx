@@ -3,14 +3,14 @@ defmodule Lynx.Rust.Futures do
 
   def arguments!(:reject, _tools), do: []
 
-  def arguments!(:immediate, tools) do
+  def arguments!(mode, tools) when mode in [:immediate, :polling] do
     versions = File.read!(Path.join(tools, "lynx-toolchain")) |> String.split("\n")
 
     unless Enum.all?(["charon=", "aeneas="], fn prefix ->
              Enum.any?(
                versions,
                &(String.starts_with?(&1, prefix) and
-                   String.ends_with?(&1, "+immediate-futures-v1"))
+                   Enum.member?(String.split(&1, "+"), "immediate-futures-v1"))
              )
            end),
            do:
@@ -27,16 +27,19 @@ defmodule Lynx.Rust.Futures do
       "--include",
       "core::task::poll::Poll",
       "--include",
-      "core::pin::Pin"
+      "core::pin",
+      "--include",
+      "core::future::future::Future"
     ]
   end
 
   def arguments!(other, _tools),
     do: raise(ArgumentError, "unsupported Rust future extraction mode: #{inspect(other)}")
 
-  def type_models!(:reject, _document), do: []
+  def type_models!(mode, document, prefix \\ "Native.Extraction")
+  def type_models!(:reject, _document, _prefix), do: []
 
-  def type_models!(:immediate, document) do
+  def type_models!(:immediate, document, _prefix) do
     contexts =
       Enum.filter(document["translated"]["type_decls"], fn type ->
         type &&
@@ -71,6 +74,25 @@ defmodule Lynx.Rust.Futures do
 
       _ ->
         raise ArgumentError, "missing or ambiguous compiler task Context definition"
+    end
+  end
+
+  def type_models!(:polling, document, prefix) do
+    module = (prefix |> String.split(".") |> hd()) <> ".NativeRuntime"
+
+    for {name, lean} <- [{"Context", "Lynx.NativeTaskContext"}, {"Waker", "Lynx.NativeWaker"}] do
+      unless Lynx.Rust.FutureModels.type(document["translated"], name),
+        do: raise(ArgumentError, "stateful polling requires the compiler #{name} definition")
+
+      %{
+        rust: "core::task::wake::" <> name,
+        lean: lean,
+        import: module,
+        label:
+          "Registered native " <>
+            name <>
+            " model; borrowed wake capability, coalesced notification; callback registration, physical layout and executor correctness unverified"
+      }
     end
   end
 end

@@ -50,6 +50,20 @@ defmodule Lynx.Rust do
   are not supported. Pin's data definition is extracted rather than supplied by
   an axiom. This does not verify physical pinning, native memory or an executor.
 
+  `:futures` may also be `:polling` with `execution: :runtime`. This supports
+  explicit calls to first-party Future implementations, including Pending/Ready
+  results and registered wake requests. Context::waker and Waker::wake_by_ref
+  have separately reported models. A wake capability requires a unique typed
+  notification cell within the environment's reference counter; missing or invalid
+  capabilities exhaust verification. Requests atomically mark that cell and may
+  coalesce. The callback must be registered to this nonpanicking notification
+  protocol. Registration, native vtables and callback implementation remain trusted
+  boundaries; an arbitrary Waker cannot be assumed to satisfy that protocol.
+  This does not implement an executor, implicit repolling, fairness, cancellation
+  or compiler-generated coroutine suspension. Pin::get_mut's actual compiled body
+  is retained with a checked final mutable-borrow transfer; other Pin operations
+  are not implicitly admitted.
+
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`
