@@ -3,6 +3,7 @@
 /proofs/.lake/
 /proofs/lean-toolchain
 /proofs/workspace.llbc
+/proofs/*.aeneas.llbc
 /proofs/RustWorkspace/Extraction/
 
 /proofs/RustWorkspace_Facade.llbc

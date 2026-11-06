@@ -98,8 +98,7 @@ defmodule Lynx.Rust.ResourceTest do
 
     File.write!(property, original)
 
-    # Model preconditions do not establish correspondence to a compiled loader.
-    assert_raise ArgumentError, ~r/resource calls require compiled loader registration/, fn ->
+    prepared =
       Lynx.Rustler.prepare!(workspace, "effects-native",
         tools: @tools,
         execution: :runtime,
@@ -109,7 +108,12 @@ defmodule Lynx.Rust.ResourceTest do
         cargo: [features: ["resource-nif"]],
         only: [retained: 1]
       )
-    end
+
+    assert %{
+             status: :validated_configuration,
+             types: [%{rust_name: "effects_native::ScalarResource"}]
+           } =
+             prepared.resource_registration
 
     core = Path.join(workspace, "core/src/lib.rs")
     source = File.read!(core)
