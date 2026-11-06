@@ -678,5 +678,25 @@ theorem clone_release_cycle {α : Type} [NativeCodec α] (value : α) (env : Env
         (.ok value, { env with refCounter := env.refCounter + 3 }) := by
   simpa using clone_release_cycle_next value Result.ok env registered empty
 
+/-- Native exception conversion and a caller continuation retain final cleanup.
+The handler remains outside all lifecycle operations; no panic is discarded. -/
+theorem clone_release_cycle_handled_next {α β γ : Type} [NativeCodec α] (value : α)
+    (finish : α → NativeM β) (handler : Exception → NativeM β) (next : β → NativeM γ)
+    (env : Environment) (registered : typeName α ∈ env.nativeResourceTypes)
+    (empty : env.nativeHeap = []) :
+    ((Result.handle (do
+      let first ← new value
+      let retained ← clone first
+      release first
+      let observed ← deref retained
+      release retained
+      finish observed) handler) >>= next) env =
+      ((Result.handle (finish value) handler) >>= next)
+        { env with refCounter := env.refCounter + 3 } := by
+  simp only [new, Result.get_bind, Result.handle, Result.get_continuation_apply,
+    ite_eq_left registered]
+  simp [clone, release, deref, lookup, payload, NativeM.allocate, Result.handle,
+    empty, NativeCodec.roundtrip, referenceLimit, handleType, typeName, Nat.add_assoc]
+
 end NativeResourceArc
 end Lynx

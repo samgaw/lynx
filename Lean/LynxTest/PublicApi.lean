@@ -709,6 +709,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Rustler.decodeBool",
   "Lynx.Rustler.encodeBool",
   "Lynx.Rustler.executeNative",
+  "Lynx.Rustler.withResourceTypes",
   "Lynx.ScheduleChoice",
   "Lynx.ScheduleChoice.current",
   "Lynx.ScheduleChoice.swap",
