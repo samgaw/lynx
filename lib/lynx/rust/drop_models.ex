@@ -76,6 +76,133 @@ defmodule Lynx.Rust.DropModels do
     |> Enum.sort_by(& &1.rust_name)
   end
 
+  # Charon preserves both the element and allocator parameters on Vec's
+  # generated drop even though it removes the allocator from the Vec type.
+  # Erasure is restricted to bytes and Global: neither has an element/custom
+  # allocator destructor. Native deallocation remains an explicit heap model.
+  defp site!(
+         %{
+           "kind" => "Precise",
+           "place" => %{"ty" => annotation},
+           "fn_ptr" => %{
+             "kind" => %{"Fun" => id},
+             "generics" => %{
+               "regions" => [%{"Body" => region}],
+               "types" => [element, allocator],
+               "const_generics" => [],
+               "trait_refs" => []
+             }
+           }
+         },
+         ctx,
+         _seen
+       )
+       when is_integer(region) do
+    u8 = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+    t = %{"TypeVar" => %{"Free" => 0}}
+    a = %{"TypeVar" => %{"Free" => 1}}
+    vector_name = path(~w(alloc vec Vec))
+
+    with ^u8 <- expand(element, ctx),
+         %{"Adt" => %{"id" => allocator_id, "builtin" => nil, "generics" => allocator_args}} <-
+           expand(allocator, ctx),
+         true <- Constants.empty_arguments?(allocator_args),
+         %{"item_meta" => %{"name" => allocator_name}, "generics" => allocator_params} <-
+           ctx.types[allocator_id],
+         true <-
+           allocator_name == path(~w(alloc alloc Global)) and parameters?(allocator_params, 0, 0),
+         %{"Adt" => %{"id" => vector_id, "builtin" => nil, "generics" => actual_args}} = self <-
+           expand(annotation, ctx),
+         true <- actual_args == arguments([u8]),
+         %{
+           "item_meta" => %{"name" => ^vector_name},
+           "generics" => vector_params,
+           "kind" => "Opaque"
+         } <- ctx.types[vector_id],
+         true <- parameters?(vector_params, 0, 1),
+         generic_self = %{
+           "Adt" => %{"id" => vector_id, "builtin" => nil, "generics" => arguments([t])}
+         },
+         function when not is_nil(function) <- ctx.functions[id],
+         %{
+           "body" => "Opaque",
+           "generics" => params,
+           "signature" => %{
+             "is_unsafe" => true,
+             "abi" => "Rust",
+             "is_variadic" => false,
+             "inputs" => [input],
+             "output" => output
+           },
+           "src" => %{
+             "TraitImpl" => %{
+               "impl_ref" => %{"id" => impl_id, "generics" => impl_args},
+               "trait_ref" => %{"id" => trait_id, "generics" => trait_args},
+               "item_id" => 0,
+               "reuses_default" => false
+             }
+           }
+         } <- function,
+         # Check the generic shape and Vec's specific lifetime bounds separately.
+         true <- parameters?(Map.put(params, "outlives", []), 1, 2),
+         true <- vector_outlives?(expand(params, ctx)["outlives"], t, a),
+         true <-
+           expand(input, ctx) == %{"Ref" => [%{"Var" => %{"Free" => 0}}, generic_self, "Mut"]},
+         true <- unit?(expand(output, ctx)),
+         true <-
+           function["item_meta"]["name"] ==
+             vector_name ++ [%{"Impl" => %{"Trait" => impl_id}}, %{"Builtin" => ["DropGlue", 0]}],
+         true <- expand(impl_args, ctx) == arguments([t, a]),
+         true <- destruct_trait?(trait_id, ctx),
+         expected_trait = %{"id" => trait_id, "generics" => arguments([generic_self])},
+         true <- expand(trait_args, ctx) == arguments([generic_self]),
+         %{
+           "src" => "Destruct",
+           "item_meta" => %{"name" => impl_name},
+           "generics" => impl_params,
+           "is_negative" => false,
+           "is_unsafe" => false,
+           "types" => [],
+           "consts" => [],
+           "implied_trait_refs" => [],
+           "impl_trait" => impl_trait,
+           "methods" => [method]
+         } <- ctx.impls[impl_id],
+         true <- impl_name == vector_name ++ [%{"Impl" => %{"Trait" => impl_id}}],
+         true <- parameters?(impl_params, 0, 2) and impl_params["outlives"] == [],
+         true <- expand(impl_trait, ctx) == expected_trait,
+         %{
+           "params" => method_params,
+           "kind" => %{"TraitMethod" => [^trait_id, 0]},
+           "skip_binder" => %{"id" => ^id, "generics" => method_args}
+         } <- method,
+         true <- parameters?(method_params, 1, 0) and method_params["outlives"] == [],
+         true <-
+           expand(method_args, ctx) ==
+             Map.put(arguments([t, a]), "regions", [%{"Var" => %{"Bound" => [0, 0]}}]) do
+      {id,
+       %{
+         id => %{
+           definition_id: id,
+           rust_name: render_name(function["item_meta"]["name"]),
+           type: "alloc::vec::Vec<u8>",
+           self: self,
+           first_party: false,
+           status: :modelled,
+           implementation_verified: false,
+           dependencies: [],
+           label:
+             "Logical heap Vec<u8>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
+         }
+       }}
+    else
+      _ ->
+        reject!(
+          "unsupported or inconsistent Vec drop element, allocator, signature or dictionary"
+        )
+    end
+  end
+
   defp site!(drop, ctx, seen) do
     with %{
            "place" => %{"ty" => type},
@@ -89,6 +216,17 @@ defmodule Lynx.Rust.DropModels do
       _ -> reject!("unsupported or inconsistent Rust drop site")
     end
   end
+
+  defp vector_outlives?(outlives, t, a),
+    do:
+      outlives ==
+        Enum.map([t, a], fn type ->
+          %{
+            "outlives" => [],
+            "regions" => [],
+            "skip_binder" => [%{"Lub" => type}, %{"Var" => %{"Free" => 0}}]
+          }
+        end)
 
   defp destructor!(id, expected, ctx, seen) do
     if id in seen, do: reject!("recursive destructor dependency")

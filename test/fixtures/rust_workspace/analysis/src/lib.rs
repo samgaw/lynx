@@ -63,3 +63,18 @@ pub fn endian_roundtrip(value: u32) -> u32 {
 pub fn read_header(input: &[u8]) -> Option<u32> {
     experiment_core::protocol::read_header(input)
 }
+
+/// Delegates an in-place vector update across the first-party crate boundary.
+pub fn replace_first(input: Vec<u8>, value: u8) -> (bool, Vec<u8>) {
+    experiment_core::collections::replace_first(input, value)
+}
+
+/// Observes a vector through the core crate's shared view.
+pub fn slice_length(input: Vec<u8>) -> (usize, Vec<u8>) {
+    experiment_core::collections::slice_length(input)
+}
+
+/// Delegates a checked mutable index operation to the core crate.
+pub fn replace_at(input: &mut [u8], position: usize, value: u8) {
+    experiment_core::collections::replace_at(input, position, value);
+}
