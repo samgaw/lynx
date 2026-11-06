@@ -16,6 +16,11 @@ defmodule Lynx.Rust.NativeLifetimes do
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
     coroutines = coroutine_storage!(types, translated, refs)
 
+    types =
+      Map.new(types, fn {id, type} ->
+        {id, Map.put(type, :native_coroutine_storage, coroutines[id])}
+      end)
+
     frame_inputs =
       for function <- functions,
           coroutine_entry?(function, "poll"),
@@ -128,6 +133,27 @@ defmodule Lynx.Rust.NativeLifetimes do
           [id | seen]
         )
 
+      # Validated frame slots are state alternatives: a transferred capture and
+      # its saved slot do not represent two simultaneously live native owners.
+      metadata = types[id][:native_coroutine_storage] ->
+        metadata["states"]
+        |> Enum.map(fn indices ->
+          Enum.sum(
+            for index <- indices do
+              field = Enum.at(metadata["fields"], index)
+
+              native_count(
+                CallModels.instantiate(CallModels.expand(field["ty"], refs), args),
+                native,
+                types,
+                refs,
+                [id | seen]
+              )
+            end
+          )
+        end)
+        |> Enum.max(fn -> 0 end)
+
       is_map(types[id]["kind"]) ->
         kind = types[id]["kind"]
 
@@ -179,7 +205,8 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp coroutine_storage!(types, translated, refs) do
     for {id, type} <- types,
         attribute <- type["item_meta"]["attr_info"]["attributes"] || [],
-        %{"Unknown" => %{"path" => "lynx::coroutine_storage_v1", "args" => args}} <- [attribute],
+        %{"Unknown" => %{"path" => path, "args" => args}} <- [attribute],
+        path in ["lynx::coroutine_storage_v1", "lynx::coroutine_storage_v2"],
         into: %{} do
       metadata = JSON.decode!(args)
 
@@ -189,22 +216,36 @@ defmodule Lynx.Rust.NativeLifetimes do
                Enum.sort(Map.keys(metadata)) == ~w(state states) and
                is_integer(metadata["state"]) and is_list(metadata["states"]) and
                length(metadata["states"]) >= 3 and
-               Enum.take(metadata["states"], 3) == [[], [], []],
+               Enum.slice(metadata["states"], 1, 2) == [[], []] and
+               if(path == "lynx::coroutine_storage_v2",
+                 do:
+                   metadata["state"] > 0 and
+                     hd(metadata["states"]) == Enum.to_list(0..(metadata["state"] - 1)),
+                 else: hd(metadata["states"]) == []
+               ),
              do: LLBC.failure!(type, translated, "invalid compiler coroutine storage evidence")
 
       fields = type["kind"]["Struct"]
 
       unless Enum.count(type["item_meta"]["attr_info"]["attributes"], fn attribute ->
-               match?(%{"Unknown" => %{"path" => "lynx::coroutine_storage_v1"}}, attribute)
+               match?(
+                 %{"Unknown" => %{"path" => path}}
+                 when path in ["lynx::coroutine_storage_v1", "lynx::coroutine_storage_v2"],
+                 attribute
+               )
              end) == 1,
              do: LLBC.failure!(type, translated, "duplicate compiler coroutine storage evidence")
 
       unless metadata["state"] >= 0 and metadata["state"] < length(fields) and
-               Enum.all?(metadata["states"], fn indices ->
+               Enum.all?(Enum.with_index(metadata["states"]), fn {indices, tag} ->
                  is_list(indices) and Enum.uniq(indices) == indices and
                    Enum.all?(
                      indices,
-                     &(is_integer(&1) and &1 > metadata["state"] and &1 < length(fields))
+                     &(is_integer(&1) and &1 >= 0 and &1 < length(fields) and
+                         if(tag == 0 and path == "lynx::coroutine_storage_v2",
+                           do: &1 < metadata["state"],
+                           else: &1 > metadata["state"]
+                         ))
                    )
                end),
              do: LLBC.failure!(type, translated, "invalid compiler coroutine saved-field mapping")
