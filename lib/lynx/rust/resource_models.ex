@@ -4,9 +4,9 @@ defmodule Lynx.Rust.ResourceModels do
   @arc ~w(rustler resource arc ResourceArc)
   @resource ~w(rustler resource traits Resource)
 
-  # Recognition is not extraction admission. The call catalogue stays closed
-  # until concrete Resource dictionaries, payload destruction and loader state
-  # have been checked; these signatures alone do not establish those facts.
+  # Signatures alone cannot approve a resource: ResourceAudit checks concrete
+  # dictionaries and payloads, ResourceDrops checks destruction, and standalone
+  # properties state loader registration in their environment preconditions.
 
   def type?(%{"kind" => "Opaque", "item_meta" => %{"name" => name}, "generics" => p}),
     do: name == path(@arc) and params?(p, 0, [])
@@ -45,13 +45,14 @@ defmodule Lynx.Rust.ResourceModels do
         builtin: false,
         can_fail: true,
         lift: true,
-        keep_params: [true, false],
+        keep_params: [true],
+        keep_trait_clauses: [false],
         native_resource_type: arc["def_id"],
         resource_trait: resource["def_id"],
         resource_operation: method,
         native_cutoff_only: method != "new",
         label:
-          "Rustler 0.39 Rust-owned resource model: registered typed allocation, distinct linear ownership tokens, shared immutable payload and bounded reference count; VM pins, callbacks, physical allocation and FFI unverified"
+          "Rustler 0.39 Rust-owned ResourceArc model: explicit registration precondition, distinct linear ownership tokens, shared immutable destructor-free payload and bounded reference count; inherited Resource callback flags modeled false; VM pins, custom callbacks, physical allocation and FFI unverified"
       }
     else
       _ -> nil
@@ -66,10 +67,32 @@ defmodule Lynx.Rust.ResourceModels do
           lean: "Lynx.NativeResourceArc",
           import: hd(String.split(prefix, ".")) <> ".NativeRuntime",
           label:
-            "Rust-owned ResourceArc identities and reference tokens; not a BEAM resource codec"
+            "Rust-owned ResourceArc identities and reference tokens; inherited Rustler 0.39 Resource flags are external false-constant models; registration is an explicit environment precondition, not a verified loader or BEAM resource codec"
         }
       ],
       else: []
+  end
+
+  def external_names(calls) do
+    if Enum.any?(calls, fn {_, model} -> model[:native_resource_type] end) do
+      %{
+        "globals" =>
+          Enum.map(~w(IMPLEMENTS_DESTRUCTOR IMPLEMENTS_DOWN), fn flag ->
+            %{
+              "rust_pattern" => "rustler::resource::traits::Resource::" <> flag,
+              "extract_name" =>
+                "Lynx.NativeResourceArc." <>
+                  if(flag == "IMPLEMENTS_DESTRUCTOR",
+                    do: "defaultDestructor",
+                    else: "defaultDown"
+                  ),
+              "can_fail" => true
+            }
+          end)
+      }
+    else
+      %{}
+    end
   end
 
   defp identity?(f, "new", self, trait, _t, refs) do
@@ -169,6 +192,16 @@ defmodule Lynx.Rust.ResourceModels do
     do: Enum.reduce(list, refs, &trait_references/2)
 
   defp trait_references(_, refs), do: refs
+
+  def trait_references(translated), do: trait_references(translated, %{})
+
+  def dictionary(%{"regions" => [], "outlives" => [], "skip_binder" => value}, refs),
+    do: dictionary_value(value, refs)
+
+  def dictionary(_, _), do: nil
+  defp dictionary_value(%{"Value" => [_, value]}, _), do: value
+  defp dictionary_value(%{"Deduplicated" => id}, refs), do: refs[id]
+  defp dictionary_value(_, _), do: nil
 
   def params?(p, n, clauses, bounds \\ []) do
     match?(

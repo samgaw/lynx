@@ -167,7 +167,17 @@ defmodule Lynx.Rust.Extraction do
     models =
       models ++
         Lynx.Rust.MutexModels.type_models(audit.external_calls, module) ++
-        Lynx.Rust.LockModels.type_models(audit.external_calls, module)
+        Lynx.Rust.LockModels.type_models(audit.external_calls, module) ++
+        Lynx.Rust.ResourceModels.type_models(audit.external_calls, module)
+
+    if Enum.any?(audit.external_calls, fn {_, m} -> m[:native_resource_type] end) do
+      unless File.read!(Path.join(tools, "lynx-toolchain")) =~ "global-names-v1",
+        do:
+          raise(ArgumentError, "resource extraction requires the pinned global-names-v1 backend")
+
+      unless Lynx.Rustler.require_rustler!(context) == "0.39.0",
+        do: raise(ArgumentError, "resource models require Rustler 0.39.0")
+    end
 
     unless length(models) == MapSet.size(MapSet.new(models, & &1.rust)),
       do: raise(ArgumentError, "conflicting native Rust type models")
@@ -216,14 +226,16 @@ defmodule Lynx.Rust.Extraction do
                         "can_fail" => &1.can_fail,
                         "lift" => &1.lift
                       },
-                      if(Map.has_key?(&1, :keep_params),
-                        do: %{"keep_params" => &1.keep_params},
-                        else: %{}
-                      )
+                      &1
+                      |> Map.take([:keep_params, :keep_trait_clauses])
+                      |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
                     )
                   )
               },
-              Lynx.Rustler.EncoderModels.external_names(audit.external_calls)
+              Map.merge(
+                Lynx.Rustler.EncoderModels.external_names(audit.external_calls),
+                Lynx.Rust.ResourceModels.external_names(audit.external_calls)
+              )
             )
           )
         )

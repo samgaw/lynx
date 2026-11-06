@@ -63,7 +63,9 @@ defmodule Lynx.Rust.NativeBorrows do
 
     owners =
       for type <- translated["type_decls"],
-          type && (LockModels.guard?(type, refs) or MutexModels.type?(type)),
+          type &&
+            (LockModels.guard?(type, refs) or MutexModels.type?(type) or
+               Lynx.Rust.ResourceModels.type?(type)),
           do: type["def_id"]
 
     {all, records} =
@@ -203,6 +205,11 @@ defmodule Lynx.Rust.NativeBorrows do
   defp statement?("Return", _, _, _), do: true
   defp statement?(%{"StorageLive" => _}, _, _, _), do: true
   defp statement?(%{"StorageDead" => _}, _, _, _), do: true
+
+  # Primitive bitwise operations cannot overflow or panic. Overloaded Rust
+  # operators are calls and still require their actual nonpanicking bodies.
+  defp statement?(%{"Assign" => [_, %{"BinaryOp" => [op, _, _]}]}, _, _, _)
+       when op in ~w(BitAnd BitOr BitXor), do: true
 
   defp statement?(%{"Assign" => [_, value]}, _, _, _),
     do: Enum.any?(~w(Use Ref Aggregate Discriminant Len), &Map.has_key?(value, &1))

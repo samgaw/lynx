@@ -10,7 +10,9 @@ defmodule Lynx.Rust.NativeLifetimes do
 
     mutexes =
       for type <- translated["type_decls"],
-          type && (MutexModels.type?(type) or LockModels.guard?(type, refs)),
+          type &&
+            (MutexModels.type?(type) or LockModels.guard?(type, refs) or
+               Lynx.Rust.ResourceModels.type?(type)),
           do: type["def_id"]
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
@@ -204,7 +206,8 @@ defmodule Lynx.Rust.NativeLifetimes do
          not ((MapSet.size(remaining) == 0 and
                  ((model && (model[:native_dispose] || model[:native_transfer])) ||
                     MapSet.member?(ctx.implementations, id))) or
-                (MapSet.equal?(remaining, live) and MapSet.member?(ctx.nonpanicking, id))),
+                (MapSet.member?(ctx.nonpanicking, id) and
+                   (MapSet.equal?(remaining, live) or (model && model[:native_dispose])))),
        do: reject!(ctx)
 
     destination!(dest, remaining, ctx)

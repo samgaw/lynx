@@ -521,6 +521,14 @@ structure NativeResourceArc (α : Type) where
 
 namespace NativeResourceArc
 
+universe u
+
+/-- Rustler 0.39's inherited Resource callback flags are false. Admission checks
+the concrete dictionary has no overrides; no user callback is erased here. -/
+@[expose, trait_default] def defaultDestructor {ρ : Type u} (_dictionary : ρ) : NativeM Bool := .ok false
+
+@[expose, trait_default] def defaultDown {ρ : Type u} (_dictionary : ρ) : NativeM Bool := .ok false
+
 @[expose] def typeName (α : Type) [NativeCodec α] : String :=
   "resource<" ++ NativeCodec.typeName (α := α) ++ ">"
 
@@ -643,7 +651,8 @@ theorem deref_inconsistent_count {α : Type} [NativeCodec α]
 
 /-- Clone retains the allocation after the original owner is consumed. Final
 release removes both the last token and allocation; other runtime fields survive. -/
-theorem clone_release_cycle {α : Type} [NativeCodec α] (value : α) (env : Environment)
+theorem clone_release_cycle_next {α β : Type} [NativeCodec α] (value : α)
+    (next : α → NativeM β) (env : Environment)
     (registered : typeName α ∈ env.nativeResourceTypes)
     (empty : env.nativeHeap = []) :
     (do
@@ -652,11 +661,22 @@ theorem clone_release_cycle {α : Type} [NativeCodec α] (value : α) (env : Env
       release first
       let observed ← deref retained
       release retained
-      Result.ok observed) env =
-        (.ok value, { env with refCounter := env.refCounter + 3 }) := by
+      next observed) env = next value { env with refCounter := env.refCounter + 3 } := by
   simp only [new, Result.get_bind, Result.get_continuation_apply, ite_eq_left registered]
   simp [clone, release, deref, lookup, payload, NativeM.allocate,
     empty, NativeCodec.roundtrip, referenceLimit, handleType, typeName, Nat.add_assoc]
+
+theorem clone_release_cycle {α : Type} [NativeCodec α] (value : α) (env : Environment)
+    (registered : typeName α ∈ env.nativeResourceTypes) (empty : env.nativeHeap = []) :
+    (do
+      let first ← new value
+      let retained ← clone first
+      release first
+      let observed ← deref retained
+      release retained
+      Result.ok observed) env =
+        (.ok value, { env with refCounter := env.refCounter + 3 }) := by
+  simpa using clone_release_cycle_next value Result.ok env registered empty
 
 end NativeResourceArc
 end Lynx
