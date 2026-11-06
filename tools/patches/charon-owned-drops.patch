@@ -206,10 +206,10 @@ diff --git a/charon/src/options.rs b/charon/src/options.rs
 diff --git a/charon/tests/crate_data.rs b/charon/tests/crate_data.rs
 --- a/charon/tests/crate_data.rs
 +++ b/charon/tests/crate_data.rs
-@@ -1364,3 +1364,39 @@
+@@ -1364,2 +1364,39 @@
      Ok(())
  }
-
++
 +#[test]
 +fn owned_drop_entry_retains_compiler_field_cleanup() -> anyhow::Result<()> {
 +    let data = translate(
