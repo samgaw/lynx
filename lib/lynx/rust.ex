@@ -104,7 +104,9 @@ defmodule Lynx.Rust do
   construction invoke the actual extracted structural destructor. This subset
   requires default Resource callbacks and nonpanicking mutex field cleanup;
   custom Drop, poisoned/held mutex destruction and VM collection remain unsupported.
-  The Rustler facade preparation API retains its destructor-free payload subset.
+  `Lynx.Rustler.prepare!/1` supports the same opt-in for top-level resource NIF
+  arguments/results, including cleanup after a later argument fails conversion.
+  VM collection and native FFI execution remain explicit trusted boundaries.
 
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires

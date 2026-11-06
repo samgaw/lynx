@@ -206,6 +206,14 @@ pub fn resource_locked_increment(
     effects_core::locked_increment(&resource.state, amount)
 }
 
+/// Reads protected shared state through the first-party guard implementation.
+pub fn resource_locked_value(resource: &rustler::ResourceArc<CounterResource>) -> u64 {
+    let guard = effects_core::recover_guard(resource.state.lock());
+    let value = effects_core::read_guard(&guard);
+    effects_core::release_guard(guard);
+    value
+}
+
 /// Consumes one Rust ownership token, running payload cleanup on final release.
 pub fn resource_release(resource: rustler::ResourceArc<CounterResource>) {
     drop(resource);
@@ -814,6 +822,34 @@ pub fn resource_checked(resource: rustler::ResourceArc<ScalarResource>, accepted
     } else {
         0
     }
+}
+
+/// Returns a resource whose payload owns a native mutex.
+///
+/// # Panics
+/// Panics if its resource type is not registered by the loader.
+#[cfg(feature = "locked-resource-handles")]
+#[rustler::nif(name = "counter_new")]
+pub fn locked_resource_create(value: u64) -> rustler::ResourceArc<CounterResource> {
+    resource_new(value)
+}
+
+/// Updates a VM-held resource, consuming only this call's decoded Rust owner.
+#[cfg(feature = "locked-resource-handles")]
+#[rustler::nif(name = "counter_add", schedule = "DirtyCpu")]
+pub fn locked_resource_add(resource: rustler::ResourceArc<CounterResource>, amount: u64) -> bool {
+    let changed = resource_locked_increment(&resource, amount);
+    resource_release(resource);
+    changed
+}
+
+/// Reads the current shared value and releases this call's temporary owner.
+#[cfg(feature = "locked-resource-handles")]
+#[rustler::nif(name = "counter_value")]
+pub fn locked_resource_read(resource: rustler::ResourceArc<CounterResource>) -> u64 {
+    let value = resource_locked_value(&resource);
+    resource_release(resource);
+    value
 }
 
 #[cfg(feature = "nif")]

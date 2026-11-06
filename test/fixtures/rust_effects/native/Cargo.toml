@@ -11,6 +11,7 @@ nif = []
 payload-nif = ["nif"]
 resource-nif = ["nif"]
 resource-handles = ["resource-nif"]
+locked-resource-handles = ["nif"]
 
 [dependencies]
 effects-core = { path = "../core" }
