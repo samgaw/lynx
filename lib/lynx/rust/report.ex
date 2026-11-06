@@ -135,6 +135,7 @@ defmodule Lynx.Rust.Report do
 
     %{
       report_module: List.last(reports).module,
+      execution: Map.get(extraction, :execution, :pure),
       implementations: implementations,
       constants:
         constants
@@ -157,6 +158,12 @@ defmodule Lynx.Rust.Report do
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
+          if(Map.get(extraction, :execution, :pure) == :runtime,
+            do: [
+              "Lynx resumable native interpretation: rust_panicked marker; undef/divergence exhaust verification; resource, lock, unwind cleanup and FFI primitives require separate models"
+            ],
+            else: []
+          ) ++
           Enum.map(Map.get(extraction, :external_types, []), & &1.label) ++
           Enum.map(Map.values(external), & &1.label) ++
           Enum.map(Lynx.Rust.DropModels.report(extraction.audit.drops), & &1.label) ++

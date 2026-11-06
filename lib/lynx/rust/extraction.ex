@@ -5,7 +5,7 @@ defmodule Lynx.Rust.Extraction do
   # clients must kernel-check their properties and audit the generated modules.
   def run!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key not in [:external_types, :external_calls, :rustler_atoms],
+        key not in [:external_types, :external_calls, :rustler_atoms, :execution],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
 
     if :rustler_encoders in Keyword.get(opts, :external_calls, []),
@@ -138,9 +138,15 @@ defmodule Lynx.Rust.Extraction do
           )
       end
 
+    execution = Keyword.get(opts, :execution, :pure)
+
+    {result_monad, runtime_args, runtime_modules} =
+      Lynx.Rust.Runtime.configuration!(execution, output, module)
+
     run!(
       Path.join(tools, "aeneas"),
-      model_args ++
+      runtime_args ++
+        model_args ++
         [
           "-backend",
           "lean",
@@ -158,7 +164,7 @@ defmodule Lynx.Rust.Extraction do
 
     translation_bytes = File.read!(Path.join(output, "translation.json"))
     translation = JSON.decode!(translation_bytes)
-    implementations = Lynx.Rust.LLBC.link!(audit, translation)
+    implementations = Lynx.Rust.LLBC.link!(audit, translation, result_monad: result_monad)
     Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)
     Lynx.Rust.BytesModels.install!(audit, translation, output, module)
     # Keep per-root metadata, since several extractions can share one Lean package.
@@ -169,6 +175,7 @@ defmodule Lynx.Rust.Extraction do
 
     %{
       audit: audit,
+      execution: execution,
       translation: translation,
       implementations: implementations,
       constants: Lynx.Rust.Constants.link!(audit.constants, translation),
@@ -176,24 +183,25 @@ defmodule Lynx.Rust.Extraction do
       fingerprint:
         Lynx.Rust.Fingerprint.extraction!(context, tools, llbc, translation_bytes, first_party)
         |> then(fn digest ->
-          if models == [] and requested_calls == [] and map_size(audit.external_calls) == 0,
-            do: digest,
-            else:
-              Lynx.Rust.Fingerprint.digest(
-                :erlang.term_to_binary(
-                  {digest, models, requested_calls,
-                   audit.external_calls
-                   |> Map.values()
-                   |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
-                   |> Enum.sort()},
-                  [:deterministic]
-                )
-              )
+          if execution == :pure and models == [] and requested_calls == [] and
+               map_size(audit.external_calls) == 0,
+             do: digest,
+             else:
+               Lynx.Rust.Fingerprint.digest(
+                 :erlang.term_to_binary(
+                   {digest, Lynx.Rust.Runtime.fingerprint(execution), models, requested_calls,
+                    audit.external_calls
+                    |> Map.values()
+                    |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
+                    |> Enum.sort()},
+                   [:deterministic]
+                 )
+               )
         end),
       llbc: llbc,
       output: output,
       module: module,
-      model_modules: Lynx.Rust.BytesModels.modules(audit, module)
+      model_modules: runtime_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
     }
   end
 

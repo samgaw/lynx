@@ -40,6 +40,15 @@ defmodule Lynx.Rust do
   with the pinned runtime when needed. `:module_prefix` defaults to
   `Native.Extraction`. Also accepts `:tools` (or `LYNX_AENEAS_DIR`), `:build_dir`
   and `:cargo` options as in `Lynx.Rustler.prepare!/3`.
+
+  `:execution` is `:pure` by default. `:runtime` interprets extracted computations
+  using `Lynx.Result`, permitting composition with runtime effects. It requires
+  the pinned result-monad backend. Native panic uses the internal `rust_panicked`
+  marker; undefined behavior and divergence are verification exhaustion. This
+  option alone does not admit resources, locks, async or new external calls.
+  Native facade conversion and effectful external primitives require separate
+  validated models. Guard destruction and native unwind cleanup remain unsupported.
+  Unsupported recursive/trait combinations fail elaboration.
   """
   def verify!(workspace, package, opts) do
     Lynx.External.with_preparation_lock(fn -> do_verify!(workspace, package, opts) end)
@@ -54,7 +63,8 @@ defmodule Lynx.Rust do
       :module_prefix,
       :tools,
       :build_dir,
-      :cargo
+      :cargo,
+      :execution
     ]
 
     for key <- Keyword.keys(opts),
@@ -75,7 +85,11 @@ defmodule Lynx.Rust do
         tools
       )
 
-    extraction = Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix)
+    extraction =
+      Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
+        execution: Keyword.get(opts, :execution, :pure)
+      )
+
     Lynx.Rust.Project.build!(project, [prefix <> ".Funs" | proofs])
 
     file =
