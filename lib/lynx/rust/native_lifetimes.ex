@@ -2,10 +2,10 @@ defmodule Lynx.Rust.NativeLifetimes do
   @moduledoc false
   alias Lynx.Rust.{CallModels, LLBC, MutexModels, LockModels}
 
-  # Extraction can reconstruct assertions without their unwind drops. Logical
-  # heap ownership still needs cleanup. Until unwind is interpreted, admit only
-  # straight-line owner lifetimes without a potentially failing intervening step.
-  def audit!(functions, models, translated, refs, opts \\ []) do
+  # Track consuming ownership on every branch. Potential failure with a live
+  # owner requires supported cleanup; borrowed calls need checked nonpanicking
+  # bodies. Whole single-field enum payloads may transfer their ownership.
+  def audit!(functions, models, translated, refs) do
     Lynx.Rust.NativeBorrows.audit!(functions, models, translated, refs)
 
     mutexes =
@@ -35,11 +35,14 @@ defmodule Lynx.Rust.NativeLifetimes do
           nonpanicking: nonpanicking,
           function: function,
           translated: translated,
-          branching: Keyword.get(opts, :branching, false),
+          types: types,
+          refs: refs,
+          locals:
+            Map.new(body["locals"]["locals"], &{&1["index"], CallModels.expand(&1["ty"], refs)}),
           booleans: boolean_constants(translated, %{})
         }
 
-        block!(body["body"], live, context)
+        unless block!(body["body"], live, context) == :terminal, do: reject!(context)
       end
     end
   end
@@ -89,8 +92,6 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp switch!(%{"data" => data, "branches" => branches}, state, ctx) do
-    if not ctx.branching and MapSet.size(state.live) > 0, do: reject!(ctx)
-
     value =
       case data["scrutinee"] do
         %{"Value" => operand} -> boolean(operand, state.known, ctx)
@@ -201,7 +202,8 @@ defmodule Lynx.Rust.NativeLifetimes do
     # in for a body here.
     if MapSet.size(live) > 0 and
          not ((MapSet.size(remaining) == 0 and
-                 ((model && model[:native_dispose]) || MapSet.member?(ctx.implementations, id))) or
+                 ((model && (model[:native_dispose] || model[:native_transfer])) ||
+                    MapSet.member?(ctx.implementations, id))) or
                 (MapSet.equal?(remaining, live) and MapSet.member?(ctx.nonpanicking, id))),
        do: reject!(ctx)
 
@@ -255,6 +257,45 @@ defmodule Lynx.Rust.NativeLifetimes do
     MapSet.delete(live, local)
   end
 
+  # A single-field variant moves its complete payload. Multi-field or opaque
+  # containers cannot be partially consumed by this rule. All branch states
+  # still undergo the same ownership and join checks.
+  defp moves!(
+         %{
+           "Move" => %{
+             "kind" => %{
+               "Projection" => [
+                 %{"kind" => %{"Local" => local}, "ty" => annotation},
+                 %{"Field" => [variant, 0]}
+               ]
+             }
+           }
+         },
+         live,
+         ctx
+       ) do
+    if MapSet.member?(ctx.owners, local) do
+      unless MapSet.member?(live, local), do: reject!(ctx)
+      type = CallModels.expand(annotation, ctx.refs)
+      unless type == ctx.locals[local], do: reject!(ctx)
+
+      with %{"Adt" => %{"id" => id, "builtin" => nil}} <- type,
+           %{"kind" => %{"Enum" => variants}} <- ctx.types[id],
+           %{"fields" => [_]} <- Enum.find(variants, &(&1["id"] == variant)) do
+        MapSet.delete(live, local)
+      else
+        _ -> reject!(ctx)
+      end
+    else
+      live
+    end
+  end
+
+  defp moves!(%{"Move" => place}, live, ctx) do
+    if nested_owner?(place, ctx), do: reject!(ctx)
+    live
+  end
+
   defp moves!(%{"Copy" => place}, live, ctx) do
     if nested_owner?(place, ctx), do: reject!(ctx)
     live
@@ -280,6 +321,6 @@ defmodule Lynx.Rust.NativeLifetimes do
       LLBC.failure!(
         ctx.function,
         ctx.translated,
-        "native owner lifetime requires unsupported unwind, branching or implicit cleanup; consume the owner before potentially failing operations"
+        "native owner lifetime requires unsupported unwind, partial moves or implicit cleanup; consume the owner before potentially failing operations"
       )
 end
