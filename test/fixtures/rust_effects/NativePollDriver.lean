@@ -33,39 +33,44 @@ theorem driver_next {α : Type} (value : U64) (cancel : Bool) (context : NativeT
     (next : (Option U64 × NativeTaskContext) → NativeM α) (env : Environment)
     (bounded : context.waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) =
-      [(context.waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(context.waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : context.waker.isNoop = false) :
     (drive_paused_counter value cancel context >>= next) env =
       next (if cancel then none else some (core.num.U64.saturating_add value 1#u64), context)
         (NativeWaker.notifiedEnv context.waker env) := by
   rw [driver_contract]
   simp only [bind_assoc, Result.ok_bind]
-  exact NativeWaker.wakeByRef_registered_next context.waker _ env bounded stored
+  simpa [NativeWaker.notifiedEnv, callback] using
+    NativeWaker.wakeByRef_registered_next context.waker _ env bounded stored callback
 
 theorem completion (value : U64) (context : NativeTaskContext) (env : Environment)
     (bounded : context.waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) =
-      [(context.waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(context.waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : context.waker.isNoop = false) :
     ∃ result,
       drive_paused_counter value false context env =
         (.ok (some result, context), NativeWaker.notifiedEnv context.waker env) ∧
       result.val = min U64.max (value.val + 1) := by
   refine ⟨core.num.U64.saturating_add value 1#u64, ?_, ?_⟩
-  · simpa using driver_next value false context Result.ok env bounded stored
+  · simpa using driver_next value false context Result.ok env bounded stored callback
   · simp
 
 theorem cancellation (value : U64) (context : NativeTaskContext) (env : Environment)
     (bounded : context.waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) =
-      [(context.waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(context.waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : context.waker.isNoop = false) :
     drive_paused_counter value true context env =
       (.ok (none, context), NativeWaker.notifiedEnv context.waker env) := by
-  simpa using driver_next value true context Result.ok env bounded stored
+  simpa using driver_next value true context Result.ok env bounded stored callback
 
 theorem missing_callback (value : U64) (cancel : Bool) (context : NativeTaskContext)
     (env : Environment)
-    (missing : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) = []) :
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) = [])
+    (callback : context.waker.isNoop = false) :
     drive_paused_counter value cancel context env = (.error .exhausted, env) := by
   rw [driver_contract]
-  exact NativeWaker.wakeByRef_missing_next context.waker _ env missing
+  exact NativeWaker.wakeByRef_missing_next context.waker _ env missing callback
 
 end Driver.Properties

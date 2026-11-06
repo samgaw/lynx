@@ -18,14 +18,15 @@ theorem callee_pending {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin effects_core.PausedCounter × NativeTaskContext) → Result α)
     (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     (effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll
         ⟨⟨true, ⟨value⟩⟩⟩ ⟨waker⟩ >>= next) env =
       next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩) (NativeWaker.notifiedEnv waker env) := by
   simpa [effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
-    core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc, NativeWaker.notifiedEnv] using
+    core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc, NativeWaker.notifiedEnv, callback] using
     (NativeWaker.wakeByRef_registered_next waker
-      (fun _ => next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩)) env bounded stored)
+      (fun _ => next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩)) env bounded stored callback)
 
 theorem callee_ready (value : U64) (context : NativeTaskContext) :
     ∃ result,
@@ -74,12 +75,12 @@ theorem drop_missing_owner (value : U64) :
 
 theorem first_pending_next {α : Type} (value : U64) (env : Environment)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin owned_suspending.closure × NativeTaskContext) → Result α) :
-    (owned_suspending.closure.poll ⟨initial value⟩ ⟨⟨0⟩⟩ >>= next) (registered env) =
-      next (.Pending, ⟨pending value⟩, ⟨⟨0⟩⟩) (retained env value) := by
-  have unfolded : owned_suspending.closure.poll ⟨initial value⟩ ⟨⟨0⟩⟩ = (do
+    (owned_suspending.closure.poll ⟨initial value⟩ ⟨⟨0, false⟩⟩ >>= next) (registered env) =
+      next (.Pending, ⟨pending value⟩, ⟨⟨0, false⟩⟩) (retained env value) := by
+  have unfolded : owned_suspending.closure.poll ⟨initial value⟩ ⟨⟨0, false⟩⟩ = (do
     let mutex ← NativeMutex.new value
-    NativeWaker.wakeByRef ⟨0⟩
-    Result.ok (.Pending, ⟨⟨value, 3#u32, some mutex, some ⟨false, ⟨value⟩⟩, some true⟩⟩, ⟨⟨0⟩⟩)) := by
+    NativeWaker.wakeByRef ⟨0, false⟩
+    Result.ok (.Pending, ⟨⟨value, 3#u32, some mutex, some ⟨false, ⟨value⟩⟩, some true⟩⟩, ⟨⟨0, false⟩⟩)) := by
       unfold owned_suspending.closure.poll
       split <;> simp_all [initial, effects_core.paused_counter,
         core.future.into_future.IntoFuture.Blanket.into_future,
@@ -90,14 +91,15 @@ theorem first_pending_next {α : Type} (value : U64) (env : Environment)
   let allocated : Environment := { env with refCounter := 1, nativeHeap := [
     (1, NativeMutex.typeName U64, .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]),
     (0, NativeWaker.typeName, .atom "idle")] }
-  have ready : NativeWaker.pollWake ⟨0⟩ allocated = some (.ok (), retained env value) := by
+  have ready : NativeWaker.pollWake ⟨0, false⟩ allocated = some (.ok (), retained env value) := by
     simp [NativeWaker.pollWake, allocated, retained]
-  rw [NativeWaker.wakeByRef, Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  simp only [NativeWaker.wakeByRef, Bool.false_eq_true, ↓reduceIte]
+  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp [pending]
 
 theorem first_pending (value : U64) (env : Environment) :
-    owned_suspending.closure.poll ⟨initial value⟩ ⟨⟨0⟩⟩ (registered env) =
-      (.ok (.Pending, ⟨pending value⟩, ⟨⟨0⟩⟩), retained env value) := by
+    owned_suspending.closure.poll ⟨initial value⟩ ⟨⟨0, false⟩⟩ (registered env) =
+      (.ok (.Pending, ⟨pending value⟩, ⟨⟨0, false⟩⟩), retained env value) := by
   simpa using first_pending_next value env Result.ok
 
 theorem cancel_pending (value : U64) (env : Environment) :
@@ -116,7 +118,7 @@ theorem completed_drop (value : U64) :
 theorem suspend_then_cancel (value : U64) (env : Environment) :
     (do
       let future ← owned_suspending value
-      let (_, future, _) ← owned_suspending.closure.poll ⟨future⟩ ⟨⟨0⟩⟩
+      let (_, future, _) ← owned_suspending.closure.poll ⟨future⟩ ⟨⟨0, false⟩⟩
       owned_suspending.closure.drop_owned future.pointer) (registered env) =
         (.ok (), reclaimed env) := by
   have composed := first_pending_next value env
@@ -124,13 +126,13 @@ theorem suspend_then_cancel (value : U64) (env : Environment) :
   simpa [owned_suspending, NativeM.ok, initial, cancel_pending] using composed
 
 theorem resume_ready (value : U64) (env : Environment) :
-    ∃ result, owned_suspending.closure.poll ⟨pending value⟩ ⟨⟨0⟩⟩ (retained env value) =
-      (.ok (.Ready result, ⟨completed value⟩, ⟨⟨0⟩⟩), reclaimed env) ∧
+    ∃ result, owned_suspending.closure.poll ⟨pending value⟩ ⟨⟨0, false⟩⟩ (retained env value) =
+      (.ok (.Ready result, ⟨completed value⟩, ⟨⟨0, false⟩⟩), reclaimed env) ∧
       result.val = min U64.max (value.val + 1) := by
-  have unfolded : owned_suspending.closure.poll ⟨pending value⟩ ⟨⟨0⟩⟩ = (do
+  have unfolded : owned_suspending.closure.poll ⟨pending value⟩ ⟨⟨0, false⟩⟩ = (do
     let result ← effects_core.saturating_increment value
     NativeMutex.dispose (α := U64) ⟨1⟩
-    Result.ok (.Ready result, ⟨completed value⟩, ⟨⟨0⟩⟩)) := by
+    Result.ok (.Ready result, ⟨completed value⟩, ⟨⟨0, false⟩⟩)) := by
     unfold owned_suspending.closure.poll
     split <;> simp_all [pending, completed,
       effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,

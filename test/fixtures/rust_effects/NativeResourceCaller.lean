@@ -17,14 +17,14 @@ theorem caller_contract (resource : NativeResourceArc CounterResource) (amount :
 /-- A real Rust caller cancels its Pending future at scope exit, reclaiming the
 sole resource owner and mutex while retaining the registered wake notification. -/
 theorem caller_cancellation (value amount : U64) (env : Environment) :
-    poll_cancel_resource ⟨2,3⟩ amount ⟨⟨0⟩⟩ (live env value 3 false) =
-      (.ok (.Pending, ⟨⟨0⟩⟩), reclaimed env 3 true) := by
+    poll_cancel_resource ⟨2,3⟩ amount ⟨⟨0, false⟩⟩ (live env value 3 false) =
+      (.ok (.Pending, ⟨⟨0, false⟩⟩), reclaimed env 3 true) := by
   rw [caller_contract]
   simp only [initial_state, Result.ok_bind, bind_assoc]
   rw [first_pending_next]
-  change (resource_release ⟨2,3⟩ >>= fun _ => Result.ok ((core.task.poll.Poll.Pending : core.task.poll.Poll Bool), (⟨⟨0⟩⟩ : NativeTaskContext))) _ = _
+  change (resource_release ⟨2,3⟩ >>= fun _ => Result.ok ((core.task.poll.Poll.Pending : core.task.poll.Poll Bool), (⟨⟨0, false⟩⟩ : NativeTaskContext))) _ = _
   simpa using release_next value 3 true env
-    (fun _ => Result.ok ((core.task.poll.Poll.Pending : core.task.poll.Poll Bool), (⟨⟨0⟩⟩ : NativeTaskContext)))
+    (fun _ => Result.ok ((core.task.poll.Poll.Pending : core.task.poll.Poll Bool), (⟨⟨0, false⟩⟩ : NativeTaskContext)))
 
 @[expose] def readyInitial (amount : U64) : resource_immediate.closure :=
   ⟨some ⟨2,3⟩, amount, 0#u32⟩
@@ -53,8 +53,8 @@ theorem ready_caller_contract (resource : NativeResourceArc CounterResource) (am
 
 theorem caller_completion (value amount : U64) (env : Environment) :
     ∃ changed updated,
-      poll_ready_resource ⟨2,3⟩ amount ⟨⟨0⟩⟩ (live env value 3 false) =
-        (.ok (.Ready changed, ⟨⟨0⟩⟩), reclaimed env 4 false) ∧
+      poll_ready_resource ⟨2,3⟩ amount ⟨⟨0, false⟩⟩ (live env value 3 false) =
+        (.ok (.Ready changed, ⟨⟨0, false⟩⟩), reclaimed env 4 false) ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
   have created : resource_immediate ⟨2,3⟩ amount = Result.ok (readyInitial amount) := rfl
@@ -64,12 +64,12 @@ theorem caller_completion (value amount : U64) (env : Environment) :
   simp only [bind_assoc, Result.ok_bind, completed_cleanup]
   let finish : Bool → NativeM (core.task.poll.Poll Bool × NativeTaskContext) := fun changed => do
     resource_release ⟨2,3⟩
-    Result.ok (.Ready changed, ⟨⟨0⟩⟩)
+    Result.ok (.Ready changed, ⟨⟨0, false⟩⟩)
   obtain ⟨changed, updated, computed, arithmetic⟩ := update_next value amount env false finish
   refine ⟨changed, updated, ?_, arithmetic⟩
   change (resource_locked_increment ⟨2,3⟩ amount >>= finish) _ = _
   rw [computed]
   simpa [finish] using release_next updated 4 false env
-    (fun _ => Result.ok ((core.task.poll.Poll.Ready changed : core.task.poll.Poll Bool), (⟨⟨0⟩⟩ : NativeTaskContext)))
+    (fun _ => Result.ok ((core.task.poll.Poll.Ready changed : core.task.poll.Poll Bool), (⟨⟨0, false⟩⟩ : NativeTaskContext)))
 
 end Macro.Caller

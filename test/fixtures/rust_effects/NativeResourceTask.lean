@@ -31,14 +31,14 @@ theorem poll_bind {α : Type} (state : resource_suspending.closure) (context : N
 
 theorem first_poll_next {α : Type} (value amount : U64) (env : Environment)
     (next : NativeTask.Step Bool resource_suspending.closure → NativeM α) :
-    (adapt resource_suspending.closure.poll (initial amount) ⟨⟨0⟩⟩ >>= next) (live env value 3 false) =
-      next (.pending (pending amount) ⟨⟨0⟩⟩) (live env value 3 true) := by
+    (adapt resource_suspending.closure.poll (initial amount) ⟨⟨0, false⟩⟩ >>= next) (live env value 3 false) =
+      next (.pending (pending amount) ⟨⟨0, false⟩⟩) (live env value 3 true) := by
   rw [poll_bind, first_pending_next]
 
 theorem resume_poll_next {α : Type} (value amount : U64) (env : Environment)
     (next : NativeTask.Step Bool resource_suspending.closure → NativeM α) :
     ∃ changed updated,
-      (adapt resource_suspending.closure.poll (pending amount) ⟨⟨0⟩⟩ >>= next) (live env value 3 false) =
+      (adapt resource_suspending.closure.poll (pending amount) ⟨⟨0, false⟩⟩ >>= next) (live env value 3 false) =
         next (.ready changed (completed amount)) (reclaimed env 4 false) ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
@@ -52,13 +52,13 @@ theorem resume_poll_next {α : Type} (value amount : U64) (env : Environment)
 theorem completion (value amount : U64) (env : Environment) :
     ∃ changed updated,
       NativeTask.drive (adapt resource_suspending.closure.poll)
-      resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0⟩⟩ 2 (initial amount) (live env value 3 false) =
+      resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0, false⟩⟩ 2 (initial amount) (live env value 3 false) =
         (.ok (some changed), reclaimed env 4 false) ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
   simp only [NativeTask.drive]
   rw [first_poll_next]
-  rw [NativeWaker.await_notified_next ⟨0⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell])]
+  rw [NativeWaker.await_notified_next ⟨0, false⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell]) rfl]
   simp only []
   have consumed : {live env value 3 true with
       nativeHeap := (live env value 3 true).nativeHeap.map fun cell =>
@@ -83,40 +83,40 @@ theorem completion (value amount : U64) (env : Environment) :
 
 theorem cancellation (value amount : U64) (env : Environment) :
     NativeTask.drive (adapt resource_suspending.closure.poll)
-      resource_suspending.closure.drop_owned (fun _ => true) ⟨⟨0⟩⟩ 2 (initial amount) (live env value 3 false) =
+      resource_suspending.closure.drop_owned (fun _ => true) ⟨⟨0, false⟩⟩ 2 (initial amount) (live env value 3 false) =
       (.ok none, reclaimed env 3 true) := by
   simp only [NativeTask.drive]
   rw [first_poll_next]
-  rw [NativeWaker.await_cancelled_next ⟨0⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell])]
+  rw [NativeWaker.await_cancelled_next ⟨0, false⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell]) rfl]
   change (resource_release ⟨2,3⟩ >>= fun _ => Result.ok none) _ = _
   simpa using release_next value 3 true env (fun _ => Result.ok (none : Option Bool))
 
 theorem cutoff_zero (amount : U64) :
     NativeTask.drive (adapt resource_suspending.closure.poll)
-      resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0⟩⟩ 0 (initial amount) = Result.error .exhausted := rfl
+      resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0, false⟩⟩ 0 (initial amount) = Result.error .exhausted := rfl
 
 /-- One Pending poll cannot become a completed task when the poll budget ends. -/
 theorem cutoff_one (value amount : U64) (env : Environment) :
     NativeTask.drive (adapt resource_suspending.closure.poll)
-      resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0⟩⟩ 1 (initial amount) (live env value 3 false) =
+      resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0, false⟩⟩ 1 (initial amount) (live env value 3 false) =
       (.error .exhausted, live env value 3 false) := by
   simp only [NativeTask.drive]
   rw [first_poll_next]
-  rw [NativeWaker.await_notified_next ⟨0⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell])]
+  rw [NativeWaker.await_notified_next ⟨0, false⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell]) rfl]
   simp [live, cell]
 
 theorem idle_blocks (value : U64) (env : Environment) :
-    NativeWaker.pollAwait ⟨0⟩ (fun _ => false) (live env value 3 false) = none := by
+    NativeWaker.pollAwait ⟨0, false⟩ (fun _ => false) (live env value 3 false) = none := by
   apply NativeWaker.pollAwait_idle <;> simp [live, cell]
 
 theorem invalid_waker (env : Environment) :
-    NativeWaker.pollAwait ⟨0⟩ (fun _ => true) {env with nativeHeap := []} =
+    NativeWaker.pollAwait ⟨0, false⟩ (fun _ => true) {env with nativeHeap := []} =
       some (.error .exhausted, {env with nativeHeap := []}) := by
   apply NativeWaker.pollAwait_missing
-  rfl
+  all_goals rfl
 
 theorem duplicate_waker (env : Environment) :
-    NativeWaker.pollAwait ⟨0⟩ (fun _ => true) {env with nativeHeap := [
+    NativeWaker.pollAwait ⟨0, false⟩ (fun _ => true) {env with nativeHeap := [
       (0, NativeWaker.typeName, .atom "idle"), (0, NativeWaker.typeName, .atom "notified")]} =
       some (.error .exhausted, {env with nativeHeap := [
         (0, NativeWaker.typeName, .atom "idle"), (0, NativeWaker.typeName, .atom "notified")]}) := by

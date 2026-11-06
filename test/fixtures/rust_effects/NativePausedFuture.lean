@@ -18,14 +18,15 @@ theorem callee_pending {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin effects_core.PausedCounter × NativeTaskContext) → Result α)
     (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     (effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll
         ⟨⟨true, ⟨value⟩⟩⟩ ⟨waker⟩ >>= next) env =
       next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩) (NativeWaker.notifiedEnv waker env) := by
   simpa [effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
-    core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc, NativeWaker.notifiedEnv] using
+    core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc, NativeWaker.notifiedEnv, callback] using
     (NativeWaker.wakeByRef_registered_next waker
-      (fun _ => next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩)) env bounded stored)
+      (fun _ => next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩)) env bounded stored callback)
 
 theorem callee_ready (value : U64) (context : NativeTaskContext) :
     ∃ result,
@@ -40,28 +41,31 @@ theorem callee_ready (value : U64) (context : NativeTaskContext) :
 
 theorem caller_pending (value : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     (do
       let future ← effects_core.paused_counter value
       poll_paused ⟨future⟩ ⟨waker⟩) env =
       (.ok (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩), NativeWaker.notifiedEnv waker env) := by
-  have model := callee_pending value waker Result.ok env bounded stored
+  have model := callee_pending value waker Result.ok env bounded stored callback
   simpa [effects_core.paused_counter, poll_paused, NativeM.ok] using model
 
 theorem no_early_completion (value result : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false)
     (finalState : effects_native.core.pin.Pin effects_core.PausedCounter)
     (context : NativeTaskContext) (finalEnv : Environment) :
     (do
       let future ← effects_core.paused_counter value
       poll_paused ⟨future⟩ ⟨waker⟩) env ≠
       (.ok (core.task.poll.Poll.Ready result, finalState, context), finalEnv) := by
-  rw [caller_pending value waker env bounded stored]
+  rw [caller_pending value waker env bounded stored callback]
   simp
 
 theorem missing_registration (value : U64) (waker : NativeWaker) (env : Environment)
-    (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = []) :
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = [])
+    (callback : waker.isNoop = false) :
     (do
       let future ← effects_core.paused_counter value
       poll_paused ⟨future⟩ ⟨waker⟩) env = (.error .exhausted, env) := by
@@ -71,12 +75,13 @@ theorem missing_registration (value : U64) (waker : NativeWaker) (env : Environm
   simpa [next, effects_core.paused_counter, poll_paused,
     effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
     core.pin.PinMutAT.get_mut, NativeM.ok] using
-    (NativeWaker.wakeByRef_missing_next waker next env missing)
+    (NativeWaker.wakeByRef_missing_next waker next env missing callback)
 
 /-- A second explicit poll completes; no executor fairness or implicit repoll is assumed. -/
 theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     ∃ result,
       (do
         let future ← effects_core.paused_counter value
@@ -92,7 +97,7 @@ theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment) (bound
     (fun output => do
       let (first, updated, context) := output
       let (second, finalState, _) ← poll_paused updated context
-      Result.ok (first, second, finalState)) env bounded stored
+      Result.ok (first, second, finalState)) env bounded stored callback
   simpa [effects_core.paused_counter, poll_paused, NativeM.ok, computed] using model
 
 end Poll.Properties
