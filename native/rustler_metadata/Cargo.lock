@@ -50,6 +50,7 @@ name = "lynx-rustler-metadata"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "proc-macro2",
  "rustler",
  "serde_json",
  "syn",

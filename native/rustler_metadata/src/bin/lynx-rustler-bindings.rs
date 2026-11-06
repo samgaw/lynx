@@ -8,6 +8,40 @@ use std::io::{self, Read};
 use syn::visit::{self, Visit};
 use syn::{Expr, FnArg, ItemFn, Lit, Member, ReturnType, Type};
 
+// syn does not yet parse rustc's expanded `super let` temporary scopes. Their
+// lifetime semantics are irrelevant to inventory/signature discovery. Adapt
+// tokens only here; extraction still consumes the unchanged actual Rust code,
+// and the discovered export table is checked against the compiled library.
+fn metadata_tokens(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    use proc_macro2::{Group, TokenTree};
+    let mut input = tokens.into_iter().peekable();
+    let mut output = proc_macro2::TokenStream::new();
+    while let Some(token) = input.next() {
+        if matches!(&token, TokenTree::Ident(id) if id == "super")
+            && matches!(input.peek(), Some(TokenTree::Ident(id)) if id == "let")
+        {
+            continue;
+        }
+        let token = match token {
+            TokenTree::Group(group) => {
+                let mut adapted = Group::new(group.delimiter(), metadata_tokens(group.stream()));
+                adapted.set_span(group.span());
+                TokenTree::Group(adapted)
+            }
+            token => token,
+        };
+        output.extend([token]);
+    }
+    output
+}
+
+fn parse_expanded(source: &str) -> Result<syn::File, String> {
+    let tokens = source
+        .parse()
+        .map_err(|e| format!("cannot tokenize expanded Rust: {e}"))?;
+    syn::parse2(metadata_tokens(tokens)).map_err(|e| format!("cannot parse expanded Rust: {e}"))
+}
+
 #[derive(Default)]
 struct Bindings {
     selected: Option<Vec<(String, u32)>>,
@@ -319,7 +353,7 @@ fn run() -> Result<(), String> {
             .read_to_string(&mut source)
             .map_err(|e| e.to_string())?;
     }
-    let file = syn::parse_file(&source).map_err(|e| format!("cannot parse expanded Rust: {e}"))?;
+    let file = parse_expanded(&source)?;
     if std::env::args().nth(2).as_deref() == Some("--resources") {
         let selection: Value = serde_json::from_str(
             &std::env::args()
@@ -407,13 +441,31 @@ mod tests {
         "#
         .replace("$SIGNATURE", signature)
         .replace("$ARITY", &arity.to_string());
-        let file = syn::parse_file(&source).expect("valid expanded Rust syntax");
+        let file = parse_expanded(&source).expect("valid expanded Rust syntax");
         let mut visitor = Bindings {
             selected,
             ..Bindings::default()
         };
         visitor.visit_file(&file);
         visitor
+    }
+
+    #[test]
+    fn discovers_exports_with_expanded_pin_temporary_scopes() {
+        let bindings = discover(
+            "fn native(a: bool) -> bool { { super let mut pinned = a; pinned } }",
+            1,
+        );
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(bindings.entries[0]["arguments"], json!(["bool"]));
+        assert_eq!(bindings.entries[0]["result"], json!("bool"));
+        let file =
+            parse_expanded("fn f() { let text = \"super let\"; super::f(); /* super let */ }")
+                .expect("literal and parent module paths remain valid");
+        let mut literals = Literals::default();
+        literals.visit_file(&file);
+        assert!(matches!(&literals.0[..], [Lit::Str(s)] if s.value() == "super let"));
+        assert!(parse_expanded("fn f() { super other } ").is_err());
     }
 
     #[test]
