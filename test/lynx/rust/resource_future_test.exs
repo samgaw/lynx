@@ -33,6 +33,10 @@ defmodule Lynx.Rust.ResourceFutureTest do
       Path.join(project, "ResourceAwait/Critical.lean")
     )
 
+    task = Path.join(project, "ResourceAwait/Task.lean")
+    task_original = File.read!(Path.join(@fixture, "NativeResourceTask.lean"))
+    File.write!(task, task_original)
+
     packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
 
     if File.dir?(packages) do
@@ -49,12 +53,16 @@ defmodule Lynx.Rust.ResourceFutureTest do
       lean_project: project,
       build_dir: Path.join(tmp, "build"),
       module_prefix: "ResourceAwait.Extraction",
-      proof_modules: ["ResourceAwait.Critical", "ResourceAwait.Properties"],
+      proof_modules: ["ResourceAwait.Critical", "ResourceAwait.Properties", "ResourceAwait.Task"],
       required_properties:
         ["ResourceAwait.Critical.increment_spec", "ResourceAwait.Critical.critical_state_next"] ++
           Enum.map(
             ~w(initial_state release_next drop_unstarted first_pending_next cancel_pending completed_drop update_next resume_next suspend_then_cancel missing_capture missing_saved_owner),
             &("ResourceAwait.Properties." <> &1)
+          ) ++
+          Enum.map(
+            ~w(poll_bind first_poll_next resume_poll_next completion cancellation cutoff_zero cutoff_one),
+            &("ResourceAwait.Task." <> &1)
           )
     ]
 
@@ -167,6 +175,22 @@ defmodule Lynx.Rust.ResourceFutureTest do
     end
 
     File.write!(property, original)
+
+    for {before, after_text} <- [
+          {"(.ok none, reclaimed env 3 true)", "(.ok (some false), reclaimed env 3 true)"},
+          {"(.error .exhausted, live env value 3 false)",
+           "(.ok (some true), live env value 3 false)"}
+        ] do
+      wrong = String.replace(task_original, before, after_text)
+      refute wrong == task_original
+      File.write!(task, wrong)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rust.verify!(workspace, "effects-native", options)
+      end
+    end
+
+    File.write!(task, task_original)
     source = Path.join(workspace, "native/src/lib.rs")
     rust = File.read!(source)
 

@@ -196,7 +196,7 @@ defmodule Lynx.Rust.Report do
           ) ++
           if(Map.get(extraction, :futures, :reject) == :cancelling,
             do: [
-              "Compiler coroutine saved-slot and owned destruction interpretation; actual rustc drop MIR with checked pointer erasure and valid-state guards; optional initial capture slots and saved-field transfer; one Unpin native owner per state; Aeneas replacement primitive; native destructors, allocation, physical pinning, FFI and executor correctness remain modeled boundaries"
+              "Compiler coroutine saved-slot and owned destruction interpretation; actual rustc drop MIR with checked pointer erasure and valid-state guards; optional initial capture slots and saved-field transfer; one Unpin native owner per state; Aeneas replacement primitive; native destructors, allocation, physical pinning, FFI, cancellation delivery and native executor correspondence remain modeled boundaries; optional logical task execution uses atomic scheduler waits"
             ],
             else: []
           ) ++
