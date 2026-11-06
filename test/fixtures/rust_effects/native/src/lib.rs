@@ -599,5 +599,33 @@ mod facade {
     }
 }
 
+/// Creates an immutable resource returned to the VM.
+///
+/// # Panics
+/// Panics if called before the native loader registers ScalarResource.
+#[cfg(feature = "resource-handles")]
+#[rustler::nif]
+pub fn resource_create(value: u64) -> rustler::ResourceArc<ScalarResource> {
+    scalar_resource_new(value)
+}
+
+/// Reads a VM-held resource through the first-party implementation.
+#[cfg(feature = "resource-handles")]
+#[rustler::nif]
+pub fn resource_value(resource: rustler::ResourceArc<ScalarResource>) -> u64 {
+    scalar_resource_read(&resource)
+}
+
+/// The second argument exercises decoder failure after acquiring a Rust owner.
+#[cfg(feature = "resource-handles")]
+#[rustler::nif]
+pub fn resource_checked(resource: rustler::ResourceArc<ScalarResource>, accepted: bool) -> u64 {
+    if accepted {
+        scalar_resource_read(&resource)
+    } else {
+        0
+    }
+}
+
 #[cfg(feature = "nif")]
 rustler::init!("Elixir.LynxEffectsFixture.Native");
