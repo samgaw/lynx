@@ -31,6 +31,7 @@ defmodule Lynx.Rust.NativeDrops do
         lean: "Lynx.NativeDrop.drop",
         builtin: false,
         can_fail: true,
+        native_cutoff_only: true,
         lift: true,
         native_dispose: true,
         native_codec_drop: true,

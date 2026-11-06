@@ -54,6 +54,7 @@ defmodule Lynx.Rust.LockModels do
         lean: "Lynx.NativeMutex.lock",
         builtin: false,
         can_fail: true,
+        native_cutoff_only: true,
         lift: true,
         native_mutex_type: mutex,
         native_guard_type: guard["def_id"],

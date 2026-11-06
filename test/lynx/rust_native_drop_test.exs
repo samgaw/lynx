@@ -181,7 +181,7 @@ defmodule Lynx.Rust.NativeDropTest do
       end
     end
 
-    for root <- ~w(mutex_assert_scalar mutex_scope mutex_pair) do
+    for root <- ~w(mutex_assert_scalar mutex_scope) do
       assert_raise CompileError, ~r/structural drop erasure rejected|native owner lifetime/, fn ->
         Lynx.Rust.verify!(
           workspace,

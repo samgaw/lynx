@@ -45,6 +45,7 @@ defmodule Lynx.Rust.MutexModels do
         lean: "Lynx.NativeMutex.new",
         builtin: false,
         can_fail: true,
+        native_cutoff_only: true,
         lift: true,
         native_mutex_type: id,
         native_constructor: true,
