@@ -52,3 +52,13 @@ pub fn acquire_counter(
 ) -> std::sync::LockResult<std::sync::MutexGuard<'_, Counter>> {
     mutex.lock()
 }
+
+/// Reads the counter through a shared borrow of its held guard.
+pub fn read_guard(guard: &std::sync::MutexGuard<'_, Counter>) -> u64 {
+    guard.value
+}
+
+/// Composes the checked transition through an exclusive guard borrow.
+pub fn increment_guard(guard: &mut std::sync::MutexGuard<'_, Counter>, amount: u64) -> bool {
+    increment(guard, amount)
+}

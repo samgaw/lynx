@@ -6,6 +6,8 @@ defmodule Lynx.Rust.NativeLifetimes do
   # heap ownership still needs cleanup. Until unwind is interpreted, admit only
   # straight-line owner lifetimes without a potentially failing intervening step.
   def audit!(functions, models, translated, refs, opts \\ []) do
+    Lynx.Rust.NativeBorrows.audit!(functions, models, translated, refs)
+
     mutexes =
       for type <- translated["type_decls"],
           type && (MutexModels.type?(type) or LockModels.guard?(type, refs)),

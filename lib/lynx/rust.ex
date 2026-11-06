@@ -54,8 +54,12 @@ defmodule Lynx.Rust do
   atomically updates a shared cell; contention blocks on the existing scheduler.
   Recursive acquisition exhausts verification. Standalone synchronous execution
   contexts are mapped to local Lynx processes; this is not an OS thread identity
-  or async task/migration model. Guard access/release and resource lifetimes
-  remain unsupported, so returning a guard does not verify a critical section.
+  or async task/migration model. Shared/exclusive guard borrows use validated
+  Deref models and Aeneas's mutable-borrow reconstruction, including first-party
+  callees. Borrowed-guard functions must have acyclic, nonpanicking implementation
+  dependencies: mutable-borrow outputs on failure are unsupported. The updated
+  guard is returned as a value; release and resource lifetimes remain unsupported,
+  so this does not yet verify a complete critical section.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned Mutex<bool/unsigned scalar> values. These remove their
   cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined
