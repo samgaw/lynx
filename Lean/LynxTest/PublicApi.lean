@@ -19,6 +19,14 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
 private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
+-- Effectful clients normalize catches through public monadic equations.
+private theorem publicExceptionEquations : True := by
+  have _ := @Lynx.Result.handle_get
+  have _ := @Lynx.Result.handle_set
+  have _ := @Lynx.Result.handle_error
+  have _ := @Lynx.Result.tryWith_eq
+  trivial
+
 -- State waits can be reasoned about without importing scheduler internals.
 private theorem publicWaitTraces : True := by
   have _ := @Lynx.concurrent_eq_run

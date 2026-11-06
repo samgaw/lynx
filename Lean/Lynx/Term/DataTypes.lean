@@ -288,6 +288,18 @@ exception, so it propagates without reaching the handler. -/
       .request query fun reply => Result.handle (continuation reply) handler
   | .wait poll continuation => .wait poll fun value => Result.handle (continuation value) handler
 
+/-- Move a handler through an environment read without unfolding its body. -/
+theorem handle_get (body : Environment → Result α) (handler : Exception → Result α) :
+    Result.handle (.get body) handler = .get (fun env => Result.handle (body env) handler) := rfl
+
+/-- Move a handler through an environment update without unfolding its body. -/
+theorem handle_set (env : Environment) (body : Result α) (handler : Exception → Result α) :
+    Result.handle (.set env body) handler = .set env (Result.handle body handler) := rfl
+
+/-- Ordinary error exceptions reach the handler; exhaustion remains separate. -/
+theorem handle_error (reason : Term) (handler : Exception → Result α) :
+    Result.handle (.error (.error reason)) handler = handler (.error reason) := rfl
+
 /-- Catch only the protected computation. Exceptions raised by either
 continuation propagate to an enclosing handler. -/
 @[expose] def tryWith (computation : Result α) (next : α → Result β)
@@ -298,6 +310,18 @@ continuation propagate to an enclosing handler. -/
     (fun reply => match reply with
       | .ok value => next value
       | .error exception => handler exception)
+
+/-- Expose try/catch using the public monadic equations rather than unfolding
+protected implementation binds. Only the protected computation is handled. -/
+theorem tryWith_eq (computation : Result α) (next : α → Result β)
+    (handler : Exception → Result β) :
+    Result.tryWith computation next handler = (do
+      let reply ← Result.handle (do
+        let value ← computation
+        Result.ok (Except.ok value)) (fun exception => Result.ok (Except.error exception))
+      match reply with
+      | .ok value => next value
+      | .error exception => handler exception) := rfl
 
 @[simp] theorem tryWith_ok (value : α) (next : α → Result β)
     (handler : Exception → Result β) :
