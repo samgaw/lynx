@@ -39,6 +39,21 @@ defmodule Lynx.Rust.NativeLifetimes do
         {function["def_id"], inputs}
       end
 
+    # These bodies are audited below: panic with a live frame owner is rejected.
+    # A consuming caller may therefore retain that same sole frame across its
+    # compiler poll, even though repolling an empty completed frame may panic.
+    # Verification cutoffs do not establish a Rust outcome or cleanup guarantee.
+    preserving_polls =
+      for function <- functions,
+          coroutine_entry?(function, "poll"),
+          %{"Structured" => _} <- [function["body"]],
+          [input, _context] <- [function["signature"]["inputs"]],
+          %{borrowed: true, id: id} <- [
+            frame_info(CallModels.expand(input, refs), types, refs, coroutines, [])
+          ],
+          into: %{},
+          do: {function["def_id"], id}
+
     # Compiler poll entries are checked below by state-sensitive ownership
     # analysis. Their completed-state panic cannot lose a live saved guard.
     Lynx.Rust.NativeBorrows.audit!(functions, models, translated, refs, frame_inputs)
@@ -86,6 +101,7 @@ defmodule Lynx.Rust.NativeLifetimes do
           models: models,
           implementations: implementations,
           nonpanicking: nonpanicking,
+          preserving_polls: preserving_polls,
           function: function,
           translated: translated,
           types: types,
@@ -491,12 +507,38 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp parse_state(_), do: :unknown
 
   defp known_after(%{"Assign" => [%{"kind" => %{"Local" => local}}, value]}, known, ctx) do
-    known = known |> Map.delete({:alias, local}) |> Map.delete({:empty, local})
+    known =
+      known
+      |> Map.delete({:alias, local})
+      |> Map.delete({:empty, local})
+      |> Map.delete({:frame_borrow, local})
 
     known =
       if empty_value?(value, known, ctx), do: Map.put(known, {:empty, local}, true), else: known
 
     case value do
+      %{"Aggregate" => [_kind, [%{"Move" => place}]]} ->
+        target = frame_info(ctx.locals[local], ctx.types, ctx.refs, ctx.coroutines, [])
+
+        case {target, Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)} do
+          {%{borrowed: true, id: id, prefix: [{:field, nil, 0}, :deref]},
+           %{"Ref" => [_, pointee, "Mut"]}} ->
+            {root, path} = resolve_place(%{"kind" => %{"Projection" => [place, "Deref"]}}, known)
+            owned = frame_info(ctx.locals[root], ctx.types, ctx.refs, ctx.coroutines, [])
+
+            if match?(%{borrowed: false, id: ^id, prefix: ^path}, owned) and
+                 match?(
+                   %{borrowed: false, id: ^id, prefix: []},
+                   frame_info(pointee, ctx.types, ctx.refs, ctx.coroutines, [])
+                 ) and
+                 native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) == 1,
+               do: Map.put(Map.delete(known, local), {:frame_borrow, local}, {root, id}),
+               else: Map.delete(known, local)
+
+          _ ->
+            Map.delete(known, local)
+        end
+
       %{"Ref" => %{"place" => place}} ->
         Map.put(Map.delete(known, local), {:alias, local}, resolve_place(place, known))
 
@@ -510,6 +552,18 @@ defmodule Lynx.Rust.NativeLifetimes do
            do: Map.put(known, local, {:coroutine_state, root}),
            else: known_boolean(local, boolean(%{"Copy" => place}, known, ctx), known)
 
+      %{"Use" => [%{"Move" => %{"kind" => %{"Local" => source}}} = operand, _]} ->
+        case {known[{:frame_borrow, source}],
+              frame_info(ctx.locals[local], ctx.types, ctx.refs, ctx.coroutines, [])} do
+          {{root, id}, %{borrowed: true, id: id}} ->
+            known
+            |> Map.delete({:frame_borrow, source})
+            |> Map.put({:frame_borrow, local}, {root, id})
+
+          _ ->
+            known_boolean(local, boolean(operand, known, ctx), known)
+        end
+
       %{"Use" => [operand, _]} ->
         known_boolean(local, boolean(operand, known, ctx), known)
 
@@ -519,7 +573,12 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp known_after(%{"StorageDead" => local}, known, _),
-    do: known |> Map.delete(local) |> Map.delete({:alias, local}) |> Map.delete({:empty, local})
+    do:
+      known
+      |> Map.delete(local)
+      |> Map.delete({:alias, local})
+      |> Map.delete({:empty, local})
+      |> Map.delete({:frame_borrow, local})
 
   defp known_after(%{"Call" => _}, known, _),
     do: Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
@@ -631,12 +690,14 @@ defmodule Lynx.Rust.NativeLifetimes do
 
     # Ownership can move into an actual extracted callee: its body is checked by
     # this same audit, and its effects compose through NativeM. No caller-owned
-    # cell may remain live if that callee fails. External contracts cannot stand
-    # in for a body here.
+    # cell may remain live if that callee fails. The separate compiler-frame rule
+    # allows only that same sole frame: its audited panic states have no native
+    # owner. External contracts cannot stand in for a body here.
     if MapSet.size(live) > 0 and
          !((MapSet.size(remaining) == 0 and
               ((model && (model[:native_dispose] || model[:native_transfer])) ||
                  MapSet.member?(ctx.implementations, id))) or
+             preserving_poll_borrow?(call, live, remaining, ctx) or
              (MapSet.member?(ctx.nonpanicking, id) and
                 (MapSet.equal?(remaining, live) or
                    MapSet.member?(ctx.implementations, id) or
@@ -672,6 +733,23 @@ defmodule Lynx.Rust.NativeLifetimes do
     if MapSet.size(live) > 0 or nested_owner?(kind, ctx), do: reject!(ctx)
     live
   end
+
+  defp preserving_poll_borrow?(
+         %{
+           "func" => %{"Regular" => %{"kind" => %{"Fun" => id}}},
+           "args" => [%{"Move" => %{"kind" => %{"Local" => pin}}}, _]
+         },
+         live,
+         remaining,
+         ctx
+       ) do
+    case {ctx.preserving_polls[id], ctx.known[{:frame_borrow, pin}], MapSet.to_list(live)} do
+      {id, {root, id}, [root]} when is_integer(id) -> MapSet.equal?(live, remaining)
+      _ -> false
+    end
+  end
+
+  defp preserving_poll_borrow?(_, _, _, _), do: false
 
   # Only an empty replacement can transfer the one saved owner out of a frame.
   # Non-owning replacements retain the ordinary call path.
