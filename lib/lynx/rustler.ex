@@ -87,6 +87,12 @@ defmodule Lynx.Rustler do
       modeled VM pins; native task identity and custom return encoders remain
       unsupported in this mode. Ordinary scalar/tuple/result and
       byte-vector codecs retain their existing decoding rules and cutoffs.
+    * `:owned_drops` — `false` by default. With runtime execution, `true` admits
+      the supported mutex-containing ResourceArc payloads using actual extracted
+      structural cleanup. Result encoding and partial argument-decoding cleanup
+      use the same owning dispatch as extracted Rust calls. VM pins survive
+      temporary Rust owners; VM collection, custom destructor unwind and native
+      binary/FFI correctness remain outside these proofs.
     * `:unwind` — `:reject` by default; `:assertions` selects the existing bounded
       mutex assertion-cleanup adapter for destructor-free payloads with runtime
       execution. Guard unwind and general failing-callee cleanup remain unsupported.
@@ -116,7 +122,8 @@ defmodule Lynx.Rustler do
       :proof_modules,
       :required_properties,
       :execution,
-      :unwind
+      :unwind,
+      :owned_drops
     ]
 
     for key <- Keyword.keys(opts),
@@ -127,6 +134,15 @@ defmodule Lynx.Rustler do
 
     unless execution in [:pure, :runtime],
       do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(execution)}")
+
+    owned = Keyword.get(opts, :owned_drops, false)
+
+    unless is_boolean(owned) and (not owned or execution == :runtime),
+      do:
+        raise(
+          ArgumentError,
+          "owned resource cleanup requires runtime execution and a boolean owned_drops option"
+        )
 
     prefix = Keyword.get(opts, :module_prefix, "Native.Extraction")
     tools = opts[:tools] || System.fetch_env!("LYNX_AENEAS_DIR")
@@ -226,6 +242,7 @@ defmodule Lynx.Rustler do
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         execution: execution,
+        owned_drops: Keyword.get(opts, :owned_drops, false),
         unwind: Keyword.get(opts, :unwind, :reject),
         external_types: models,
         external_calls:
@@ -263,6 +280,7 @@ defmodule Lynx.Rustler do
     external =
       Lynx.Rustler.Adapter.external!(bindings, extraction.implementations,
         execution: execution,
+        owned_drops: Keyword.get(opts, :owned_drops, false),
         resource_types: Enum.map(registrations.types, & &1.tag),
         audit_modules: extraction.model_modules,
         proof_modules: proofs,

@@ -33,7 +33,19 @@ defmodule Lynx.Rustler.Adapter do
     if resources != [] and execution != :runtime,
       do: raise(ArgumentError, "resource registration requires runtime execution")
 
-    declarations = Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution, resources))
+    owned = Keyword.get(opts, :owned_drops, false)
+
+    unless is_boolean(owned) and (not owned or execution == :runtime),
+      do:
+        raise(
+          ArgumentError,
+          "owned resource cleanup requires runtime execution and a boolean owned_drops option"
+        )
+
+    release = if owned, do: "Lynx.NativeOwnedDrop.drop", else: "Lynx.NativeResourceArc.release"
+
+    declarations =
+      Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution, resources, release))
 
     source = """
     module
@@ -79,7 +91,7 @@ defmodule Lynx.Rustler.Adapter do
     }
   end
 
-  defp declaration!(binding, execution_model, resources) do
+  defp declaration!(binding, execution_model, resources, release) do
     result = type!(binding["result"])
     args = for index <- indices(binding["arity"]), do: "arg#{index}"
     decoded = Enum.map(args, &("decoded_" <> &1))
@@ -132,7 +144,7 @@ defmodule Lynx.Rustler.Adapter do
           else
             cleanup =
               Enum.map_join(owned, "; ", fn {name, _} ->
-                "Lynx.NativeResourceArc.release #{name}"
+                "#{release} #{name}"
               end)
 
             "Lynx.Result.handle (#{decoder}) (fun error => do #{cleanup}; Lynx.Result.error error)"
@@ -150,8 +162,8 @@ defmodule Lynx.Rustler.Adapter do
     wrapper_call =
       Enum.join([wrapper | if(runtime?, do: ["_dispatcher" | args], else: args)], " ")
 
-    body = "do\n#{decode}\n  #{execute(invocation, result, execution_model)}"
-    direct_body = "do\n#{decode}\n  #{execute(direct, result, execution_model)}"
+    body = "do\n#{decode}\n  #{execute(invocation, result, execution_model, release)}"
+    direct_body = "do\n#{decode}\n  #{execute(direct, result, execution_model, release)}"
 
     registry =
       if resources == [], do: "", else: "Lynx.Rustler.withResourceTypes #{lean_list(resources)} "
@@ -168,22 +180,22 @@ defmodule Lynx.Rustler.Adapter do
 
   defp lean_list(strings), do: "[" <> Enum.map_join(strings, ", ", &JSON.encode!/1) <> "]"
 
-  defp execute(call, %{resource: true}, :runtime) do
-    "Lynx.Rustler.executeNative (do let value ← (#{call}); let term ← Lynx.NativeResourceArc.encode value; Lynx.NativeResourceArc.release value; Lynx.Result.ok term) id"
+  defp execute(call, %{resource: true}, :runtime, release) do
+    "Lynx.Rustler.executeNative (do let value ← (#{call}); let term ← Lynx.NativeResourceArc.encode value; #{release} value; Lynx.Result.ok term) id"
   end
 
-  defp execute(call, %{encode_m: encoder}, :runtime) do
+  defp execute(call, %{encode_m: encoder}, :runtime, _release) do
     "Lynx.Rustler.executeNative (do let value ← (#{call}); Lynx.NativeM.fromRust (#{encoder} value)) id"
   end
 
-  defp execute(call, type, :runtime),
+  defp execute(call, type, :runtime, _release),
     do: "Lynx.Rustler.executeNative (#{call}) #{type.encode}"
 
-  defp execute(call, %{encode_m: encoder}, :pure) do
+  defp execute(call, %{encode_m: encoder}, :pure, _release) do
     "Lynx.Rustler.execute (do let value ← (#{call}); #{encoder} value) id"
   end
 
-  defp execute(call, type, :pure), do: "Lynx.Rustler.execute (#{call}) #{type.encode}"
+  defp execute(call, type, :pure, _release), do: "Lynx.Rustler.execute (#{call}) #{type.encode}"
 
   defp monadic_encoder(%{encode_m: encoder}), do: encoder
   defp monadic_encoder(type), do: "(fun value => RustM.ok (#{type.encode} value))"
