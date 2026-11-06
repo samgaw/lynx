@@ -49,6 +49,7 @@ git -C "$source_dir" checkout --detach 7b462d9159db2ed3015162352183906a30bfafc6
 git -C "$source_dir" apply "$script_dir/patches/charon-nested-proof-roots.patch"
 git -C "$source_dir" apply "$script_dir/patches/charon-needs-drop.patch"
 git -C "$source_dir" apply "$script_dir/patches/charon-immediate-futures.patch"
+git -C "$source_dir" apply "$script_dir/patches/charon-pin-borrow-transfer.patch"
 rustup toolchain install nightly-2026-09-17 --profile minimal \
   --component rustc-dev --component llvm-tools --component rust-src --component miri
 cd "$source_dir/charon"
@@ -60,6 +61,8 @@ IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
   --no-default-features --features rustc --test crate_data -- needs_drop
 IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
   --no-default-features --features rustc --test crate_data -- immediate_future_state_machine
+IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+  --no-default-features --features rustc --test crate_data -- pin_get_mut_transfers_only_the_standard_wrapper
 cp target/release/charon target/release/charon-driver "$install_dir/"
 
 aeneas_source="$install_dir/aeneas-source"
@@ -70,6 +73,7 @@ git -C "$aeneas_source" apply "$script_dir/patches/aeneas-lean-result-monad.patc
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-assertion-unwind-input.patch"
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-external-global-names.patch"
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-immediate-futures.patch"
+git -C "$aeneas_source" apply "$script_dir/patches/aeneas-workspace-roots.patch"
 ln -s "$source_dir" "$aeneas_source/charon"
 cp "$script_dir/aeneas.opam.locked" "$aeneas_source/src/aeneas.opam.locked"
 # Keep compiler packages and configuration inside this installation.
@@ -78,12 +82,12 @@ opam init --root="$opam_root" --bare --no-setup --yes
 opam switch create --root="$opam_root" lynx-aeneas ocaml-base-compiler.5.3.0 --yes
 opam install --root="$opam_root" --switch=lynx-aeneas \
   "$aeneas_source/src" --deps-only --locked --yes
-aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1
+aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1
 AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aeneas -- \
   dune build --root "$aeneas_source/src" main.exe
 cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
 printf '%s\n' "aeneas=$aeneas_version" \
-  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+immediate-futures-v1' \
+  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1' \
   'aeneas_runtime=lynx-bounded-default-format-v2' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"
