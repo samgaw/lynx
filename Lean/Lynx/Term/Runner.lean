@@ -252,6 +252,90 @@ theorem run_reaches (computation : Result α) (env : Environment) (choices : Lis
   rw [Term.Runner.run, ready]
   rfl
 
+/-- A finite two-worker trace: the root acquires, the child blocks, the root
+releases and finishes, then the child acquires and releases. Poll equations
+specify every shared-state transition; neither fairness nor unbounded schedule
+coverage is assumed. Process-local state is empty throughout this trace. -/
+theorem two_wait_interleave
+    (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
+    (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
+    (parentRelease : Environment → Option (δ × Environment)) (parentFinish : δ → Result Term)
+    (childRelease : Environment → Option (ε × Environment)) (childFinish : ε → Result Term)
+    (parentValue : β) (childValue : γ) (parentReleased : δ) (childReleased : ε)
+    (rootValue childResult : Term)
+    (s0 s1 s2 s3 s4 : Nat × List (Nat × String × Term)) :
+    let atState := fun (pid : PID) (saved : List (PID × ProcessState))
+        (choices : List ScheduleChoice) (shared : Nat × List (Nat × String × Term)) =>
+      ({ currentPid := pid
+         pidCounter := 2
+         refCounter := shared.1
+         nativeHeap := shared.2
+         processes := saved
+         schedule := choices } : Environment)
+    parentPoll (atState 1 [(2, {})] [.swap 2] s0) =
+        some (parentValue, atState 1 [(2, {})] [.swap 2] s1) →
+    parentNext parentValue = .wait parentRelease parentFinish →
+    childPoll (atState 2 [(1, {})] [] s1) = none →
+    parentRelease (atState 1 [(2, {})] [] s1) =
+        some (parentReleased, atState 1 [(2, {})] [] s2) →
+    parentFinish parentReleased = .ok rootValue →
+    childPoll (atState 2 [] [] s2) = some (childValue, atState 2 [] [] s3) →
+    childNext childValue = .wait childRelease childFinish →
+    childRelease (atState 2 [] [] s3) = some (childReleased, atState 2 [] [] s4) →
+    childFinish childReleased = .ok childResult →
+    (Result.schedule (.wait childPoll childNext) (fun _ => .wait parentPoll parentNext))
+      { refCounter := s0.1, nativeHeap := s0.2, schedule := [.current, .swap 2] } =
+      (.ok rootValue, atState 1 [] [] s4) := by
+  dsimp only
+  intro acquired parent blocked released parentDone childAcquired child childReleased childDone
+  change Term.Runner.run _ _ = _
+  simp [Term.Runner.run, Term.Runner.execute, Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.findTimeout, Term.Runner.step, Term.Runner.activate, Term.Runner.save,
+    Term.Runner.findProcess, Term.Runner.removeProcess, Term.Runner.schedule,
+    Term.Runner.restore, Term.Runner.isEmpty,
+    acquired, parent, blocked, released, parentDone, childAcquired, child, childReleased, childDone]
+
+/-- The symmetric finite trace: the child acquires first, the root blocks,
+then the child finishes before the root acquires and releases. -/
+theorem two_wait_interleave_child_first
+    (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
+    (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
+    (parentRelease : Environment → Option (δ × Environment)) (parentFinish : δ → Result Term)
+    (childRelease : Environment → Option (ε × Environment)) (childFinish : ε → Result Term)
+    (parentValue : β) (childValue : γ) (parentReleased : δ) (childReleased : ε)
+    (rootValue childResult : Term)
+    (s0 s1 s2 s3 s4 : Nat × List (Nat × String × Term)) :
+    let atState := fun (pid : PID) (saved : List (PID × ProcessState))
+        (choices : List ScheduleChoice) (shared : Nat × List (Nat × String × Term)) =>
+      ({ currentPid := pid
+         pidCounter := 2
+         refCounter := shared.1
+         nativeHeap := shared.2
+         processes := saved
+         schedule := choices } : Environment)
+    childPoll (atState 2 [(1, {})] [.swap 1] s0) =
+        some (childValue, atState 2 [(1, {})] [.swap 1] s1) →
+    childNext childValue = .wait childRelease childFinish →
+    parentPoll (atState 1 [(2, {})] [] s1) = none →
+    childRelease (atState 2 [(1, {})] [] s1) =
+        some (childReleased, atState 2 [(1, {})] [] s2) →
+    childFinish childReleased = .ok childResult →
+    parentPoll (atState 1 [] [] s2) = some (parentValue, atState 1 [] [] s3) →
+    parentNext parentValue = .wait parentRelease parentFinish →
+    parentRelease (atState 1 [] [] s3) = some (parentReleased, atState 1 [] [] s4) →
+    parentFinish parentReleased = .ok rootValue →
+    (Result.schedule (.wait childPoll childNext) (fun _ => .wait parentPoll parentNext))
+      { refCounter := s0.1, nativeHeap := s0.2, schedule := [.swap 2, .swap 1] } =
+      (.ok rootValue, atState 1 [] [] s4) := by
+  dsimp only
+  intro acquired child blocked released childDone parentAcquired parent parentReleased parentDone
+  change Term.Runner.run _ _ = _
+  simp [Term.Runner.run, Term.Runner.execute, Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.findTimeout, Term.Runner.step, Term.Runner.activate, Term.Runner.save,
+    Term.Runner.findProcess, Term.Runner.removeProcess, Term.Runner.schedule,
+    Term.Runner.restore, Term.Runner.isEmpty,
+    acquired, child, blocked, released, childDone, parentAcquired, parent, parentReleased, parentDone]
+
 @[simp] theorem IsPure.ok_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (choices : List ScheduleChoice) (value : α) :
     computation.run env choices = (.ok value, final) ↔ computation = .ok value ∧ env = final := by
