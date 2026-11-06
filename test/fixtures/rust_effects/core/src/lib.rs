@@ -24,3 +24,12 @@ pub struct Snapshot {
     /// Snapshot contents.
     pub counter: Counter,
 }
+
+/// Consumes the transferred native owner before checking the request.
+///
+/// # Panics
+/// Panics when `accepted` is false, after native destruction has completed.
+pub fn release_checked(mutex: std::sync::Mutex<u64>, accepted: bool) {
+    drop(mutex);
+    assert!(accepted);
+}

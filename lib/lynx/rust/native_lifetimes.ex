@@ -10,6 +10,7 @@ defmodule Lynx.Rust.NativeLifetimes do
       for type <- translated["type_decls"], type && MutexModels.type?(type), do: type["def_id"]
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
+    implementations = MapSet.new(functions, & &1["def_id"])
 
     for function <- functions,
         %{"Structured" => body} <- [function["body"]] do
@@ -21,7 +22,15 @@ defmodule Lynx.Rust.NativeLifetimes do
 
       if MapSet.size(owners) > 0 do
         live = MapSet.filter(owners, &(&1 > 0 and &1 <= body["locals"]["arg_count"]))
-        context = %{owners: owners, models: models, function: function, translated: translated}
+
+        context = %{
+          owners: owners,
+          models: models,
+          implementations: implementations,
+          function: function,
+          translated: translated
+        }
+
         block!(body["body"], live, context)
       end
     end
@@ -64,11 +73,17 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp statement!(%{"Call" => %{"call" => call, "dest" => dest}}, live, ctx) do
-    model = get_in(ctx.models, [get_in(call, ["func", "Regular", "kind", "Fun"])])
+    id = get_in(call, ["func", "Regular", "kind", "Fun"])
+    model = ctx.models[id]
     remaining = moves!(call["args"], live, ctx)
 
+    # Ownership can move into an actual extracted callee: its body is checked by
+    # this same audit, and its effects compose through NativeM. No caller-owned
+    # cell may remain live if that callee fails. External contracts cannot stand
+    # in for a body here.
     if MapSet.size(live) > 0 and
-         not (model && model[:native_dispose] && MapSet.size(remaining) == 0),
+         not (MapSet.size(remaining) == 0 and
+                ((model && model[:native_dispose]) || MapSet.member?(ctx.implementations, id))),
        do: reject!(ctx)
 
     destination!(dest, remaining, ctx)
