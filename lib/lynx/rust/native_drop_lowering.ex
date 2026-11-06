@@ -76,13 +76,16 @@ defmodule Lynx.Rust.NativeDropLowering do
               "native drop lowering requires the actual core::mem::drop declaration"
             )
 
-        unless place_type!(drop["place"], ctx) == CallModels.expand(site.self, ctx.refs),
-          do:
-            LLBC.failure!(
-              ctx.function,
-              ctx.translated,
-              "native dropped place has an inconsistent owned type"
-            )
+        unless same_runtime_type?(
+                 place_type!(drop["place"], ctx),
+                 CallModels.expand(site.self, ctx.refs)
+               ),
+               do:
+                 LLBC.failure!(
+                   ctx.function,
+                   ctx.translated,
+                   "native dropped place has an inconsistent owned type"
+                 )
 
         # Introduce one fresh type-table entry before its use in the body;
         # the library declaration can occur later in the serialized crate.
@@ -244,9 +247,10 @@ defmodule Lynx.Rust.NativeDropLowering do
           )
       end
 
-    # rustc freshens body lifetimes at individual accesses. They do not change
-    # the runtime type; retain region arity, generic identity and borrow kind.
-    unless erase_body_regions(type) == erase_body_regions(CallModels.expand(annotation, ctx.refs)),
+    # rustc instantiates and freshens lifetimes at accesses. They do not change
+    # runtime ownership; retain region arity, generic identity and borrow kind.
+    # The original region identities remain in LLBC for Aeneas's borrow checks.
+    unless same_runtime_type?(type, CallModels.expand(annotation, ctx.refs)),
       do:
         LLBC.failure!(
           ctx.function,
@@ -265,13 +269,23 @@ defmodule Lynx.Rust.NativeDropLowering do
         "native owner lifetime: invalid place annotation"
       )
 
-  defp erase_body_regions(%{"Body" => id}) when is_integer(id), do: %{"Body" => 0}
+  def same_runtime_type?(left, right), do: erase_regions(left) == erase_regions(right)
 
-  defp erase_body_regions(map) when is_map(map),
-    do: Map.new(map, fn {key, value} -> {key, erase_body_regions(value)} end)
+  defp erase_regions(%{"Ref" => [_, type, kind]}),
+    do: %{"Ref" => ["Erased", erase_regions(type), kind]}
 
-  defp erase_body_regions(list) when is_list(list), do: Enum.map(list, &erase_body_regions/1)
-  defp erase_body_regions(value), do: value
+  defp erase_regions(map) when is_map(map),
+    do:
+      Map.new(map, fn
+        {"regions", regions} when is_list(regions) ->
+          {"regions", Enum.map(regions, fn _ -> "Erased" end)}
+
+        {key, value} ->
+          {key, erase_regions(value)}
+      end)
+
+  defp erase_regions(list) when is_list(list), do: Enum.map(list, &erase_regions/1)
+  defp erase_regions(value), do: value
 
   defp walk_children(map, ctx, state, cleanup) when is_map(map) do
     {pairs, state} =
