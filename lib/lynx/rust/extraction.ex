@@ -96,6 +96,11 @@ defmodule Lynx.Rust.Extraction do
 
     native_unwind = native_unwind ++ nonpanicking
 
+    document =
+      if native_drops != [] or native_unwind != [],
+        do: Lynx.Rust.LLBCJson.restore_spans!(document, discovery.document),
+        else: document
+
     backend_llbc =
       if native_drops == [] and native_unwind == [] do
         llbc

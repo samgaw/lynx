@@ -1,6 +1,44 @@
 defmodule Lynx.Rust.LLBCJson do
   @moduledoc false
 
+  # Removing an unreachable block can remove a span's first serialized value,
+  # while a later statement still refers to its ID. Span IDs have their own
+  # family: never resolve them through type/constant/trait reference tables.
+  def restore_spans!(document, original) do
+    spans = span_values(original, %{})
+    restore_spans(document, spans)
+  end
+
+  defp span_values(%{"span" => %{"Value" => [id, value]}} = map, spans) do
+    case Map.fetch(spans, id) do
+      {:ok, other} when other != value -> raise ArgumentError, "inconsistent LLBC span identity"
+      _ -> span_values(Map.values(map), Map.put(spans, id, value))
+    end
+  end
+
+  defp span_values(map, spans) when is_map(map), do: span_values(Map.values(map), spans)
+  defp span_values(list, spans) when is_list(list), do: Enum.reduce(list, spans, &span_values/2)
+  defp span_values(_, spans), do: spans
+
+  defp restore_spans(map, spans) when is_map(map) do
+    Map.new(map, fn
+      {"span", %{"Deduplicated" => id}} ->
+        {"span",
+         %{
+           "Untagged" =>
+             Map.get(spans, id) || raise(ArgumentError, "missing LLBC span identity #{id}")
+         }}
+
+      {key, value} ->
+        {key, restore_spans(value, spans)}
+    end)
+  end
+
+  defp restore_spans(list, spans) when is_list(list),
+    do: Enum.map(list, &restore_spans(&1, spans))
+
+  defp restore_spans(value, _), do: value
+
   # The pinned charon-ml reader matches record fields in serde declaration order.
   # Preserve the original order when editing LLBC, including unchanged nested
   # records. New records use an observed schema, never alphabetic map ordering.
