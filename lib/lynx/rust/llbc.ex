@@ -7,7 +7,14 @@ defmodule Lynx.Rust.LLBC do
   @global_backend @unwind_backend <> "+global-names-v1"
   @future_backend @global_backend <> "+immediate-futures-v1"
   @workspace_backend @future_backend <> "+workspace-roots-v1"
-  @unwind_backends [@unwind_backend, @global_backend, @future_backend, @workspace_backend]
+  @undefined_backend @workspace_backend <> "+undefined-behavior-v1"
+  @unwind_backends [
+    @unwind_backend,
+    @global_backend,
+    @future_backend,
+    @workspace_backend,
+    @undefined_backend
+  ]
   @runtime_backends ["nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1" | @unwind_backends]
 
   def crate_names!(workspace) do
@@ -252,7 +259,8 @@ defmodule Lynx.Rust.LLBC do
                @unwind_backend,
                @global_backend,
                @future_backend,
-               @workspace_backend
+               @workspace_backend,
+               @undefined_backend
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
