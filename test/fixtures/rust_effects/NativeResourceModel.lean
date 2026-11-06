@@ -38,4 +38,13 @@ theorem forged_count (handle : NativeResourceArc Bool) (value : Bool) (env : Env
     NativeResourceArc.deref handle env = (.error .exhausted, env) := by
   exact NativeResourceArc.deref_inconsistent_count handle value env distinct stored
 
+/-- Identity freshness alone cannot justify allocation if an older token points
+at the prospective new allocation. The resource frame must exclude this alias. -/
+theorem future_owner_not_bounded :
+    ¬ NativeResourceArc.FrameBelow Bool 1 [(1, NativeResourceArc.handleType Bool, .reference 2)] := by
+  intro bounded
+  have impossible := (bounded (1, NativeResourceArc.handleType Bool, .reference 2)
+    (by simp)).2.1 rfl 2 rfl
+  omega
+
 end Resource.ModelProperties
