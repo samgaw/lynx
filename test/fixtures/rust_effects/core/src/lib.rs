@@ -124,3 +124,37 @@ pub fn locked_scalar_increment(mutex: &std::sync::Mutex<u64>, amount: u64) -> bo
 pub fn saturating_increment(value: u64) -> u64 {
     value.saturating_add(1)
 }
+
+/// A first-party future whose progress is retained across explicit polls.
+pub struct PausedCounter {
+    /// Whether the next poll must suspend once.
+    pub waiting: bool,
+    /// The computation input retained while suspended.
+    pub counter: Counter,
+}
+
+/// Constructs a future which returns Pending before computing its result.
+pub fn paused_counter(value: u64) -> PausedCounter {
+    PausedCounter {
+        waiting: true,
+        counter: Counter { value },
+    }
+}
+
+impl std::future::Future for PausedCounter {
+    type Output = u64;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<u64> {
+        let this = self.get_mut();
+        if this.waiting {
+            this.waiting = false;
+            context.waker().wake_by_ref();
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(saturating_increment(this.counter.value))
+        }
+    }
+}

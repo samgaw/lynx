@@ -60,6 +60,19 @@ theorem no_early_completion (value result : U64) (waker : NativeWaker) (env : En
   rw [caller_pending value waker env bounded stored]
   simp
 
+theorem missing_registration (value : U64) (waker : NativeWaker) (env : Environment)
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = []) :
+    (do
+      let future ← effects_core.paused_counter value
+      poll_paused ⟨future⟩ ⟨waker⟩) env = (.error .exhausted, env) := by
+  let next : Unit → Result (core.task.poll.Poll U64 ×
+      effects_native.core.pin.Pin effects_core.PausedCounter × NativeTaskContext) :=
+    fun _ => Result.ok (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩)
+  simpa [next, effects_core.paused_counter, poll_paused,
+    effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
+    core.pin.PinMutAT.get_mut, NativeM.ok] using
+    (NativeWaker.wakeByRef_missing_next waker next env missing)
+
 /-- A second explicit poll completes; no executor fairness or implicit repoll is assumed. -/
 theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
