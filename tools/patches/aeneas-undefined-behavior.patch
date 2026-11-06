@@ -1,0 +1,96 @@
+--- a/src/extract/ExtractBase.ml
++++ b/src/extract/ExtractBase.ml
+@@ -1203,6 +1203,7 @@
+         (TResult, result_ok_id, Config.lean_result_operation "ok" "ok");
+         (TResult, result_fail_id, Config.lean_result_operation "fail" "fail");
+         (TError, error_failure_id, "panic");
++        (TError, error_undefined_behavior_id, "undef");
+         (TLoopResult, loop_result_continue_id, "cont");
+         (TLoopResult, loop_result_break_id, "done");
+         (* No Fuel::Zero on purpose *)
+--- a/src/interp/InterpStatements.ml
++++ b/src/interp/InterpStatements.ml
+@@ -784,7 +784,11 @@
+       let (ctx, res), cc = eval_assertion config st.span assertion ctx in
+       ([ (ctx, res) ], cc_singleton __FILE__ __LINE__ st.span cc)
+   | Call (call, dest, _) -> eval_function_call config st.span call dest ctx
+-  | Panic _ | UnwindTerminate | UndefinedBehavior ->
++  | UndefinedBehavior ->
++      if config.mode = ConcreteMode then
++        [%craise] st.span "Reached undefined behavior"
++      else ([], cf_empty __FILE__ __LINE__ st.span SA.UndefinedBehavior)
++  | Panic _ | UnwindTerminate ->
+       (* Evaluate to a panic only if the execution is concrete, otherwise we stop
+          evaluating there and synthesize a [panic] node in the symbolic AST. *)
+       if config.mode = ConcreteMode then
+--- a/src/pure/PrintPure.ml
++++ b/src/pure/PrintPure.ml
+@@ -525,6 +525,7 @@
+           let variant_id = Option.get variant_id in
+           if variant_id = error_failure_id then "@Error::Failure"
+           else if variant_id = error_out_of_fuel_id then "@Error::OutOfFuel"
++          else if variant_id = error_undefined_behavior_id then "@Error::UndefinedBehavior"
+           else
+             [%craise_opt_span] span
+               "Unreachable: improper variant id for error type"
+@@ -661,6 +662,7 @@
+             let variant_id = Option.get variant_id in
+             if variant_id = error_failure_id then "@Error::Failure"
+             else if variant_id = error_out_of_fuel_id then "@Error::OutOfFuel"
++          else if variant_id = error_undefined_behavior_id then "@Error::UndefinedBehavior"
+             else
+               [%craise_opt_span] span
+                 "Unreachable: improper variant id for error type"
+--- a/src/pure/Pure.ml
++++ b/src/pure/Pure.ml
+@@ -257,6 +257,7 @@
+ let loop_result_fail_id = VariantId.of_int 2
+ let error_failure_id = VariantId.of_int 0
+ let error_out_of_fuel_id = VariantId.of_int 1
++let error_undefined_behavior_id = VariantId.of_int 2
+
+ (* We don't always use those: it depends on the backend (we use natural numbers
+    for the fuel: in Coq they are enumerations, but in F* they are primitive)
+--- a/src/pure/PureTypeCheck.ml
++++ b/src/pure/PureTypeCheck.ml
+@@ -59,7 +59,7 @@
+           [%sanity_check] span (generics = empty_generic_args);
+           let variant_id = Option.get variant_id in
+           [%sanity_check] span
+-            (variant_id = error_failure_id || variant_id = error_out_of_fuel_id);
++            (variant_id = error_failure_id || variant_id = error_out_of_fuel_id || variant_id = error_undefined_behavior_id);
+           []
+       | TFuel ->
+           let variant_id = Option.get variant_id in
+--- a/src/symbolic/PrintSymbolicAst.ml
++++ b/src/symbolic/PrintSymbolicAst.ml
+@@ -56,6 +56,7 @@
+       in
+       indent ^ "return" ^ ret
+   | Panic -> indent ^ "panic"
++  | UndefinedBehavior -> indent ^ "undefined behavior"
+   | FunCall (call, next) ->
+       let call = call_to_string env indent call in
+       let next = expr_to_string env indent indent_incr next in
+--- a/src/symbolic/SymbolicAst.ml
++++ b/src/symbolic/SymbolicAst.ml
+@@ -153,6 +153,7 @@
+           need it to translate shared borrows to pure values (we need to be able
+           to look up the shared values in the context). *)
+   | Panic
++  | UndefinedBehavior
+   | FunCall of call * expr
+   | EndAbs of (Contexts.eval_ctx[@opaque]) * abs * abs_level * expr
+       (** The context is the evaluation context upon ending the abstraction,
+--- a/src/symbolic/SymbolicToPureExpressions.ml
++++ b/src/symbolic/SymbolicToPureExpressions.ml
+@@ -233,6 +233,9 @@
+          Remark: we can't get there if we are inside a loop. *)
+       translate_return ectx opt_v ctx
+   | Panic -> translate_panic ctx
++  | UndefinedBehavior ->
++      let output = unwrap_result_ty ctx.span (translate_panic ctx).ty in
++      mk_result_fail_texpr_with_error_id ctx.span error_undefined_behavior_id output
+   | FunCall (call, e) -> translate_function_call call e ctx
+   | EndAbs (ectx, abs, abs_level, e) ->
+       translate_end_abs ectx abs abs_level e ctx
