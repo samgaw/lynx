@@ -81,8 +81,11 @@ defmodule Lynx.Rust do
   ownership without clearing poison, allowing complete critical sections to
   compose acquisition, explicit poisoned-result recovery, checked mutation and
   normal release across first-party crates. Panicking unwrap and guard unwind
-  remain unsupported. Scheduled native execution still needs a public runner
-  proof interface; successful standalone proofs do not establish concurrency.
+  remain unsupported. Public runner trace lemmas support two finite contending
+  schedules with two workers, each acquiring and releasing once. Actual extracted
+  critical sections have parametric proofs preserving both successful updates
+  under those schedules. This does not establish arbitrary-schedule safety,
+  fairness, general liveness, native task identity or an effectful NIF adapter.
 
   `unwind: :assertions` additionally preserves compiler assertion cleanup for
   local owned Mutex<bool/unsigned scalar> values. It requires `execution: :runtime`
