@@ -5,8 +5,19 @@ defmodule Lynx.Rust.Extraction do
   # clients must kernel-check their properties and audit the generated modules.
   def run!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key not in [:external_types, :external_calls, :rustler_atoms, :execution, :unwind],
+        key not in [
+          :external_types,
+          :external_calls,
+          :rustler_atoms,
+          :execution,
+          :unwind,
+          :futures
+        ],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
+
+    if Keyword.get(opts, :futures, :reject) != :reject and
+         Keyword.get(opts, :execution, :pure) != :pure,
+       do: raise(ArgumentError, "immediate future extraction currently requires pure execution")
 
     unwind = Keyword.get(opts, :unwind, :reject)
     Lynx.Rust.NativeUnwind.charon_arguments(unwind)
@@ -24,7 +35,7 @@ defmodule Lynx.Rust.Extraction do
         roots,
         output,
         module,
-        Keyword.take(opts, [:external_types, :unwind])
+        Keyword.take(opts, [:external_types, :unwind, :futures])
       )
 
     {discovery, caches} =
@@ -56,7 +67,7 @@ defmodule Lynx.Rust.Extraction do
              roots,
              output,
              module,
-             Keyword.take(opts, [:external_types, :unwind]),
+             Keyword.take(opts, [:external_types, :unwind, :futures]),
              opaque
            ), caches}
       end
@@ -70,7 +81,7 @@ defmodule Lynx.Rust.Extraction do
           Enum.uniq(roots ++ ["core::mem::drop"]),
           output,
           module,
-          Keyword.take(opts, [:external_types, :unwind]),
+          Keyword.take(opts, [:external_types, :unwind, :futures]),
           Enum.map(caches, & &1.opaque_pattern)
         )
       else
@@ -302,6 +313,7 @@ defmodule Lynx.Rust.Extraction do
       compiler_drop_queries: compiler_drop_queries,
       native_drops: native_drops,
       native_unwind: native_unwind,
+      futures: Keyword.get(opts, :futures, :reject),
       unwind: unwind,
       execution: execution,
       translation: translation,
@@ -343,7 +355,7 @@ defmodule Lynx.Rust.Extraction do
   @doc false
   def describe!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key not in [:external_types, :unwind],
+        key not in [:external_types, :unwind, :futures],
         do: raise(ArgumentError, "unknown Rust discovery option: #{key}")
 
     describe!(context, tools, roots, output, module, opts, [])
@@ -391,6 +403,7 @@ defmodule Lynx.Rust.Extraction do
 
     args =
       ["rustc", "--sysroot", "default"] ++
+        Lynx.Rust.Futures.arguments!(Keyword.get(opts, :futures, :reject), tools) ++
         Lynx.Rust.NativeUnwind.charon_arguments(Keyword.get(opts, :unwind, :reject)) ++
         [
           "--opaque",
@@ -427,6 +440,9 @@ defmodule Lynx.Rust.Extraction do
 
     document = read_llbc!(llbc, diagnostics)
     validate_target!(document)
+
+    models =
+      models ++ Lynx.Rust.Futures.type_models!(Keyword.get(opts, :futures, :reject), document)
 
     %{document: document, llbc: llbc, first_party: first_party, models: models}
   end
