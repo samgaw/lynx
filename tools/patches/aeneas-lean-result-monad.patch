@@ -1,0 +1,155 @@
+diff --git i/src/Config.ml w/src/Config.ml
+index 20b01c623994..5d0ee78ef6f3 100644
+--- i/src/Config.ml
++++ w/src/Config.ml
+@@ -18,6 +18,29 @@ let backend_of_string (b : string) : backend option =
+
+ let opt_backend : backend option ref = ref None
+
++(** Optional result monad for effectful Lean models. The target module provides
++    [ok], [fail], [massert] and [lift]; standard RustM calls require a MonadLift. *)
++let lean_result_monad : string option ref = ref None
++
++let set_lean_result_monad (name : string) : unit =
++  let identifier part =
++    String.length part > 0
++    && (match part.[0] with 'a' .. 'z' | 'A' .. 'Z' | '_' -> true | _ -> false)
++    && String.for_all
++         (function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true | _ -> false)
++         part
++  in
++  if not (List.for_all identifier (String.split_on_char '.' name)) then
++    raise (Arg.Bad "-lean-result-monad expects a dotted Lean identifier");
++  lean_result_monad := Some name
++
++let lean_result_name () = Option.value !lean_result_monad ~default:"RustM"
++
++let lean_result_operation (fallback : string) (operation : string) =
++  match !lean_result_monad with
++  | None -> fallback
++  | Some name -> name ^ "." ^ operation
++
+ let set_backend (b : string) : unit =
+   match backend_of_string b with
+   | Some b -> opt_backend := Some b
+diff --git i/src/EmitJson.ml w/src/EmitJson.ml
+index f36c8423bf7a..40c57f60aff6 100644
+--- i/src/EmitJson.ml
++++ w/src/EmitJson.ml
+@@ -105,6 +105,7 @@ type trait_impl_entry = {
+ [@@deriving to_yojson]
+
+ type envelope = {
++  result_monad : string;
+   aeneas_version : string;
+   charon_version : string;
+       (** The version of charon that emitted the [.llbc] input. *)
+@@ -384,6 +385,7 @@ let write_if_enabled ~(crate_name : string) : string option =
+         aeneas_version = Option.value GitVersion.commit ~default:"unknown";
+         charon_version = Charon.CharonVersion.supported_charon_version;
+         crate_name;
++        result_monad = Config.lean_result_name ();
+         functions = List.rev state.function_entries;
+         types = List.rev state.type_entries;
+         globals = List.rev state.global_entries;
+diff --git i/src/Main.ml w/src/Main.ml
+index d985752b2071..30b74ddccd12 100644
+--- i/src/Main.ml
++++ w/src/Main.ml
+@@ -97,6 +97,9 @@ let () =
+         Arg.Symbol (backend_names, set_backend),
+         " Specify the target backend (" ^ String.concat ", " backend_names ^ ")"
+       );
++      ( "-lean-result-monad",
++        Arg.String set_lean_result_monad,
++        " Select the result monad namespace for the Lean backend" );
+       ( "-namespace",
+         Arg.String set_namespace,
+         " Set the namespace of the definitions in the pure model" );
+@@ -579,6 +582,11 @@ let () =
+               fail true))
+   in
+
++  let () =
++    if Option.is_some !lean_result_monad && !opt_backend <> Some Lean then
++      fail_with_error_no_doc "-lean-result-monad requires -backend lean"
++  in
++
+   (* Load the lists of external names given through [-external-names]. This has
+      to happen before we force the maps below, as they are memoized. *)
+   let () =
+diff --git i/src/extract/Extract.ml w/src/extract/Extract.ml
+index 8ea1cf821e92..a830bae1cf14 100644
+--- i/src/extract/Extract.ml
++++ w/src/extract/Extract.ml
+@@ -954,7 +954,15 @@ and extract_App (span : Meta.span) (ctx : extraction_ctx) (fmt : F.formatter)
+     (out_ty : ty) : unit =
+   (* We don't do the same thing if the app is a top-level identifier (function,
+    * ADT constructor...) or a "regular" expression *)
+-  match app.e with
++  (* Lean inserts lifts for bound do-statements, but not for a final expression.
++     Make the lift explicit for every computation application, including tail
++     calls to standard RustM primitives. Native-monad calls use the identity lift. *)
++  let lift_result =
++    backend () = Lean && Option.is_some !Config.lean_result_monad
++    && match out_ty with TAdt (TBuiltin TResult, _) -> true | _ -> false
++  in
++  if lift_result then F.pp_print_string fmt "monadLift (";
++  (match app.e with
+   | Qualif qualif -> (
+       (* Top-level qualifier *)
+       match (qualif.id, out_ty) with
+@@ -1039,7 +1047,8 @@ and extract_App (span : Meta.span) (ctx : extraction_ctx) (fmt : F.formatter)
+           extract_texpr span ctx fmt ~inside:true ~inside_do ve)
+         args;
+       (* Close parentheses *)
+-      if inside then F.pp_print_string fmt ")"
++      if inside then F.pp_print_string fmt ")");
++  if lift_result then F.pp_print_string fmt ")"
+
+ and extract_array_or_slice (span : Meta.span) (ctx : extraction_ctx)
+     (fmt : F.formatter) ~(inside : bool) ~(is_array : bool) (args_ty : ty)
+diff --git i/src/extract/ExtractBase.ml w/src/extract/ExtractBase.ml
+index cfe68b1069b8..bc7532de277a 100644
+--- i/src/extract/ExtractBase.ml
++++ w/src/extract/ExtractBase.ml
+@@ -1146,7 +1146,7 @@ let builtin_adts () : (builtin_ty * string) list =
+   match backend () with
+   | Lean ->
+       [
+-        (TResult, "RustM");
++        (TResult, Config.lean_result_name ());
+         (TLoopResult, "ControlFlow");
+         (TFuel, "Nat");
+         (TArray, "Array");
+@@ -1200,8 +1200,8 @@ let builtin_variants () : (builtin_ty * VariantId.id * string) list =
+       ]
+   | Lean ->
+       [
+-        (TResult, result_ok_id, "ok");
+-        (TResult, result_fail_id, "fail");
++        (TResult, result_ok_id, Config.lean_result_operation "ok" "ok");
++        (TResult, result_fail_id, Config.lean_result_operation "fail" "fail");
+         (TError, error_failure_id, "panic");
+         (TLoopResult, loop_result_continue_id, "cont");
+         (TLoopResult, loop_result_break_id, "done");
+@@ -1254,8 +1254,8 @@ let builtin_pure_functions () : (pure_builtin_fun_id * string) list =
+       (* We don't provide [FuelDecrease] and [FuelEqZero] on purpose *)
+       [
+         (Return, "return");
+-        (Fail, "fail_");
+-        (Assert, "massert");
++        (Fail, Config.lean_result_operation "fail_" "fail");
++        (Assert, Config.lean_result_operation "massert" "massert");
+         (Discriminant, "read_discriminant");
+         (UpdateAtIndex Slice, "Slice.update");
+         (UpdateAtIndex Array, "Array.update");
+@@ -1263,7 +1263,7 @@ let builtin_pure_functions () : (pure_builtin_fun_id * string) list =
+         (IndexAtIndex Array, "Array.index_usize");
+         (IndexMutAtIndex Slice, "Slice.index_mut_usize");
+         (IndexMutAtIndex Array, "Array.index_mut_usize");
+-        (ToResult, "lift");
++        (ToResult, Config.lean_result_operation "lift" "lift");
+         (ResultUnwrapMut, "core.result.Result.unwrap.mut");
+         (GetTarget, "get_target");
+         (TargetFeatureEnabled, "target_feature_enabled");
