@@ -222,6 +222,9 @@ defmodule Lynx.Rust.NativeCodecs do
           decode_encode value := by
             cases value
             simp [NativeCodec.roundtrip]
+
+        @[simp] theorem #{quote!("typeName::" <> rust)} :
+            NativeCodec.typeName (α := #{identifier!(lean)}) = #{JSON.encode!(type.native_tag)} := rfl
         """
 
       _ ->
