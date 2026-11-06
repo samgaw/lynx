@@ -59,10 +59,13 @@ defmodule Lynx.Rust do
   coalesce. The callback must be registered to this nonpanicking notification
   protocol. Registration, native vtables and callback implementation remain trusted
   boundaries; an arbitrary Waker cannot be assumed to satisfy that protocol.
-  This does not implement an executor, implicit repolling, fairness, cancellation
-  or compiler-generated coroutine suspension. Pin::get_mut's actual compiled body
-  is retained with a checked final mutable-borrow transfer; other Pin operations
-  are not implicitly admitted.
+  This does not introduce an executor, implicit repolling, fairness, external
+  cancellation delivery or compiler-generated coroutine suspension. Pin::get_mut's
+  actual compiled body is retained with a checked final mutable-borrow transfer.
+  Safe Pin::new on a mutable Unpin reference is inlined only after checking the
+  complete standard constructor body and actual pointer/pointee types. Ordinary
+  first-party Rust callers can therefore construct and explicitly poll supported
+  futures. Unsafe pinning helpers and other Pin operations are not implicitly admitted.
 
   `futures: :suspending, execution: :runtime` additionally extracts compiler
   coroutine suspension with saved fields. Captures and saved fields requiring
