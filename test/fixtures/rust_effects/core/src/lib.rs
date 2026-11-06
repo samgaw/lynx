@@ -62,3 +62,20 @@ pub fn read_guard(guard: &std::sync::MutexGuard<'_, Counter>) -> u64 {
 pub fn increment_guard(guard: &mut std::sync::MutexGuard<'_, Counter>, amount: u64) -> bool {
     increment(guard, amount)
 }
+
+/// Commits the reconstructed guard payload by explicitly releasing ownership.
+pub fn update_release(mut guard: std::sync::MutexGuard<'_, Counter>, amount: u64) -> bool {
+    let changed = increment_guard(&mut guard, amount);
+    drop(guard);
+    changed
+}
+
+/// Releases a held guard without modifying its payload.
+pub fn release_guard(guard: std::sync::MutexGuard<'_, Counter>) {
+    drop(guard);
+}
+
+/// Commits through the compiler-generated guard destructor at scope exit.
+pub fn update_scope(mut guard: std::sync::MutexGuard<'_, Counter>, amount: u64) -> bool {
+    increment_guard(&mut guard, amount)
+}

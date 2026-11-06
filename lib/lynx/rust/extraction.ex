@@ -79,6 +79,11 @@ defmodule Lynx.Rust.Extraction do
 
     %{document: document, llbc: llbc, first_party: first_party, models: models} = discovery
 
+    {document, nonpanicking_borrows} =
+      if Keyword.get(opts, :execution, :pure) == :runtime,
+        do: Lynx.Rust.NativeBorrows.prune_owned_guard_calls!(document, first_party),
+        else: {document, []}
+
     {document, native_unwind} =
       if unwind == :assertions,
         do: Lynx.Rust.NativeUnwind.lower!(document, first_party),
@@ -90,11 +95,11 @@ defmodule Lynx.Rust.Extraction do
         else: {document, []}
 
     {document, nonpanicking} =
-      if unwind == :assertions,
+      if Keyword.get(opts, :execution, :pure) == :runtime,
         do: Lynx.Rust.NativeUnwind.nonpanicking_drops!(document),
         else: {document, []}
 
-    native_unwind = native_unwind ++ nonpanicking
+    native_unwind = nonpanicking_borrows ++ native_unwind ++ nonpanicking
 
     document =
       if native_drops != [] or native_unwind != [],
