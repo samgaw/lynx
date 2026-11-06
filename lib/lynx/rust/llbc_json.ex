@@ -26,7 +26,8 @@ defmodule Lynx.Rust.LLBCJson do
     document = put_in(document, ["translated", "type_decls"], types)
 
     document =
-      Enum.reduce(~w(immediate_futures suspending_futures), document, fn field, document ->
+      Enum.reduce(~w(immediate_futures suspending_futures cancelling_futures), document, fn field,
+                                                                                            document ->
         case get_in(document, ["translated", "options", field]) do
           nil ->
             document
@@ -49,6 +50,143 @@ defmodule Lynx.Rust.LLBCJson do
     spans = span_values(original, %{})
     restore_spans(document, spans)
   end
+
+  # Cleanup pruning can remove the first serialized type or constant value.
+  # Rehydrate explicit positions using separate tables for each ID family.
+  def restore_type_references!(document, original) do
+    refs =
+      merge_references!(
+        Lynx.Rust.LLBC.type_references!(original),
+        Lynx.Rust.LLBC.type_references!(document),
+        "type"
+      )
+
+    # Cleanup lowering rehydrates trait dictionaries, including those inside
+    # constant calls. Compare equal representations before checking identity.
+    original = restore_trait_references!(original, original)
+    document = restore_trait_references!(document, original)
+
+    constants =
+      merge_references!(
+        constant_values(original, %{}),
+        constant_values(document, %{}),
+        "constant"
+      )
+
+    document |> restore_constants(constants) |> restore_types(refs)
+  end
+
+  defp merge_references!(left, right, kind) do
+    Map.merge(left, right, fn id, previous, value ->
+      if previous != value, do: raise(ArgumentError, "inconsistent LLBC #{kind} reference #{id}")
+      value
+    end)
+  end
+
+  defp constant_values(%{"Value" => [id, [kind, _type] = value]} = node, refs)
+       when is_map(kind) do
+    refs = merge_references!(refs, %{id => value}, "constant")
+    constant_values(Map.values(node), refs)
+  end
+
+  defp constant_values(map, refs) when is_map(map), do: constant_values(Map.values(map), refs)
+
+  defp constant_values(list, refs) when is_list(list),
+    do: Enum.reduce(list, refs, &constant_values/2)
+
+  defp constant_values(_, refs), do: refs
+
+  defp restore_constants(%{"scrutinee" => _, "branches" => branches} = data, refs) do
+    Map.new(data, fn
+      {"branches", _} ->
+        {"branches",
+         Enum.map(branches, fn [value, branch] -> [restore_constant(value, refs), branch] end)}
+
+      {key, value} ->
+        {key, restore_constants(value, refs)}
+    end)
+  end
+
+  defp restore_constants(map, refs) when is_map(map) do
+    Map.new(map, fn
+      {"Const", value} ->
+        {"Const", restore_constant(value, refs)}
+
+      {"const_generics", values} ->
+        {"const_generics", Enum.map(values, &restore_constant(&1, refs))}
+
+      {key, value} ->
+        {key, restore_constants(value, refs)}
+    end)
+  end
+
+  defp restore_constants(list, refs) when is_list(list),
+    do: Enum.map(list, &restore_constants(&1, refs))
+
+  defp restore_constants(value, _), do: value
+
+  defp restore_constant(%{"Deduplicated" => id}, refs) do
+    value = Map.get(refs, id) || raise(ArgumentError, "missing LLBC constant reference #{id}")
+    %{"Value" => [id, restore_constants(value, refs)]}
+  end
+
+  defp restore_constant(value, refs), do: restore_constants(value, refs)
+
+  defp restore_types(%{"Value" => [id, [kind, type]]}, refs) when is_map(kind) do
+    %{"Value" => [id, [restore_types(kind, refs), restore_type(type, refs, [])]]}
+  end
+
+  defp restore_types(map, refs) when is_map(map) do
+    Map.new(map, fn
+      {key, type} when key in ["ty", "output"] ->
+        {key, restore_type(type, refs, [])}
+
+      {key, types} when key in ["types", "inputs"] and is_list(types) ->
+        {key, Enum.map(types, &restore_type(&1, refs, []))}
+
+      {key, value} ->
+        {key, restore_types(value, refs)}
+    end)
+  end
+
+  defp restore_types(list, refs) when is_list(list), do: Enum.map(list, &restore_types(&1, refs))
+  defp restore_types(value, _), do: value
+
+  defp restore_type(%{"Deduplicated" => id}, refs, seen) do
+    if id in seen, do: raise(ArgumentError, "cyclic LLBC type reference")
+    value = Map.get(refs, id) || raise(ArgumentError, "missing LLBC type reference #{id}")
+    restore_type(%{"Value" => [id, value]}, refs, seen)
+  end
+
+  defp restore_type(%{"Value" => [id, value]}, refs, seen) do
+    value =
+      case value do
+        %{"Ref" => [region, type, kind]} ->
+          %{"Ref" => [region, restore_type(type, refs, [id | seen]), kind]}
+
+        %{"RawPtr" => [type, kind]} ->
+          %{"RawPtr" => [restore_type(type, refs, [id | seen]), kind]}
+
+        %{"Slice" => [type, sized]} ->
+          %{"Slice" => [restore_type(type, refs, [id | seen]), restore_types(sized, refs)]}
+
+        %{"Array" => [type, size, sized]} ->
+          %{
+            "Array" => [
+              restore_type(type, refs, [id | seen]),
+              restore_types(size, refs),
+              restore_types(sized, refs)
+            ]
+          }
+
+        other ->
+          restore_types(other, refs)
+      end
+
+    %{"Value" => [id, value]}
+  end
+
+  defp restore_type(other, refs, _), do: restore_types(other, refs)
 
   # A concrete trait dictionary can first occur in unreachable unwind cleanup.
   # Rehydrate only its own hash-cons family before subsequent audits/lowering;
@@ -188,9 +326,12 @@ defmodule Lynx.Rust.LLBCJson do
 
         "start_from" in keys and "mir" in keys and "preset" in keys and
           Enum.sort(old_keys -- keys) != [] and
-          Enum.all?(old_keys -- keys, &(&1 in ~w(immediate_futures suspending_futures))) and
+          Enum.all?(
+            old_keys -- keys,
+            &(&1 in ~w(immediate_futures suspending_futures cancelling_futures))
+          ) and
             keys -- old_keys == [] ->
-          old_keys -- ~w(immediate_futures suspending_futures)
+          old_keys -- ~w(immediate_futures suspending_futures cancelling_futures)
 
         # TraitRef is introduced when lowering a Drop to a consuming call. Its
         # precise shape is fixed by the pinned LLBC schema and checked by audit.

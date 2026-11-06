@@ -2,6 +2,79 @@ defmodule Lynx.Rust.LLBCJsonTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.LLBCJson
 
+  test "constant identity survives trait-dictionary rehydration inside constant calls" do
+    dictionary = %{"kind" => "SelfId", "trait_decl_ref" => %{"id" => 2, "generics" => %{}}}
+    binder = fn value -> %{"regions" => [], "outlives" => [], "skip_binder" => value} end
+    scalar = %{"Value" => [7, %{"Scalar" => "Bool"}]}
+
+    constant = %{
+      "Value" => [
+        9,
+        [
+          %{
+            "Call" => [%{"generics" => %{"trait_refs" => [binder.(%{"Deduplicated" => 5})]}}, []]
+          },
+          scalar
+        ]
+      ]
+    }
+
+    original = %{"dictionary" => %{"Value" => [5, dictionary]}, "Const" => constant}
+    document = LLBCJson.restore_trait_references!(Map.delete(original, "dictionary"), original)
+    assert ^document = LLBCJson.restore_type_references!(document, original)
+  end
+
+  test "restores types and switch constants removed with cleanup in their own families" do
+    scalar = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U32"}}}
+    constant = [%{"Integer" => %{"Unsigned" => ["U32", "3"]}}, %{"Deduplicated" => 7}]
+
+    original = %{
+      "removed" => [
+        %{"ty" => %{"Value" => [7, scalar]}},
+        %{"Const" => %{"Value" => [7, constant]}}
+      ],
+      "place" => %{"ty" => %{"Deduplicated" => 7}},
+      "switch" => %{
+        "scrutinee" => %{},
+        "branches" => [[%{"Deduplicated" => 7}, 0]],
+        "fallback" => 1
+      },
+      "span" => %{"Deduplicated" => 7},
+      "trait_refs" => [%{"skip_binder" => %{"Deduplicated" => 7}}]
+    }
+
+    document = Map.delete(original, "removed")
+    type = %{"Value" => [7, scalar]}
+    restored_constant = %{"Value" => [7, [hd(constant), type]]}
+
+    assert %{
+             "place" => %{"ty" => ^type},
+             "switch" => %{"branches" => [[^restored_constant, 0]]},
+             "span" => %{"Deduplicated" => 7},
+             "trait_refs" => [%{"skip_binder" => %{"Deduplicated" => 7}}]
+           } = LLBCJson.restore_type_references!(document, original)
+
+    assert_raise ArgumentError, ~r/missing LLBC type reference/, fn ->
+      LLBCJson.restore_type_references!(%{"ty" => %{"Deduplicated" => 99}}, original)
+    end
+
+    assert_raise ArgumentError, ~r/missing LLBC constant reference/, fn ->
+      LLBCJson.restore_type_references!(%{"Const" => %{"Deduplicated" => 99}}, original)
+    end
+
+    assert_raise ArgumentError, ~r/inconsistent LLBC type reference/, fn ->
+      LLBCJson.restore_type_references!(
+        %{"ty" => %{"Value" => [7, %{"Scalar" => "Bool"}]}},
+        original
+      )
+    end
+
+    assert_raise ArgumentError, ~r/inconsistent LLBC constant reference/, fn ->
+      conflicting = [%{"Integer" => %{"Unsigned" => ["U32", "2"]}}, %{"Deduplicated" => 7}]
+      LLBCJson.restore_type_references!(%{"Const" => %{"Value" => [7, conflicting]}}, original)
+    end
+  end
+
   test "keeps compiler drop evidence in the audit while removing only the backend type field" do
     nested = %{"needs_drop" => "ordinary source data"}
     type = %{"def_id" => 7, "kind" => %{"Struct" => []}, "needs_drop" => false}
