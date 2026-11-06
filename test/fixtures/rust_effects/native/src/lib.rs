@@ -14,6 +14,66 @@ pub fn guard_increment(
     effects_core::increment_guard(guard, amount)
 }
 
+/// Transfers a guard to another crate to update and release its shared payload.
+pub fn guard_update_release(
+    guard: std::sync::MutexGuard<'_, effects_core::Counter>,
+    amount: u64,
+) -> bool {
+    effects_core::update_release(guard, amount)
+}
+
+/// Releases a guard through the first-party callee.
+pub fn guard_release(guard: std::sync::MutexGuard<'_, effects_core::Counter>) {
+    effects_core::release_guard(guard);
+}
+
+/// Uses the compiler-generated normal guard drop in another first-party crate.
+pub fn guard_update_scope(
+    guard: std::sync::MutexGuard<'_, effects_core::Counter>,
+    amount: u64,
+) -> bool {
+    effects_core::update_scope(guard, amount)
+}
+
+/// Composes an owning update/release with a new acquisition across crate calls.
+pub fn guard_update_reacquire<'a>(
+    guard: std::sync::MutexGuard<'a, effects_core::Counter>,
+    mutex: &'a Mutex<effects_core::Counter>,
+    amount: u64,
+) -> (
+    bool,
+    std::sync::LockResult<std::sync::MutexGuard<'a, effects_core::Counter>>,
+) {
+    let changed = effects_core::update_release(guard, amount);
+    (changed, effects_core::acquire_counter(mutex))
+}
+
+/// Releases ownership before an assertion, leaving no guard to poison on failure.
+///
+/// # Panics
+/// Panics when the request is rejected, after normal release has completed.
+pub fn guard_release_then_assert(
+    guard: std::sync::MutexGuard<'_, effects_core::Counter>,
+    accepted: bool,
+) {
+    drop(guard);
+    assert!(accepted);
+}
+
+/// Requires updated payload propagation and guard poisoning during unwind.
+///
+/// # Panics
+/// Panics when the request is rejected while the guard is still owned.
+pub fn guard_owned_then_assert(
+    mut guard: std::sync::MutexGuard<'_, effects_core::Counter>,
+    amount: u64,
+    accepted: bool,
+) {
+    effects_core::increment_guard(&mut guard, amount);
+    assert!(accepted);
+    drop(guard);
+}
+
 /// Exercises mutation whose updated borrow would be lost on panic.
 ///
 /// # Panics
@@ -277,6 +337,29 @@ pub fn mutex_discard_custom(value: u64) {
 #[cfg(test)]
 mod tests {
     use super::mutex_new_incremented;
+
+    #[test]
+    fn owned_update_is_visible_after_release() {
+        let mutex = std::sync::Mutex::new(effects_core::Counter { value: 7 });
+        let guard = mutex.lock().expect("fresh lock must be available");
+        assert!(super::guard_update_release(guard, 5));
+        let guard = mutex.try_lock().expect("update must release the lock");
+        assert_eq!(guard.value, 12);
+        assert!(!super::guard_update_release(guard, u64::MAX));
+        let guard = mutex
+            .try_lock()
+            .expect("rejection must also release the lock");
+        assert_eq!(guard.value, 12);
+        assert!(super::guard_update_scope(guard, 2));
+        let guard = mutex.try_lock().expect("scope exit must release the lock");
+        assert_eq!(guard.value, 14);
+        let (changed, acquired) = super::guard_update_reacquire(guard, &mutex, 3);
+        assert!(changed);
+        let guard = acquired.expect("release must permit reacquisition");
+        assert_eq!(guard.value, 17);
+        super::guard_release(guard);
+        assert!(!mutex.is_poisoned());
+    }
 
     #[test]
     fn borrowed_guard_update_preserves_rejected_state() {

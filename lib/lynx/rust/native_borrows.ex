@@ -29,6 +29,128 @@ defmodule Lynx.Rust.NativeBorrows do
     end
   end
 
+  def nonpanicking_calls(functions, models) do
+    by_id = Map.new(functions, &{&1["def_id"], &1})
+
+    MapSet.new(
+      for id <- Map.keys(by_id) ++ Map.keys(models), total?(id, by_id, models, []), do: id
+    )
+  end
+
+  # Compiler cleanup after a certified nonpanicking call is unreachable. Keep
+  # the original LLBC and a call-site record; never erase a failing call's drops.
+  def prune_owned_guard_calls!(document, first_party) do
+    translated = document["translated"]
+    refs = LLBC.type_references!(document)
+    all = Enum.reject(translated["fun_decls"], &is_nil/1)
+
+    {functions, external} =
+      Enum.split_with(all, fn function ->
+        case hd(function["item_meta"]["name"]) do
+          %{"Ident" => [crate, _]} -> crate in first_party
+          _ -> false
+        end
+      end)
+
+    models = CallModels.resolve(external, translated, refs, [], :runtime)
+
+    case Lynx.Rust.NativeDrops.audit(functions, models, translated, refs) do
+      :ok -> :ok
+      {:error, function, message} -> LLBC.failure!(function, translated, message)
+    end
+
+    safe = nonpanicking_calls(functions, models)
+
+    safe =
+      Enum.reduce(models, safe, fn {id, model}, safe ->
+        if model[:native_dispose], do: MapSet.put(safe, id), else: safe
+      end)
+
+    guards =
+      for type <- translated["type_decls"], LockModels.guard?(type, refs), do: type["def_id"]
+
+    {all, records} =
+      Enum.map_reduce(all, [], fn function, records ->
+        owned =
+          case function["body"] do
+            %{"Structured" => %{"locals" => %{"locals" => locals}}} ->
+              Enum.any?(locals, fn local ->
+                case CallModels.expand(local["ty"], refs) do
+                  %{"Adt" => %{"id" => id}} -> id in guards
+                  _ -> false
+                end
+              end)
+
+            _ ->
+              false
+          end
+
+        if owned and Enum.any?(functions, &(&1["def_id"] == function["def_id"])) do
+          {body, records} = prune(function["body"], safe, function["def_id"], models, records)
+          {Map.put(function, "body", body), records}
+        else
+          {function, records}
+        end
+      end)
+
+    {put_in(
+       document,
+       ["translated", "fun_decls"],
+       Enum.map(translated["fun_decls"], fn
+         nil -> nil
+         function -> Enum.find(all, &(&1["def_id"] == function["def_id"]))
+       end)
+     ), Enum.reverse(records)}
+  end
+
+  defp prune(
+         %{"kind" => %{"Call" => %{"call" => call, "on_unwind" => cleanup}}} = statement,
+         safe,
+         caller,
+         models,
+         records
+       ) do
+    id = get_in(call, ["func", "Regular", "kind", "Fun"])
+
+    if MapSet.member?(safe, id) and cleanup["statements"] != [] do
+      kind =
+        if models[id] && models[id][:native_dispose],
+          do: :nonpanicking_drop_call,
+          else: :nonpanicking_borrow_call
+
+      record = %{
+        kind: kind,
+        caller: caller,
+        statement: statement["id"],
+        function: id,
+        cleanup_block: cleanup["id"]
+      }
+
+      statement = put_in(statement, ["kind", "Call", "on_unwind", "statements"], [])
+      prune_children(statement, safe, caller, models, [record | records])
+    else
+      prune_children(statement, safe, caller, models, records)
+    end
+  end
+
+  defp prune(value, safe, caller, models, records),
+    do: prune_children(value, safe, caller, models, records)
+
+  defp prune_children(map, safe, caller, models, records) when is_map(map) do
+    {pairs, records} =
+      Enum.map_reduce(Enum.sort(map), records, fn {key, value}, records ->
+        {value, records} = prune(value, safe, caller, models, records)
+        {{key, value}, records}
+      end)
+
+    {Map.new(pairs), records}
+  end
+
+  defp prune_children(list, safe, caller, models, records) when is_list(list),
+    do: Enum.map_reduce(list, records, &prune(&1, safe, caller, models, &2))
+
+  defp prune_children(value, _, _, _, records), do: {value, records}
+
   defp borrowed_guard?(%{"Ref" => [_, type, _]}, guards), do: contains_guard?(type, guards)
 
   defp borrowed_guard?(map, guards) when is_map(map),

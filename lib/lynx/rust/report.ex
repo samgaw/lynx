@@ -152,7 +152,7 @@ defmodule Lynx.Rust.Report do
       trusted_boundary:
         @trusted ++
           if(Map.get(extraction, :native_unwind, []) != [],
-            do: ["Lynx validated assertion-unwind cleanup lowering"],
+            do: ["Lynx validated native cleanup lowering and nonpanicking-call analysis"],
             else: []
           ) ++
           if(Map.get(extraction, :native_drops, []) != [],

@@ -58,8 +58,12 @@ defmodule Lynx.Rust do
   Deref models and Aeneas's mutable-borrow reconstruction, including first-party
   callees. Borrowed-guard functions must have acyclic, nonpanicking implementation
   dependencies: mutable-borrow outputs on failure are unsupported. The updated
-  guard is returned as a value; release and resource lifetimes remain unsupported,
-  so this does not yet verify a complete critical section.
+  guard is returned as a value. Explicit and compiler-generated normal guard
+  release commit the reconstructed payload and unlock the uniquely owned cell,
+  preserving poison status. Acquisition tokens and execution contexts are checked.
+  Actual owning updates can compose with reacquisition across crates. Unreachable
+  compiler cleanup behind certified nonpanicking calls is recorded and omitted;
+  guard destruction during unwind and resource lifetimes remain unsupported.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned Mutex<bool/unsigned scalar> values. These remove their
   cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined

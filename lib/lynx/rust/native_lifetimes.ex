@@ -15,6 +15,7 @@ defmodule Lynx.Rust.NativeLifetimes do
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
     implementations = MapSet.new(functions, & &1["def_id"])
+    nonpanicking = Lynx.Rust.NativeBorrows.nonpanicking_calls(functions, models)
 
     for function <- functions,
         %{"Structured" => body} <- [function["body"]] do
@@ -31,6 +32,7 @@ defmodule Lynx.Rust.NativeLifetimes do
           owners: owners,
           models: models,
           implementations: implementations,
+          nonpanicking: nonpanicking,
           function: function,
           translated: translated,
           branching: Keyword.get(opts, :branching, false),
@@ -182,7 +184,9 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp statement!(%{"Assign" => [dest, value]}, live, ctx) do
-    if MapSet.size(live) > 0 and not administrative?(value), do: reject!(ctx)
+    if MapSet.size(live) > 0 and not (administrative?(value) or match?(%{"Ref" => _}, value)),
+      do: reject!(ctx)
+
     transfer!(dest, value, live, ctx)
   end
 
@@ -196,8 +200,9 @@ defmodule Lynx.Rust.NativeLifetimes do
     # cell may remain live if that callee fails. External contracts cannot stand
     # in for a body here.
     if MapSet.size(live) > 0 and
-         not (MapSet.size(remaining) == 0 and
-                ((model && model[:native_dispose]) || MapSet.member?(ctx.implementations, id))),
+         not ((MapSet.size(remaining) == 0 and
+                 ((model && model[:native_dispose]) || MapSet.member?(ctx.implementations, id))) or
+                (MapSet.equal?(remaining, live) and MapSet.member?(ctx.nonpanicking, id))),
        do: reject!(ctx)
 
     destination!(dest, remaining, ctx)

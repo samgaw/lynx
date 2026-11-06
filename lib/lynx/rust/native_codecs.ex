@@ -7,11 +7,14 @@ defmodule Lynx.Rust.NativeCodecs do
   def plan!(audit) do
     constructors =
       for {id, model} <- audit.external_calls,
-          model[:native_constructor] == true or model[:native_codec_input] == true,
+          model[:native_constructor] == true or model[:native_codec_input] == true or
+            model[:native_codec_drop] == true,
           into: %{},
-          do: {id, model[:native_codec_input] == true}
+          do:
+            {id,
+             if(model[:native_codec_drop], do: :drop, else: model[:native_codec_input] == true)}
 
-    roots = Enum.flat_map(audit.functions, &payloads(&1["body"], constructors))
+    roots = Enum.flat_map(audit.functions, &payloads(&1["body"], constructors, audit.references))
     plan = Enum.reduce(roots, [], &visit!(&1, audit, &2, []))
 
     Enum.map(plan, fn type ->
@@ -21,8 +24,15 @@ defmodule Lynx.Rust.NativeCodecs do
     end)
   end
 
-  defp payloads(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => generics}}, ids) do
+  defp payloads(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => generics}}, ids, refs) do
     case {Map.fetch(ids, id), generics} do
+      {{:ok, :drop},
+       %{"types" => [type], "regions" => [], "const_generics" => [], "trait_refs" => [_]}} ->
+        case CallModels.expand(type, refs) do
+          %{"Adt" => %{"generics" => %{"types" => [payload]}}} -> [payload]
+          _ -> raise ArgumentError, "unsupported native consuming codec input"
+        end
+
       {{:ok, false},
        %{"types" => [type], "regions" => [], "const_generics" => [], "trait_refs" => []}} ->
         [type]
@@ -45,9 +55,13 @@ defmodule Lynx.Rust.NativeCodecs do
     end
   end
 
-  defp payloads(map, ids) when is_map(map), do: Enum.flat_map(Map.values(map), &payloads(&1, ids))
-  defp payloads(list, ids) when is_list(list), do: Enum.flat_map(list, &payloads(&1, ids))
-  defp payloads(_, _), do: []
+  defp payloads(map, ids, refs) when is_map(map),
+    do: Enum.flat_map(Map.values(map), &payloads(&1, ids, refs))
+
+  defp payloads(list, ids, refs) when is_list(list),
+    do: Enum.flat_map(list, &payloads(&1, ids, refs))
+
+  defp payloads(_, _, _), do: []
 
   defp visit!(type, audit, found, visiting) do
     case CallModels.expand(type, audit.references) do

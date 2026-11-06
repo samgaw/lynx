@@ -115,7 +115,10 @@ defmodule Lynx.Rust.NativeDropLowering do
               state.next_ref,
               %{
                 "kind" => %{
-                  "TraitImpl" => %{"id" => site.impl, "generics" => arguments([site.payload])}
+                  "TraitImpl" => %{
+                    "id" => site.impl,
+                    "generics" => Map.get(site, :impl_arguments, arguments([site.payload]))
+                  }
                 },
                 "trait_decl_ref" => %{"id" => site.trait, "generics" => arguments([site.self])}
               }

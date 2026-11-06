@@ -9,8 +9,9 @@ a native facade before becoming an Elixir-visible exception. Undefined behavior
 and divergence are verification exhaustion, never successful native returns.
 Mutex construction initializes logical shared cells. Bounded blocking acquisition
 uses atomic state waits; borrowed guard views reconstruct payload updates.
-Guard release, resource lifetimes, native
-executors and FFI execution require separate models. -/
+Normal release commits reconstructed guard payloads and unlocks owned cells.
+Guard unwind, resource lifetimes, native executors and FFI execution require
+separate models. -/
 
 public section
 
@@ -400,3 +401,106 @@ theorem lock_unlocked {α : Type} [NativeCodec α] (mutex : NativeMutex α)
   simp
 
 end Lynx.NativeMutex
+
+namespace Lynx.NativeGuard
+
+/-- Commit the reconstructed payload and unlock only the uniquely owned cell.
+Normal release preserves poison status. Unwind poisoning requires a separate
+execution context and is not implemented by this operation. -/
+@[expose] def pollRelease {α : Type} [NativeCodec α] (guard : NativeGuard α)
+    (env : Environment) : Option (Except Exception Unit × Environment) :=
+  let invalid := some (.error .exhausted, env)
+  match env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) with
+  | [(_, storedType, .tuple fields)] =>
+    if storedType == NativeMutex.typeName α then
+      if size : fields.size = 3 then
+        let lockState := fields[0]'(by omega)
+        let poisonState := fields[1]'(by omega)
+        let payload := fields[2]'(by omega)
+        match lockState, poisonState with
+        | .tuple lockFields, .atom poison =>
+          if lockSize : lockFields.size = 3 then
+            let marker := lockFields[0]'(by omega)
+            let context := lockFields[1]'(by omega)
+            let token := lockFields[2]'(by omega)
+            match marker, context, token with
+            | .atom "locked", .pid owner, .reference token =>
+              if owner == guard.ownerContext && token == guard.token &&
+                  guard.ownerContext == env.currentPid &&
+                  (poison == "unpoisoned" || poison == "poisoned") then
+                match NativeCodec.decode (α := α) payload with
+                | some _ =>
+                  some (.ok (), { env with nativeHeap := env.nativeHeap.map fun cell =>
+                    if cell.1 == guard.mutex.id then
+                      (guard.mutex.id, NativeMutex.typeName α,
+                        .tuple #[.atom "unlocked", .atom poison, NativeCodec.encode guard.value])
+                    else cell })
+                | none => invalid
+              else invalid
+            | _, _, _ => invalid
+          else invalid
+        | _, _ => invalid
+      else invalid
+    else invalid
+  | _ => invalid
+
+@[expose] def release {α : Type} [NativeCodec α] (guard : NativeGuard α) : NativeM Unit :=
+  .wait (pollRelease guard) fun reply => match reply with
+    | .ok value => .ok value
+    | .error error => .error error
+
+/-- Release stores the latest reconstructed borrow, preserving unrelated cells. -/
+theorem release_owned {α : Type} [NativeCodec α] (guard : NativeGuard α)
+    (original : α) (poisoned : Bool) (env : Environment)
+    (owner : guard.ownerContext = env.currentPid)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) =
+      [(guard.mutex.id, NativeMutex.typeName α,
+        NativeMutex.lockedContents guard.ownerContext guard.token poisoned original)]) :
+    release guard env = (.ok (), { env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
+      else cell }) := by
+  have ready : pollRelease guard env = some (.ok (), { env with
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
+        else cell }) := by
+    cases poisoned <;> simp [pollRelease, NativeMutex.lockedContents, stored, owner,
+      NativeCodec.roundtrip]
+  unfold release
+  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+end Lynx.NativeGuard
+
+namespace Lynx
+instance {α : Type} [NativeCodec α] : NativeDrop (NativeGuard α) where
+  drop := NativeGuard.release
+end Lynx
+
+namespace Lynx.NativeGuard
+
+theorem release_owned_next {α β : Type} [NativeCodec α] (guard : NativeGuard α)
+    (original : α) (poisoned : Bool) (next : NativeM β) (env : Environment)
+    (owner : guard.ownerContext = env.currentPid)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) =
+      [(guard.mutex.id, NativeMutex.typeName α,
+        NativeMutex.lockedContents guard.ownerContext guard.token poisoned original)]) :
+    (do release guard; next) env = next { env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
+      else cell } := by
+  have ready : pollRelease guard env = some (.ok (), { env with
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
+        else cell }) := by
+    cases poisoned <;> simp [pollRelease, NativeMutex.lockedContents, stored, owner,
+      NativeCodec.roundtrip]
+  unfold release
+  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+end Lynx.NativeGuard

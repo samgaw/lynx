@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.NativeDrops do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, MutexModels}
+  alias Lynx.Rust.{CallModels, MutexModels, LockModels, GuardDrops}
 
   def resolve(function, translated, refs) do
     with %{
@@ -23,8 +23,9 @@ defmodule Lynx.Rust.NativeDrops do
          } <- clause["trait_"],
          true <- CallModels.expand(args, refs) == arguments([variable()]),
          true <- destruct?(trait, translated, refs),
-         mutex when not is_nil(mutex) <-
-           Enum.find(translated["type_decls"], &(&1 && MutexModels.type?(&1))) do
+         mutex = Enum.find(translated["type_decls"], &(&1 && MutexModels.type?(&1))),
+         guard = Enum.find(translated["type_decls"], &LockModels.guard?(&1, refs)),
+         true <- mutex != nil or guard != nil do
       %{
         rust_name: "core::mem::drop",
         lean: "Lynx.NativeDrop.drop",
@@ -32,10 +33,16 @@ defmodule Lynx.Rust.NativeDrops do
         can_fail: true,
         lift: true,
         native_dispose: true,
-        native_mutex_type: mutex["def_id"],
+        native_codec_drop: true,
         label:
-          "Consuming Mutex<scalar> destruction model: removes one live unlocked cell without a Rust panic; invalid cells exhaust verification; payload has no destructor; Rust std, physical deallocation and FFI correctness unverified; compiler local drops use audited consuming lowering; unwind requires validated assertion cleanup lowering; projected drops and custom payload destructors unsupported"
+          "Consuming destruction model: Mutex<scalar> removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
       }
+      |> then(fn model ->
+        if mutex, do: Map.put(model, :native_mutex_type, mutex["def_id"]), else: model
+      end)
+      |> then(fn model ->
+        if guard, do: Map.put(model, :native_guard_type, guard["def_id"]), else: model
+      end)
     else
       _ -> nil
     end
@@ -50,7 +57,11 @@ defmodule Lynx.Rust.NativeDrops do
   defp native_drop?(%{"Drop" => %{"place" => %{"ty" => type}}} = node, translated, refs) do
     case CallModels.expand(type, refs) do
       %{"Adt" => %{"id" => id}} ->
-        Enum.any?(translated["type_decls"], &(&1 && &1["def_id"] == id && MutexModels.type?(&1)))
+        Enum.any?(
+          translated["type_decls"],
+          &(&1 && &1["def_id"] == id &&
+              (MutexModels.type?(&1) or LockModels.guard?(&1, refs)))
+        )
 
       _ ->
         Enum.any?(Map.values(node), &native_drop?(&1, translated, refs))
@@ -72,44 +83,50 @@ defmodule Lynx.Rust.NativeDrops do
       %{"Adt" => %{"id" => id, "generics" => %{"types" => [payload]} = args}} ->
         type = Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id))
 
-        if type && MutexModels.type?(type) do
-          with true <- scalar?(payload) and args == arguments([payload]),
-               "Precise" <- drop["kind"],
-               %{"kind" => %{"Fun" => fid}, "generics" => call_args} <- drop["fn_ptr"],
+        cond do
+          LockModels.guard?(type, refs) ->
+            GuardDrops.site(drop, translated, refs)
+
+          type && MutexModels.type?(type) ->
+            with true <- scalar?(payload) and args == arguments([payload]),
+                 "Precise" <- drop["kind"],
+                 %{"kind" => %{"Fun" => fid}, "generics" => call_args} <- drop["fn_ptr"],
+                 %{
+                   "regions" => [%{"Body" => region}],
+                   "types" => [_],
+                   "const_generics" => [],
+                   "trait_refs" => []
+                 } <- call_args,
+                 true <- is_integer(region),
+                 true <- CallModels.expand(call_args["types"], refs) == [payload],
+                 function when not is_nil(function) <-
+                   Enum.find(translated["fun_decls"], &(&1 && &1["def_id"] == fid)),
+                 %{"TraitImpl" => source} <- function["src"],
+                 impl_id = source["impl_ref"]["id"],
+                 trait = source["trait_ref"]["id"],
+                 true <- destruct?(trait, translated, refs),
+                 impl when not is_nil(impl) <-
+                   Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
+                 true <- mutex_impl?(impl, id, trait, translated, refs),
+                 [method] <- impl["methods"],
+                 true <- method["skip_binder"]["id"] == fid do
+              {:ok,
                %{
-                 "regions" => [%{"Body" => region}],
-                 "types" => [_],
-                 "const_generics" => [],
-                 "trait_refs" => []
-               } <- call_args,
-               true <- is_integer(region),
-               true <- CallModels.expand(call_args["types"], refs) == [payload],
-               function when not is_nil(function) <-
-                 Enum.find(translated["fun_decls"], &(&1 && &1["def_id"] == fid)),
-               %{"TraitImpl" => source} <- function["src"],
-               impl_id = source["impl_ref"]["id"],
-               trait = source["trait_ref"]["id"],
-               true <- destruct?(trait, translated, refs),
-               impl when not is_nil(impl) <-
-                 Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
-               true <- mutex_impl?(impl, id, trait, translated, refs),
-               [method] <- impl["methods"],
-               true <- method["skip_binder"]["id"] == fid do
-            {:ok,
-             %{
-               function: fid,
-               impl: impl_id,
-               trait: trait,
-               payload: hd(call_args["types"]),
-               self: drop["place"]["ty"]
-             }}
-          else
-            _ ->
-              {:error,
-               "unsupported native drop payload or inconsistent compiler destructor; only Mutex<bool/unsigned scalar> is supported"}
-          end
-        else
-          nil
+                 function: fid,
+                 native_kind: :mutex,
+                 impl: impl_id,
+                 trait: trait,
+                 payload: hd(call_args["types"]),
+                 self: drop["place"]["ty"]
+               }}
+            else
+              _ ->
+                {:error,
+                 "unsupported native drop payload or inconsistent compiler destructor; only Mutex<bool/unsigned scalar> is supported"}
+            end
+
+          true ->
+            nil
         end
 
       _ ->
@@ -148,38 +165,40 @@ defmodule Lynx.Rust.NativeDrops do
       if cleanup,
         do: raise(ArgumentError, "native consuming calls during unwind are not yet translated")
 
-      with %{
-             "types" => [type],
-             "regions" => [],
-             "const_generics" => [],
-             "trait_refs" => [dictionary]
-           } <- generics,
-           %{"Adt" => %{"id" => mutex, "builtin" => nil, "generics" => args}} = self <-
-             CallModels.expand(type, refs),
-           true <-
-             Enum.any?(
-               translated["type_decls"],
-               &(&1 && &1["def_id"] == mutex && MutexModels.type?(&1))
-             ),
-           %{"types" => [payload], "regions" => [], "const_generics" => [], "trait_refs" => []} <-
-             args,
-           true <- scalar?(payload),
-           %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <- dictionary,
-           %{
-             "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => impl_args}},
-             "trait_decl_ref" => decl
-           } <- expand_trait(dictionary, traits),
-           true <- CallModels.expand(impl_args, refs) == arguments([payload]),
-           true <- destruct?(decl["id"], translated, refs),
-           true <- CallModels.expand(decl["generics"], refs) == arguments([self]),
-           impl when not is_nil(impl) <-
-             Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
-           true <- mutex_impl?(impl, mutex, decl["id"], translated, refs) do
-        :ok
-      else
-        _ ->
-          raise ArgumentError,
-                "native destruction requires an exact Mutex<scalar> Destruct implementation; custom payload destructors are unsupported"
+      if not GuardDrops.call?(generics, translated, refs, traits) do
+        with %{
+               "types" => [type],
+               "regions" => [],
+               "const_generics" => [],
+               "trait_refs" => [dictionary]
+             } <- generics,
+             %{"Adt" => %{"id" => mutex, "builtin" => nil, "generics" => args}} = self <-
+               CallModels.expand(type, refs),
+             true <-
+               Enum.any?(
+                 translated["type_decls"],
+                 &(&1 && &1["def_id"] == mutex && MutexModels.type?(&1))
+               ),
+             %{"types" => [payload], "regions" => [], "const_generics" => [], "trait_refs" => []} <-
+               args,
+             true <- scalar?(payload),
+             %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <- dictionary,
+             %{
+               "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => impl_args}},
+               "trait_decl_ref" => decl
+             } <- expand_trait(dictionary, traits),
+             true <- CallModels.expand(impl_args, refs) == arguments([payload]),
+             true <- destruct?(decl["id"], translated, refs),
+             true <- CallModels.expand(decl["generics"], refs) == arguments([self]),
+             impl when not is_nil(impl) <-
+               Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
+             true <- mutex_impl?(impl, mutex, decl["id"], translated, refs) do
+          :ok
+        else
+          _ ->
+            raise ArgumentError,
+                  "native destruction requires an exact Mutex<scalar> or MutexGuard Destruct implementation; custom payload destructors are unsupported"
+        end
       end
     end
   end

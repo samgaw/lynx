@@ -56,8 +56,8 @@ defmodule Lynx.Rust.NativeUnwind do
     {put_in(document, ["translated", "fun_decls"], functions), Enum.reverse(records)}
   end
 
-  # The closed scalar-mutex destruction model either consumes the cell or
-  # exhausts verification; it cannot raise a Rust panic. Compiler cleanup behind
+  # The closed mutex/normal-guard destruction models update the cell or
+  # exhaust verification; they cannot raise a Rust panic. Compiler cleanup behind
   # that call is unreachable in this model. Validate every concrete dictionary
   # before omitting its unwind-only block, including calls introduced by lowering.
   def nonpanicking_drops!(document) do
@@ -91,7 +91,7 @@ defmodule Lynx.Rust.NativeUnwind do
          ids,
          records
        ) do
-    if MapSet.member?(ids, id) do
+    if MapSet.member?(ids, id) and cleanup["statements"] != [] do
       record = %{kind: :nonpanicking_drop_call, function: id, cleanup_block: cleanup["id"]}
 
       {Map.put(node, "Call", Map.put(call, "on_unwind", Map.put(cleanup, "statements", []))),
@@ -190,8 +190,11 @@ defmodule Lynx.Rust.NativeUnwind do
           :ok
 
         %{"Drop" => drop} ->
-          unless match?({:ok, _}, NativeDrops.site(drop, ctx.translated, ctx.refs)),
-            do: reject!(ctx)
+          unless match?(
+                   {:ok, %{native_kind: :mutex}},
+                   NativeDrops.site(drop, ctx.translated, ctx.refs)
+                 ),
+                 do: reject!(ctx)
 
         %{
           "Switch" => %{"data" => %{"scrutinee" => %{"Value" => operand}}, "branches" => branches}
