@@ -141,6 +141,23 @@ pub fn mutex_dispose_then_assert(value: u64, accepted: bool) {
     assert!(accepted);
 }
 
+/// Transfers the owner to another first-party crate, including its failure path.
+///
+/// # Panics
+/// Panics when `accepted` is false, after the callee has consumed the mutex.
+pub fn mutex_release_checked(value: u64, accepted: bool) {
+    effects_core::release_checked(Mutex::new(value), accepted);
+}
+
+/// Exercises the guard update/destruction boundary independently of ResourceArc.
+///
+/// # Panics
+/// Panics if the mutex is poisoned.
+pub fn mutex_guarded_increment(mutex: &Mutex<effects_core::Counter>, amount: u64) -> bool {
+    let mut guard = mutex.lock().unwrap();
+    effects_core::increment(&mut guard, amount)
+}
+
 /// Explicitly consumes a newly initialized native mutex.
 pub fn mutex_discard(value: u64) {
     drop(Mutex::new(effects_core::Counter { value }));

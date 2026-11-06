@@ -55,6 +55,10 @@ defmodule Lynx.Rust do
   cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined
   and unwind drops remain rejected. Native facade conversion, locks and native
   unwind cleanup require separate validated semantics.
+  Owners may move into actual extracted first-party callees when no other owner
+  remains live in the caller. The callee undergoes the same lifetime audit;
+  effects and post-consumption failures compose through the runtime monad.
+  Assumed external contracts cannot satisfy this ownership-transfer check.
   Unsupported recursive/trait combinations fail elaboration.
   """
   def verify!(workspace, package, opts) do
