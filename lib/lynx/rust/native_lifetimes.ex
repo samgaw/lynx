@@ -6,8 +6,6 @@ defmodule Lynx.Rust.NativeLifetimes do
   # owner requires supported cleanup; borrowed calls need checked nonpanicking
   # bodies. Whole single-field enum payloads may transfer their ownership.
   def audit!(functions, models, translated, refs) do
-    Lynx.Rust.NativeBorrows.audit!(functions, models, translated, refs)
-
     mutexes =
       for type <- translated["type_decls"],
           type &&
@@ -17,6 +15,28 @@ defmodule Lynx.Rust.NativeLifetimes do
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
     coroutines = coroutine_storage!(types, translated, refs)
+
+    frame_inputs =
+      for function <- functions,
+          coroutine_entry?(function, "poll"),
+          %{"Structured" => body} <- [function["body"]],
+          into: %{} do
+        inputs =
+          for {input, index} <- Enum.with_index(function["signature"]["inputs"], 1),
+              type = CallModels.expand(input, refs),
+              %{borrowed: true} = frame <- [frame_info(type, types, refs, coroutines, [])],
+              local = Enum.find(body["locals"]["locals"], &(&1["index"] == index)),
+              local != nil,
+              frame ==
+                frame_info(CallModels.expand(local["ty"], refs), types, refs, coroutines, []),
+              do: index
+
+        {function["def_id"], inputs}
+      end
+
+    # Compiler poll entries are checked below by state-sensitive ownership
+    # analysis. Their completed-state panic cannot lose a live saved guard.
+    Lynx.Rust.NativeBorrows.audit!(functions, models, translated, refs, frame_inputs)
     implementations = MapSet.new(functions, & &1["def_id"])
     nonpanicking = Lynx.Rust.NativeBorrows.nonpanicking_calls(functions, models)
 
@@ -197,37 +217,47 @@ defmodule Lynx.Rust.NativeLifetimes do
     end
   end
 
-  defp frame_info(%{"Ref" => [_, type, "Mut"]}, types, refs, coros, path) do
-    case frame_info(type, types, refs, coros, path ++ [:deref]) do
+  defp frame_info(type, types, refs, coros, path, seen \\ [])
+
+  defp frame_info(%{"Ref" => [_, type, "Mut"]}, types, refs, coros, path, seen) do
+    case frame_info(type, types, refs, coros, path ++ [:deref], seen) do
       nil -> nil
       info -> %{info | borrowed: true}
     end
   end
 
-  defp frame_info(%{"Ref" => _}, _, _, _, _), do: nil
+  defp frame_info(%{"Ref" => _}, _, _, _, _, _), do: nil
 
   defp frame_info(
          %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}},
          types,
          refs,
          coros,
-         path
+         path,
+         seen
        ) do
     cond do
       coros[id] ->
-        %{id: id, prefix: path, borrowed: false, args: args}
+        %{id: id, prefix: path, borrowed: false, args: args, wrappers: []}
+
+      id in seen ->
+        nil
 
       match?(%{"Struct" => [_]}, types[id]["kind"]) ->
         [field] = types[id]["kind"]["Struct"]
         type = CallModels.instantiate(CallModels.expand(field["ty"], refs), args)
-        frame_info(type, types, refs, coros, path ++ [{:field, nil, 0}])
+
+        case frame_info(type, types, refs, coros, path ++ [{:field, nil, 0}], [id | seen]) do
+          nil -> nil
+          info -> %{info | wrappers: [id | info.wrappers]}
+        end
 
       true ->
         nil
     end
   end
 
-  defp frame_info(_, _, _, _, _), do: nil
+  defp frame_info(_, _, _, _, _, _), do: nil
 
   defp resolve_place(%{"kind" => %{"Local" => root}}, _known), do: {root, []}
 

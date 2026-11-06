@@ -210,6 +210,22 @@ pub async fn owned_suspending(value: u64) -> u64 {
     result
 }
 
+/// Retains a mutated guard across suspension and commits it on release or cancellation.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+#[expect(
+    clippy::await_holding_lock,
+    reason = "Verification fixture intentionally retains the guard across a Pending poll"
+)]
+pub async fn guarded_suspending(mutex: &Mutex<effects_core::Counter>, amount: u64) -> bool {
+    let mut guard = effects_core::recover_guard(mutex.lock());
+    let changed = effects_core::increment_guard(&mut guard, amount);
+    let _progress = effects_core::paused_counter(amount).await;
+    effects_core::release_guard(guard);
+    changed
+}
+
 /// Retains an owned capture, exercising cancellation cleanup rejection.
 pub async fn owned_immediate(value: Vec<u8>) -> usize {
     value.len()
@@ -438,6 +454,34 @@ mod tests {
         }
         fn wake_by_ref(self: &Arc<Self>) {
             self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn suspended_guard_commits_mutations_on_cancellation_and_completion() {
+        use std::future::Future;
+        for (value, amount) in [(4, 3), (u64::MAX, 1)] {
+            for cancel in [false, true] {
+                let mutex = std::sync::Mutex::new(effects_core::Counter { value });
+                let mut future = Box::pin(super::guarded_suspending(&mutex, amount));
+                let mut context = Context::from_waker(Waker::noop());
+                assert_eq!(future.as_mut().poll(&mut context), Poll::Pending);
+                assert!(matches!(
+                    mutex.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                if !cancel {
+                    assert_eq!(
+                        future.as_mut().poll(&mut context),
+                        Poll::Ready(value.checked_add(amount).is_some())
+                    );
+                }
+                drop(future);
+                assert_eq!(
+                    mutex.lock().unwrap().value,
+                    value.checked_add(amount).unwrap_or(value)
+                );
+            }
         }
     }
 

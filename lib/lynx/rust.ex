@@ -84,6 +84,18 @@ defmodule Lynx.Rust do
   unsupported. Native allocation, physical pinning, standard primitives and FFI
   retain their reported trusted boundaries.
 
+  Saved `std::sync::MutexGuard` values are also supported in cancelling mode
+  for the existing destructor-free payload subset. Actual first-party mutations
+  before suspension are retained in the guard view and committed by normal
+  release or cancellation. The original LLBC is audited before the opaque guard
+  is represented as a `NativeGuard` capability without Rust lifetime arguments.
+  Explicit shared/exclusive guard borrows, nominal type identities and executable
+  bodies remain intact. Compiler poll inputs use path-sensitive ownership checks,
+  so completed-state panics are distinguished from failures with a live guard.
+  Panic/unwind with a live saved guard, native thread migration, executor behavior
+  and other guard families remain unsupported. Rust memory safety, standard
+  primitives, physical pinning, allocation and FFI remain trusted boundaries.
+
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`
