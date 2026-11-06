@@ -70,4 +70,46 @@ theorem read_continuation {β : Type} (value : U64) (next : Term → Result β)
   convert model using 1 <;> simp [__READ__, resource_reader, NativeDrop.drop,
     NativeM.ok, Rustler.executeNative, Result.handle, bind_assoc, Rustler.encodeUnsigned]
   all_goals rfl
+
+theorem create_framed_continuation {β : Type} (value : U64) (next : Term → Result β)
+    (env : Environment) (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes)
+    (frame : NativeResourceArc.FrameBelow ScalarResource env.refCounter env.nativeHeap) :
+    (Rustler.executeNative (do
+      let owner ← __CREATE__ value
+      let term ← NativeResourceArc.encode owner
+      NativeResourceArc.release owner
+      Result.ok term) id >>= next) env =
+    next (.reference (env.refCounter + 4)) {env with
+      refCounter := env.refCounter + 4
+      nativeHeap := NativeResourceArc.vmCells (ScalarResource.mk (effects_core.Counter.mk value))
+        (env.refCounter + 1) (env.refCounter + 3) (env.refCounter + 4) ++ env.nativeHeap} := by
+  have model := NativeResourceArc.new_encode_release_framed_next
+    (ScalarResource.mk (effects_core.Counter.mk value))
+    (fun error => match error with
+      | .error (.atom "rust_panicked") => Result.error (.error (.atom "nif_panicked"))
+      | _ => Result.error .exhausted)
+    next env registered frame
+  convert model using 1
+  simp [__CREATE__, scalar_resource_new, Rustler.executeNative]
+  all_goals rfl
+
+theorem read_pinned_continuation {β : Type} (value : U64) (next : Term → Result β)
+    (env : Environment) (id pin term : Nat)
+    (pinned : NativeResourceArc.Pinned (ScalarResource.mk (effects_core.Counter.mk value)) id pin term env)
+    (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes) :
+    (do
+      let owner ← NativeResourceArc.decode (α := ScalarResource) (.reference term)
+      let result ← Rustler.executeNative (__READ__ owner) Rustler.encodeUnsigned
+      next result) env = next (.integer value.val) {env with refCounter := env.refCounter + 1} := by
+  have model := NativeResourceArc.decode_read_pinned_next
+    (ScalarResource.mk (effects_core.Counter.mk value))
+    (fun resource => Result.ok (Rustler.encodeUnsigned resource.counter.value))
+    (fun error => match error with
+      | .error (.atom "rust_panicked") => Result.error (.error (.atom "nif_panicked"))
+      | _ => Result.error .exhausted)
+    next env id pin term pinned registered
+  convert model using 1 <;> simp [__READ__, resource_reader, NativeDrop.drop,
+    NativeM.ok, Rustler.executeNative, Result.handle, bind_assoc, Rustler.encodeUnsigned]
+  all_goals rfl
+
 end Handles.Properties

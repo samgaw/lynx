@@ -74,7 +74,7 @@ defmodule Lynx.RustlerResourceHandlesTest do
           proof_modules: ["Handles.Properties"],
           required_properties:
             Enum.map(
-              ~w(reader resource_reader checked_reader checked_disabled create_continuation read_continuation),
+              ~w(reader resource_reader checked_reader checked_disabled create_continuation read_continuation create_framed_continuation read_pinned_continuation),
               &("Handles.Properties." <> &1)
             )
         ]
@@ -131,6 +131,25 @@ defmodule Lynx.RustlerResourceHandlesTest do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
+    original_properties = File.read!(property)
+
+    broken_frame =
+      String.replace(
+        original_properties,
+        "(env.refCounter + 4) ++ env.nativeHeap}",
+        "(env.refCounter + 4)}",
+        global: false
+      )
+
+    refute broken_frame == original_properties
+    File.write!(property, broken_frame)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.Project.build!(project, ["Handles.Properties"])
+    end
+
+    File.write!(property, original_properties)
+
     core = Path.join(workspace, "core/src/lib.rs")
     original = File.read!(core)
 
@@ -243,6 +262,52 @@ defmodule Lynx.RustlerResourceHandlesTest do
           all_goals simp [Lynx.NativeResourceArc.typeName]
         · simp [Lynx.NativeResourceArc.typeName]
         · rfl
+        """
+      law two_resources,
+        expects: (
+          first = LynxEffectsFixture.Native.resource_create(7)
+          second = LynxEffectsFixture.Native.resource_create(9)
+          LynxEffectsFixture.Native.resource_value(first) == 7 and
+            LynxEffectsFixture.Native.resource_value(second) == 9
+        ),
+        proof: ~LEAN"""
+        let seven : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 7⟩
+        let nine : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 9⟩
+        have input7 : Lynx.Rustler.decodeUnsigned .U64 64 (.integer 7) = .ok seven := rfl
+        have input9 : Lynx.Rustler.decodeUnsigned .U64 64 (.integer 9) = .ok nine := rfl
+        have eq7 : Erlang.erlang.«==/2» (.integer seven.val) (.integer 7) = .ok (.atom "true") := by
+          simp [seven, Aeneas.Std.UScalar.val, Erlang.erlang.«==/2»]
+        have eq9 : Erlang.erlang.«==/2» (.integer nine.val) (.integer 9) = .ok (.atom "true") := by
+          simp [nine, Aeneas.Std.UScalar.val, Erlang.erlang.«==/2»]
+        simp only [Lynx.concurrent_eq_run, Lynx.apply_eq, «two_resources:ensures/0»,
+          Elixir.LynxEffectsFixture.Native.«resource_create/1»,
+          Elixir.LynxEffectsFixture.Native.«resource_create:execution/1»,
+          Elixir.LynxEffectsFixture.Native.«resource_value/1»,
+          Elixir.LynxEffectsFixture.Native.«resource_value:execution/1»,
+          Lynx.Rustler.withResourceTypes, input7, input9, Lynx.Result.ofExcept,
+          Lynx.Result.andAlso_eq, Lynx.Result.ok_bind, Lynx.Result.get_bind, Lynx.Result.set_bind,
+          Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply, bind_assoc]
+        rw [Handles.Properties.create_framed_continuation seven]
+        · simp only [Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+          rw [Handles.Properties.create_framed_continuation nine]
+          · simp only [Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+            rw [Handles.Properties.read_pinned_continuation seven _ _ 1 3 4]
+            · simp only [eq7, Lynx.Result.ofExcept, Lynx.Result.ok_bind,
+                Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+              rw [Handles.Properties.read_pinned_continuation nine _ _ 5 7 8]
+              · simp [eq9, Lynx.Result.ofExcept]
+              · constructor <;> simp [Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.typeName,
+                  Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.termType]
+              · simp [Lynx.NativeResourceArc.typeName]
+            · constructor <;> simp [Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.typeName,
+                Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.termType]
+            · simp [Lynx.NativeResourceArc.typeName]
+          · simp [Lynx.NativeResourceArc.typeName]
+          · simpa only [Lynx.NativeResourceArc.vmCells, List.append_nil] using
+              (Lynx.NativeResourceArc.FrameBelow.vmCells
+                (effects_native.ScalarResource.mk (effects_native.effects_core.Counter.mk seven)) 1 3 4 4 (by decide))
+        · simp [Lynx.NativeResourceArc.typeName]
+        · simp [Lynx.NativeResourceArc.FrameBelow]
         """
     end
     '''
