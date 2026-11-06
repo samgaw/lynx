@@ -41,7 +41,8 @@ defmodule Lynx.Rust.ResourceModels do
 
       %{
         rust_name: rust,
-        lean: "Lynx.NativeResourceArc.#{method}",
+        lean:
+          "Lynx.NativeResourceArc.#{if method == "new" and get_in(t, ["options", "owned_drops"]) == true, do: "newOwned", else: method}",
         builtin: false,
         can_fail: true,
         lift: true,
@@ -50,9 +51,15 @@ defmodule Lynx.Rust.ResourceModels do
         native_resource_type: arc["def_id"],
         resource_trait: resource["def_id"],
         resource_operation: method,
+        native_transfer: method == "new" and get_in(t, ["options", "owned_drops"]) == true,
         native_cutoff_only: method != "new",
         label:
-          "Rustler 0.39 Rust-owned ResourceArc model: explicit registration precondition, distinct linear ownership tokens, shared immutable destructor-free payload and bounded reference count; inherited Resource callback flags modeled false; VM pins, custom callbacks, physical allocation and FFI unverified"
+          if(get_in(t, ["options", "owned_drops"]) == true,
+            do:
+              "Rustler 0.39 ResourceArc with extracted payload cleanup: shared identity and reference tokens; registration failure disposes its moved payload; final Rust-owned release invokes the validated compiler destructor; VM callbacks, allocation and FFI correctness remain trusted boundaries",
+            else:
+              "Rustler 0.39 Rust-owned ResourceArc model: explicit registration precondition, distinct linear ownership tokens, shared immutable destructor-free payload and bounded reference count; inherited Resource callback flags modeled false; VM pins, custom callbacks, physical allocation and FFI unverified"
+          )
       }
     else
       _ -> nil

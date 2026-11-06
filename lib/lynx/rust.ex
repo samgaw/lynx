@@ -99,8 +99,12 @@ defmodule Lynx.Rust do
   `owned_drops: true, execution: :runtime` additionally extracts consuming drop
   entries for reached monomorphic structs requiring destruction. These use actual
   optimized compiler drop MIR after checked self-pointer normalization. Unsupported
-  field destructors and native operations remain rejected. This does not yet
-  enable Rustler resource payloads requiring destruction.
+  field destructors and native operations remain rejected. Rust-owned ResourceArc
+  payloads may contain a supported mutex identity: final release and unregistered
+  construction invoke the actual extracted structural destructor. This subset
+  requires default Resource callbacks and nonpanicking mutex field cleanup;
+  custom Drop, poisoned/held mutex destruction and VM collection remain unsupported.
+  The Rustler facade preparation API retains its destructor-free payload subset.
 
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires
@@ -154,9 +158,10 @@ defmodule Lynx.Rust do
   unsupported. Runtime adapters support top-level ResourceArc arguments/results
   for payloads identified by audited resource operations in the selected extraction;
   nested resource codecs and signature-only payload discovery remain rejected.
-  Owners may move into actual extracted first-party callees when no other owner
-  remains live in the caller. The callee undergoes the same lifetime audit;
-  effects and post-consumption failures compose through the runtime monad.
+  Owners may move into actual extracted first-party callees. When other owners
+  remain live, the callee must also be certified nonpanicking. Every callee
+  undergoes the same lifetime audit; supported effects compose through the
+  runtime monad without losing retained ownership on failure.
   Assumed external contracts cannot satisfy this ownership-transfer check.
 
   Normal branches are audited independently and must consume or return every

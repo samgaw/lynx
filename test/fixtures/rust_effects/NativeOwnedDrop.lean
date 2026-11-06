@@ -19,7 +19,7 @@ theorem construct_cleanup (value : U64) (env : Environment)
     (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
     (owned_counter_payload value >>= CounterResource.drop_owned) env =
       (.ok (), { env with refCounter := env.refCounter + 1 }) := by
-  simpa [owned_counter_payload, CounterResource.drop_owned, NativeDrop.drop,
+  simpa [owned_counter_payload, CounterResource.drop_owned, NativeOwnedDrop.drop,
     NativeM.ok, bind_assoc] using
     NativeMutex.new_dispose ({ value } : effects_core.Counter) env fresh
 
