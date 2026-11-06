@@ -1,0 +1,349 @@
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -342,6 +342,7 @@
+             let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
+                 continue;
+             };
++
+             if tcx.item_name(*id).as_str() != "new"
+                 || args.len() != 1
+                 || tcx.fn_sig(*id).skip_binder().safety().is_unsafe()
+@@ -430,6 +431,217 @@
+             )));
+             block.statements.push(inlined);
+             terminator.kind = mir::TerminatorKind::Goto { target: *target };
++        }
++    }
++
++    /// Reproduce the standard pin! helper only at its compiler macro expansion.
++    /// Ordinary unsafe helper calls retain their original verification boundary.
++    fn normalize_pin_macro_calls(&self, body: &mut mir::Body<'tcx>) {
++        if !self.options.immediate_futures {
++            return;
++        }
++        let tcx = self.tcx;
++        let Some(macro_id) = tcx.get_diagnostic_item(Symbol::intern("pin_macro")) else {
++            return;
++        };
++        let Some(wrapper_id) = tcx.get_diagnostic_item(Symbol::intern("PinMacroHelper")) else {
++            return;
++        };
++        let pin_id = tcx.lang_items().pin_type().unwrap();
++        for block in body.basic_blocks.as_mut() {
++            let terminator = block.terminator.as_mut().unwrap();
++            let mir::TerminatorKind::Call {
++                func,
++                args,
++                destination,
++                target: Some(target),
++                ..
++            } = &terminator.kind
++            else {
++                continue;
++            };
++            let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
++                continue;
++            };
++            if tcx.item_name(*id).as_str() != "pin_new_unchecked_in_helper"
++                || tcx.parent(*id) != tcx.parent(wrapper_id)
++                || args.len() != 1
++                || !terminator
++                    .source_info
++                    .span
++                    .macro_backtrace()
++                    .any(|expn| expn.macro_def_id == Some(macro_id))
++            {
++                continue;
++            }
++            let pointer = args[0].node.ty(&body.local_decls, tcx);
++            let ty::Ref(_, wrapper_ty, rustc_hir::Mutability::Mut) = pointer.kind() else {
++                continue;
++            };
++            let ty::Adt(wrapper, wrapper_args) = wrapper_ty.kind() else {
++                continue;
++            };
++            if wrapper.did() != wrapper_id
++                || wrapper.variants().len() != 1
++                || wrapper.non_enum_variant().fields.len() != 1
++            {
++                continue;
++            }
++            let payload = wrapper.non_enum_variant().fields[rustc_abi::FieldIdx::from_usize(0)]
++                .ty(tcx, wrapper_args)
++                .skip_normalization();
++            let ty::Adt(pin, pin_args) = destination.ty(&body.local_decls, tcx).ty.kind() else {
++                continue;
++            };
++            if pin.did() != pin_id {
++                continue;
++            }
++            let output_pointer = pin_args.type_at(0);
++            let ty::Ref(region, pointee, rustc_hir::Mutability::Mut) = output_pointer.kind() else {
++                continue;
++            };
++            if *pointee != payload {
++                continue;
++            }
++            let implementation = tcx.optimized_mir(*id);
++            if implementation.arg_count != 1 || implementation.basic_blocks.len() != 1 {
++                continue;
++            }
++            let entry = &implementation.basic_blocks[mir::START_BLOCK];
++            if !matches!(entry.terminator().kind, mir::TerminatorKind::Return) {
++                continue;
++            }
++            let statements: Vec<_> = entry
++                .statements
++                .iter()
++                .filter(|statement| {
++                    !matches!(
++                        statement.kind,
++                        mir::StatementKind::StorageLive(_)
++                            | mir::StatementKind::StorageDead(_)
++                            | mir::StatementKind::Nop
++                    )
++                })
++                .collect();
++            let [borrow, construct] = statements.as_slice() else {
++                continue;
++            };
++            let mir::StatementKind::Assign((
++                borrow_dest,
++                mir::Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, source),
++            )) = &borrow.kind
++            else {
++                continue;
++            };
++            if !borrow_dest.projection.is_empty()
++                || borrow_dest.local.as_usize() <= 1
++                || source.local.as_usize() != 1
++                || !matches!(source.projection.as_ref(),
++                    [mir::ProjectionElem::Deref, mir::ProjectionElem::Field(field, _)] if field.as_usize() == 0)
++            {
++                continue;
++            }
++            let mir::StatementKind::Assign((result, mir::Rvalue::Aggregate(kind, values))) =
++                &construct.kind
++            else {
++                continue;
++            };
++            if result.local != mir::RETURN_PLACE
++                || !result.projection.is_empty()
++                || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _)
++                    if *id == pin_id && args.type_at(0) == implementation.local_decls[borrow_dest.local].ty)
++                || values.len() != 1
++                || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)],
++                    mir::Operand::Copy(place) | mir::Operand::Move(place)
++                    if place.local == borrow_dest.local && place.projection.is_empty())
++            {
++                continue;
++            }
++            let place = match &args[0].node {
++                mir::Operand::Move(place) | mir::Operand::Copy(place) => *place,
++                _ => continue,
++            };
++            let projected = place.project_deeper(
++                &[
++                    mir::ProjectionElem::Deref,
++                    mir::ProjectionElem::Field(rustc_abi::FieldIdx::from_usize(0), payload),
++                ],
++                tcx,
++            );
++            let fresh = body.local_decls.push(mir::LocalDecl::new(
++                output_pointer,
++                terminator.source_info.span,
++            ));
++            let mut borrowed = (*borrow).clone();
++            borrowed.source_info = terminator.source_info;
++            borrowed.kind = mir::StatementKind::Assign(Box::new((
++                mir::Place::from(fresh),
++                mir::Rvalue::Ref(
++                    *region,
++                    mir::BorrowKind::Mut {
++                        kind: mir::MutBorrowKind::Default,
++                    },
++                    projected,
++                ),
++            )));
++            let mut constructed = (*construct).clone();
++            constructed.source_info = terminator.source_info;
++            constructed.kind = mir::StatementKind::Assign(Box::new((
++                *destination,
++                mir::Rvalue::Aggregate(
++                    Box::new(mir::AggregateKind::Adt(
++                        pin_id,
++                        rustc_abi::VariantIdx::from_usize(0),
++                        pin_args,
++                        None,
++                        None,
++                    )),
++                    rustc_index::IndexVec::from_raw(vec![mir::Operand::Move(mir::Place::from(
++                        fresh,
++                    ))]),
++                ),
++            )));
++            block.statements.push(borrowed);
++            block.statements.push(constructed);
++            terminator.kind = mir::TerminatorKind::Goto { target: *target };
++        }
++    }
++
++    /// The macro wrapper has no destructor of its own. Its actual structural
++    /// cleanup delegates to its sole field, whose compiler drop body is retained.
++    fn normalize_pin_macro_drops(&self, body: &mut mir::Body<'tcx>) {
++        if !self.options.cancelling_futures {
++            return;
++        }
++        let tcx = self.tcx;
++        let Some(wrapper_id) = tcx.get_diagnostic_item(Symbol::intern("PinMacroHelper")) else {
++            return;
++        };
++        for block in body.basic_blocks.as_mut() {
++            let terminator = block.terminator.as_mut().unwrap();
++            let mir::TerminatorKind::Drop { place, .. } = &mut terminator.kind else {
++                continue;
++            };
++            let ty::Adt(wrapper, args) = place.ty(&body.local_decls, tcx).ty.kind() else {
++                continue;
++            };
++            if wrapper.did() != wrapper_id
++                || wrapper.has_dtor(tcx)
++                || wrapper.variants().len() != 1
++                || wrapper.non_enum_variant().fields.len() != 1
++            {
++                continue;
++            }
++            let payload = wrapper.non_enum_variant().fields[rustc_abi::FieldIdx::from_usize(0)]
++                .ty(tcx, args)
++                .skip_normalization();
++            *place = place.project_deeper(
++                &[mir::ProjectionElem::Field(
++                    rustc_abi::FieldIdx::from_usize(0),
++                    payload,
++                )],
++                tcx,
++            );
+         }
+     }
+
+@@ -865,6 +1077,8 @@
+         if let Some(mut body) = self.get_mir(def.this(), span)? {
+             self.normalize_pin_get_mut(def, &mut body);
+             self.normalize_safe_pin_calls(&mut body);
++            self.normalize_pin_macro_calls(&mut body);
++            self.normalize_pin_macro_drops(&mut body);
+             self.normalize_coroutine_context(def, &mut body)?;
+             self.normalize_coroutine_pin(def, &mut body)?;
+             Ok(self.translate_body(span, body, &def.source_text))
+@@ -3004,7 +3218,34 @@
+                 //
+                 // note: loss of precision, we erase the bound vars.
+                 let generics = hax::erase_free_regions(tcx, generics.skip_binder());
+-                if self.options.cancelling_futures
++                if self.options.immediate_futures
++                    && self.tcx.lang_items().future_trait() == Some(self.tcx.parent(*def_id))
++                    && self.tcx.item_name(*def_id).as_str() == "poll"
++                    && let ty::Coroutine(id, args) = generics.type_at(0).kind()
++                {
++                    let item = hax::translate_item_ref(&self.hax_state, *id, args);
++                    let mut pointer =
++                        self.translate_fn_ptr(span, &item, TransItemSourceKind::CoroutinePoll)?;
++                    let body = self.get_mir(&item, span)?.unwrap();
++                    let mut types: Vec<_> = body
++                        .args_iter()
++                        .map(|local| body.local_decls[local].ty)
++                        .collect();
++                    types.push(body.return_ty());
++                    let tuple = ty::Ty::new_tup(tcx, &types);
++                    let (_, regions) = hax::unerase_lifetimes(
++                        self.hax_state_with_id(),
++                        tuple,
++                        Symbol::intern("coroutine_poll"),
++                    );
++                    for _ in regions {
++                        pointer
++                            .generics
++                            .regions
++                            .push(self.translate_erased_region());
++                    }
++                    FnOperand::Regular(pointer)
++                } else if self.options.cancelling_futures
+                     && self.tcx.get_diagnostic_item(Symbol::intern("mem_drop")) == Some(*def_id)
+                     && let ty::Coroutine(id, args) = generics.type_at(0).kind()
+                 {
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1513,3 +1513,73 @@
+     );
+     Ok(())
+ }
++
++#[test]
++fn pin_macro_links_actual_coroutine_poll_and_structural_drop() -> anyhow::Result<()> {
++    let data = translate(
++        r#"//@ charon-args=--preset=aeneas --cancelling-futures --suspending-futures --immediate-futures --owned-drops --mir=optimized --sysroot=default --start-from=crate::drive --start-from=crate::direct --opaque=core --opaque=std --include=core::pin --include=core::task::poll::Poll --include=core::option::Option --monomorphize-mut=all
++//@ rustc-args=--edition=2024 -Zmir-strip-debuginfo=all-locals -Zmir-enable-passes=+DeadStoreElimination-final,+SimplifyLocals-final
++#![feature(pin_macro_internals)]
++pub async fn make(mutex: std::sync::Mutex<u64>) { drop(mutex); }
++pub fn drive(mutex: std::sync::Mutex<u64>, context: &mut std::task::Context<'_>) -> std::task::Poll<()> {
++    use std::future::Future;
++    std::pin::pin!(make(mutex)).poll(context)
++}
++pub fn direct<T>(wrapper: &mut std::pin::PinMacroHelper<T>) -> std::pin::Pin<&mut T> {
++    unsafe { std::pin::pin_new_unchecked_in_helper(wrapper) }
++}
++fn main() {}
++"#,
++    )?;
++    let find = |name: &str| {
++        data.fun_decls
++            .iter()
++            .find(|f| f.item_meta.name.debug_repr(&data) == name)
++            .unwrap()
++    };
++    let calls = |name: &str| {
++        find(name)
++            .body
++            .as_structured()
++            .unwrap()
++            .body
++            .statements
++            .iter()
++            .filter_map(|s| {
++                let StatementKind::Call { call, .. } = &s.kind else {
++                    return None;
++                };
++                let FnOperand::Regular(pointer) = &call.func else {
++                    panic!("direct call required")
++                };
++                let FnPtrKind::Fun(id) = pointer.kind.as_ref() else {
++                    panic!("implementation required, not builtin trait placeholder")
++                };
++                Some(data.fun_decls[*id].item_meta.name.debug_repr(&data))
++            })
++            .collect::<Vec<_>>()
++    };
++    let drive = calls("test_crate::drive");
++    assert!(
++        drive
++            .iter()
++            .any(|n| n.starts_with("test_crate::make::") && n.ends_with("::poll"))
++    );
++    assert!(
++        drive
++            .iter()
++            .any(|n| n.starts_with("test_crate::make::") && n.ends_with("::drop_owned"))
++    );
++    assert!(
++        !drive
++            .iter()
++            .any(|n| n.contains("pin_new_unchecked_in_helper"))
++    );
++    let direct = calls("test_crate::direct");
++    assert!(
++        direct
++            .iter()
++            .any(|n| n.contains("pin_new_unchecked_in_helper"))
++    );
++    Ok(())
++}
