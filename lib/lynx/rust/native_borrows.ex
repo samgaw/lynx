@@ -39,7 +39,7 @@ defmodule Lynx.Rust.NativeBorrows do
 
   # Compiler cleanup after a certified nonpanicking call is unreachable. Keep
   # the original LLBC and a call-site record; never erase a potentially panicking call's drops.
-  def prune_owned_calls!(document, first_party) do
+  def prune_owned_calls!(document, first_party, enabled_models \\ []) do
     translated = document["translated"]
     refs = LLBC.type_references!(document)
     all = Enum.reject(translated["fun_decls"], &is_nil/1)
@@ -52,14 +52,17 @@ defmodule Lynx.Rust.NativeBorrows do
         end
       end)
 
-    models = CallModels.resolve(external, translated, refs, [], :runtime)
+    {helpers, external} =
+      Enum.split_with(external, &Lynx.Rust.LibraryHelpers.selected?(&1, translated))
+
+    models = CallModels.resolve(external, translated, refs, enabled_models, :runtime)
 
     case Lynx.Rust.NativeDrops.audit(functions, models, translated, refs) do
       :ok -> :ok
       {:error, function, message} -> LLBC.failure!(function, translated, message)
     end
 
-    safe = nonpanicking_calls(functions, models)
+    safe = nonpanicking_calls(functions ++ helpers, models)
 
     owners =
       for type <- translated["type_decls"],
@@ -151,6 +154,32 @@ defmodule Lynx.Rust.NativeBorrows do
   defp prune_children(value, _, _, _, records), do: {value, records}
 
   defp borrowed_guard?(%{"Ref" => [_, type, _]}, guards), do: contains_guard?(type, guards)
+
+  defp borrowed_guard?(%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}, ctx) do
+    seen = Map.get(ctx, :borrowed_seen, [])
+
+    if id in seen do
+      false
+    else
+      ctx = Map.put(ctx, :borrowed_seen, [id | seen])
+
+      case ctx.types[id] do
+        %{"Struct" => fields} ->
+          Enum.any?(fields, &borrowed_guard?(CallModels.instantiate(&1["ty"], args), ctx))
+
+        %{"Enum" => variants} ->
+          Enum.any?(variants, fn v ->
+            Enum.any?(v["fields"], &borrowed_guard?(CallModels.instantiate(&1["ty"], args), ctx))
+          end)
+
+        %{"Alias" => type} ->
+          borrowed_guard?(CallModels.instantiate(type, args), ctx)
+
+        _ ->
+          Enum.any?(args["types"], &borrowed_guard?(&1, ctx))
+      end
+    end
+  end
 
   defp borrowed_guard?(map, guards) when is_map(map),
     do: Enum.any?(Map.values(map), &borrowed_guard?(&1, guards))

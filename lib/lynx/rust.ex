@@ -73,6 +73,17 @@ defmodule Lynx.Rust do
   other pointer observations and escapes are rejected. This supports explicit
   polling, not an executor, cancellation cleanup or guards across suspension.
 
+  `futures: :cancelling, execution: :runtime` also extracts the compiler's actual
+  coroutine destruction body. Its self-pointer accesses become consuming accesses
+  to the logical frame; pointer escapes are rejected. Saved storage can retain one
+  supported native owner across suspension, and destruction consumes it through
+  the checked destructor model. Slot removal uses Aeneas's existing mutable
+  replacement primitive. Invalid state tags and missing saved owners exhaust
+  verification. Owned captures requiring destruction, multiple native owners per
+  frame, non-Unpin fields, executor integration and async NIF composition remain
+  unsupported. Native allocation, physical pinning, standard primitives and FFI
+  retain their reported trusted boundaries.
+
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`

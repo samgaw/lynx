@@ -76,24 +76,13 @@ defmodule Lynx.Rust.NativeDropLowering do
               "native drop lowering requires the actual core::mem::drop declaration"
             )
 
-        case drop["place"]["kind"] do
-          %{"Local" => local} ->
-            unless CallModels.expand(Map.fetch!(ctx.locals, local), ctx.refs) ==
-                     CallModels.expand(site.self, ctx.refs),
-                   do:
-                     LLBC.failure!(
-                       ctx.function,
-                       ctx.translated,
-                       "native dropped place has an inconsistent local type"
-                     )
-
-          _ ->
+        unless place_type!(drop["place"], ctx) == CallModels.expand(site.self, ctx.refs),
+          do:
             LLBC.failure!(
               ctx.function,
               ctx.translated,
-              "projected native drops are not yet supported"
+              "native dropped place has an inconsistent owned type"
             )
-        end
 
         # Introduce one fresh type-table entry before its use in the body;
         # the library declaration can occur later in the serialized crate.
@@ -178,6 +167,111 @@ defmodule Lynx.Rust.NativeDropLowering do
   end
 
   defp walk(value, ctx, state, cleanup), do: walk_children(value, ctx, state, cleanup)
+
+  # Only a local and its owned fields may be consumed. Dereferencing a borrowed
+  # aggregate would require reconstructing that borrow after failure or drop.
+  def place_type!(place, ctx, borrowed \\ false)
+
+  def place_type!(%{"kind" => kind, "ty" => annotation}, ctx, borrowed) do
+    type =
+      case kind do
+        %{"Projection" => [parent, "Deref"]} when borrowed ->
+          case place_type!(parent, ctx, borrowed) do
+            %{"Ref" => [_, type, _]} ->
+              type
+
+            _ ->
+              LLBC.failure!(
+                ctx.function,
+                ctx.translated,
+                "unsupported native ownership pointer dereference"
+              )
+          end
+
+        %{"Local" => local} ->
+          CallModels.expand(Map.fetch!(ctx.locals, local), ctx.refs)
+
+        %{"Projection" => [parent, %{"Field" => [variant, index]}]}
+        when is_integer(index) and index >= 0 ->
+          case place_type!(parent, ctx, borrowed) do
+            %{"Adt" => %{"builtin" => "Tuple", "generics" => %{"types" => types}}}
+            when is_nil(variant) ->
+              Enum.fetch!(types, index)
+
+            %{"Adt" => %{"builtin" => nil, "id" => id, "generics" => args}} ->
+              declaration = Enum.find(ctx.translated["type_decls"], &(&1 && &1["def_id"] == id))
+
+              fields =
+                case declaration["kind"] do
+                  %{"Struct" => fields} when is_nil(variant) ->
+                    fields
+
+                  %{"Enum" => variants} ->
+                    Enum.find_value(variants, fn row ->
+                      if row["id"] == variant, do: row["fields"]
+                    end)
+
+                  _ ->
+                    nil
+                end
+
+              unless is_list(fields) and args["const_generics"] == [] and
+                       length(args["types"]) == length(declaration["generics"]["types"]) and
+                       length(args["regions"]) == length(declaration["generics"]["regions"]),
+                     do:
+                       LLBC.failure!(
+                         ctx.function,
+                         ctx.translated,
+                         "unsupported owned drop field instantiation"
+                       )
+
+              field = Enum.fetch!(fields, index)
+              CallModels.instantiate(CallModels.expand(field["ty"], ctx.refs), args)
+
+            _ ->
+              LLBC.failure!(
+                ctx.function,
+                ctx.translated,
+                "native drop projection requires an owned aggregate"
+              )
+          end
+
+        _ ->
+          LLBC.failure!(
+            ctx.function,
+            ctx.translated,
+            "native drop cannot consume through a borrowed or raw pointer"
+          )
+      end
+
+    # rustc freshens body lifetimes at individual accesses. They do not change
+    # the runtime type; retain region arity, generic identity and borrow kind.
+    unless erase_body_regions(type) == erase_body_regions(CallModels.expand(annotation, ctx.refs)),
+      do:
+        LLBC.failure!(
+          ctx.function,
+          ctx.translated,
+          "native dropped place has an inconsistent field type"
+        )
+
+    type
+  end
+
+  def place_type!(_, ctx, _),
+    do:
+      LLBC.failure!(
+        ctx.function,
+        ctx.translated,
+        "native owner lifetime: invalid place annotation"
+      )
+
+  defp erase_body_regions(%{"Body" => id}) when is_integer(id), do: %{"Body" => 0}
+
+  defp erase_body_regions(map) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, erase_body_regions(value)} end)
+
+  defp erase_body_regions(list) when is_list(list), do: Enum.map(list, &erase_body_regions/1)
+  defp erase_body_regions(value), do: value
 
   defp walk_children(map, ctx, state, cleanup) when is_map(map) do
     {pairs, state} =

@@ -16,6 +16,7 @@ defmodule Lynx.Rust.NativeLifetimes do
           do: type["def_id"]
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
+    coroutines = coroutine_storage!(types, translated, refs)
     implementations = MapSet.new(functions, & &1["def_id"])
     nonpanicking = Lynx.Rust.NativeBorrows.nonpanicking_calls(functions, models)
 
@@ -27,11 +28,36 @@ defmodule Lynx.Rust.NativeLifetimes do
             into: MapSet.new(),
             do: local["index"]
 
+      frames =
+        for local <- body["locals"]["locals"],
+            local["index"] > 0 and local["index"] <= body["locals"]["arg_count"],
+            frame = frame_info(CallModels.expand(local["ty"], refs), types, refs, coroutines, []),
+            frame != nil,
+            into: %{},
+            do: {local["index"], frame}
+
+      borrowed = MapSet.new(for {id, frame} <- frames, frame.borrowed, do: id)
+
+      if MapSet.size(borrowed) > 0 and not coroutine_entry?(function, "poll"),
+        do:
+          LLBC.failure!(
+            function,
+            translated,
+            "borrowed owned-future state currently requires the compiler poll entry"
+          )
+
+      owners = MapSet.union(owners, borrowed)
+
       if MapSet.size(owners) > 0 do
         live = MapSet.filter(owners, &(&1 > 0 and &1 <= body["locals"]["arg_count"]))
 
         context = %{
           owners: owners,
+          borrowed: borrowed,
+          frames: frames,
+          native: mutexes,
+          coroutines: coroutines,
+          cutoff_undefined: get_in(translated, ["options", "cancelling_futures"]) == true,
           models: models,
           implementations: implementations,
           nonpanicking: nonpanicking,
@@ -49,29 +75,174 @@ defmodule Lynx.Rust.NativeLifetimes do
     end
   end
 
-  # References borrow an owner; they do not own or destroy its native cell.
-  defp contains_native?(%{"Ref" => _}, _, _, _, _), do: false
+  # Inspect actual fields after instantiation. A Pin containing a mutable
+  # reference borrows its pointee; its type argument alone does not own it.
+  defp contains_native?(type, native, types, refs, seen),
+    do: native_count(type, native, types, refs, seen) > 0
 
-  defp contains_native?(%{"Adt" => %{"id" => id} = adt}, mutexes, types, refs, seen) do
-    id in mutexes or
-      contains_native?(adt["generics"], mutexes, types, refs, seen) or
-      (id not in seen and
-         contains_native?(
-           CallModels.expand(get_in(types, [id, "kind"]), refs),
-           mutexes,
-           types,
-           refs,
-           [id | seen]
-         ))
+  defp native_count(%{"Ref" => _}, _, _, _, _), do: 0
+
+  defp native_count(
+         %{"Adt" => %{"id" => id, "builtin" => builtin, "generics" => args}},
+         native,
+         types,
+         refs,
+         seen
+       ) do
+    cond do
+      id in native and is_nil(builtin) ->
+        1
+
+      builtin == "Tuple" ->
+        Enum.sum(Enum.map(args["types"], &native_count(&1, native, types, refs, seen)))
+
+      id in seen ->
+        0
+
+      match?(%{"Alias" => _}, types[id]["kind"]) ->
+        native_count(
+          CallModels.instantiate(CallModels.expand(types[id]["kind"]["Alias"], refs), args),
+          native,
+          types,
+          refs,
+          [id | seen]
+        )
+
+      is_map(types[id]["kind"]) ->
+        kind = types[id]["kind"]
+
+        counts =
+          for fields <-
+                (case kind do
+                   %{"Struct" => fields} -> [fields]
+                   %{"Enum" => variants} -> Enum.map(variants, & &1["fields"])
+                   _ -> []
+                 end) do
+            Enum.sum(
+              for field <- fields,
+                  do:
+                    native_count(
+                      CallModels.instantiate(CallModels.expand(field["ty"], refs), args),
+                      native,
+                      types,
+                      refs,
+                      [id | seen]
+                    )
+            )
+          end
+
+        Enum.max(counts, fn -> 0 end)
+
+      true ->
+        Enum.sum(Enum.map(args["types"], &native_count(&1, native, types, refs, seen)))
+    end
   end
 
-  defp contains_native?(map, mutexes, types, refs, seen) when is_map(map),
-    do: Enum.any?(Map.values(map), &contains_native?(&1, mutexes, types, refs, seen))
+  defp native_count(%{"Array" => [type | _]}, native, types, refs, seen),
+    do: if(native_count(type, native, types, refs, seen) > 0, do: 2, else: 0)
 
-  defp contains_native?(list, mutexes, types, refs, seen) when is_list(list),
-    do: Enum.any?(list, &contains_native?(&1, mutexes, types, refs, seen))
+  defp native_count(map, native, types, refs, seen) when is_map(map),
+    do: Enum.sum(Enum.map(Map.values(map), &native_count(&1, native, types, refs, seen)))
 
-  defp contains_native?(_, _, _, _, _), do: false
+  defp native_count(list, native, types, refs, seen) when is_list(list),
+    do: Enum.sum(Enum.map(list, &native_count(&1, native, types, refs, seen)))
+
+  defp native_count(_, _, _, _, _), do: 0
+
+  defp coroutine_entry?(item, method) do
+    name = item["item_meta"]["name"]
+
+    length(name) >= 3 and Enum.at(name, -2) == %{"Builtin" => ["Closure", 0]} and
+      List.last(name) == %{"Ident" => [method, 0]}
+  end
+
+  defp coroutine_storage!(types, translated, refs) do
+    for {id, type} <- types,
+        attribute <- type["item_meta"]["attr_info"]["attributes"] || [],
+        %{"Unknown" => %{"path" => "lynx::coroutine_storage_v1", "args" => args}} <- [attribute],
+        into: %{} do
+      metadata = JSON.decode!(args)
+
+      unless type["src"] == "Normal" and
+               List.last(type["item_meta"]["name"]) == %{"Builtin" => ["Closure", 0]} and
+               match?(%{"Struct" => _}, type["kind"]) and
+               Enum.sort(Map.keys(metadata)) == ~w(state states) and
+               is_integer(metadata["state"]) and is_list(metadata["states"]) and
+               length(metadata["states"]) >= 3 and
+               Enum.take(metadata["states"], 3) == [[], [], []],
+             do: LLBC.failure!(type, translated, "invalid compiler coroutine storage evidence")
+
+      fields = type["kind"]["Struct"]
+
+      unless Enum.count(type["item_meta"]["attr_info"]["attributes"], fn attribute ->
+               match?(%{"Unknown" => %{"path" => "lynx::coroutine_storage_v1"}}, attribute)
+             end) == 1,
+             do: LLBC.failure!(type, translated, "duplicate compiler coroutine storage evidence")
+
+      unless metadata["state"] >= 0 and metadata["state"] < length(fields) and
+               Enum.all?(metadata["states"], fn indices ->
+                 is_list(indices) and Enum.uniq(indices) == indices and
+                   Enum.all?(
+                     indices,
+                     &(is_integer(&1) and &1 > metadata["state"] and &1 < length(fields))
+                   )
+               end),
+             do: LLBC.failure!(type, translated, "invalid compiler coroutine saved-field mapping")
+
+      unless CallModels.expand(Enum.at(fields, metadata["state"])["ty"], refs) ==
+               %{"Scalar" => %{"Integer" => %{"Unsigned" => "U32"}}},
+             do: LLBC.failure!(type, translated, "invalid compiler coroutine state type")
+
+      {id, Map.put(metadata, "fields", fields)}
+    end
+  end
+
+  defp frame_info(%{"Ref" => [_, type, "Mut"]}, types, refs, coros, path) do
+    case frame_info(type, types, refs, coros, path ++ [:deref]) do
+      nil -> nil
+      info -> %{info | borrowed: true}
+    end
+  end
+
+  defp frame_info(%{"Ref" => _}, _, _, _, _), do: nil
+
+  defp frame_info(
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}},
+         types,
+         refs,
+         coros,
+         path
+       ) do
+    cond do
+      coros[id] ->
+        %{id: id, prefix: path, borrowed: false, args: args}
+
+      match?(%{"Struct" => [_]}, types[id]["kind"]) ->
+        [field] = types[id]["kind"]["Struct"]
+        type = CallModels.instantiate(CallModels.expand(field["ty"], refs), args)
+        frame_info(type, types, refs, coros, path ++ [{:field, nil, 0}])
+
+      true ->
+        nil
+    end
+  end
+
+  defp frame_info(_, _, _, _, _), do: nil
+
+  defp resolve_place(%{"kind" => %{"Local" => root}}, _known), do: {root, []}
+
+  defp resolve_place(%{"kind" => %{"Projection" => [parent, step]}}, known) do
+    {root, path} = resolve_place(parent, known)
+
+    case {step, path, known[{:alias, root}]} do
+      {"Deref", [], {alias, prefix}} -> {alias, prefix}
+      {"Deref", _, _} -> {root, path ++ [:deref]}
+      {%{"Field" => [variant, index]}, _, _} -> {root, path ++ [{:field, variant, index}]}
+      _ -> {root, path ++ [:unsupported]}
+    end
+  end
+
+  defp resolve_place(_, _), do: {nil, []}
 
   defp block!(block, live, ctx), do: block_state!(block, %{live: live, known: %{}}, ctx)
 
@@ -85,7 +256,7 @@ defmodule Lynx.Rust.NativeLifetimes do
           end
 
         kind ->
-          case statement!(kind, state.live, ctx) do
+          case statement!(kind, state.live, Map.put(ctx, :known, state.known)) do
             :terminal -> {:halt, :terminal}
             live -> {:cont, %{live: live, known: known_after(kind, state.known, ctx)}}
           end
@@ -109,43 +280,222 @@ defmodule Lynx.Rust.NativeLifetimes do
       block_state!(Enum.fetch!(branches, index), state, ctx)
     else
       states =
-        Enum.map(branches, &block_state!(&1, state, ctx)) |> Enum.reject(&(&1 == :terminal))
+        Enum.with_index(branches)
+        |> Enum.map(fn {branch, index} ->
+          block_state!(branch, refine_coroutine(data, index, state, ctx), ctx)
+        end)
+        |> Enum.reject(&(&1 == :terminal))
 
       case states do
         [] ->
           :terminal
 
         [first | rest] ->
-          unless Enum.all?(rest, &MapSet.equal?(&1.live, first.live)), do: reject!(ctx)
+          unless Enum.all?(
+                   rest,
+                   &MapSet.equal?(
+                     MapSet.difference(&1.live, ctx.borrowed),
+                     MapSet.difference(first.live, ctx.borrowed)
+                   )
+                 ),
+                 do: reject!(ctx)
+
+          live = Enum.reduce(rest, first.live, &MapSet.union(&1.live, &2))
 
           known =
             Map.filter(first.known, fn {id, value} ->
               Enum.all?(rest, &(&1.known[id] == value))
             end)
 
-          %{first | known: known}
+          %{first | known: known, live: live}
       end
     end
   end
 
-  defp known_after(%{"Assign" => [%{"kind" => %{"Local" => local}}, value]}, known, ctx) do
-    value =
-      case value do
-        %{"Use" => [operand, _]} -> boolean(operand, known, ctx)
-        _ -> :unknown
+  defp refine_coroutine(data, index, state, ctx) do
+    fact =
+      case data["scrutinee"] do
+        %{"Value" => operand} -> state_operand(operand, state.known, ctx)
+        _ -> nil
       end
 
-    if is_boolean(value), do: Map.put(known, local, value), else: Map.delete(known, local)
+    case fact do
+      {:coroutine_state, root} ->
+        frame = ctx.frames[root]
+
+        tags =
+          for [constant, branch] <- data["branches"],
+              branch == index,
+              do: scalar_constant(constant, ctx)
+
+        tags =
+          if data["fallback"] == index do
+            explicit =
+              Enum.map(data["branches"], fn [constant, _] -> scalar_constant(constant, ctx) end)
+
+            case state.known[{:states, root}] do
+              domain when is_list(domain) ->
+                if Enum.all?(explicit, &is_integer/1), do: tags ++ (domain -- explicit), else: []
+
+              _ ->
+                []
+            end
+          else
+            tags
+          end
+
+        if tags != [] and Enum.all?(tags, &is_integer/1) do
+          metadata = ctx.coroutines[frame.id]
+
+          owned =
+            Enum.any?(tags, fn tag ->
+              case Enum.fetch(metadata["states"], tag) do
+                {:ok, indices} ->
+                  Enum.any?(indices, fn field ->
+                    type =
+                      CallModels.instantiate(
+                        CallModels.expand(Enum.at(metadata["fields"], field)["ty"], ctx.refs),
+                        frame.args
+                      )
+
+                    contains_native?(type, ctx.native, ctx.types, ctx.refs, [])
+                  end)
+
+                _ ->
+                  true
+              end
+            end)
+
+          %{
+            state
+            | known: Map.put(state.known, {:states, root}, tags),
+              live:
+                if(owned, do: MapSet.put(state.live, root), else: MapSet.delete(state.live, root))
+          }
+        else
+          state
+        end
+
+      _ ->
+        state
+    end
   end
 
-  defp known_after(%{"StorageDead" => local}, known, _), do: Map.delete(known, local)
+  defp state_operand(%{"Move" => %{"kind" => %{"Local" => id}}}, known, _), do: known[id]
 
-  # A call can update booleans through aliases. Retain no constant fact across
-  # one; compiler drop flags are re-established by explicit assignments.
-  defp known_after(%{"Call" => _}, _, _), do: %{}
-  defp known_after(%{"Assign" => _}, _, _), do: %{}
+  defp state_operand(%{"Copy" => place}, known, ctx) do
+    {root, path} = resolve_place(place, known)
+
+    if ctx.frames[root] &&
+         path ==
+           ctx.frames[root].prefix ++
+             [{:field, nil, ctx.coroutines[ctx.frames[root].id]["state"]}] do
+      {:coroutine_state, root}
+    else
+      case place do
+        %{"kind" => %{"Local" => id}} -> known[id]
+        _ -> nil
+      end
+    end
+  end
+
+  defp state_operand(_, _, _), do: nil
+
+  defp scalar_constant(
+         %{"Value" => [_, [%{"Integer" => %{"Unsigned" => ["U32", value]}}, _]]},
+         _
+       ),
+       do: parse_state(value)
+
+  defp scalar_constant(%{"Deduplicated" => id}, ctx), do: Map.get(ctx.booleans, id, :unknown)
+  defp scalar_constant(_, _), do: :unknown
+
+  defp parse_state(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n >= 0 and n < 4_294_967_296 -> n
+      _ -> :unknown
+    end
+  end
+
+  defp parse_state(_), do: :unknown
+
+  defp known_after(%{"Assign" => [%{"kind" => %{"Local" => local}}, value]}, known, ctx) do
+    known = known |> Map.delete({:alias, local}) |> Map.delete({:empty, local})
+
+    known =
+      if empty_value?(value, known, ctx), do: Map.put(known, {:empty, local}, true), else: known
+
+    case value do
+      %{"Ref" => %{"place" => place}} ->
+        Map.put(Map.delete(known, local), {:alias, local}, resolve_place(place, known))
+
+      %{"Use" => [%{"Copy" => place}, _]} ->
+        {root, path} = resolve_place(place, known)
+
+        if ctx.frames[root] &&
+             path ==
+               ctx.frames[root].prefix ++
+                 [{:field, nil, ctx.coroutines[ctx.frames[root].id]["state"]}],
+           do: Map.put(known, local, {:coroutine_state, root}),
+           else: known_boolean(local, boolean(%{"Copy" => place}, known, ctx), known)
+
+      %{"Use" => [operand, _]} ->
+        known_boolean(local, boolean(operand, known, ctx), known)
+
+      _ ->
+        Map.delete(known, local)
+    end
+  end
+
+  defp known_after(%{"StorageDead" => local}, known, _),
+    do: known |> Map.delete(local) |> Map.delete({:alias, local}) |> Map.delete({:empty, local})
+
+  defp known_after(%{"Call" => _}, known, _),
+    do: Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
+
+  defp known_after(%{"Assign" => _}, known, _),
+    do: Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
 
   defp known_after(_, known, _), do: known
+
+  defp empty_value?(%{"Aggregate" => [_kind, operands]}, known, ctx),
+    do: Enum.all?(operands, &empty_operand?(&1, known, ctx))
+
+  defp empty_value?(%{"Use" => [operand, _]}, known, ctx), do: empty_operand?(operand, known, ctx)
+  defp empty_value?(_, _, _), do: false
+
+  defp empty_operand?(operand, known, ctx) when is_map(operand) do
+    case operand do
+      %{"Move" => %{"kind" => %{"Local" => local}, "ty" => type}} ->
+        not contains_native?(
+          CallModels.expand(type, ctx.refs),
+          ctx.native,
+          ctx.types,
+          ctx.refs,
+          []
+        ) or known[{:empty, local}] == true
+
+      %{"Copy" => %{"kind" => %{"Local" => local}, "ty" => type}} ->
+        not contains_native?(
+          CallModels.expand(type, ctx.refs),
+          ctx.native,
+          ctx.types,
+          ctx.refs,
+          []
+        ) or known[{:empty, local}] == true
+
+      %{"Const" => _} ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp empty_operand?(_, _, _), do: false
+
+  defp known_boolean(local, value, known),
+    do: if(is_boolean(value), do: Map.put(known, local, value), else: Map.delete(known, local))
 
   defp boolean(%{"Const" => constant}, _, ctx), do: constant_boolean(constant, ctx)
 
@@ -171,6 +521,12 @@ defmodule Lynx.Rust.NativeLifetimes do
     end
   end
 
+  defp boolean_constants(
+         %{"Value" => [id, [%{"Integer" => %{"Unsigned" => ["U32", value]}}, _]]},
+         found
+       ),
+       do: Map.put(found, id, parse_state(value))
+
   defp boolean_constants(map, found) when is_map(map),
     do: boolean_constants(Map.values(map), found)
 
@@ -182,7 +538,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp statement!(%{"StorageLive" => _}, live, _), do: live
 
   defp statement!(%{"StorageDead" => local}, live, ctx) do
-    if MapSet.member?(live, local), do: reject!(ctx)
+    if MapSet.member?(live, local) and not MapSet.member?(ctx.borrowed, local), do: reject!(ctx)
     live
   end
 
@@ -196,52 +552,117 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp statement!(%{"Call" => %{"call" => call, "dest" => dest}}, live, ctx) do
     id = get_in(call, ["func", "Regular", "kind", "Fun"])
     model = ctx.models[id]
-    remaining = moves!(call["args"], live, ctx)
+
+    remaining =
+      if model && model[:native_replace],
+        do: replace_owner!(call, live, ctx),
+        else: moves!(call["args"], live, ctx)
 
     # Ownership can move into an actual extracted callee: its body is checked by
     # this same audit, and its effects compose through NativeM. No caller-owned
     # cell may remain live if that callee fails. External contracts cannot stand
     # in for a body here.
     if MapSet.size(live) > 0 and
-         not ((MapSet.size(remaining) == 0 and
-                 ((model && (model[:native_dispose] || model[:native_transfer])) ||
-                    MapSet.member?(ctx.implementations, id))) or
-                (MapSet.member?(ctx.nonpanicking, id) and
-                   (MapSet.equal?(remaining, live) or (model && model[:native_dispose])))),
+         !((MapSet.size(remaining) == 0 and
+              ((model && (model[:native_dispose] || model[:native_transfer])) ||
+                 MapSet.member?(ctx.implementations, id))) or
+             (MapSet.member?(ctx.nonpanicking, id) and
+                (MapSet.equal?(remaining, live) or
+                   (model && (model[:native_dispose] || model[:native_replace]))))),
        do: reject!(ctx)
 
     destination!(dest, remaining, ctx)
   end
 
   defp statement!("Return", live, ctx) do
-    if MapSet.size(MapSet.delete(live, 0)) > 0, do: reject!(ctx)
+    if MapSet.size(MapSet.difference(MapSet.delete(live, 0), ctx.borrowed)) > 0, do: reject!(ctx)
     :terminal
   end
 
-  defp statement!(%{"Panic" => %{"on_unwind" => %{"statements" => []}}}, live, ctx) do
+  defp statement!(%{"Panic" => %{"on_unwind" => %{"statements" => cleanup}}}, live, ctx) do
     if MapSet.size(live) > 0, do: reject!(ctx)
+
+    unless Enum.all?(cleanup, fn statement ->
+             case statement["kind"] do
+               %{"StorageDead" => _} -> true
+               terminal when terminal in ["UnwindResume", "UnwindTerminate"] -> true
+               _ -> false
+             end
+           end),
+           do: reject!(ctx)
+
     :terminal
   end
+
+  defp statement!("UndefinedBehavior", _live, %{cutoff_undefined: true}), do: :terminal
 
   defp statement!(kind, live, ctx) do
     if MapSet.size(live) > 0 or nested_owner?(kind, ctx), do: reject!(ctx)
     live
   end
 
+  # Only an empty replacement can transfer the one saved owner out of a frame.
+  # Non-owning replacements retain the ordinary call path.
+  defp replace_owner!(%{"args" => [borrow, replacement]}, live, ctx) do
+    place =
+      case borrow do
+        %{"Move" => place} -> place
+        %{"Copy" => place} -> place
+        _ -> reject!(ctx)
+      end
+
+    case Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true) do
+      %{"Ref" => [_, type, "Mut"]} ->
+        {root, path} = resolve_place(%{"kind" => %{"Projection" => [place, "Deref"]}}, ctx.known)
+
+        if contains_native?(type, ctx.native, ctx.types, ctx.refs, []) do
+          frame = ctx.frames[root]
+
+          frame_type =
+            if frame,
+              do: %{"Adt" => %{"id" => frame.id, "builtin" => nil, "generics" => frame.args}}
+
+          unless frame && path != [] && MapSet.member?(live, root) &&
+                   native_count(frame_type, ctx.native, ctx.types, ctx.refs, []) == 1 &&
+                   native_count(type, ctx.native, ctx.types, ctx.refs, []) == 1 &&
+                   empty_operand?(replacement, ctx.known, ctx),
+                 do: reject!(ctx)
+
+          MapSet.delete(live, root)
+        else
+          moves!([borrow, replacement], live, ctx)
+        end
+
+      _ ->
+        reject!(ctx)
+    end
+  end
+
   defp administrative?(%{"Use" => _}), do: true
   defp administrative?(%{"Aggregate" => _}), do: true
+  defp administrative?(%{"Discriminant" => _}), do: true
   defp administrative?(_), do: false
 
   defp transfer!(dest, value, live, ctx) do
     remaining = moves!(value, live, ctx)
-
-    if MapSet.size(remaining) < MapSet.size(live) and not nested_owner?(dest, ctx),
-      do: reject!(ctx)
-
-    destination!(dest, remaining, ctx)
+    transferred = MapSet.size(remaining) < MapSet.size(live)
+    if transferred and not native_place?(dest, ctx), do: reject!(ctx)
+    if transferred, do: destination!(dest, remaining, ctx), else: remaining
   end
 
-  defp destination!(%{"kind" => %{"Local" => local}}, live, ctx) do
+  defp native_place?(place, ctx),
+    do:
+      contains_native?(
+        Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true),
+        ctx.native,
+        ctx.types,
+        ctx.refs,
+        []
+      )
+
+  defp destination!(%{"kind" => %{"Local" => local}} = place, live, ctx) do
+    Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
+
     if MapSet.member?(ctx.owners, local) do
       if MapSet.member?(live, local), do: reject!(ctx)
       MapSet.put(live, local)
@@ -251,56 +672,64 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp destination!(dest, live, ctx) do
-    if nested_owner?(dest, ctx), do: reject!(ctx)
-    live
-  end
+    if native_place?(dest, ctx) do
+      {root, _} = resolve_place(dest, ctx.known)
 
-  defp moves!(%{"Move" => %{"kind" => %{"Local" => local}}}, live, ctx) do
-    if MapSet.member?(ctx.owners, local) and not MapSet.member?(live, local), do: reject!(ctx)
-    MapSet.delete(live, local)
-  end
+      unless ctx.frames[root] && ctx.frames[root].borrowed &&
+               native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) == 0,
+             do: reject!(ctx)
 
-  # A single-field variant moves its complete payload. Multi-field or opaque
-  # containers cannot be partially consumed by this rule. All branch states
-  # still undergo the same ownership and join checks.
-  defp moves!(
-         %{
-           "Move" => %{
-             "kind" => %{
-               "Projection" => [
-                 %{"kind" => %{"Local" => local}, "ty" => annotation},
-                 %{"Field" => [variant, 0]}
-               ]
-             }
-           }
-         },
-         live,
-         ctx
-       ) do
-    if MapSet.member?(ctx.owners, local) do
-      unless MapSet.member?(live, local), do: reject!(ctx)
-      type = CallModels.expand(annotation, ctx.refs)
-      unless type == ctx.locals[local], do: reject!(ctx)
-
-      with %{"Adt" => %{"id" => id, "builtin" => nil}} <- type,
-           %{"kind" => %{"Enum" => variants}} <- ctx.types[id],
-           %{"fields" => [_]} <- Enum.find(variants, &(&1["id"] == variant)) do
-        MapSet.delete(live, local)
-      else
-        _ -> reject!(ctx)
-      end
+      if MapSet.member?(live, root), do: reject!(ctx)
+      MapSet.put(live, root)
     else
       live
     end
   end
 
+  defp moves!(%{"Move" => %{"kind" => %{"Local" => local}} = place}, live, ctx) do
+    Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
+
+    if MapSet.member?(ctx.owners, local) and not MapSet.member?(live, local) and
+         ctx.known[{:empty, local}] != true,
+       do: reject!(ctx)
+
+    MapSet.delete(live, local)
+  end
+
+  # A projection can transfer the complete native ownership of a container only
+  # when the actual instantiated type contains exactly one native owner.
   defp moves!(%{"Move" => place}, live, ctx) do
-    if nested_owner?(place, ctx), do: reject!(ctx)
-    live
+    if native_place?(place, ctx) do
+      {root, _} = resolve_place(place, ctx.known)
+
+      unless MapSet.member?(live, root),
+        do:
+          LLBC.failure!(
+            ctx.function,
+            ctx.translated,
+            "native owner lifetime: projected native field is uninitialized or consumed"
+          )
+
+      root_type =
+        if ctx.frames[root],
+          do: %{
+            "Adt" => %{
+              "id" => ctx.frames[root].id,
+              "builtin" => nil,
+              "generics" => ctx.frames[root].args
+            }
+          },
+          else: ctx.locals[root]
+
+      unless native_count(root_type, ctx.native, ctx.types, ctx.refs, []) == 1, do: reject!(ctx)
+      MapSet.delete(live, root)
+    else
+      live
+    end
   end
 
   defp moves!(%{"Copy" => place}, live, ctx) do
-    if nested_owner?(place, ctx), do: reject!(ctx)
+    if native_place?(place, ctx), do: reject!(ctx)
     live
   end
 

@@ -19,7 +19,7 @@ defmodule Lynx.Rust.Extraction do
          Keyword.get(opts, :execution, :pure) != :pure,
        do: raise(ArgumentError, "immediate future extraction currently requires pure execution")
 
-    if Keyword.get(opts, :futures, :reject) in [:polling, :suspending] and
+    if Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling] and
          Keyword.get(opts, :execution, :pure) != :runtime,
        do: raise(ArgumentError, "stateful future polling requires runtime execution")
 
@@ -96,7 +96,16 @@ defmodule Lynx.Rust.Extraction do
 
     {document, nonpanicking_borrows} =
       if Keyword.get(opts, :execution, :pure) == :runtime,
-        do: Lynx.Rust.NativeBorrows.prune_owned_calls!(document, first_party),
+        do:
+          Lynx.Rust.NativeBorrows.prune_owned_calls!(
+            document,
+            first_party,
+            Keyword.get(opts, :external_calls, []) ++
+              if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
+                do: [:native_wakers],
+                else: []
+              )
+          ),
         else: {document, []}
 
     {document, native_unwind} =
@@ -155,7 +164,7 @@ defmodule Lynx.Rust.Extraction do
 
     requested_calls =
       Keyword.get(opts, :external_calls, []) ++
-        if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending],
+        if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
           do: [:native_wakers],
           else: []
         )
@@ -214,6 +223,10 @@ defmodule Lynx.Rust.Extraction do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
+
+        backend_document =
+          Lynx.Rust.LLBCJson.restore_type_references!(backend_document, discovery.document)
+
         File.write!(path, Lynx.Rust.LLBCJson.encode_like!(backend_document, llbc))
         path
       end
