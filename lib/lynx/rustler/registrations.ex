@@ -85,7 +85,10 @@ defmodule Lynx.Rustler.Registrations do
             case g["item_meta"]["name"] do
               name when length(name) == length(prefix) + 2 ->
                 Enum.take(name, length(prefix)) == prefix and
-                  match?(%{"Ident" => ["_", _]}, Enum.at(name, -2)) and
+                  Enum.any?(
+                    expected,
+                    &(Enum.at(name, -2) == %{"Ident" => ["_", &1["anonymous_index"]]})
+                  ) and
                   List.last(name) == %{"Ident" => ["__INVENTORY", 0]}
 
               _ ->
@@ -206,11 +209,19 @@ defmodule Lynx.Rustler.Registrations do
     if node["def_id"] in seen,
       do: raise(ArgumentError, "cyclic resource inventory initialization")
 
-    [f] =
-      Enum.filter(
-        Map.values(functions),
-        &(is_map(&1["src"]) and get_in(&1, ["src", "GlobalInitializer", "id"]) == node["def_id"])
-      )
+    f =
+      case Enum.filter(
+             Map.values(functions),
+             &(is_map(&1["src"]) and
+                 get_in(&1, ["src", "GlobalInitializer", "id"]) == node["def_id"])
+           ) do
+        [f] ->
+          f
+
+        _ ->
+          raise ArgumentError,
+                "missing resource inventory initializer #{inspect(node["item_meta"]["name"])}"
+      end
 
     unless match?(%{"Structured" => _}, f["body"]),
       do: raise(ArgumentError, "missing resource initializer implementation")

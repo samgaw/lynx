@@ -233,6 +233,7 @@ struct Registrations {
     modules: Vec<String>,
     entries: Vec<Value>,
     errors: Vec<String>,
+    anonymous: std::collections::BTreeMap<Vec<String>, usize>,
 }
 impl<'ast> Visit<'ast> for Registrations {
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
@@ -240,13 +241,23 @@ impl<'ast> Visit<'ast> for Registrations {
         visit::visit_item_mod(self, module);
         self.modules.pop();
     }
+    // Module-level anonymous constants have compiler disambiguators independent
+    // of function/impl bodies. Resource inventories are module items.
+    fn visit_item_fn(&mut self, _item: &'ast ItemFn) {}
+    fn visit_item_impl(&mut self, _item: &'ast syn::ItemImpl) {}
     fn visit_item_const(&mut self, item: &'ast ItemConst) {
+        let ordinal = self.anonymous.entry(self.modules.clone()).or_default();
+        let index = *ordinal;
+        if item.ident == "_" {
+            *ordinal += 1;
+        }
         match registration(item) {
             Ok(Some(mut entry)) => {
                 entry["modules"] = json!(self.modules);
+                entry["anonymous_index"] = json!(index);
                 self.entries.push(entry);
             }
-            Ok(None) => visit::visit_item_const(self, item),
+            Ok(None) => {}
             Err(e) => self.errors.push(e),
         }
     }
@@ -325,6 +336,19 @@ mod tests {
                 "accepted altered inventory: {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn tracks_module_inventory_disambiguators_without_function_constants() {
+        let file = syn::parse_file(&format!(
+            "const _: u8 = 0; fn unrelated() {{ const _: u8 = 1; }} {INVENTORY} const _: u8 = 2;"
+        ))
+        .expect("fixture");
+        let mut registrations = Registrations::default();
+        registrations.visit_file(&file);
+        assert!(registrations.errors.is_empty());
+        assert_eq!(registrations.entries.len(), 1);
+        assert_eq!(registrations.entries[0]["anonymous_index"], 1);
     }
 
     #[test]
