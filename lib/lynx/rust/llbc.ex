@@ -575,6 +575,22 @@ defmodule Lynx.Rust.LLBC do
       builtin == nil and length(types) == 2 and result_type?(id, audit) ->
         %{"result" => Enum.map(types, &signature_type!(&1, audit))}
 
+      builtin == nil and length(types) == 1 and
+          Lynx.Rust.ResourceModels.type?(
+            Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
+          ) ->
+        payload = Lynx.Rust.CallModels.expand(hd(types), audit.references)
+
+        with %{"Adt" => %{"id" => payload_id, "builtin" => nil, "generics" => args}} <- payload,
+             true <- Lynx.Rust.Constants.empty_arguments?(args),
+             %{"item_meta" => %{"name" => name}} <-
+               Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == payload_id)),
+             true <- Enum.all?(name, &match?(%{"Ident" => [_, 0]}, &1)) do
+          %{"resource" => Enum.map(name, fn %{"Ident" => [part, 0]} -> part end)}
+        else
+          _ -> raise ArgumentError, "resource NIF type requires a monomorphic nominal payload"
+        end
+
       builtin == nil and byte_vector?(id, types, audit) ->
         %{"vec" => "u8"}
 

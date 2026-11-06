@@ -70,6 +70,42 @@ fn supported_type(ty: &Type, output: bool) -> Result<Value, String> {
             .map(|segment| segment.ident.to_string())
             .collect();
         if path.qself.is_none()
+            && (names == ["ResourceArc"]
+                || names == ["rustler", "ResourceArc"]
+                || names == ["rustler", "resource", "ResourceArc"]
+                || names == ["rustler", "resource", "arc", "ResourceArc"])
+        {
+            let segment = path
+                .path
+                .segments
+                .last()
+                .ok_or("missing ResourceArc segment")?;
+            if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
+                if arguments.args.len() == 1 {
+                    if let Some(syn::GenericArgument::Type(Type::Path(payload))) =
+                        arguments.args.first()
+                    {
+                        if payload.qself.is_none()
+                            && payload
+                                .path
+                                .segments
+                                .iter()
+                                .all(|s| matches!(s.arguments, syn::PathArguments::None))
+                        {
+                            let name: Vec<_> = payload
+                                .path
+                                .segments
+                                .iter()
+                                .map(|s| s.ident.to_string())
+                                .collect();
+                            return Ok(json!({"resource": name}));
+                        }
+                    }
+                }
+            }
+            return Err("Rustler ResourceArc requires a monomorphic payload path".into());
+        }
+        if path.qself.is_none()
             && (names == ["Vec"]
                 || names == ["std", "vec", "Vec"]
                 || names == ["alloc", "vec", "Vec"])
@@ -390,6 +426,27 @@ mod tests {
           "flags":2, "rust_name":"native", "modules":["nested"],
           "arguments":["bool", "i64"], "result":"bool"})]
         );
+    }
+
+    #[test]
+    fn discovers_resource_hints_and_rejects_nonconcrete_payloads() {
+        let bindings = discover("fn native(a: rustler::ResourceArc<State>) -> rustler::ResourceArc<types::State> { todo!() }", 1);
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(
+            bindings.entries[0]["arguments"],
+            json!([{"resource": ["State"]}])
+        );
+        assert_eq!(
+            bindings.entries[0]["result"],
+            json!({"resource": ["types", "State"]})
+        );
+        for signature in [
+            "fn native(a: rustler::ResourceArc<State<u64>>) -> bool { true }",
+            "fn native(a: rustler::ResourceArc<&State>) -> bool { true }",
+            "fn native(a: rustler::ResourceArc<State, Other>) -> bool { true }",
+        ] {
+            assert_eq!(discover(signature, 1).errors.len(), 1, "{signature}");
+        }
     }
 
     #[test]
