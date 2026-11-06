@@ -201,11 +201,35 @@ defmodule Lynx.Rust.LLBC do
     }
   end
 
-  def link!(audit, translation) do
+  def link!(audit, translation, opts \\ []) do
+    expected_monad = Keyword.get(opts, :result_monad, "RustM")
+
+    result_monad =
+      if translation["aeneas_version"] == "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1",
+        do: translation["result_monad"],
+        else: Map.get(translation, "result_monad", "RustM")
+
+    unless result_monad == expected_monad and expected_monad in ["RustM", "Lynx.NativeM"],
+      do:
+        raise(
+          ArgumentError,
+          "Aeneas result monad does not match the selected execution model"
+        )
+
+    if expected_monad != "RustM" and
+         translation["aeneas_version"] !=
+           "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1",
+       do:
+         raise(
+           ArgumentError,
+           "native runtime extraction requires the pinned result-monad backend"
+         )
+
     unless translation["charon_version"] == "0.1.304" && translation["crate"] == audit.crate &&
              translation["aeneas_version"] in [
                "nightly-2026.11.04-2b9e3ea",
-               "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1"
+               "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1",
+               "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1"
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 

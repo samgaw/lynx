@@ -95,6 +95,31 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
+  test "binds translation provenance to the selected result monad" do
+    audit = LLBC.audit!(document([function()]), ["first_party"])
+
+    pure =
+      Map.put(translation(), "aeneas_version", "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1")
+
+    pure = Map.put(pure, "result_monad", "RustM")
+    native = Map.put(pure, "result_monad", "Lynx.NativeM")
+
+    assert %{0 => _} = LLBC.link!(audit, pure)
+    assert %{0 => _} = LLBC.link!(audit, native, result_monad: "Lynx.NativeM")
+
+    for {translation, expected} <- [
+          {native, "RustM"},
+          {Map.delete(pure, "result_monad"), "RustM"},
+          {pure, "Lynx.NativeM"},
+          {Map.put(native, "result_monad", "UncheckedM"), "UncheckedM"},
+          {Map.put(native, "aeneas_version", "nightly-2026.11.04-2b9e3ea"), "Lynx.NativeM"}
+        ] do
+      assert_raise ArgumentError, fn ->
+        LLBC.link!(audit, translation, result_monad: expected)
+      end
+    end
+  end
+
   test "composite signatures retain tuple structure and require the standard Result identity" do
     boolean = %{"Value" => [0, %{"Scalar" => "Bool"}]}
 
