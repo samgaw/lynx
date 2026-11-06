@@ -129,6 +129,8 @@ structure Environment where
   /-- Shared native cells: logical identity, nominal type tag and encoded contents.
   Native backends validate typed access. -/
   nativeHeap : List (Nat × String × Term) := []
+  /-- Resource types registered by the modeled native loader. -/
+  nativeResourceTypes : List String := []
 deriving Repr, Inhabited
 
 namespace Environment

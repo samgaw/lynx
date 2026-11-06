@@ -115,6 +115,49 @@ pub struct CounterResource {
 #[rustler::resource_impl]
 impl rustler::Resource for CounterResource {}
 
+/// Destructor-free resource with a payload defined in another workspace crate.
+pub struct ScalarResource {
+    counter: effects_core::Counter,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for ScalarResource {}
+
+/// Allocates a resource after its type has been registered by the native loader.
+///
+/// # Panics
+/// Panics when the loader has not registered the resource type.
+pub fn scalar_resource_new(value: u64) -> rustler::ResourceArc<ScalarResource> {
+    rustler::ResourceArc::new(ScalarResource {
+        counter: effects_core::Counter { value },
+    })
+}
+
+/// Retains the same shared allocation with another Rust ownership token.
+pub fn scalar_resource_clone(
+    resource: &rustler::ResourceArc<ScalarResource>,
+) -> rustler::ResourceArc<ScalarResource> {
+    resource.clone()
+}
+
+/// Reads through the resource's shared dereference and a first-party callee.
+pub fn scalar_resource_read(resource: &rustler::ResourceArc<ScalarResource>) -> u64 {
+    effects_core::counter_value(&resource.counter)
+}
+
+/// Releases the original handle, observes its retained alias, then releases it.
+///
+/// # Panics
+/// Panics when the loader has not registered the resource type.
+pub fn scalar_resource_cycle(value: u64) -> u64 {
+    let first = scalar_resource_new(value);
+    let retained = scalar_resource_clone(&first);
+    drop(first);
+    let observed = scalar_resource_read(&retained);
+    drop(retained);
+    observed
+}
+
 /// Allocates the actual Rustler resource. Requires Rustler resource registration.
 pub fn resource_new(value: u64) -> rustler::ResourceArc<CounterResource> {
     rustler::ResourceArc::new(CounterResource {

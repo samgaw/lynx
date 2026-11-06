@@ -6,6 +6,11 @@ pub struct Counter {
     pub value: u64,
 }
 
+/// Reads shared counter contents without transferring ownership.
+pub fn counter_value(counter: &Counter) -> u64 {
+    counter.value
+}
+
 /// Updates through an exclusive borrow; overflow leaves the original value intact.
 pub fn increment(counter: &mut Counter, amount: u64) -> bool {
     match counter.value.checked_add(amount) {
