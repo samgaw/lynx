@@ -1,0 +1,463 @@
+--- a/charon/src/bin/charon-driver/translate/get_mir.rs
++++ b/charon/src/bin/charon-driver/translate/get_mir.rs
+@@ -30,6 +30,22 @@
+                 raise_error!(self, span, "Thread panicked when extracting body.");
+             }
+         }
++    }
++
++    pub(crate) fn get_coroutine_drop_mir(&mut self, item: &hax::ItemRef<'tcx>) -> mir::Body<'tcx> {
++        let tcx = self.tcx;
++        let id = item.def_id.real_rust_def_id();
++        let body = tcx
++            .optimized_mir(id)
++            .coroutine
++            .as_ref()
++            .unwrap()
++            .coroutine_drop
++            .as_ref()
++            .unwrap()
++            .clone();
++        let state = self.hax_state_with_id();
++        hax::substitute(tcx, state.typing_env(), Some(item.rustc_args(state)), body)
+     }
+
+     fn get_mir_inner(
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -602,11 +602,128 @@
+         Ok(())
+     }
+
++    /// Consume the logical future while executing rustc's actual destructor body.
++    fn translate_owned_coroutine_drop(
++        &mut self,
++        span: Span,
++        def: &hax::FullDef<'tcx>,
++    ) -> Result<Body, Error> {
++        use rustc_middle::mir::visit::MutVisitor;
++        let hax::FullDefKind::Coroutine(coroutine) = def.kind() else {
++            unreachable!()
++        };
++        let mut body = self.get_coroutine_drop_mir(def.this());
++        if body.arg_count != 1
++            || body.local_decls[mir::Local::from_usize(1)]
++                .ty
++                .builtin_deref(true)
++                != Some(coroutine.self_ty)
++        {
++            raise_error!(
++                self,
++                span,
++                "Unsupported compiler coroutine destruction signature"
++            );
++        }
++        struct OwnedSelf<'tcx> {
++            tcx: ty::TyCtxt<'tcx>,
++            invalid: bool,
++        }
++        impl<'tcx> MutVisitor<'tcx> for OwnedSelf<'tcx> {
++            fn tcx(&self) -> ty::TyCtxt<'tcx> {
++                self.tcx
++            }
++            fn visit_place(
++                &mut self,
++                place: &mut mir::Place<'tcx>,
++                _: mir::visit::PlaceContext,
++                _: mir::Location,
++            ) {
++                if place.local.as_usize() == 1 {
++                    if matches!(place.projection.first(), Some(mir::ProjectionElem::Deref)) {
++                        *place = mir::Place::from(place.local)
++                            .project_deeper(&place.projection[1..], self.tcx);
++                    } else {
++                        self.invalid = true;
++                    }
++                }
++            }
++        }
++        let mut visitor = OwnedSelf {
++            tcx: self.tcx,
++            invalid: false,
++        };
++        visitor.visit_body(&mut body);
++        if visitor.invalid {
++            raise_error!(
++                self,
++                span,
++                "Compiler coroutine destruction observes or escapes its self pointer"
++            );
++        }
++        body.local_decls[mir::Local::from_usize(1)].ty = coroutine.self_ty;
++        let layout_body = self.get_mir(def.this(), span)?.unwrap();
++        let Some(layout) = layout_body.coroutine_layout_raw() else {
++            raise_error!(
++                self,
++                span,
++                "Missing compiler coroutine layout for destruction"
++            );
++        };
++        let state_count = layout.variant_fields.len();
++        let mut translated = self.translate_body(span, body, &def.source_text);
++        if let Body::Unstructured(body) = &mut translated {
++            // The owned logical frame admits arbitrary tags. Exclude invalid tags
++            // explicitly rather than treating rustc's otherwise-return as cleanup.
++            let entry = body.body[START_BLOCK_ID].clone();
++            let kind = entry.kind;
++            let original = body.body.push(entry);
++            let invalid = body
++                .body
++                .push(Terminator::new(span, TerminatorKind::UndefinedBehavior).into_block(kind));
++            let state_ty = Ty::new(TyKind::Scalar(ScalarTy::Integer(IntegerTy::Unsigned(
++                UIntTy::U32,
++            ))));
++            let state = body.locals.place_for_var(LocalId::new(1)).project(
++                ProjectionElem::Field(None, FieldId::new(coroutine.upvar_tys.len())),
++                state_ty,
++            );
++            let data = SwitchData {
++                scrutinee: SwitchScrutinee::Value(Operand::Copy(state)),
++                branches: (0..state_count)
++                    .map(|tag| {
++                        (
++                            IntegerValue::from_unchecked_uint(UIntTy::U32, tag as u128)
++                                .to_constant(),
++                            BranchId::ZERO,
++                        )
++                    })
++                    .collect(),
++                fallback: Some(BranchId::new(1)),
++            };
++            body.body[START_BLOCK_ID] = BlockData {
++                statements: vec![],
++                terminator: Terminator::new(
++                    span,
++                    TerminatorKind::Switch {
++                        data,
++                        branches: [original, invalid].into_iter().collect(),
++                    },
++                ),
++                kind,
++            };
++        }
++        Ok(translated)
++    }
++
+     fn translate_def_body_inner(
+         &mut self,
+         span: Span,
+         def: &hax::FullDef<'tcx>,
+     ) -> Result<Body, Error> {
++        if self.item_src.kind == TransItemSourceKind::CoroutineDrop {
++            return self.translate_owned_coroutine_drop(span, def);
++        }
+         // Retrieve the body
+         if let Some(mut body) = self.get_mir(def.this(), span)? {
+             self.normalize_pin_get_mut(def, &mut body);
+@@ -1601,6 +1718,72 @@
+         Ok((place, initialized_slot))
+     }
+
++    /// Moving a saved payload empties its logical slot; no partially initialized
++    /// record is returned through a future's mutable borrow.
++    fn take_saved_operand(
++        &mut self,
++        span: Span,
++        source: &mir::Place<'tcx>,
++    ) -> Result<Operand, Error> {
++        let (slot, saved) = self.translate_place_inner(span, source, true)?;
++        if !saved {
++            return Ok(Operand::Move(slot));
++        }
++        let rust_ty = source.ty(self.local_decls, self.tcx).ty;
++        let payload = self.translate_rustc_ty(span, &rust_ty)?;
++        let place = self.require_saved_field(span, slot.clone(), payload.clone());
++        if hax::solve_copy(&self.hax_state, rust_ty).is_some() {
++            return Ok(Operand::Copy(place));
++        }
++        // Move the whole slot out through a mutable borrow using the existing
++        // Aeneas replacement primitive, then unwrap the owned previous slot.
++        // A direct move through &mut would leave an uninitialized borrowed field.
++        let option = self.tcx.lang_items().option_type().unwrap();
++        let option_ty = ty::Ty::new_adt(
++            self.tcx,
++            self.tcx.adt_def(option),
++            self.tcx.mk_args(&[rust_ty.into()]),
++        );
++        let borrow_ty = Ty::new(TyKind::Ref(Region::Erased, slot.ty().clone(), RefKind::Mut));
++        let borrow = self.rval_to_place(
++            Rvalue::Ref {
++                place: slot.clone(),
++                kind: BorrowKind::Mut,
++                ptr_metadata: Self::missing_ptr_metadata(),
++            },
++            borrow_ty,
++        );
++        let empty = self.rval_to_place(
++            Rvalue::Aggregate(
++                AggregateKind::Adt(
++                    slot.ty().as_adt().unwrap().clone(),
++                    Some(VariantId::ZERO),
++                    None,
++                ),
++                vec![],
++            ),
++            slot.ty().clone(),
++        );
++        let previous = self.fresh_var(None, slot.ty().clone());
++        let path = NamePattern::parse("core::mem::replace").unwrap();
++        let def_id = self.resolve_single_path(span, &path)?;
++        let args = self.tcx.mk_args(&[option_ty.into()]);
++        let item = hax::ItemRef::translate(self.hax_state_with_id(), def_id, args);
++        let func =
++            FnOperand::Regular(self.translate_fn_ptr(span, &item, TransItemSourceKind::Fun)?);
++        self.push_nounwind_call(
++            span,
++            previous.clone(),
++            Call {
++                func,
++                args: vec![Operand::Move(borrow), Operand::Move(empty)],
++                safety: CallSafety::Inherit,
++            },
++        );
++        let value = self.require_saved_field(span, previous, payload);
++        Ok(Operand::Move(value))
++    }
++
+     /// Translate an operand
+     fn translate_operand(
+         &mut self,
+@@ -1611,6 +1794,9 @@
+             mir::Operand::Copy(place) => {
+                 let p = self.translate_place(span, place)?;
+                 Operand::Copy(p)
++            }
++            mir::Operand::Move(place) if self.options.cancelling_futures => {
++                self.take_saved_operand(span, place)?
+             }
+             mir::Operand::Move(place) => {
+                 let p = self.translate_place(span, place)?;
+@@ -2038,6 +2224,11 @@
+                             self.register_item(span, &item, TransItemSourceKind::CoroutinePoll);
+                         let parent = self.item_id;
+                         self.record_containment(parent, ItemOrModuleId::Item(poll.into()));
++                        if self.options.cancelling_futures {
++                            let drop: FunDeclId =
++                                self.register_item(span, &item, TransItemSourceKind::CoroutineDrop);
++                            self.record_containment(parent, ItemOrModuleId::Item(drop.into()));
++                        }
+                         let mut operands_t = operands_t;
+                         operands_t.push(Operand::Const(
+                             IntegerValue::from_unchecked_uint(UIntTy::U32, 0).to_constant(),
+@@ -2635,10 +2826,22 @@
+                 //
+                 // note: loss of precision, we erase the bound vars.
+                 let generics = hax::erase_free_regions(tcx, generics.skip_binder());
+-                let item = &hax::translate_item_ref(&self.hax_state, *def_id, generics);
+-                trace!("func: {:?}", item.def_id);
+-                let fn_ptr = self.translate_fn_ptr(span, item, TransItemSourceKind::Fun)?;
+-                FnOperand::Regular(fn_ptr)
++                if self.options.cancelling_futures
++                    && self.tcx.get_diagnostic_item(Symbol::intern("mem_drop")) == Some(*def_id)
++                    && let ty::Coroutine(id, args) = generics.type_at(0).kind()
++                {
++                    let item = hax::translate_item_ref(&self.hax_state, *id, args);
++                    FnOperand::Regular(self.translate_fn_ptr(
++                        span,
++                        &item,
++                        TransItemSourceKind::CoroutineDrop,
++                    )?)
++                } else {
++                    let item = &hax::translate_item_ref(&self.hax_state, *def_id, generics);
++                    trace!("func: {:?}", item.def_id);
++                    let fn_ptr = self.translate_fn_ptr(span, item, TransItemSourceKind::Fun)?;
++                    FnOperand::Regular(fn_ptr)
++                }
+             }
+             _ => {
+                 // Call to a function pointer.
+@@ -2767,8 +2970,39 @@
+         unwind: &mir::UnwindAction,
+     ) -> Result<TerminatorKind, Error> {
+         let place_ty = place.ty(self.local_decls, self.tcx).ty;
++        if self.options.cancelling_futures
++            && let ty::Coroutine(id, args) = place_ty.kind()
++        {
++            let item = hax::translate_item_ref(&self.hax_state, *id, args);
++            let func = FnOperand::Regular(self.translate_fn_ptr(
++                span,
++                &item,
++                TransItemSourceKind::CoroutineDrop,
++            )?);
++            let argument = self.take_saved_operand(span, place)?;
++            let dest = self.fresh_var(None, Ty::mk_unit());
++            let target = self.translate_basic_block_id(*target);
++            let on_unwind = self.translate_unwind_action(span, unwind);
++            return Ok(TerminatorKind::Call {
++                call: Call {
++                    func,
++                    args: vec![argument],
++                    safety: CallSafety::Safe,
++                },
++                dest,
++                target,
++                on_unwind,
++            });
++        }
+         let fn_ptr = self.translate_drop_glue_method_call(span, place_ty)?;
+-        let place = self.translate_place(span, place)?;
++        let place = if self.options.cancelling_futures {
++            match self.take_saved_operand(span, place)? {
++                Operand::Move(place) | Operand::Copy(place) => place,
++                _ => unreachable!(),
++            }
++        } else {
++            self.translate_place(span, place)?
++        };
+         let target = self.translate_basic_block_id(*target);
+         let on_unwind = self.translate_unwind_action(span, unwind);
+
+--- a/charon/src/bin/charon-driver/translate/translate_crate.rs
++++ b/charon/src/bin/charon-driver/translate/translate_crate.rs
+@@ -73,6 +73,8 @@
+     ClosureAsFnCast,
+     /// The compiler-generated state-machine poll body of an async function.
+     CoroutinePoll,
++    /// An owned destruction entry using rustc's coroutine drop body.
++    CoroutineDrop,
+     /// The `drop_glue` method of a `Destruct` impl. It contains the drop glue that calls
+     /// `Drop::drop` for the type and then drops its fields. This is a method implementation (and
+     /// the DefId is that of the ADT or closure for which to generate the drop glue).
+@@ -472,7 +474,7 @@
+                     Global | VTableInstance(..) => {
+                         ItemId::Global(self.translated.global_decls.reserve_slot())
+                     }
+-                    Fun | CoroutinePoll | CallableMethod(..) | ClosureAsFnCast
++                    Fun | CoroutinePoll | CoroutineDrop | CallableMethod(..) | ClosureAsFnCast
+                     | DropGlueMethod(..) | VTableMethod(..) | VTableDropShim(..) => {
+                         ItemId::Fun(self.translated.fun_decls.reserve_slot())
+                     }
+--- a/charon/src/bin/charon-driver/translate/translate_items.rs
++++ b/charon/src/bin/charon-driver/translate/translate_items.rs
+@@ -147,7 +147,9 @@
+                 let ty = bt_ctx.translate_type_decl(id, item_meta, &def)?;
+                 self.translated.type_decls.set_slot(id, ty);
+             }
+-            TransItemSourceKind::Fun | TransItemSourceKind::CoroutinePoll => {
++            TransItemSourceKind::Fun
++            | TransItemSourceKind::CoroutinePoll
++            | TransItemSourceKind::CoroutineDrop => {
+                 let id = trans_id.expect_item();
+                 let fun_decl = bt_ctx.translate_fun_decl(id, item_meta, &def)?;
+                 self.translated.fun_decls.set_slot(id, fun_decl);
+@@ -422,7 +424,7 @@
+     pub fn translate_type_decl(
+         mut self,
+         trans_id: TypeDeclId,
+-        item_meta: ItemMeta,
++        mut item_meta: ItemMeta,
+         def: &hax::FullDef<'tcx>,
+     ) -> Result<TypeDecl, Error> {
+         let span = item_meta.span;
+@@ -473,6 +475,28 @@
+                         span,
+                         "Coroutines with suspension are not supported yet"
+                     );
++                }
++                if self.options.cancelling_futures {
++                    let states: Vec<Vec<usize>> = layout
++                        .variant_fields
++                        .iter()
++                        .map(|fields| {
++                            fields
++                                .iter()
++                                .map(|id| c.upvar_tys.len() + 1 + id.as_usize())
++                                .collect()
++                        })
++                        .collect();
++                    item_meta
++                        .attr_info
++                        .attributes
++                        .push(Attribute::Unknown(RawAttribute {
++                            path: "lynx::coroutine_storage_v1".into(),
++                            args: Some(
++                                serde_json::json!({"state": c.upvar_tys.len(), "states": states})
++                                    .to_string(),
++                            ),
++                        }));
+                 }
+                 let mut fields: charon_lib::ids::IndexVec<FieldId, Field> = c
+                     .upvar_tys
+@@ -498,7 +522,9 @@
+                     )))),
+                 });
+                 for (index, field) in layout.field_tys.iter_enumerated() {
+-                    if field.ty.needs_drop(self.tcx, self.hax_state.typing_env()) {
++                    if field.ty.needs_drop(self.tcx, self.hax_state.typing_env())
++                        && !self.options.cancelling_futures
++                    {
+                         raise_error!(
+                             self,
+                             span,
+@@ -648,6 +674,17 @@
+         let signature = match &def.kind {
+             hax::FullDefKind::Fn(f) => self.translate_fun_sig(span, &f.sig().value)?,
+             hax::FullDefKind::AssocFn(f) => self.translate_fun_sig(span, &f.sig().value)?,
++            hax::FullDefKind::Coroutine(c)
++                if self.item_src.kind == TransItemSourceKind::CoroutineDrop =>
++            {
++                FunSig {
++                    inputs: vec![self.translate_rustc_ty(span, &c.self_ty)?],
++                    output: Ty::mk_unit(),
++                    is_unsafe: false,
++                    abi: Abi::rust(),
++                    is_variadic: false,
++                }
++            }
+             hax::FullDefKind::Coroutine(_) => {
+                 let body = self.get_mir(def.this(), span)?.ok_or_else(|| {
+                     register_error!(self, span, "Missing compiler coroutine poll body")
+--- a/charon/src/bin/charon-driver/translate/translate_meta.rs
++++ b/charon/src/bin/charon-driver/translate/translate_meta.rs
+@@ -448,6 +448,12 @@
+                 name.name
+                     .push(PathElem::Ident("poll".to_string(), Disambiguator::ZERO));
+             }
++            TransItemSourceKind::CoroutineDrop => {
++                name.name.push(PathElem::Ident(
++                    "drop_owned".to_string(),
++                    Disambiguator::ZERO,
++                ));
++            }
+             TransItemSourceKind::CallableMethod(kind) => {
+                 let fn_name = kind.method_name().to_string();
+                 name.name
+--- a/charon/src/options.rs
++++ b/charon/src/options.rs
+@@ -72,6 +72,10 @@
+     #[arg(long)]
+     #[serde(default)]
+     pub suspending_futures: bool,
++    /// Extract owned coroutine destruction from compiler MIR.
++    #[arg(long)]
++    #[serde(default)]
++    pub cancelling_futures: bool,
+     /// Extra flags to pass to rustc.
+     #[clap(long = "rustc-arg")]
+     #[serde(default)]
+@@ -777,6 +781,7 @@
+     pub mir_level: MirLevel,
+     pub immediate_futures: bool,
+     pub suspending_futures: bool,
++    pub cancelling_futures: bool,
+     /// Usually we skip the provided methods that aren't used. When this flag is on, we translate
+     /// them all.
+     pub translate_all_methods: bool,
+@@ -999,6 +1004,7 @@
+             mir_level,
+             immediate_futures: options.immediate_futures,
+             suspending_futures: options.suspending_futures,
++            cancelling_futures: options.cancelling_futures,
+             monomorphize_mut: options.monomorphize_mut,
+             hide_marker_traits: options.hide_marker_traits,
+             hide_allocator: options.hide_allocator,

@@ -164,7 +164,7 @@ defmodule Lynx.Rust.Report do
             else: []
           ) ++
           if(Map.get(extraction, :native_drops, []) != [],
-            do: ["Lynx audited local consuming-drop lowering to core::mem::drop"],
+            do: ["Lynx audited owned-place consuming-drop lowering to core::mem::drop"],
             else: []
           ) ++
           if(map_size(extraction.audit.drops.erasures) > 0,
@@ -182,6 +182,12 @@ defmodule Lynx.Rust.Report do
           if(Map.get(extraction, :futures, :reject) == :suspending,
             do: [
               "Compiler coroutine saved-slot interpretation; only drop-free Unpin saved fields; physical pinning, cancellation cleanup and executor behavior unverified"
+            ],
+            else: []
+          ) ++
+          if(Map.get(extraction, :futures, :reject) == :cancelling,
+            do: [
+              "Compiler coroutine saved-slot and owned destruction interpretation; actual rustc drop MIR with checked pointer erasure and valid-state guards; one Unpin native owner per frame; Aeneas replacement primitive; native destructors, allocation, physical pinning, FFI and executor correctness remain modeled boundaries"
             ],
             else: []
           ) ++

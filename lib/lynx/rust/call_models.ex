@@ -61,6 +61,21 @@ defmodule Lynx.Rust.CallModels do
       output = expand(signature["output"], refs)
 
       case {name, inputs, output} do
+        {[%{"Ident" => ["core", 0]}, %{"Ident" => ["mem", 0]}, %{"Ident" => ["replace", 0]}],
+         [%{"Ref" => [%{"Var" => %{"Free" => 0}}, variable, "Mut"]}, variable], variable} ->
+          if variable == %{"TypeVar" => %{"Free" => 0}} and generic_shape?(generics, 1, 1) do
+            %{
+              rust_name: "core::mem::replace",
+              lean: "Aeneas.Std.core.mem.replace",
+              builtin: true,
+              can_fail: false,
+              lift: false,
+              native_replace: true,
+              label:
+                "Aeneas mutable replacement primitive; returns the previous owned value and reconstructs the borrow with its replacement; Rust core implementation not verified"
+            }
+          end
+
         {[
            %{"Ident" => ["core", 0]},
            %{"Ident" => ["num", 0]},
@@ -235,6 +250,12 @@ defmodule Lynx.Rust.CallModels do
        ),
        do: :rustler_binary_as_slice in enabled
 
+  defp candidate?(
+         [%{"Ident" => ["core", 0]}, %{"Ident" => ["mem", 0]}, %{"Ident" => ["replace", 0]}],
+         _
+       ),
+       do: true
+
   defp candidate?(_, _), do: false
 
   defp generic_shape?(
@@ -296,6 +317,17 @@ defmodule Lynx.Rust.CallModels do
   end
 
   defp binary_type?(_, _), do: false
+
+  # Instantiate free variables in a declaration's field type; bound variables
+  # under nested binders retain their own identity.
+  def instantiate(%{"TypeVar" => %{"Free" => index}}, args), do: Enum.fetch!(args["types"], index)
+  def instantiate(%{"Var" => %{"Free" => index}}, args), do: Enum.fetch!(args["regions"], index)
+
+  def instantiate(map, args) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, instantiate(value, args)} end)
+
+  def instantiate(list, args) when is_list(list), do: Enum.map(list, &instantiate(&1, args))
+  def instantiate(value, _), do: value
 
   def expand(%{"Value" => [_, value]}, refs), do: expand(value, refs)
 

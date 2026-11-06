@@ -3,7 +3,7 @@ defmodule Lynx.Rust.Futures do
 
   def arguments!(:reject, _tools), do: []
 
-  def arguments!(mode, tools) when mode in [:immediate, :polling, :suspending] do
+  def arguments!(mode, tools) when mode in [:immediate, :polling, :suspending, :cancelling] do
     versions = File.read!(Path.join(tools, "lynx-toolchain")) |> String.split("\n")
 
     unless Enum.all?(["charon=", "aeneas="], fn prefix ->
@@ -19,7 +19,7 @@ defmodule Lynx.Rust.Futures do
                "immediate futures require the pinned immediate-futures-v1 backend"
              )
 
-    if mode == :suspending and
+    if mode in [:suspending, :cancelling] and
          not Enum.all?(
            [{"charon=", "suspending-futures-v1"}, {"aeneas=", "undefined-behavior-v1"}],
            fn {prefix, capability} ->
@@ -35,7 +35,20 @@ defmodule Lynx.Rust.Futures do
            "suspending futures require the pinned suspending-futures-v1 and undefined-behavior-v1 backends"
          )
 
-    if(mode == :suspending, do: ["--suspending-futures"], else: []) ++
+    if mode == :cancelling and
+         not Enum.any?(
+           versions,
+           &(String.starts_with?(&1, "charon=") and
+               "cancelling-futures-v1" in String.split(&1, "+"))
+         ),
+       do:
+         raise(
+           ArgumentError,
+           "coroutine destruction requires the pinned cancelling-futures-v1 backend"
+         )
+
+    if(mode == :cancelling, do: ["--cancelling-futures", "--mir", "optimized"], else: []) ++
+      if(mode in [:suspending, :cancelling], do: ["--suspending-futures"], else: []) ++
       [
         "--immediate-futures",
         "--monomorphize-mut=all",
@@ -98,7 +111,7 @@ defmodule Lynx.Rust.Futures do
     end
   end
 
-  def type_models!(mode, document, prefix) when mode in [:polling, :suspending] do
+  def type_models!(mode, document, prefix) when mode in [:polling, :suspending, :cancelling] do
     module = (prefix |> String.split(".") |> hd()) <> ".NativeRuntime"
 
     for {name, lean} <- [{"Context", "Lynx.NativeTaskContext"}, {"Waker", "Lynx.NativeWaker"}] do

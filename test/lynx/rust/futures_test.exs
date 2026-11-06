@@ -79,4 +79,32 @@ defmodule Lynx.Rust.FuturesTest do
       end
     end
   end
+
+  @tag :tmp_dir
+  test "cancellation requires its compiler capability and optimized drop MIR", %{tmp_dir: tmp} do
+    manifest =
+      "charon=base+immediate-futures-v1+suspending-futures-v1\naeneas=base+immediate-futures-v1+undefined-behavior-v1\n"
+
+    path = Path.join(tmp, "lynx-toolchain")
+    File.write!(path, manifest)
+
+    assert_raise ArgumentError, ~r/cancelling-futures-v1/, fn ->
+      Futures.arguments!(:cancelling, tmp)
+    end
+
+    File.write!(
+      path,
+      String.replace(manifest, "charon=base", "charon=base+cancelling-futures-v1")
+    )
+
+    assert ["--cancelling-futures", "--mir", "optimized", "--suspending-futures" | _] =
+             Futures.arguments!(:cancelling, tmp)
+
+    assert_raise ArgumentError, ~r/requires runtime execution/, fn ->
+      Lynx.Rust.Extraction.run!(%{}, "/unused", ["probe::future"], "/unused", "Probe.Extraction",
+        futures: :cancelling,
+        execution: :pure
+      )
+    end
+  end
 end
