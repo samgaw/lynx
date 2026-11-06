@@ -310,6 +310,45 @@ pub async fn resource_suspending(
     changed
 }
 
+/// Completes a shared-resource update on its first poll and releases its owner.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+pub async fn resource_immediate(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let changed = resource_locked_increment(&resource, amount);
+    resource_release(resource);
+    changed
+}
+
+/// Polls the actual resource future, then destroys its completed frame.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+pub fn poll_ready_resource(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+    context: &mut std::task::Context<'_>,
+) -> std::task::Poll<bool> {
+    use std::future::Future;
+    std::pin::pin!(resource_immediate(resource, amount)).poll(context)
+}
+
+/// Cancels the actual suspended resource future when its local scope ends.
+///
+/// # Panics
+/// A caller-provided waker callback may panic.
+pub fn poll_cancel_resource(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+    context: &mut std::task::Context<'_>,
+) -> std::task::Poll<bool> {
+    use std::future::Future;
+    std::pin::pin!(resource_suspending(resource, amount)).poll(context)
+}
+
 /// Retains an owned capture, exercising cancellation cleanup rejection.
 pub async fn owned_immediate(value: Vec<u8>) -> usize {
     value.len()

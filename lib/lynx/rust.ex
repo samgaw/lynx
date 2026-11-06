@@ -86,9 +86,18 @@ defmodule Lynx.Rust do
   capture in an optional initial slot, moves it into saved storage on suspension,
   and executes the actual compiler cleanup on unstarted or suspended cancellation.
   `owned_drops: true` allows the supported mutex-containing resource payloads.
+  The pin-macro backend also supports ordinary consuming Rust callers using
+  standard `pin!` to poll such a compiler future. It validates the actual macro
+  expansion and complete helper body, links Future::poll to the actual coroutine
+  implementation and preserves the wrapper's field destruction through the
+  compiler cleanup body. Direct unsafe helper calls remain unsupported. A caller
+  may retain only that same sole owned frame across the poll; panics with live
+  native owners and additional caller-owned resources are rejected. Repeated
+  borrowed `Pin::as_mut` polling is not yet supported by this ownership rule.
   Multiple simultaneously live native owners per frame, non-Unpin fields,
-  native executor integration and async NIF composition remain unsupported. Native allocation, physical pinning, standard primitives and FFI
-  retain their reported trusted boundaries.
+  native executor integration and async NIF composition remain unsupported.
+  Native allocation, physical pinning, standard primitives and FFI retain their
+  reported trusted boundaries.
 
   `Lynx.NativeTask.drive` can execute a concrete extracted poll/destructor pair
   in the logical runtime. Pending tasks wait for an atomic wake consumption or
