@@ -184,6 +184,16 @@ pub fn resource_increment(resource: &rustler::ResourceArc<CounterResource>, amou
     effects_core::increment(&mut resource.state.lock().unwrap(), amount)
 }
 
+/// Completes on its first poll through a first-party dependency.
+pub async fn immediate_increment(value: u64) -> u64 {
+    effects_core::saturating_increment(value)
+}
+
+/// Retains an owned capture, exercising cancellation cleanup rejection.
+pub async fn owned_immediate(value: Vec<u8>) -> usize {
+    value.len()
+}
+
 /// Awaits an actual Rust coroutine, exercising constructor and await lowering.
 pub async fn async_increment(value: u64) -> u64 {
     async { value.saturating_add(1) }.await
@@ -396,6 +406,25 @@ pub fn mutex_discard_custom(value: u64) {
 #[cfg(test)]
 mod tests {
     use super::mutex_new_incremented;
+
+    #[test]
+    fn immediate_future_completes_and_rejects_repolling() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        for value in [0, 7, u64::MAX] {
+            let mut future = std::pin::pin!(super::immediate_increment(value));
+            let mut context = Context::from_waker(Waker::noop());
+            assert_eq!(
+                future.as_mut().poll(&mut context),
+                Poll::Ready(value.saturating_add(1))
+            );
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                future.as_mut().poll(&mut context)
+            }))
+            .is_err());
+        }
+    }
 
     #[test]
     fn complete_critical_section_rejects_overflow_without_poisoning() {

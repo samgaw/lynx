@@ -119,3 +119,8 @@ pub fn locked_scalar_increment(mutex: &std::sync::Mutex<u64>, amount: u64) -> bo
     drop(guard);
     changed
 }
+
+/// Increments a scalar, preserving the fixed-width saturation bound.
+pub fn saturating_increment(value: u64) -> u64 {
+    value.saturating_add(1)
+}
