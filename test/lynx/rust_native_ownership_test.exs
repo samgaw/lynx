@@ -70,8 +70,8 @@ defmodule Lynx.Rust.NativeOwnershipTest do
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
 
-    # Admitting a first-party call never admits its opaque lock/guard callees.
-    assert_raise CompileError, ~r/unverified external Rust call std::sync::poison::mutex/, fn ->
+    # Acquiring a guard does not admit opaque unwrap or guard operations.
+    assert_raise CompileError, ~r/unverified external Rust call core::result/, fn ->
       Lynx.Rust.verify!(
         workspace,
         "effects-native",

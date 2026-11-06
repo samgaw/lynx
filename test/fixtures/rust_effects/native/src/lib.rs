@@ -176,6 +176,24 @@ pub fn mutex_guarded_increment(mutex: &Mutex<effects_core::Counter>, amount: u64
     effects_core::increment(&mut guard, amount)
 }
 
+/// Composes actual first-party acquisition without exposing guards as NIFs.
+///
+/// # Panics
+/// Native recursive acquisition can panic or block; verification rejects it.
+pub fn mutex_acquire(
+    mutex: &Mutex<effects_core::Counter>,
+) -> std::sync::LockResult<std::sync::MutexGuard<'_, effects_core::Counter>> {
+    effects_core::acquire_counter(mutex)
+}
+
+/// Requires guard destruction independently of unwrap or dereference support.
+///
+/// # Panics
+/// Native recursive acquisition can panic or block; verification rejects it.
+pub fn mutex_acquire_and_drop(mutex: &Mutex<effects_core::Counter>) {
+    let _owned_result = effects_core::acquire_counter(mutex);
+}
+
 /// Explicitly consumes a newly initialized native mutex.
 pub fn mutex_discard(value: u64) {
     drop(Mutex::new(effects_core::Counter { value }));
@@ -240,5 +258,38 @@ mod tests {
     #[should_panic(expected = "tracked destruction")]
     fn custom_payload_destruction_is_observable() {
         super::mutex_discard_custom(7);
+    }
+
+    #[test]
+    fn cross_crate_acquisition_holds_the_actual_guard() {
+        let mutex = std::sync::Mutex::new(effects_core::Counter { value: 7 });
+        let guard = match super::mutex_acquire(&mutex) {
+            Ok(guard) => guard,
+            Err(_) => panic!("a fresh mutex must not be poisoned"),
+        };
+        assert_eq!(guard.value, 7);
+        assert!(mutex.try_lock().is_err());
+        drop(guard);
+        assert!(mutex.try_lock().is_ok());
+    }
+
+    #[test]
+    fn poisoned_acquisition_still_owns_the_actual_guard() {
+        let mutex = std::sync::Mutex::new(effects_core::Counter { value: 7 });
+        let failed = std::panic::catch_unwind(|| {
+            let mut guard = mutex.lock().unwrap();
+            guard.value = 19;
+            panic!("poison the mutex");
+        });
+        assert!(failed.is_err());
+        let guard = match super::mutex_acquire(&mutex) {
+            Ok(_) => panic!("acquisition must report the poisoned mutex"),
+            Err(error) => error.into_inner(),
+        };
+        assert_eq!(guard.value, 19);
+        assert!(matches!(
+            mutex.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
     }
 }
