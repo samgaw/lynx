@@ -151,6 +151,51 @@ defmodule Lynx.Rust.LibraryHelpers do
     end
   end
 
+  def selected?(
+        %{
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["future", 0]},
+              %{"Ident" => ["into_future", 0]},
+              %{"Impl" => %{"Trait" => impl}},
+              %{"Ident" => ["into_future", 0]}
+            ]
+          },
+          "src" => %{"TraitImpl" => %{"impl_ref" => %{"id" => impl}, "reuses_default" => false}},
+          "signature" =>
+            %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = signature,
+          "body" => %{
+            "Structured" => %{
+              "locals" => %{"arg_count" => 1, "locals" => [_, _]},
+              "body" => %{"statements" => statements}
+            }
+          }
+        },
+        translated
+      ) do
+    refs = Lynx.Rust.LLBC.type_references!(translated)
+    input = %{"TypeVar" => %{"Free" => 0}}
+
+    Lynx.Rust.CallModels.expand(signature["inputs"], refs) == [input] and
+      Lynx.Rust.CallModels.expand(signature["output"], refs) == input and
+      match?(
+        [
+          %{
+            "kind" => %{
+              "Assign" => [
+                %{"kind" => %{"Local" => 0}},
+                %{"Use" => [%{"Move" => %{"kind" => %{"Local" => 1}}}, retag]}
+              ]
+            }
+          },
+          %{"kind" => "Return"}
+        ]
+        when retag in ["No", "Yes"],
+        Enum.reject(statements, &pin_storage?/1)
+      )
+  end
+
   def selected?(_, _), do: false
 
   defp pin_storage?(%{"kind" => %{"StorageLive" => id}}) when id in [0, 1], do: true

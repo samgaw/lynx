@@ -1,0 +1,589 @@
+--- a/charon/src/options.rs
++++ b/charon/src/options.rs
+@@ -68,6 +68,10 @@
+     #[arg(long)]
+     #[serde(default)]
+     pub immediate_futures: bool,
++    /// Retain compiler saved fields as initialized-or-empty logical slots.
++    #[arg(long)]
++    #[serde(default)]
++    pub suspending_futures: bool,
+     /// Extra flags to pass to rustc.
+     #[clap(long = "rustc-arg")]
+     #[serde(default)]
+@@ -772,6 +776,7 @@
+     /// The level at which to extract the MIR
+     pub mir_level: MirLevel,
+     pub immediate_futures: bool,
++    pub suspending_futures: bool,
+     /// Usually we skip the provided methods that aren't used. When this flag is on, we translate
+     /// them all.
+     pub translate_all_methods: bool,
+@@ -993,6 +998,7 @@
+             start_from,
+             mir_level,
+             immediate_futures: options.immediate_futures,
++            suspending_futures: options.suspending_futures,
+             monomorphize_mut: options.monomorphize_mut,
+             hide_marker_traits: options.hide_marker_traits,
+             hide_allocator: options.hide_allocator,
+--- a/charon/src/bin/charon-driver/translate/translate_items.rs
++++ b/charon/src/bin/charon-driver/translate/translate_items.rs
+@@ -465,7 +465,9 @@
+                 let Some(layout) = body.coroutine_layout_raw() else {
+                     raise_error!(self, span, "Coroutines require optimized MIR");
+                 };
+-                if !layout.field_tys.is_empty() || layout.variant_fields.len() != 3 {
++                if (!layout.field_tys.is_empty() || layout.variant_fields.len() != 3)
++                    && !self.options.suspending_futures
++                {
+                     raise_error!(
+                         self,
+                         span,
+@@ -495,6 +497,32 @@
+                         UIntTy::U32,
+                     )))),
+                 });
++                for (index, field) in layout.field_tys.iter_enumerated() {
++                    if field.ty.needs_drop(self.tcx, self.hax_state.typing_env()) {
++                        raise_error!(
++                            self,
++                            span,
++                            "Saved future fields requiring drop are not supported yet"
++                        );
++                    }
++                    if !field.ty.is_unpin(self.tcx, self.hax_state.typing_env()) {
++                        raise_error!(
++                            self,
++                            span,
++                            "Saved future fields requiring pinning are not supported yet"
++                        );
++                    }
++                    let option = self.tcx.lang_items().option_type().unwrap();
++                    let args = self.tcx.mk_args(&[field.ty.into()]);
++                    let rust_ty = ty::Ty::new_adt(self.tcx, self.tcx.adt_def(option), args);
++                    fields.push(Field {
++                        span,
++                        attr_info: AttrInfo::dummy_private(),
++                        name: format!("saved_{}", index.as_usize()),
++                        is_positional: false,
++                        ty: self.translate_rustc_ty(span, &rust_ty)?,
++                    });
++                }
+                 Ok(TypeDeclKind::Struct(fields))
+             }
+             _ => panic!("Unexpected item when translating types: {def:?}"),
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -316,6 +316,292 @@
+         }
+     }
+
++    /// Recover only rustc's private Context -> NonNull -> ResumeTy -> Context round-trip.
++    /// Pointer values must not escape or be observed by any other operation.
++    fn normalize_coroutine_context(
++        &mut self,
++        def: &hax::FullDef<'tcx>,
++        body: &mut mir::Body<'tcx>,
++    ) -> Result<(), Error> {
++        use rustc_middle::mir::visit::Visitor;
++        if !self.options.suspending_futures || !matches!(def.kind(), hax::FullDefKind::Coroutine(_))
++        {
++            return Ok(());
++        }
++        let span = self.translate_span(&body.span);
++        let context = self.tcx.lang_items().get(LangItem::Context).unwrap();
++        let resume = self.tcx.lang_items().get(LangItem::ResumeTy).unwrap();
++        let nonnull = self.tcx.lang_items().get(LangItem::NonNull).unwrap();
++        let input = mir::Local::from_usize(2);
++        let input_ty = body.local_decls[input].ty;
++        let is_context_ref = |ty: ty::Ty<'tcx>| {
++            matches!(ty.kind(),
++            ty::Ref(_, inner, rustc_hir::Mutability::Mut) if matches!(inner.kind(), ty::Adt(def, _) if def.did() == context))
++        };
++        if !is_context_ref(input_ty) {
++            raise_error!(self, span, "Unexpected compiler future Context input");
++        }
++        let class = |ty: ty::Ty<'tcx>| match ty.kind() {
++            ty::Adt(def, _) if def.did() == resume => Some(0),
++            ty::Adt(def, args)
++                if def.did() == nonnull
++                    && matches!(args.type_at(0).kind(), ty::Adt(def, _) if def.did() == context) =>
++            {
++                Some(1)
++            }
++            _ => None,
++        };
++        let candidates: std::collections::HashSet<_> = body
++            .local_decls
++            .iter_enumerated()
++            .filter_map(|(id, decl)| class(decl.ty).map(|_| id))
++            .collect();
++        struct Uses<'a> {
++            candidates: &'a std::collections::HashSet<mir::Local>,
++            found: bool,
++        }
++        impl<'tcx> Visitor<'tcx> for Uses<'_> {
++            fn visit_place(
++                &mut self,
++                place: &mir::Place<'tcx>,
++                _: mir::visit::PlaceContext,
++                _: mir::Location,
++            ) {
++                self.found |= self.candidates.contains(&place.local);
++            }
++        }
++        let direct = |operand: &mir::Operand<'tcx>| match operand {
++            mir::Operand::Copy(place) | mir::Operand::Move(place)
++                if place.projection.is_empty() =>
++            {
++                Some(place.local)
++            }
++            _ => None,
++        };
++        let mut rewrites = Vec::new();
++        for (block_id, block) in body.basic_blocks.iter_enumerated() {
++            for (index, statement) in block.statements.iter().enumerate() {
++                if matches!(
++                    statement.kind,
++                    mir::StatementKind::StorageLive(_)
++                        | mir::StatementKind::StorageDead(_)
++                        | mir::StatementKind::Nop
++                ) {
++                    continue;
++                }
++                let location = mir::Location {
++                    block: block_id,
++                    statement_index: index,
++                };
++                let mut uses = Uses {
++                    candidates: &candidates,
++                    found: false,
++                };
++                uses.visit_statement(statement, location);
++                if !uses.found {
++                    continue;
++                }
++                let mir::StatementKind::Assign((dest, value)) = &statement.kind else {
++                    raise_error!(
++                        self,
++                        span,
++                        "Unsupported observation of compiler future Context storage"
++                    );
++                };
++                if !dest.projection.is_empty() {
++                    raise_error!(
++                        self,
++                        span,
++                        "Unsupported projection write into compiler Context storage"
++                    );
++                }
++                let source = match value {
++                    mir::Rvalue::Cast(mir::CastKind::Transmute, operand, _)
++                        if class(body.local_decls[dest.local].ty) == Some(1)
++                            && direct(operand) == Some(input) =>
++                    {
++                        Some(input)
++                    }
++                    mir::Rvalue::Aggregate(kind, operands)
++                        if matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, _, _, _) if *id == resume)
++                            && operands.len() == 1
++                            && class(body.local_decls[dest.local].ty) == Some(0) =>
++                    {
++                        direct(&operands[rustc_abi::FieldIdx::from_usize(0)])
++                            .filter(|id| class(body.local_decls[*id].ty) == Some(1))
++                    }
++                    mir::Rvalue::Use(operand, _)
++                        if class(body.local_decls[dest.local].ty) == Some(0) =>
++                    {
++                        direct(operand).filter(|id| class(body.local_decls[*id].ty) == Some(0))
++                    }
++                    mir::Rvalue::Cast(
++                        mir::CastKind::Transmute,
++                        mir::Operand::Copy(place) | mir::Operand::Move(place),
++                        _,
++                    ) if is_context_ref(body.local_decls[dest.local].ty)
++                        && class(body.local_decls[place.local].ty) == Some(0)
++                        && matches!(place.projection.as_ref(), [mir::ProjectionElem::Field(field, _)] if field.as_usize() == 0) =>
++                    {
++                        Some(place.local)
++                    }
++                    _ => None,
++                };
++                let Some(source) = source else {
++                    raise_error!(
++                        self,
++                        span,
++                        "Unsupported use of compiler future Context pointer round-trip"
++                    );
++                };
++                rewrites.push((block_id, index, source));
++            }
++            let mut uses = Uses {
++                candidates: &candidates,
++                found: false,
++            };
++            uses.visit_terminator(
++                block.terminator(),
++                mir::Location {
++                    block: block_id,
++                    statement_index: block.statements.len(),
++                },
++            );
++            if uses.found {
++                raise_error!(
++                    self,
++                    span,
++                    "Compiler future Context pointer escapes a validated round-trip"
++                );
++            }
++        }
++        for id in candidates {
++            body.local_decls[id].ty = input_ty;
++        }
++        for (block, index, source) in rewrites {
++            let mir::StatementKind::Assign((_, value)) =
++                &mut body.basic_blocks.as_mut()[block].statements[index].kind
++            else {
++                unreachable!()
++            };
++            *value = mir::Rvalue::Ref(
++                self.tcx.lifetimes.re_erased,
++                mir::BorrowKind::Mut {
++                    kind: mir::MutBorrowKind::Default,
++                },
++                mir::Place::from(source).project_deeper(&[mir::ProjectionElem::Deref], self.tcx),
++            );
++        }
++        Ok(())
++    }
++
++    /// Inline the compiler's Pin constructor only for an Unpin mutable pointee.
++    /// Check the standard implementation, rather than accepting an opaque call.
++    fn normalize_coroutine_pin(
++        &mut self,
++        def: &hax::FullDef<'tcx>,
++        body: &mut mir::Body<'tcx>,
++    ) -> Result<(), Error> {
++        if !self.options.suspending_futures || !matches!(def.kind(), hax::FullDefKind::Coroutine(_))
++        {
++            return Ok(());
++        }
++        use crate::hax::UnderOwnerState;
++        let tcx = self.tcx;
++        let pin = tcx.lang_items().pin_type().unwrap();
++        let constructor = tcx.lang_items().get(LangItem::PinNewUnchecked).unwrap();
++        let implementation = tcx.optimized_mir(constructor);
++        if implementation.basic_blocks.len() != 1 {
++            return Ok(());
++        }
++        let block = &implementation.basic_blocks[mir::START_BLOCK];
++        if !matches!(block.terminator().kind, mir::TerminatorKind::Return) {
++            return Ok(());
++        }
++        let statements: Vec<_> = block
++            .statements
++            .iter()
++            .filter(|statement| {
++                !matches!(
++                    statement.kind,
++                    mir::StatementKind::StorageLive(_)
++                        | mir::StatementKind::StorageDead(_)
++                        | mir::StatementKind::Nop
++                )
++            })
++            .collect();
++        let [statement] = statements.as_slice() else {
++            return Ok(());
++        };
++        let mir::StatementKind::Assign((dest, mir::Rvalue::Aggregate(kind, values))) =
++            &statement.kind
++        else {
++            return Ok(());
++        };
++        if dest.local != mir::RETURN_PLACE
++            || !dest.projection.is_empty()
++            || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, _, _, _) if *id == pin)
++            || values.len() != 1
++            || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)], mir::Operand::Copy(place) | mir::Operand::Move(place)
++                if place.local.as_usize() == 1 && place.projection.is_empty())
++        {
++            return Ok(());
++        }
++        for block in body.basic_blocks.as_mut() {
++            let terminator = block.terminator.as_mut().unwrap();
++            let mir::TerminatorKind::Call {
++                func,
++                args,
++                destination,
++                target: Some(target),
++                ..
++            } = &terminator.kind
++            else {
++                continue;
++            };
++            let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
++                continue;
++            };
++            if *id != constructor || args.len() != 1 {
++                continue;
++            }
++            let ty::Ref(_, pointee, rustc_hir::Mutability::Mut) =
++                args[0].node.ty(&body.local_decls, tcx).kind()
++            else {
++                continue;
++            };
++            if !pointee.is_unpin(tcx, self.hax_state.typing_env()) {
++                continue;
++            }
++            let ty::Adt(def, generics) = destination.ty(&body.local_decls, tcx).ty.kind() else {
++                continue;
++            };
++            if def.did() != pin {
++                continue;
++            }
++            let source_info = terminator.source_info;
++            let mut inlined = (*statement).clone();
++            inlined.source_info = source_info;
++            inlined.kind = mir::StatementKind::Assign(Box::new((
++                *destination,
++                mir::Rvalue::Aggregate(
++                    Box::new(mir::AggregateKind::Adt(
++                        pin,
++                        rustc_abi::VariantIdx::from_usize(0),
++                        generics,
++                        None,
++                        None,
++                    )),
++                    rustc_index::IndexVec::from_raw(vec![args[0].node.clone()]),
++                ),
++            )));
++            let target = *target;
++            block.statements.push(inlined);
++            terminator.kind = mir::TerminatorKind::Goto { target };
++        }
++        Ok(())
++    }
++
+     fn translate_def_body_inner(
+         &mut self,
+         span: Span,
+@@ -324,6 +610,8 @@
+         // Retrieve the body
+         if let Some(mut body) = self.get_mir(def.this(), span)? {
+             self.normalize_pin_get_mut(def, &mut body);
++            self.normalize_coroutine_context(def, &mut body)?;
++            self.normalize_coroutine_pin(def, &mut body)?;
+             Ok(self.translate_body(span, body, &def.source_text))
+         } else if let Some(value) =
+             def.evaluate(self.hax_state_with_id(), hax::ReadMode::Structured)
+@@ -1104,11 +1392,58 @@
+         })
+     }
+
+-    fn translate_place(
++    fn saved_option_type(&mut self, span: Span, payload: ty::Ty<'tcx>) -> Result<Ty, Error> {
++        let option = self.tcx.lang_items().option_type().unwrap();
++        let args = self.tcx.mk_args(&[payload.into()]);
++        let rust_ty = ty::Ty::new_adt(self.tcx, self.tcx.adt_def(option), args);
++        self.translate_rustc_ty(span, &rust_ty)
++    }
++
++    /// Inactive compiler storage is empty, never a fabricated value of its payload type.
++    fn require_saved_field(&mut self, span: Span, slot: Place, payload: Ty) -> Place {
++        let target = self.blocks.reserve_slot();
++        let kind = self.kind;
++        let failure = self
++            .blocks
++            .push(Terminator::new(span, TerminatorKind::UndefinedBehavior).into_block(kind));
++        let tref = slot.ty().as_adt().unwrap().clone();
++        let some = VariantId::new(1);
++        let data = SwitchData {
++            scrutinee: SwitchScrutinee::Discriminant(slot.clone()),
++            branches: vec![(
++                ConstantExpr::new(
++                    ConstantExprKind::Discriminant(tref, some),
++                    Ty::new(TyKind::Scalar(ScalarTy::Integer(IntegerTy::Signed(
++                        IntTy::Isize,
++                    )))),
++                ),
++                BranchId::ZERO,
++            )],
++            fallback: Some(BranchId::new(1)),
++        };
++        let mut branches = IndexVec::new();
++        branches.push(target);
++        branches.push(failure);
++        let block = BlockData {
++            statements: mem::take(&mut self.statements),
++            terminator: Terminator::new(span, TerminatorKind::Switch { data, branches }),
++            kind,
++        };
++        let previous = mem::replace(&mut self.current_block, target);
++        self.blocks.set_slot(previous, block);
++        slot.project(ProjectionElem::Field(Some(some), FieldId::ZERO), payload)
++    }
++
++    fn translate_place(&mut self, span: Span, place: &mir::Place<'tcx>) -> Result<Place, Error> {
++        Ok(self.translate_place_inner(span, place, false)?.0)
++    }
++
++    fn translate_place_inner(
+         &mut self,
+         span: Span,
+         mir_place: &mir::Place<'tcx>,
+-    ) -> Result<Place, Error> {
++        initialize: bool,
++    ) -> Result<(Place, bool), Error> {
+         use crate::hax::{BaseState, SInto};
+         use rustc_middle::ty;
+
+@@ -1117,7 +1452,8 @@
+         let mut place_ty: mir::PlaceTy = mir::Place::from(mir_place.local).ty(local_decls, tcx);
+         let var_id = self.translate_local(&mir_place.local).unwrap();
+         let mut place = self.locals.place_for_var(var_id);
+-        for elem in mir_place.projection.as_slice() {
++        let mut initialized_slot = false;
++        for (projection_index, elem) in mir_place.projection.as_slice().iter().enumerate() {
+             use mir::ProjectionElem::*;
+             if let TyKind::Error(msg) = place.ty().kind() {
+                 return Err(Error {
+@@ -1191,6 +1527,27 @@
+                         ty::Tuple(_types) => ProjectionElem::Field(None, field_id),
+                         // We get there when we access one of the fields of the state captured by a
+                         // closure.
++                        ty::Coroutine(def, args) if place_ty.variant_index.is_some() => {
++                            let layout =
++                                self.tcx.optimized_mir(*def).coroutine_layout_raw().unwrap();
++                            let saved =
++                                layout.variant_fields[place_ty.variant_index.unwrap()][*index];
++                            let offset =
++                                args.as_coroutine().upvar_tys().len() + 1 + saved.as_usize();
++                            let option_ty = self.saved_option_type(span, projected_place_ty.ty)?;
++                            let slot = place.project(
++                                ProjectionElem::Field(None, FieldId::new(offset)),
++                                option_ty,
++                            );
++                            if initialize && projection_index + 1 == mir_place.projection.len() {
++                                place = slot;
++                                initialized_slot = true;
++                            } else {
++                                place = self.require_saved_field(span, slot, next_place_ty);
++                            }
++                            place_ty = projected_place_ty;
++                            continue;
++                        }
+                         ty::Closure(..) | ty::Coroutine(..) => {
+                             ProjectionElem::Field(None, field_id)
+                         }
+@@ -1241,7 +1598,7 @@
+             place = place.project(proj_elem, next_place_ty);
+             place_ty = projected_place_ty;
+         }
+-        Ok(place)
++        Ok((place, initialized_slot))
+     }
+
+     /// Translate an operand
+@@ -1685,6 +2042,23 @@
+                         operands_t.push(Operand::Const(
+                             IntegerValue::from_unchecked_uint(UIntTy::U32, 0).to_constant(),
+                         ));
++                        let body = self.get_mir(&item, span)?.unwrap();
++                        let layout = body.coroutine_layout_raw().unwrap();
++                        for field in &layout.field_tys {
++                            let option_ty = self.saved_option_type(span, field.ty)?;
++                            let none = self.rval_to_place(
++                                Rvalue::Aggregate(
++                                    AggregateKind::Adt(
++                                        option_ty.as_adt().unwrap().clone(),
++                                        Some(VariantId::ZERO),
++                                        None,
++                                    ),
++                                    vec![],
++                                ),
++                                option_ty,
++                            );
++                            operands_t.push(Operand::Move(none));
++                        }
+                         Ok(Rvalue::Aggregate(
+                             AggregateKind::Adt(tref, None, None),
+                             operands_t,
+@@ -1751,8 +2125,27 @@
+                 None
+             }
+             mir::StatementKind::Assign((place, rvalue)) => {
+-                let t_place = self.translate_place(span, place)?;
+-                let t_rvalue = self.translate_mir_rvalue(span, rvalue, t_place.ty())?;
++                let (t_place, saved) = self.translate_place_inner(span, place, true)?;
++                let rust_payload = place.ty(self.local_decls, self.tcx).ty;
++                let payload = if saved {
++                    self.translate_rustc_ty(span, &rust_payload)?
++                } else {
++                    t_place.ty().clone()
++                };
++                let t_rvalue = self.translate_mir_rvalue(span, rvalue, &payload)?;
++                let t_rvalue = if saved {
++                    let value = self.rval_to_place(t_rvalue, payload);
++                    Rvalue::Aggregate(
++                        AggregateKind::Adt(
++                            t_place.ty().as_adt().unwrap().clone(),
++                            Some(VariantId::new(1)),
++                            None,
++                        ),
++                        vec![Operand::Move(value)],
++                    )
++                } else {
++                    t_rvalue
++                };
+                 Some(StatementKind::Assign(t_place, t_rvalue))
+             }
+             mir::StatementKind::SetDiscriminant {
+@@ -2225,7 +2618,14 @@
+         // There are two cases, depending on whether this is a "regular"
+         // call to a top-level function identified by its id, or if we
+         // are using a local function pointer (i.e., the operand is a "move").
+-        let lval = self.translate_place(span, destination)?;
++        let (slot, saved) = self.translate_place_inner(span, destination, true)?;
++        let lval = if saved {
++            let rust_ty = destination.ty(self.local_decls, tcx).ty;
++            let ty = self.translate_rustc_ty(span, &rust_ty)?;
++            self.fresh_var(None, ty)
++        } else {
++            slot.clone()
++        };
+         let on_unwind = self.translate_unwind_action(span, unwind);
+         // Translate the function operand.
+         let fn_operand = match op_ty.kind() {
+@@ -2324,6 +2724,31 @@
+             }
+         };
+
++        let target = if saved {
++            let store = Statement::new(
++                span,
++                StatementKind::Assign(
++                    slot.clone(),
++                    Rvalue::Aggregate(
++                        AggregateKind::Adt(
++                            slot.ty().as_adt().unwrap().clone(),
++                            Some(VariantId::new(1)),
++                            None,
++                        ),
++                        vec![Operand::Move(lval.clone())],
++                    ),
++                ),
++            );
++            let kind = self.kind;
++            self.blocks.push(BlockData {
++                statements: vec![store],
++                terminator: Terminator::new(span, TerminatorKind::Goto { target }),
++                kind,
++            })
++        } else {
++            target
++        };
++
+         Ok(TerminatorKind::Call {
+             call,
+             dest: lval,
