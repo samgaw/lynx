@@ -67,6 +67,15 @@ defmodule Lynx.Rustler do
     * `:proof_modules` — additional Lean property modules to build and audit.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
+    * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
+      state and blocking waits in Lynx's runtime. Runtime bindings use concurrent
+      purity, preserve effects before panic and convert `rust_panicked` to
+      `nif_panicked`. Resource handles, native task identity and custom return
+      encoders remain unsupported in this mode. Ordinary scalar/tuple/result and
+      byte-vector codecs retain their existing decoding rules and cutoffs.
+    * `:unwind` — `:reject` by default; `:assertions` selects the existing bounded
+      scalar-mutex assertion-cleanup adapter with runtime execution. Guard unwind
+      and general failing-callee cleanup remain unsupported.
 
   The returned `:verification` separates extracted bodies, checked Rust properties,
   cross-crate composition and generated adapter correspondence theorems. It lists
@@ -91,12 +100,19 @@ defmodule Lynx.Rustler do
       :cargo,
       :only,
       :proof_modules,
-      :required_properties
+      :required_properties,
+      :execution,
+      :unwind
     ]
 
     for key <- Keyword.keys(opts),
         key not in allowed,
         do: raise(ArgumentError, "unknown Rustler verification option: #{key}")
+
+    execution = Keyword.get(opts, :execution, :pure)
+
+    unless execution in [:pure, :runtime],
+      do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(execution)}")
 
     prefix = Keyword.get(opts, :module_prefix, "Native.Extraction")
     tools = opts[:tools] || System.fetch_env!("LYNX_AENEAS_DIR")
@@ -146,6 +162,9 @@ defmodule Lynx.Rustler do
 
     custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
 
+    if execution == :runtime and custom?,
+      do: raise(ArgumentError, "runtime Rustler custom encoders are unsupported")
+
     models =
       if binary? do
         [
@@ -192,6 +211,8 @@ defmodule Lynx.Rustler do
 
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
+        execution: execution,
+        unwind: Keyword.get(opts, :unwind, :reject),
         external_types: models,
         external_calls:
           if(binary?, do: [:rustler_binary_as_slice], else: []) ++
@@ -199,12 +220,16 @@ defmodule Lynx.Rustler do
         rustler_atoms: if(custom?, do: :discover, else: [])
       )
 
-    bindings = Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation)
+    bindings =
+      Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation,
+        result_monad: if(execution == :runtime, do: "Lynx.NativeM", else: "RustM")
+      )
 
     Lynx.Rust.Project.build!(project, [bridge, prefix <> ".Funs" | proofs])
 
     external =
       Lynx.Rustler.Adapter.external!(bindings, extraction.implementations,
+        execution: execution,
         audit_modules: extraction.model_modules,
         proof_modules: proofs,
         bridge_module: bridge,

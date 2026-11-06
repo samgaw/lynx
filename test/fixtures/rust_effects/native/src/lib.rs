@@ -482,3 +482,47 @@ mod tests {
         ));
     }
 }
+
+/// Allocates, updates and consumes a scalar mutex through a first-party callee.
+///
+/// # Panics
+/// Recursive acquisition can panic or block; no recursive acquisition is made here.
+pub fn mutex_locked_scalar(value: u64, amount: u64) -> bool {
+    let mutex = Mutex::new(value);
+    let changed = effects_core::locked_scalar_increment(&mutex, amount);
+    drop(mutex);
+    changed
+}
+
+#[cfg(test)]
+mod runtime_nif_tests {
+    #[test]
+    fn scalar_critical_section_checks_overflow_and_releases() {
+        assert!(super::mutex_locked_scalar(7, 3));
+        assert!(!super::mutex_locked_scalar(u64::MAX, 1));
+        assert!(super::mutex_locked_scalar(u64::MAX, 0));
+    }
+}
+
+/// Rustler exports exercising the native runtime through ordinary scalar codecs.
+#[cfg(feature = "nif")]
+mod facade {
+    /// Preserves the checked result across allocation and normal destruction.
+    #[rustler::nif(name = "checked", schedule = "DirtyCpu")]
+    fn checked(value: u64, amount: u64) -> bool {
+        super::mutex_locked_scalar(value, amount)
+    }
+
+    /// Raises only after normal destruction has completed.
+    ///
+    /// # Panics
+    /// Panics when `accepted` is false, after consuming the native mutex.
+    #[rustler::nif]
+    fn released(value: u64, accepted: bool) -> bool {
+        super::mutex_dispose_then_assert(value, accepted);
+        true
+    }
+}
+
+#[cfg(feature = "nif")]
+rustler::init!("Elixir.LynxEffectsFixture.Native");

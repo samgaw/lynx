@@ -52,8 +52,8 @@ defmodule Lynx.Rustler.Bindings do
 
   # Join compiled exports, expanded Rustler signatures, extracted bodies and
   # Aeneas declaration identities. Names alone are never accepted as a model.
-  def link!(manifest, audit, translation) do
-    implementations = LLBC.link!(audit, translation)
+  def link!(manifest, audit, translation, opts \\ []) do
+    implementations = LLBC.link!(audit, translation, opts)
 
     bindings =
       for binding <- manifest.bindings do

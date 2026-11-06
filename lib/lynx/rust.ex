@@ -57,7 +57,9 @@ defmodule Lynx.Rust do
   or async task/migration model. Shared/exclusive guard borrows use validated
   Deref models and Aeneas's mutable-borrow reconstruction, including first-party
   callees. Borrowed-guard functions must have acyclic, nonpanicking implementation
-  dependencies: mutable-borrow outputs on failure are unsupported. The updated
+  dependencies: mutable-borrow outputs on panic are unsupported. Validated native
+  models may block or exhaust verification without raising a catchable panic;
+  neither case can establish successful completion. The updated
   guard is returned as a value. Explicit and compiler-generated normal guard
   release commit the reconstructed payload and unlock the uniquely owned cell,
   preserving poison status. Acquisition tokens and execution contexts are checked.
@@ -67,7 +69,7 @@ defmodule Lynx.Rust do
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned Mutex<bool/unsigned scalar> values. These remove their
   cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined
-  and general unwind drops remain rejected. Native facade conversion, locks and
+  and general unwind drops remain rejected. Resource-handle conversion and
   general native unwind cleanup require separate validated semantics.
   Owners may move into actual extracted first-party callees when no other owner
   remains live in the caller. The callee undergoes the same lifetime audit;
@@ -85,7 +87,9 @@ defmodule Lynx.Rust do
   schedules with two workers, each acquiring and releasing once. Actual extracted
   critical sections have parametric proofs preserving both successful updates
   under those schedules. This does not establish arbitrary-schedule safety,
-  fairness, general liveness, native task identity or an effectful NIF adapter.
+  fairness, general liveness or native task identity. `Lynx.Rustler` runtime
+  adapters can compose supported scalar interfaces with these effects; resource
+  handles and effectful custom encoders remain unsupported.
 
   `unwind: :assertions` additionally preserves compiler assertion cleanup for
   local owned Mutex<bool/unsigned scalar> values. It requires `execution: :runtime`
