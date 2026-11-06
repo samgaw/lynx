@@ -125,7 +125,7 @@ defmodule Lynx.Rust.Futures do
         label:
           "Registered native " <>
             name <>
-            " model; borrowed wake capability, coalesced notification; callback registration, physical layout and executor correctness unverified"
+            " model; borrowed registered capability or standard no-op waker; only registered callbacks notify; callback registration, standard constructors, physical layout and executor correctness unverified"
       }
     end
   end

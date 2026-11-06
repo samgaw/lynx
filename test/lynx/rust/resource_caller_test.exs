@@ -142,8 +142,8 @@ defmodule Lynx.Rust.ResourceCallerTest do
     false_property =
       String.replace(
         original,
-        "(.ok (.Pending, ⟨⟨0⟩⟩), reclaimed env 3 true)",
-        "(.ok (.Ready false, ⟨⟨0⟩⟩), reclaimed env 3 true)"
+        "(.ok (.Pending, ⟨⟨0, false⟩⟩), reclaimed env 3 true)",
+        "(.ok (.Ready false, ⟨⟨0, false⟩⟩), reclaimed env 3 true)"
       )
 
     refute false_property == original

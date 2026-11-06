@@ -1548,26 +1548,40 @@ end Lynx
 
 namespace Lynx
 
-/-- An identity for a supported, registered native wake callback. It is not a BEAM PID. -/
+/-- A registered callback capability or the standard static no-op waker.
+The identity is ignored for no-op wakers and is never a BEAM PID. -/
 structure NativeWaker where
   id : Nat
+  isNoop : Bool := false
 
 /-- Only the borrowed waker identity is exposed by the supported Context operations. -/
 structure NativeTaskContext where
   waker : NativeWaker
 
+namespace NativeTaskContext
+
+/-- Retain exactly the supplied borrowed waker; extension data is not observed. -/
+@[expose] def fromWaker (waker : NativeWaker) : NativeTaskContext := ⟨waker⟩
+
+end NativeTaskContext
+
 namespace NativeWaker
+
+/-- The standard static waker discards all wake requests without allocation. -/
+@[expose] def noop : NativeWaker := ⟨0, true⟩
 
 @[expose] def typeName : String := "rust:future:waker"
 
 /-- Record a coalesced notification without changing the identity's other cells. -/
 @[expose] def notifiedEnv (waker : NativeWaker) (env : Environment) : Environment :=
+  if waker.isNoop then env else
   {env with nativeHeap := env.nativeHeap.map fun cell =>
     if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}
 
 /-- Notification requests may coalesce. No executor or implicit repoll is assumed. -/
 @[expose] def pollWake (waker : NativeWaker) (env : Environment) :
     Option (Except Exception Unit × Environment) :=
+  if waker.isNoop then some (.ok (), env) else
   let cells := env.nativeHeap.filter fun cell => cell.1 == waker.id
   if waker.id ≤ env.refCounter ∧ (cells == [(waker.id, typeName, .atom "idle")] ||
       cells == [(waker.id, typeName, .atom "notified")]) then
@@ -1577,21 +1591,29 @@ namespace NativeWaker
 
 /-- A valid callback requests a wake atomically; invalid identities exhaust verification. -/
 @[expose] def wakeByRef (waker : NativeWaker) : NativeM Unit :=
+  if waker.isNoop then .ok () else
   .wait (pollWake waker) fun reply => match reply with
     | .ok value => .ok value
     | .error exception => .error exception
+
+/-- No-op callbacks do not allocate, notify or modify any environment field. -/
+theorem wakeByRef_noop_next {α : Type} (next : Unit → NativeM α) (env : Environment) :
+    (wakeByRef noop >>= next) env = next () env := by
+  simp [wakeByRef, noop, NativeM.ok]
 
 /-- Registered wake requests preserve all unrelated cells and every other runtime field. -/
 theorem wakeByRef_registered (waker : NativeWaker) (env : Environment)
     (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, typeName, .atom "idle")]) :
+      [(waker.id, typeName, .atom "idle")])
+    (registered : waker.isNoop = false) :
     wakeByRef waker env = (.ok (), {env with nativeHeap := env.nativeHeap.map fun cell =>
       if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}) := by
   have ready : pollWake waker env = some (.ok (), {env with nativeHeap := env.nativeHeap.map fun cell =>
       if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}) := by
-    simp [pollWake, stored, bounded]
+    simp [pollWake, registered, stored, bounded]
   unfold wakeByRef
+  simp only [registered, Bool.false_eq_true, ↓reduceIte]
   rw [Result.wait_ready_apply _ _ _ _ _ ready]
   simp
 
@@ -1600,39 +1622,45 @@ theorem wakeByRef_registered_next {α : Type} (waker : NativeWaker)
     (next : Unit → Result α) (env : Environment)
     (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, typeName, .atom "idle")]) :
+      [(waker.id, typeName, .atom "idle")])
+    (registered : waker.isNoop = false) :
     (wakeByRef waker >>= next) env =
       next () {env with nativeHeap := env.nativeHeap.map fun cell =>
         if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell} := by
   have ready : pollWake waker env = some (.ok (), {env with nativeHeap := env.nativeHeap.map fun cell =>
       if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell}) := by
-    simp [pollWake, stored, bounded]
+    simp [pollWake, registered, stored, bounded]
   unfold wakeByRef
+  simp only [registered, Bool.false_eq_true, ↓reduceIte]
   rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp
 
 /-- Requests coalesce in the logical notification cell. -/
 theorem notifiedEnv_idempotent (waker : NativeWaker) (env : Environment) :
     notifiedEnv waker (notifiedEnv waker env) = notifiedEnv waker env := by
-  have maps : (env.nativeHeap.map (fun cell =>
-      if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell)).map
-      (fun cell => if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell) =
-      env.nativeHeap.map (fun cell =>
-        if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell) := by
-    rw [List.map_map]
-    apply List.map_congr_left
-    intro cell _
-    by_cases same : cell.1 = waker.id <;> simp [same]
-  simp only [notifiedEnv, maps]
+  cases mode : waker.isNoop <;> simp only [notifiedEnv, mode, Bool.false_eq_true,
+    ↓reduceIte]
+  · have maps : (env.nativeHeap.map (fun cell =>
+        if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell)).map
+        (fun cell => if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell) =
+        env.nativeHeap.map (fun cell =>
+          if cell.1 == waker.id then (waker.id, typeName, .atom "notified") else cell) := by
+      rw [List.map_map]
+      apply List.map_congr_left
+      intro cell _
+      by_cases same : cell.1 = waker.id <;> simp [same]
+    simp only [maps]
 
 /-- A missing wake capability cannot complete a caller continuation. -/
 theorem wakeByRef_missing_next {α : Type} (waker : NativeWaker)
     (next : Unit → Result α) (env : Environment)
-    (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = []) :
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = [])
+    (registered : waker.isNoop = false) :
     (wakeByRef waker >>= next) env = (.error .exhausted, env) := by
   have ready : pollWake waker env = some (.error .exhausted, env) := by
-    simp [pollWake, missing]
+    simp [pollWake, registered, missing]
   unfold wakeByRef
+  simp only [registered, Bool.false_eq_true, ↓reduceIte]
   rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp
 
@@ -1645,7 +1673,9 @@ inductive Signal where
 blocks. Invalid capabilities exhaust verification rather than becoming ready. -/
 @[expose] def pollAwait (waker : NativeWaker) (cancelled : Environment → Bool)
     (env : Environment) : Option (Except Exception Signal × Environment) :=
-  match env.nativeHeap.filter (fun cell => cell.1 == waker.id) with
+  if waker.isNoop then
+    if cancelled env then some (.ok .cancel, env) else none
+  else match env.nativeHeap.filter (fun cell => cell.1 == waker.id) with
   | [(_, tag, .atom status)] =>
     if waker.id ≤ env.refCounter ∧ tag = typeName ∧ (status = "idle" ∨ status = "notified") then
       if cancelled env then some (.ok .cancel, env)
@@ -1661,18 +1691,23 @@ blocks. Invalid capabilities exhaust verification rather than becoming ready. -/
     | .ok signal => .ok signal
     | .error exception => .error exception
 
+/-- A discarded wake never makes a no-op task runnable. Cancellation is separate. -/
+theorem pollAwait_noop (cancelled : Environment → Bool) (env : Environment) :
+    pollAwait noop cancelled env = if cancelled env then some (.ok .cancel, env) else none := rfl
+
 theorem await_notified_next {α : Type} (waker : NativeWaker)
     (cancelled : Environment → Bool) (next : Signal → NativeM α) (env : Environment)
     (bounded : waker.id ≤ env.refCounter) (active : cancelled env = false)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, typeName, .atom "notified")]) :
+      [(waker.id, typeName, .atom "notified")])
+    (registered : waker.isNoop = false) :
     (await waker cancelled >>= next) env = next .wake {env with
       nativeHeap := env.nativeHeap.map fun cell =>
         if cell.1 == waker.id then (waker.id, typeName, .atom "idle") else cell} := by
   have ready : pollAwait waker cancelled env = some (.ok .wake, {env with
       nativeHeap := env.nativeHeap.map fun cell =>
         if cell.1 == waker.id then (waker.id, typeName, .atom "idle") else cell}) := by
-    simp [pollAwait, bounded, stored, active]
+    simp [pollAwait, registered, bounded, stored, active]
   unfold await
   rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp
@@ -1681,10 +1716,11 @@ theorem await_cancelled_next {α : Type} (waker : NativeWaker)
     (cancelled : Environment → Bool) (next : Signal → NativeM α) (env : Environment)
     (bounded : waker.id ≤ env.refCounter) (requested : cancelled env = true)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, typeName, .atom "notified")]) :
+      [(waker.id, typeName, .atom "notified")])
+    (registered : waker.isNoop = false) :
     (await waker cancelled >>= next) env = next .cancel env := by
   have ready : pollAwait waker cancelled env = some (.ok .cancel, env) := by
-    simp [pollAwait, bounded, stored, requested]
+    simp [pollAwait, registered, bounded, stored, requested]
   unfold await
   rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp
@@ -1692,26 +1728,29 @@ theorem await_cancelled_next {α : Type} (waker : NativeWaker)
 theorem pollAwait_idle (waker : NativeWaker) (cancelled : Environment → Bool)
     (env : Environment) (bounded : waker.id ≤ env.refCounter) (active : cancelled env = false)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, typeName, .atom "idle")]) :
+      [(waker.id, typeName, .atom "idle")])
+    (registered : waker.isNoop = false) :
     pollAwait waker cancelled env = none := by
-  simp [pollAwait, bounded, stored, active]
+  simp [pollAwait, registered, bounded, stored, active]
 
 theorem await_cancelled_idle_next {α : Type} (waker : NativeWaker)
     (cancelled : Environment → Bool) (next : Signal → NativeM α) (env : Environment)
     (bounded : waker.id ≤ env.refCounter) (requested : cancelled env = true)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, typeName, .atom "idle")]) :
+      [(waker.id, typeName, .atom "idle")])
+    (registered : waker.isNoop = false) :
     (await waker cancelled >>= next) env = next .cancel env := by
   have ready : pollAwait waker cancelled env = some (.ok .cancel, env) := by
-    simp [pollAwait, bounded, stored, requested]
+    simp [pollAwait, registered, bounded, stored, requested]
   unfold await
   rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp
 
 theorem pollAwait_missing (waker : NativeWaker) (cancelled : Environment → Bool)
-    (env : Environment) (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = []) :
+    (env : Environment) (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = [])
+    (registered : waker.isNoop = false) :
     pollAwait waker cancelled env = some (.error .exhausted, env) := by
-  simp [pollAwait, missing]
+  simp [pollAwait, registered, missing]
 
 end NativeWaker
 

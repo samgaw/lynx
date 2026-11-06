@@ -76,14 +76,14 @@ theorem first_pending_next {α : Type} (value updated : effects_core.Counter) (a
     (changed poisoned : Bool) (env : Environment)
     (computed : effects_core.increment value amount = Result.ok (changed, updated))
     (next : (core.task.poll.Poll Bool × effects_native.core.pin.Pin guarded_suspending.closure × NativeTaskContext) → Result α) :
-    (guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0⟩⟩ >>= next) (registered env value poisoned) =
-      next (.Pending, ⟨retainedFuture amount changed (guardFor env updated)⟩, ⟨⟨0⟩⟩) (held env value poisoned) := by
-  have unfolded : guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0⟩⟩ = (do
+    (guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩ >>= next) (registered env value poisoned) =
+      next (.Pending, ⟨retainedFuture amount changed (guardFor env updated)⟩, ⟨⟨0, false⟩⟩) (held env value poisoned) := by
+  have unfolded : guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩ = (do
     let acquired ← NativeMutex.lock (α := effects_core.Counter) ⟨1⟩
     let guard ← effects_core.recover_guard acquired
     let (changed, updated) ← effects_core.increment_guard guard amount
-    NativeWaker.wakeByRef ⟨0⟩
-    Result.ok (.Pending, ⟨retainedFuture amount changed updated⟩, ⟨⟨0⟩⟩)) := by
+    NativeWaker.wakeByRef ⟨0, false⟩
+    Result.ok (.Pending, ⟨retainedFuture amount changed updated⟩, ⟨⟨0, false⟩⟩)) := by
     unfold guarded_suspending.closure.poll
     split <;> simp_all [initial, retainedFuture, effects_core.paused_counter,
       core.future.into_future.IntoFuture.Blanket.into_future,
@@ -107,9 +107,9 @@ theorem first_pending_next {α : Type} (value updated : effects_core.Counter) (a
   simp only [Result.ok_bind, recovered]
   rw [callee_contract]
   simp only [guardFor, computed, NativeM.ok, Result.ok_bind]
-  have wakeReady : NativeWaker.pollWake ⟨0⟩ acquired = some (.ok (), held env value poisoned) := by
+  have wakeReady : NativeWaker.pollWake ⟨0, false⟩ acquired = some (.ok (), held env value poisoned) := by
     simp [NativeWaker.pollWake, acquired, start, registered, held]
-  simp only [NativeWaker.wakeByRef, Result.wait_bind]
+  simp only [NativeWaker.wakeByRef, Bool.false_eq_true, ↓reduceIte, Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ wakeReady]
   simp
 
@@ -135,8 +135,8 @@ theorem cancel_pending (value updated : effects_core.Counter) (amount : U64)
 
 theorem first_pending (value : effects_core.Counter) (amount : U64) (poisoned : Bool) (env : Environment) :
     ∃ (changed : Bool) (updated : effects_core.Counter),
-      guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0⟩⟩ (registered env value poisoned) =
-        (.ok (.Pending, ⟨retainedFuture amount changed (guardFor env updated)⟩, ⟨⟨0⟩⟩), held env value poisoned) ∧
+      guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩ (registered env value poisoned) =
+        (.ok (.Pending, ⟨retainedFuture amount changed (guardFor env updated)⟩, ⟨⟨0, false⟩⟩), held env value poisoned) ∧
       (if changed then updated.value.val = value.value.val + amount.val
         else updated = value ∧ U64.max < value.value.val + amount.val) := by
   obtain ⟨changed, updated, computed, property⟩ := increment_spec value amount
@@ -148,7 +148,7 @@ theorem suspend_then_cancel (value : effects_core.Counter) (amount : U64) (poiso
     ∃ (changed : Bool) (updated : effects_core.Counter),
       (do
         let future ← guarded_suspending ⟨1⟩ amount
-        let (_, future, _) ← guarded_suspending.closure.poll ⟨future⟩ ⟨⟨0⟩⟩
+        let (_, future, _) ← guarded_suspending.closure.poll ⟨future⟩ ⟨⟨0, false⟩⟩
         guarded_suspending.closure.drop_owned future.pointer) (registered env value poisoned) =
           (.ok (), released env updated poisoned) ∧
       (if changed then updated.value.val = value.value.val + amount.val
@@ -160,9 +160,9 @@ theorem suspend_then_cancel (value : effects_core.Counter) (amount : U64) (poiso
   simpa [guarded_suspending, NativeM.ok, initial, cancel_pending] using composed
 
 theorem resume_contract (amount : U64) (changed : Bool) (guard : NativeGuard effects_core.Counter) :
-    guarded_suspending.closure.poll ⟨retainedFuture amount changed guard⟩ ⟨⟨0⟩⟩ = (do
+    guarded_suspending.closure.poll ⟨retainedFuture amount changed guard⟩ ⟨⟨0, false⟩⟩ = (do
       NativeGuard.release guard
-      Result.ok (.Ready changed, ⟨completed amount changed⟩, ⟨⟨0⟩⟩)) := by
+      Result.ok (.Ready changed, ⟨completed amount changed⟩, ⟨⟨0, false⟩⟩)) := by
   unfold guarded_suspending.closure.poll
   split <;> simp_all [retainedFuture, completed,
     effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
@@ -173,20 +173,20 @@ theorem resume_contract (amount : U64) (changed : Bool) (guard : NativeGuard eff
 theorem resume_next {α : Type} (value updated : effects_core.Counter) (amount : U64)
     (changed poisoned : Bool) (env : Environment)
     (next : (core.task.poll.Poll Bool × effects_native.core.pin.Pin guarded_suspending.closure × NativeTaskContext) → Result α) :
-    (guarded_suspending.closure.poll ⟨retainedFuture amount changed (guardFor env updated)⟩ ⟨⟨0⟩⟩ >>= next)
-      (held env value poisoned) = next (.Ready changed, ⟨completed amount changed⟩, ⟨⟨0⟩⟩) (released env updated poisoned) := by
+    (guarded_suspending.closure.poll ⟨retainedFuture amount changed (guardFor env updated)⟩ ⟨⟨0, false⟩⟩ >>= next)
+      (held env value poisoned) = next (.Ready changed, ⟨completed amount changed⟩, ⟨⟨0, false⟩⟩) (released env updated poisoned) := by
   have dropContract : guarded_suspending.closure.drop_owned (retainedFuture amount changed (guardFor env updated)) =
       NativeGuard.release (guardFor env updated) := by rfl
   rw [resume_contract]
   simpa only [dropContract, bind_assoc, Result.ok_bind] using
     cancel_pending_next value updated amount changed poisoned env
-      (next (.Ready changed, ⟨completed amount changed⟩, ⟨⟨0⟩⟩))
+      (next (.Ready changed, ⟨completed amount changed⟩, ⟨⟨0, false⟩⟩))
 
 theorem two_polls (value : effects_core.Counter) (amount : U64) (poisoned : Bool) (env : Environment) :
     ∃ (changed : Bool) (updated : effects_core.Counter),
       (do
         let future ← guarded_suspending ⟨1⟩ amount
-        let (first, future, context) ← guarded_suspending.closure.poll ⟨future⟩ ⟨⟨0⟩⟩
+        let (first, future, context) ← guarded_suspending.closure.poll ⟨future⟩ ⟨⟨0, false⟩⟩
         let (second, finalState, _) ← guarded_suspending.closure.poll future context
         Result.ok (first, second, finalState)) (registered env value poisoned) =
           (.ok (.Pending, .Ready changed, ⟨completed amount changed⟩), released env updated poisoned) ∧
@@ -214,8 +214,8 @@ private theorem held_contends (value : effects_core.Counter) (poisoned : Bool) (
 theorem pending_contends (value : effects_core.Counter) (amount : U64) (poisoned : Bool)
     (env : Environment) (other : PID) (different : env.currentPid ≠ other) :
     ∃ (changed : Bool) (updated : effects_core.Counter),
-      guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0⟩⟩ (registered env value poisoned) =
-        (.ok (.Pending, ⟨retainedFuture amount changed (guardFor env updated)⟩, ⟨⟨0⟩⟩), held env value poisoned) ∧
+      guarded_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩ (registered env value poisoned) =
+        (.ok (.Pending, ⟨retainedFuture amount changed (guardFor env updated)⟩, ⟨⟨0, false⟩⟩), held env value poisoned) ∧
       NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩
         {held env value poisoned with currentPid := other} = none := by
   obtain ⟨changed, updated, pending, _⟩ := first_pending value amount poisoned env
@@ -237,7 +237,7 @@ theorem stale_guard_exhausts (value updated : effects_core.Counter) (amount : U6
   simp
 
 theorem repoll_completed (amount : U64) (changed : Bool) :
-    guarded_suspending.closure.poll ⟨completed amount changed⟩ ⟨⟨0⟩⟩ =
+    guarded_suspending.closure.poll ⟨completed amount changed⟩ ⟨⟨0, false⟩⟩ =
       Result.error (.error (.atom "rust_panicked")) := rfl
 
 end GuardAwait.Properties

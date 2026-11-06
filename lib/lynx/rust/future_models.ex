@@ -38,6 +38,34 @@ defmodule Lynx.Rust.FutureModels do
           params["trait_type_constraints"] == []
 
       cond do
+        method == "noop" and common and params["regions"] == [] and input == [] and
+          output == %{"Ref" => ["Static", adt(waker_id), "Shared"]} and
+            parent == adt(waker_id) ->
+          %{
+            rust_name: "core::task::wake::{core::task::wake::Waker}::noop",
+            lean: "Lynx.NativeWaker.noop",
+            native_wake_operation: :noop,
+            builtin: false,
+            can_fail: false,
+            lift: false,
+            label:
+              "Standard Waker::noop model: nonallocating static waker whose callbacks do nothing; no notification or progress guarantee; std implementation, pointer layout and native vtable correctness remain trusted"
+          }
+
+        method == "from_waker" and common and length(params["regions"]) == 1 and
+          input == [ref(0, adt(waker_id))] and output == adt(context_id, [region(0)]) and
+            parent == adt(context_id, [%{"Var" => %{"Bound" => [0, 0]}}]) ->
+          %{
+            rust_name: "core::task::wake::{core::task::wake::Context<'a>}::from_waker",
+            lean: "Lynx.NativeTaskContext.fromWaker",
+            native_wake_operation: :from_waker,
+            builtin: false,
+            can_fail: false,
+            lift: false,
+            label:
+              "Standard Context::from_waker model: retain the supplied borrowed waker; unsupported local-waker/extension observations remain rejected; std constructor and physical Context layout unverified"
+          }
+
         method == "waker" and common and length(params["regions"]) == 2 and
           input == [ref(1, adt(context_id, [region(0)]))] and output == ref(0, adt(waker_id)) and
             parent == adt(context_id, [%{"Var" => %{"Bound" => [0, 0]}}]) ->
@@ -49,7 +77,7 @@ defmodule Lynx.Rust.FutureModels do
             can_fail: false,
             lift: false,
             label:
-              "Context::waker identity model for registered logical wakers; native Context layout and callback registration unverified"
+              "Context::waker identity model for registered or standard no-op wakers; native Context layout and callback registration unverified"
           }
 
         method == "wake_by_ref" and common and length(params["regions"]) == 1 and
@@ -65,7 +93,7 @@ defmodule Lynx.Rust.FutureModels do
             lift: true,
             native_cutoff_only: true,
             label:
-              "Registered nonpanicking Waker::wake_by_ref callback model: atomic coalesced notification cell; invalid capabilities exhaust verification; physical vtables, callback implementation, allocation and executor scheduling unverified"
+              "Waker::wake_by_ref dispatch model: standard no-op discards requests without effects; registered nonpanicking callbacks atomically coalesce notifications; invalid capabilities exhaust verification; physical vtables, callback implementation, allocation and executor scheduling unverified"
           }
 
         true ->

@@ -59,6 +59,11 @@ defmodule Lynx.Rust do
   coalesce. The callback must be registered to this nonpanicking notification
   protocol. Registration, native vtables and callback implementation remain trusted
   boundaries; an arbitrary Waker cannot be assumed to satisfy that protocol.
+  Standard `Waker::noop` is a distinct, nonallocating model that discards wake
+  requests and leaves the environment unchanged. `Context::from_waker` retains
+  the supplied capability. Waiting on a no-op waker blocks unless cancellation
+  is observed; no notification or progress is invented. Standard constructors,
+  callback/vtable execution and physical Context layout remain trusted.
   This does not introduce an executor, implicit repolling, fairness, external
   cancellation delivery or compiler-generated coroutine suspension. Pin::get_mut's
   actual compiled body is retained with a checked final mutable-borrow transfer.

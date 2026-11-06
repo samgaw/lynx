@@ -62,20 +62,20 @@ theorem drop_unstarted (value amount : U64) (env : Environment) :
 
 theorem first_pending_next {α : Type} (value amount : U64) (env : Environment)
     (next : (core.task.poll.Poll Bool × effects_native.core.pin.Pin resource_suspending.closure × NativeTaskContext) → Result α) :
-    (resource_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0⟩⟩ >>= next) (live env value 3 false) =
-      next (.Pending, ⟨pending amount⟩, ⟨⟨0⟩⟩) (live env value 3 true) := by
-  have body : resource_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0⟩⟩ = (do
-      NativeWaker.wakeByRef ⟨0⟩
-      Result.ok (.Pending, ⟨pending amount⟩, ⟨⟨0⟩⟩)) := by
+    (resource_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩ >>= next) (live env value 3 false) =
+      next (.Pending, ⟨pending amount⟩, ⟨⟨0, false⟩⟩) (live env value 3 true) := by
+  have body : resource_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩ = (do
+      NativeWaker.wakeByRef ⟨0, false⟩
+      Result.ok (.Pending, ⟨pending amount⟩, ⟨⟨0, false⟩⟩)) := by
     simp [resource_suspending.closure.poll, initial, pending, core.mem.replace,
       effects_core.paused_counter, core.future.into_future.IntoFuture.Blanket.into_future,
       effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
       core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc, UScalar.ofNatCore, UScalar.val]
   rw [body]
   simp only [bind_assoc, Result.ok_bind]
-  have woke := NativeWaker.wakeByRef_registered_next ⟨0⟩
-    (fun _ => next (.Pending, ⟨pending amount⟩, ⟨⟨0⟩⟩)) (live env value 3 false)
-    (by simp [live]) (by simp [live, cell])
+  have woke := NativeWaker.wakeByRef_registered_next ⟨0, false⟩
+    (fun _ => next (.Pending, ⟨pending amount⟩, ⟨⟨0, false⟩⟩)) (live env value 3 false)
+    (by simp [live]) (by simp [live, cell]) rfl
   simpa [NativeWaker.notifiedEnv, live, cell] using woke
 
 theorem cancel_pending (value amount : U64) (env : Environment) :
@@ -114,21 +114,21 @@ theorem update_next {α : Type} (value amount : U64) (env : Environment) (notifi
 theorem resume_next {α : Type} (value amount : U64) (env : Environment) (notified : Bool)
     (next : (core.task.poll.Poll Bool × effects_native.core.pin.Pin resource_suspending.closure × NativeTaskContext) → Result α) :
     ∃ changed updated,
-      (resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0⟩⟩ >>= next) (live env value 3 notified) =
-        next (.Ready changed, ⟨completed amount⟩, ⟨⟨0⟩⟩) (reclaimed env 4 notified) ∧
+      (resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0, false⟩⟩ >>= next) (live env value 3 notified) =
+        next (.Ready changed, ⟨completed amount⟩, ⟨⟨0, false⟩⟩) (reclaimed env 4 notified) ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
-  have body : resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0⟩⟩ = (do
+  have body : resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0, false⟩⟩ = (do
       let changed ← resource_locked_increment ⟨2,3⟩ amount
       resource_release ⟨2,3⟩
-      Result.ok (.Ready changed, ⟨completed amount⟩, ⟨⟨0⟩⟩)) := by
+      Result.ok (.Ready changed, ⟨completed amount⟩, ⟨⟨0, false⟩⟩)) := by
     simp [resource_suspending.closure.poll, pending, completed, core.mem.replace,
       effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
       effects_core.saturating_increment, core.pin.PinMutAT.get_mut, NativeM.ok,
       UScalar.ofNatCore, UScalar.val, bind_assoc]
   let finish : Bool → NativeM α := fun changed => do
     resource_release ⟨2,3⟩
-    next (.Ready changed, ⟨completed amount⟩, ⟨⟨0⟩⟩)
+    next (.Ready changed, ⟨completed amount⟩, ⟨⟨0, false⟩⟩)
   obtain ⟨changed, updated, computed, arithmetic⟩ := update_next value amount env notified finish
   refine ⟨changed, updated, ?_, arithmetic⟩
   rw [body]
@@ -139,7 +139,7 @@ theorem resume_next {α : Type} (value amount : U64) (env : Environment) (notifi
 
 theorem suspend_then_cancel (value amount : U64) (env : Environment) :
     (do
-      let (_, future, _) ← resource_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0⟩⟩
+      let (_, future, _) ← resource_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩
       resource_suspending.closure.drop_owned future.pointer) (live env value 3 false) =
         (.ok (), reclaimed env 3 true) := by
   rw [first_pending_next]

@@ -18,14 +18,15 @@ theorem callee_pending {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin effects_core.PausedCounter × NativeTaskContext) → Result α)
     (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     (effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll
         ⟨⟨true, ⟨value⟩⟩⟩ ⟨waker⟩ >>= next) env =
       next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩) (NativeWaker.notifiedEnv waker env) := by
   simpa [effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
-    core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc, NativeWaker.notifiedEnv] using
+    core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc, NativeWaker.notifiedEnv, callback] using
     (NativeWaker.wakeByRef_registered_next waker
-      (fun _ => next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩)) env bounded stored)
+      (fun _ => next (core.task.poll.Poll.Pending, ⟨⟨false, ⟨value⟩⟩⟩, ⟨waker⟩)) env bounded stored callback)
 
 theorem callee_ready (value : U64) (context : NativeTaskContext) :
     ∃ result,
@@ -46,7 +47,8 @@ theorem first_pending_next {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin suspended_increment.closure × NativeTaskContext) → Result α)
     (env : Environment) (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     (suspended_increment.closure.poll ⟨⟨value, 0#u32, none⟩⟩ ⟨waker⟩ >>= next) env =
       next (.Pending, ⟨⟨value, 3#u32, some ⟨false, ⟨value⟩⟩⟩⟩, ⟨waker⟩)
         (NativeWaker.notifiedEnv waker env) := by
@@ -58,17 +60,18 @@ theorem first_pending_next {α : Type} (value : U64) (waker : NativeWaker)
   have unfolded : suspended_increment.closure.poll ⟨⟨value, 0#u32, none⟩⟩ ⟨waker⟩ =
       (effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll ⟨⟨true, ⟨value⟩⟩⟩ ⟨waker⟩ >>= after) := by rfl
   rw [unfolded]
-  have composed := callee_pending value waker (fun output => after output >>= next) env bounded stored
+  have composed := callee_pending value waker (fun output => after output >>= next) env bounded stored callback
   simpa [after, bind_assoc] using composed
 
 theorem first_pending (value : U64) (waker : NativeWaker) (env : Environment)
     (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     suspended_increment.closure.poll ⟨⟨value, 0#u32, none⟩⟩ ⟨waker⟩ env =
       (.ok (.Pending, ⟨⟨value, 3#u32, some ⟨false, ⟨value⟩⟩⟩⟩, ⟨waker⟩),
         NativeWaker.notifiedEnv waker env) := by
-  simpa using first_pending_next value waker Result.ok env bounded stored
+  simpa using first_pending_next value waker Result.ok env bounded stored callback
 
 theorem resume_ready (value : U64) (context : NativeTaskContext) :
     ∃ result,
@@ -106,7 +109,8 @@ theorem repoll_completed (value : U64) (context : NativeTaskContext) :
 theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment)
     (bounded : waker.id ≤ env.refCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
-      [(waker.id, NativeWaker.typeName, .atom "idle")]) :
+      [(waker.id, NativeWaker.typeName, .atom "idle")])
+    (callback : waker.isNoop = false) :
     ∃ result,
       (do
         let future ← suspended_increment value
@@ -122,7 +126,7 @@ theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment)
     (fun output => do
       let (first, updated, context) := output
       let (second, finalState, _) ← suspended_increment.closure.poll updated context
-      Result.ok (first, second, finalState)) env bounded stored
+      Result.ok (first, second, finalState)) env bounded stored callback
   simpa [suspended_increment, NativeM.ok, computed] using composed
 
 end Suspend.Properties
