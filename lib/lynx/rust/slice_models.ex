@@ -8,26 +8,40 @@ defmodule Lynx.Rust.SliceModels do
            "signature" => %{"is_unsafe" => false, "abi" => "Rust", "is_variadic" => false} = sig,
            "generics" => params
          } <- function,
-         true <- parameters?(params) do
+         true <- parameters?(CallModels.expand(params, refs)) do
       t = %{"TypeVar" => %{"Free" => 0}}
       slice = %{"Slice" => [t, nil]}
       shared = %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Shared"]}
+      mutable = %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Mut"]}
       usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
       inputs = CallModels.expand(sig["inputs"], refs)
       output = CallModels.expand(sig["output"], refs)
       name = function["item_meta"]["name"]
 
       cond do
+        inherent?(name, slice, refs, "is_empty") and inputs == [shared] and
+          output == %{"Scalar" => "Bool"} and function["src"] == "Normal" ->
+          model("core::slice::{[@T]}::is_empty", "Aeneas.Std.core.slice.Slice.is_empty")
+          |> Map.put(:lift, false)
+
         inherent?(name, slice, refs) and inputs == [shared, usize] and
           tuple?(output, [shared, shared]) and function["src"] == "Normal" ->
           model("core::slice::{[@T]}::split_at", "Aeneas.Std.core.slice.Slice.split_at")
 
         inputs == [usize, shared] and
           output == %{"Ref" => [%{"Var" => %{"Free" => 0}}, t, "Shared"]} and
-            index_identity?(function, translated, refs, t, slice, usize) ->
+            index_identity?(function, translated, refs, t, slice, usize, "index", 4) ->
           model(
             "core::slice::index::{core::slice::index::SliceIndex<usize, [@T], @T>}::index",
             "Aeneas.Std.core.slice.index.Usize.index"
+          )
+
+        inputs == [usize, mutable] and
+          output == %{"Ref" => [%{"Var" => %{"Free" => 0}}, t, "Mut"]} and
+            index_identity?(function, translated, refs, t, slice, usize, "index_mut", 5) ->
+          model(
+            "core::slice::index::{core::slice::index::SliceIndex<usize, [@T], @T>}::index_mut",
+            "Aeneas.Std.core.slice.index.Usize.index_mut"
           )
 
         true ->
@@ -46,7 +60,7 @@ defmodule Lynx.Rust.SliceModels do
       can_fail: true,
       lift: true,
       label:
-        "Aeneas safe shared-slice model with bounds panic; Rust core implementation not verified"
+        "Aeneas safe slice model preserving bounds panics and mutable updates; Rust core implementation not verified"
     }
 
   defp parameters?(%{
@@ -54,26 +68,43 @@ defmodule Lynx.Rust.SliceModels do
          "types" => [%{"index" => 0}],
          "const_generics" => [],
          "trait_clauses" => [],
-         "trait_type_constraints" => []
+         "trait_type_constraints" => [],
+         "outlives" => outlives
        }),
-       do: true
+       do:
+         outlives in [
+           [],
+           [
+             %{
+               "regions" => [],
+               "outlives" => [],
+               "skip_binder" => [
+                 %{"Lub" => %{"TypeVar" => %{"Free" => 0}}},
+                 %{"Var" => %{"Free" => 0}}
+               ]
+             }
+           ]
+         ]
 
   defp parameters?(_), do: false
+
+  defp inherent?(name, slice, refs, method \\ "split_at")
 
   defp inherent?(
          [
            %{"Ident" => ["core", 0]},
            %{"Ident" => ["slice", 0]},
            %{"Impl" => %{"Ty" => %{"skip_binder" => parent}}},
-           %{"Ident" => ["split_at", 0]}
+           %{"Ident" => [method, 0]}
          ],
          slice,
-         refs
+         refs,
+         method
        ) do
     parent |> CallModels.expand(refs) |> free() == slice
   end
 
-  defp inherent?(_, _, _), do: false
+  defp inherent?(_, _, _, _), do: false
 
   defp free(%{"Bound" => [0, index]}), do: %{"Free" => index}
   defp free(map) when is_map(map), do: Map.new(map, fn {k, v} -> {k, free(v)} end)
@@ -88,14 +119,14 @@ defmodule Lynx.Rust.SliceModels do
   defp arguments(types),
     do: %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
 
-  defp index_identity?(function, translated, refs, t, slice, usize) do
+  defp index_identity?(function, translated, refs, t, slice, usize, method_name, method_index) do
     id = function["def_id"]
 
     with %{
            "TraitImpl" => %{
              "impl_ref" => %{"id" => impl_id, "generics" => impl_args},
              "trait_ref" => %{"id" => trait, "generics" => trait_args},
-             "item_id" => 4,
+             "item_id" => ^method_index,
              "reuses_default" => false
            }
          } <- function["src"],
@@ -106,7 +137,7 @@ defmodule Lynx.Rust.SliceModels do
       name = [%{"Ident" => ["core", 0]}, %{"Ident" => ["slice", 0]}, %{"Ident" => ["index", 0]}]
 
       function["item_meta"]["name"] ==
-        name ++ [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => ["index", 0]}] and
+        name ++ [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => [method_name, 0]}] and
         decl["item_meta"]["name"] == name ++ [%{"Ident" => ["SliceIndex", 0]}] and
         impl["src"] == "Normal" and impl["is_negative"] == false and
         impl["is_unsafe"] == true and decl["is_unsafe"] == true and
@@ -118,7 +149,10 @@ defmodule Lynx.Rust.SliceModels do
           "id" => trait,
           "generics" => arguments([usize, slice, t])
         } and
-        case Enum.filter(impl["methods"], &(&1["kind"] == %{"TraitMethod" => [trait, 4]})) do
+        case Enum.filter(
+               impl["methods"],
+               &(&1["kind"] == %{"TraitMethod" => [trait, method_index]})
+             ) do
           [%{"params" => method_params, "skip_binder" => %{"id" => ^id, "generics" => args}}] ->
             method_parameters?(method_params) and
               CallModels.expand(args, refs) ==

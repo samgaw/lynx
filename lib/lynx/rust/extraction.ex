@@ -112,12 +112,18 @@ defmodule Lynx.Rust.Extraction do
                 "functions" =>
                   Enum.map(
                     Enum.reject(Map.values(audit.external_calls), & &1.builtin),
-                    &%{
-                      "rust_pattern" => &1.rust_name,
-                      "extract_name" => &1.lean,
-                      "can_fail" => &1.can_fail,
-                      "lift" => &1.lift
-                    }
+                    &Map.merge(
+                      %{
+                        "rust_pattern" => &1.rust_name,
+                        "extract_name" => &1.lean,
+                        "can_fail" => &1.can_fail,
+                        "lift" => &1.lift
+                      },
+                      if(Map.has_key?(&1, :keep_params),
+                        do: %{"keep_params" => &1.keep_params},
+                        else: %{}
+                      )
+                    )
                   )
               },
               Lynx.Rustler.EncoderModels.external_names(audit.external_calls)

@@ -12,6 +12,7 @@ defmodule Lynx.Rust.CallModels do
         model =
           Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
             Lynx.Rust.SliceModels.resolve(function, translated, refs) ||
+            Lynx.Rust.CollectionModels.resolve(function, translated, refs) ||
             Lynx.Rust.EndianModels.resolve(function, translated, refs) ||
             Lynx.Rust.BytesModels.resolve(function, translated, refs) ||
             Lynx.Rust.FormatModels.resolve(function, translated, refs) ||
