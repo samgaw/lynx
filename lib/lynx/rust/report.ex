@@ -164,6 +164,7 @@ defmodule Lynx.Rust.Report do
             do: ["Lynx compiler-generated structural drop erasure audit"],
             else: []
           ),
+      compiler_drop_queries: Map.get(extraction, :compiler_drop_queries, []),
       native_drop_lowering: Map.get(extraction, :native_drops, []),
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
       unwind: Map.get(extraction, :unwind, :reject),

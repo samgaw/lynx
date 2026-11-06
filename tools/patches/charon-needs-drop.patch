@@ -1,0 +1,84 @@
+diff --git a/charon/src/ast/items/layout_guarantees.rs b/charon/src/ast/items/layout_guarantees.rs
+index 4ea49df1d2ee..07a6740970bf 100644
+--- a/charon/src/ast/items/layout_guarantees.rs
++++ b/charon/src/ast/items/layout_guarantees.rs
+@@ -954,2 +954,3 @@ mod tests {
+             TypeDecl {
++                needs_drop: None,
+                 def_id: id,
+diff --git a/charon/src/ast/items/type_decl.rs b/charon/src/ast/items/type_decl.rs
+index 8eff2946531e..f7e428081887 100644
+--- a/charon/src/ast/items/type_decl.rs
++++ b/charon/src/ast/items/type_decl.rs
+@@ -43,2 +43,5 @@ pub struct TypeDecl {
+     pub marker_traits: Option<Box<ImplementsMarkerTraits>>,
++    /// Compiler drop query for monomorphic types. Unknown is not destructor-free.
++    #[serde_state(stateless)]
++    pub needs_drop: Option<bool>,
+ }
+diff --git a/charon/src/bin/charon-driver/translate/translate_items.rs b/charon/src/bin/charon-driver/translate/translate_items.rs
+index 94d3ea0ce866..a9b01d6e9bdc 100644
+--- a/charon/src/bin/charon-driver/translate/translate_items.rs
++++ b/charon/src/bin/charon-driver/translate/translate_items.rs
+@@ -479,3 +479,8 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+         });
++        let needs_drop = self.outermost_generics().is_empty().then(|| {
++            let ty = def.type_of(&self.hax_state).unwrap();
++            ty.needs_drop(self.hax_state.base().tcx, self.hax_state.typing_env())
++        });
+         Ok(TypeDecl {
++            needs_drop,
+             def_id: trans_id,
+diff --git a/charon/src/bin/charon-driver/translate/translate_trait_objects.rs b/charon/src/bin/charon-driver/translate/translate_trait_objects.rs
+index 5f3fea586c4f..b060d82cbec4 100644
+--- a/charon/src/bin/charon-driver/translate/translate_trait_objects.rs
++++ b/charon/src/bin/charon-driver/translate/translate_trait_objects.rs
+@@ -586,2 +586,3 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+         Ok(TypeDecl {
++            needs_drop: None,
+             def_id: type_id,
+diff --git a/charon/src/export/multi_target.rs b/charon/src/export/multi_target.rs
+index 1827409f7195..17a27fbc05ac 100644
+--- a/charon/src/export/multi_target.rs
++++ b/charon/src/export/multi_target.rs
+@@ -408,2 +408,3 @@ impl ZipAst for ItemComparer<'_> {
+             marker_traits: left_marker_traits,
++            needs_drop: left_needs_drop,
+         } = left;
+@@ -418,2 +419,3 @@ impl ZipAst for ItemComparer<'_> {
+             marker_traits: right_marker_traits,
++            needs_drop: right_needs_drop,
+         } = right;
+@@ -426,2 +428,3 @@ impl ZipAst for ItemComparer<'_> {
+         self.visit(left_ptr_metadata, right_ptr_metadata)?;
++        self.visit(left_needs_drop, right_needs_drop)?;
+         self.visit(left_marker_traits, right_marker_traits)
+diff --git a/charon/tests/crate_data.rs b/charon/tests/crate_data.rs
+index 9c9115671cd9..3250ac2517d3 100644
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1244 +1244,24 @@ fn reuses_default_only_for_default_copies() -> anyhow::Result<()> {
+ }
++
++#[test]
++fn needs_drop() -> anyhow::Result<()> {
++    let crate_data = translate(
++        r#"
++        struct Plain { value: u64 }
++        struct Custom { value: u64 }
++        impl Drop for Custom { fn drop(&mut self) {} }
++        struct Nested { inner: Custom }
++        struct Generic<T> { value: T }
++        fn main() {}
++        "#,
++    )?;
++    let queries: HashMap<_, _> = user_type_decls(&crate_data)
++        .into_iter()
++        .map(|decl| (decl.item_meta.name.debug_repr(&crate_data), decl.needs_drop))
++        .collect();
++    assert_eq!(queries["test_crate::Plain"], Some(false));
++    assert_eq!(queries["test_crate::Custom"], Some(true));
++    assert_eq!(queries["test_crate::Nested"], Some(true));
++    assert_eq!(queries["test_crate::Generic"], None);
++    Ok(())
++}

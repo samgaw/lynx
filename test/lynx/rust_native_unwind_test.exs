@@ -89,6 +89,7 @@ defmodule Lynx.Rust.NativeUnwindTest do
            } = raw
 
     bad_flags = put_in(raw, ["translated", "options", "reconstruct_asserts"], true)
+    {bad_flags, _queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(bad_flags)
     bad_file = Path.join(tmp, "resugared.llbc")
     File.write!(bad_file, Lynx.Rust.LLBCJson.encode_like!(bad_flags, result.extraction.llbc))
 

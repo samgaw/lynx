@@ -47,6 +47,7 @@ source_dir="$install_dir/charon-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/charon "$source_dir"
 git -C "$source_dir" checkout --detach 7b462d9159db2ed3015162352183906a30bfafc6
 git -C "$source_dir" apply "$script_dir/patches/charon-nested-proof-roots.patch"
+git -C "$source_dir" apply "$script_dir/patches/charon-needs-drop.patch"
 rustup toolchain install nightly-2026-09-17 --profile minimal \
   --component rustc-dev --component llvm-tools --component rust-src --component miri
 cd "$source_dir/charon"
@@ -54,6 +55,8 @@ rustup run nightly-2026-09-17 cargo build --locked --release \
   --no-default-features --features rustc --bin charon --bin charon-driver
 IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
   --no-default-features --features rustc --test ui -- nested-function-proof-root
+IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+  --no-default-features --features rustc --test crate_data -- needs_drop
 cp target/release/charon target/release/charon-driver "$install_dir/"
 
 aeneas_source="$install_dir/aeneas-source"
@@ -75,7 +78,7 @@ AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aen
   dune build --root "$aeneas_source/src" main.exe
 cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
 printf '%s\n' "aeneas=$aeneas_version" \
-  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots' \
+  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1' \
   'aeneas_runtime=lynx-bounded-default-format-v2' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"

@@ -1,6 +1,31 @@
 defmodule Lynx.Rust.LLBCJson do
   @moduledoc false
 
+  # Charon's compiler query is audit metadata. The pinned Aeneas reader uses
+  # an older, exact record schema; remove only this field at its input boundary.
+  # Keep the original query in the audited document and raw extraction hash.
+  def drop_query_metadata!(document) do
+    {types, queries} =
+      Enum.map_reduce(document["translated"]["type_decls"], [], fn
+        nil, queries ->
+          {nil, queries}
+
+        type, queries ->
+          case Map.pop(type, "needs_drop", :missing) do
+            {value, type} when is_boolean(value) or is_nil(value) ->
+              {type, [%{type_id: type["def_id"], needs_drop: value} | queries]}
+
+            {:missing, type} ->
+              {type, queries}
+
+            _ ->
+              raise ArgumentError, "invalid compiler drop query metadata"
+          end
+      end)
+
+    {put_in(document, ["translated", "type_decls"], types), Enum.reverse(queries)}
+  end
+
   # Removing an unreachable block can remove a span's first serialized value,
   # while a later statement still refers to its ID. Span IDs have their own
   # family: never resolve them through type/constant/trait reference tables.
@@ -87,6 +112,11 @@ defmodule Lynx.Rust.LLBCJson do
       cond do
         Enum.sort(old_keys) == keys ->
           old_keys
+
+        # Remove only the compiler query from the exact TypeDecl record schema.
+        keys == ~w(def_id generics item_meta kind layout marker_traits ptr_metadata src) and
+            Enum.sort(old_keys) == Enum.sort(["needs_drop" | keys]) ->
+          List.delete(old_keys, "needs_drop")
 
         # TraitRef is introduced when lowering a Drop to a consuming call. Its
         # precise shape is fixed by the pinned LLBC schema and checked by audit.

@@ -2,6 +2,29 @@ defmodule Lynx.Rust.LLBCJsonTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.LLBCJson
 
+  test "keeps compiler drop evidence in the audit while removing only the backend type field" do
+    nested = %{"needs_drop" => "ordinary source data"}
+    type = %{"def_id" => 7, "kind" => %{"Struct" => []}, "needs_drop" => false}
+    document = %{"translated" => %{"type_decls" => [nil, type]}, "body" => nested}
+
+    expected = %{
+      "translated" => %{"type_decls" => [nil, Map.delete(type, "needs_drop")]},
+      "body" => nested
+    }
+
+    assert {^expected, [%{type_id: 7, needs_drop: false}]} =
+             LLBCJson.drop_query_metadata!(document)
+
+    for value <- [0, "false", %{}] do
+      invalid =
+        put_in(document, ["translated", "type_decls"], [Map.put(type, "needs_drop", value)])
+
+      assert_raise ArgumentError, ~r/invalid compiler drop query metadata/, fn ->
+        LLBCJson.drop_query_metadata!(invalid)
+      end
+    end
+  end
+
   test "restores source spans removed with cleanup without crossing deduplication families" do
     span = %{
       "data" => %{
