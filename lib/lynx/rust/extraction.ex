@@ -113,13 +113,23 @@ defmodule Lynx.Rust.Extraction do
           ),
         else: {document, []}
 
+    document =
+      if nonpanicking_borrows != [],
+        do: Lynx.Rust.LLBCJson.restore_constant_references!(document, discovery.document),
+        else: document
+
+    {document, cleanup_flags} =
+      if Keyword.get(opts, :execution, :pure) == :runtime,
+        do: Lynx.Rust.CleanupFlags.lower!(document, first_party),
+        else: {document, []}
+
     {document, native_unwind} =
       if unwind == :assertions,
         do: Lynx.Rust.NativeUnwind.lower!(document, first_party),
         else: {document, []}
 
     document =
-      if nonpanicking_borrows != [] or native_unwind != [],
+      if nonpanicking_borrows != [] or cleanup_flags != [] or native_unwind != [],
         do: Lynx.Rust.LLBCJson.restore_trait_references!(document, discovery.document),
         else: document
 
@@ -138,7 +148,7 @@ defmodule Lynx.Rust.Extraction do
         do: Lynx.Rust.LLBCJson.restore_trait_references!(document, discovery.document),
         else: document
 
-    native_unwind = nonpanicking_borrows ++ native_unwind ++ nonpanicking
+    native_unwind = nonpanicking_borrows ++ cleanup_flags ++ native_unwind ++ nonpanicking
 
     document =
       if native_drops != [] or native_unwind != [],
@@ -406,10 +416,20 @@ defmodule Lynx.Rust.Extraction do
   @doc false
   def describe!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key not in [:external_types, :unwind, :futures, :owned_drops],
+        key not in [:external_types, :unwind, :futures, :owned_drops, :opaque_functions],
         do: raise(ArgumentError, "unknown Rust discovery option: #{key}")
 
-    describe!(context, tools, roots, output, module, opts, [])
+    opaque = Keyword.get(opts, :opaque_functions, [])
+
+    unless is_list(opaque) and
+             Enum.all?(opaque, &is_binary/1) and
+             Enum.all?(
+               opaque,
+               &Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+$/, &1)
+             ),
+           do: raise(ArgumentError, "invalid opaque Rust metadata function path")
+
+    describe!(context, tools, roots, output, module, opts, opaque)
   end
 
   defp describe!(context, tools, roots, output, module, opts, opaque) do
