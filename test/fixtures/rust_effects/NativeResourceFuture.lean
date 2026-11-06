@@ -88,20 +88,20 @@ theorem cancel_pending (value amount : U64) (env : Environment) :
 theorem completed_drop (amount : U64) :
     resource_suspending.closure.drop_owned (completed amount) = Result.ok () := rfl
 
-theorem update_next {α : Type} (value amount : U64) (env : Environment)
+theorem update_next {α : Type} (value amount : U64) (env : Environment) (notified : Bool)
     (next : Bool → NativeM α) :
     ∃ changed updated,
-      (resource_locked_increment ⟨2,3⟩ amount >>= next) (live env value 3 true) =
-        next changed (live env updated 4 true) ∧
+      (resource_locked_increment ⟨2,3⟩ amount >>= next) (live env value 3 notified) =
+        next changed (live env updated 4 notified) ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
   obtain ⟨changed, updated, computed, arithmetic⟩ := ResourceAwait.Critical.critical_state_next
-    next (⟨1⟩ : NativeMutex effects_core.Counter) ⟨value⟩ amount false (live env value 3 true)
+    next (⟨1⟩ : NativeMutex effects_core.Counter) ⟨value⟩ amount false (live env value 3 notified)
     (by simp [List.filter, live, cell]) (by simp [live, cell])
   refine ⟨changed, updated.value, ?_, ?_⟩
   · have observed := NativeResourceArc.deref_single_next
       (⟨2,3⟩ : NativeResourceArc CounterResource) ⟨⟨1⟩⟩
-      (fun payload => effects_core.locked_increment payload.state amount >>= next) (live env value 3 true)
+      (fun payload => effects_core.locked_increment payload.state amount >>= next) (live env value 3 notified)
       (by simp [List.filter, live, cell]) (by simp [List.filter, live, cell])
       (by simp [List.filter, live, cell, NativeMutex.typeName,
         NativeResourceArc.typeName, NativeResourceArc.handleType, NativeWaker.typeName])
@@ -111,11 +111,11 @@ theorem update_next {α : Type} (value amount : U64) (env : Environment)
     simpa [live, cell, List.map] using computed
   · cases changed <;> cases updated <;> simpa using arithmetic
 
-theorem resume_next {α : Type} (value amount : U64) (env : Environment)
+theorem resume_next {α : Type} (value amount : U64) (env : Environment) (notified : Bool)
     (next : (core.task.poll.Poll Bool × effects_native.core.pin.Pin resource_suspending.closure × NativeTaskContext) → Result α) :
     ∃ changed updated,
-      (resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0⟩⟩ >>= next) (live env value 3 true) =
-        next (.Ready changed, ⟨completed amount⟩, ⟨⟨0⟩⟩) (reclaimed env 4 true) ∧
+      (resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0⟩⟩ >>= next) (live env value 3 notified) =
+        next (.Ready changed, ⟨completed amount⟩, ⟨⟨0⟩⟩) (reclaimed env 4 notified) ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
   have body : resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0⟩⟩ = (do
@@ -129,13 +129,13 @@ theorem resume_next {α : Type} (value amount : U64) (env : Environment)
   let finish : Bool → NativeM α := fun changed => do
     resource_release ⟨2,3⟩
     next (.Ready changed, ⟨completed amount⟩, ⟨⟨0⟩⟩)
-  obtain ⟨changed, updated, computed, arithmetic⟩ := update_next value amount env finish
+  obtain ⟨changed, updated, computed, arithmetic⟩ := update_next value amount env notified finish
   refine ⟨changed, updated, ?_, arithmetic⟩
   rw [body]
   simp only [bind_assoc, Result.ok_bind]
   change (resource_locked_increment ⟨2,3⟩ amount >>= finish) _ = _
   rw [computed]
-  exact release_next updated 4 true env _
+  exact release_next updated 4 notified env _
 
 theorem suspend_then_cancel (value amount : U64) (env : Environment) :
     (do
