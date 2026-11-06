@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.NativeBorrows do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, LLBC, LockModels}
+  alias Lynx.Rust.{CallModels, LLBC, LockModels, MutexModels}
 
   # The backend returns reconstructed mutable borrows only on success. Until
   # failure outputs are supported, a borrowed guard must not be lost on panic.
@@ -20,11 +20,11 @@ defmodule Lynx.Rust.NativeBorrows do
 
     for function <- functions,
         borrowed_guard?(CallModels.expand(function["signature"]["inputs"], refs), context),
-        not total?(function["def_id"], implementations, models, []) do
+        not nonpanicking?(function["def_id"], implementations, models, []) do
       LLBC.failure!(
         function,
         translated,
-        "borrowed native guard requires nonpanicking, terminating implementation dependencies; mutable-borrow outputs on failure are unsupported"
+        "borrowed native guard requires nonpanicking implementation dependencies; mutable-borrow outputs on failure are unsupported"
       )
     end
   end
@@ -33,13 +33,13 @@ defmodule Lynx.Rust.NativeBorrows do
     by_id = Map.new(functions, &{&1["def_id"], &1})
 
     MapSet.new(
-      for id <- Map.keys(by_id) ++ Map.keys(models), total?(id, by_id, models, []), do: id
+      for id <- Map.keys(by_id) ++ Map.keys(models), nonpanicking?(id, by_id, models, []), do: id
     )
   end
 
   # Compiler cleanup after a certified nonpanicking call is unreachable. Keep
-  # the original LLBC and a call-site record; never erase a failing call's drops.
-  def prune_owned_guard_calls!(document, first_party) do
+  # the original LLBC and a call-site record; never erase a potentially panicking call's drops.
+  def prune_owned_calls!(document, first_party) do
     translated = document["translated"]
     refs = LLBC.type_references!(document)
     all = Enum.reject(translated["fun_decls"], &is_nil/1)
@@ -61,13 +61,10 @@ defmodule Lynx.Rust.NativeBorrows do
 
     safe = nonpanicking_calls(functions, models)
 
-    safe =
-      Enum.reduce(models, safe, fn {id, model}, safe ->
-        if model[:native_dispose], do: MapSet.put(safe, id), else: safe
-      end)
-
-    guards =
-      for type <- translated["type_decls"], LockModels.guard?(type, refs), do: type["def_id"]
+    owners =
+      for type <- translated["type_decls"],
+          type && (LockModels.guard?(type, refs) or MutexModels.type?(type)),
+          do: type["def_id"]
 
     {all, records} =
       Enum.map_reduce(all, [], fn function, records ->
@@ -76,7 +73,7 @@ defmodule Lynx.Rust.NativeBorrows do
             %{"Structured" => %{"locals" => %{"locals" => locals}}} ->
               Enum.any?(locals, fn local ->
                 case CallModels.expand(local["ty"], refs) do
-                  %{"Adt" => %{"id" => id}} -> id in guards
+                  %{"Adt" => %{"id" => id}} -> id in owners
                   _ -> false
                 end
               end)
@@ -177,13 +174,16 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp contains_guard?(_, _, _), do: false
 
-  defp total?(id, functions, models, seen) do
+  defp nonpanicking?(id, functions, models, seen) do
     cond do
       id in seen ->
         false
 
       model = models[id] ->
-        model.can_fail == false
+        # These validated native models can block or exhaust verification, but
+        # cannot raise a catchable Rust panic. Their failure cannot justify a
+        # successful proof or unwind into a stale reconstructed mutable borrow.
+        model.can_fail == false or model[:native_cutoff_only] == true
 
       function = functions[id] ->
         case function["body"] do
@@ -212,7 +212,7 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp statement?(%{"Call" => %{"call" => call}}, functions, models, seen) do
     case get_in(call, ["func", "Regular", "kind"]) do
-      %{"Fun" => id} -> total?(id, functions, models, seen)
+      %{"Fun" => id} -> nonpanicking?(id, functions, models, seen)
       _ -> false
     end
   end

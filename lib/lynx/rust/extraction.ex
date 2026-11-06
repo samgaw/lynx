@@ -81,7 +81,7 @@ defmodule Lynx.Rust.Extraction do
 
     {document, nonpanicking_borrows} =
       if Keyword.get(opts, :execution, :pure) == :runtime,
-        do: Lynx.Rust.NativeBorrows.prune_owned_guard_calls!(document, first_party),
+        do: Lynx.Rust.NativeBorrows.prune_owned_calls!(document, first_party),
         else: {document, []}
 
     {document, native_unwind} =

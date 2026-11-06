@@ -39,7 +39,8 @@ defmodule Lynx.Rust.Report do
            :lean,
            :label,
            :status,
-           :implementation_verified
+           :implementation_verified,
+           :native_cutoff_only
          ])}
       end)
 
@@ -223,6 +224,7 @@ defmodule Lynx.Rust.Report do
           function: binding["name"],
           arity: binding["arity"],
           scheduler: binding["flags"],
+          execution: Map.get(report, :execution, :pure),
           arguments: binding["arguments"],
           result: binding["result"],
           codec_models:

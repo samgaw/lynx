@@ -80,4 +80,20 @@ theorem snapshot_initialized (value : U64) (enabled : Bool) (env : Environment)
   · simp [mutex_snapshot, NativeMutex.new, NativeM.allocate, fresh]
   · exact NativeCodec.roundtrip _
 
+/-- Sequential constructors preserve both cells and return distinct owning identities. -/
+theorem paired_identities (first second : U64) (env : Environment)
+    (freshFirst : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false)
+    (freshSecond : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 2) = false) :
+    mutex_pair first second env =
+      (.ok (⟨env.refCounter + 1⟩, ⟨env.refCounter + 2⟩), { env with
+        refCounter := env.refCounter + 2
+        nativeHeap :=
+          (env.refCounter + 2, NativeMutex.typeName effects_core.Counter,
+            .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (effects_core.Counter.mk second)]) ::
+          (env.refCounter + 1, NativeMutex.typeName effects_core.Counter,
+            .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (effects_core.Counter.mk first)]) ::
+          env.nativeHeap }) ∧ env.refCounter + 1 ≠ env.refCounter + 2 := by
+  simp [mutex_pair, NativeMutex.new, NativeM.allocate, NativeM.ok,
+    freshFirst, freshSecond, Nat.add_assoc]
+
 end Runtime.MutexProperties

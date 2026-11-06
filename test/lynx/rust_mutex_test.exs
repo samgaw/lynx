@@ -37,7 +37,11 @@ defmodule Lynx.Rust.MutexTest do
     end
 
     options = [
-      roots: ["effects_native::mutex_new_incremented", "effects_native::mutex_snapshot"],
+      roots: [
+        "effects_native::mutex_new_incremented",
+        "effects_native::mutex_snapshot",
+        "effects_native::mutex_pair"
+      ],
       execution: :runtime,
       tools: @tools,
       lean_project: project,
@@ -46,7 +50,7 @@ defmodule Lynx.Rust.MutexTest do
       proof_modules: ["Runtime.MutexProperties"],
       required_properties:
         Enum.map(
-          ~w(increment_spec initialized initialized_readback collision_exhausts snapshot_initialized),
+          ~w(increment_spec initialized initialized_readback collision_exhausts snapshot_initialized paired_identities),
           &("Runtime.MutexProperties." <> &1)
         )
     ]
@@ -104,14 +108,6 @@ defmodule Lynx.Rust.MutexTest do
       assert_raise ArgumentError, ~r/unsupported native heap payload/, fn ->
         Lynx.Rust.verify!(workspace, "effects-native", Keyword.put(options, :roots, [root]))
       end
-    end
-
-    assert_raise CompileError, ~r/structural drop erasure rejected/, fn ->
-      Lynx.Rust.verify!(
-        workspace,
-        "effects-native",
-        Keyword.put(options, :roots, ["effects_native::mutex_pair"])
-      )
     end
 
     rust = Path.join(workspace, "native/src/lib.rs")
