@@ -3,14 +3,15 @@ defmodule Lynx.Rust.CallModels do
 
   # This catalogue is intentionally closed. These are explicitly reported
   # models, never proofs of foreign function implementations.
-  def resolve(functions, translated, refs, enabled) do
+  def resolve(functions, translated, refs, enabled, execution \\ :pure) do
     for key <- enabled,
         key not in [:rustler_binary_as_slice, :rustler_encoders],
         do: raise(ArgumentError, "unknown external Rust call model: #{inspect(key)}")
 
     for function <- functions,
         model =
-          Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
+          if(execution == :runtime, do: Lynx.Rust.MutexModels.resolve(function, translated, refs)) ||
+            Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
             Lynx.Rust.SliceModels.resolve(function, translated, refs) ||
             Lynx.Rust.CollectionModels.resolve(function, translated, refs) ||
             Lynx.Rust.EndianModels.resolve(function, translated, refs) ||

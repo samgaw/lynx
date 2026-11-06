@@ -16,3 +16,11 @@ pub fn increment(counter: &mut Counter, amount: u64) -> bool {
         None => false,
     }
 }
+
+/// A named payload whose representation composes a flag and another workspace type.
+pub struct Snapshot {
+    /// Whether the snapshot is enabled.
+    pub enabled: bool,
+    /// Snapshot contents.
+    pub counter: Counter,
+}

@@ -84,11 +84,18 @@ defmodule Lynx.Rust.Extraction do
     audit =
       Lynx.Rust.LLBC.audit!(document, first_party,
         external_calls: requested_calls,
+        execution: Keyword.get(opts, :execution, :pure),
         rustler_atom_caches: {caches, module}
       )
 
+    models = models ++ Lynx.Rust.MutexModels.type_models(audit.external_calls, module)
+
+    unless length(models) == MapSet.size(MapSet.new(models, & &1.rust)),
+      do: raise(ArgumentError, "conflicting native Rust type models")
+
     audit = Map.put(audit, :external_types, models)
     audit = Lynx.Rust.BytesModels.scope(audit, module)
+    codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
     model_args =
       if models == [] and map_size(audit.external_calls) == 0 do
@@ -167,6 +174,14 @@ defmodule Lynx.Rust.Extraction do
     implementations = Lynx.Rust.LLBC.link!(audit, translation, result_monad: result_monad)
     Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)
     Lynx.Rust.BytesModels.install!(audit, translation, output, module)
+    codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
+
+    codec_hashes =
+      Enum.map(codec_modules, fn name ->
+        {name,
+         Lynx.Rust.Fingerprint.file!(Path.join(output, String.replace(name, ".", "/") <> ".lean"))}
+      end)
+
     # Keep per-root metadata, since several extractions can share one Lean package.
     File.write!(
       Path.join(output, String.replace(module, ".", "_") <> ".translation.json"),
@@ -189,7 +204,8 @@ defmodule Lynx.Rust.Extraction do
              else:
                Lynx.Rust.Fingerprint.digest(
                  :erlang.term_to_binary(
-                   {digest, Lynx.Rust.Runtime.fingerprint(execution), models, requested_calls,
+                   {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, models,
+                    requested_calls,
                     audit.external_calls
                     |> Map.values()
                     |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
@@ -201,7 +217,8 @@ defmodule Lynx.Rust.Extraction do
       llbc: llbc,
       output: output,
       module: module,
-      model_modules: runtime_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
+      model_modules:
+        runtime_modules ++ codec_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
     }
   end
 
