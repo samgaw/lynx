@@ -10,8 +10,9 @@ and divergence are verification exhaustion, never successful native returns.
 Mutex construction initializes logical shared cells. Bounded blocking acquisition
 uses atomic state waits; borrowed guard views reconstruct payload updates.
 Normal release commits reconstructed guard payloads and unlocks owned cells.
-Guard unwind, resource lifetimes, native executors and FFI execution require
-separate models. -/
+Rust-owned resource tokens share immutable heap payloads, with explicit loader
+registration and bounded retain/release. Resource extraction admission, VM pins,
+callbacks, native executors and FFI execution require separate checks/models. -/
 
 public section
 
@@ -509,3 +510,153 @@ theorem release_owned_next {α β : Type} [NativeCodec α] (guard : NativeGuard 
   simp
 
 end Lynx.NativeGuard
+
+namespace Lynx
+
+/-- One linear Rust reference to a shared resource. Payloads reside in the heap,
+not in individual handles. VM-held references require a separate adapter. -/
+structure NativeResourceArc (α : Type) where
+  id : Nat
+  token : Nat
+
+namespace NativeResourceArc
+
+@[expose] def typeName (α : Type) [NativeCodec α] : String :=
+  "resource<" ++ NativeCodec.typeName (α := α) ++ ">"
+
+@[expose] def handleType (α : Type) [NativeCodec α] : String :=
+  "resource-handle<" ++ NativeCodec.typeName (α := α) ++ ">"
+
+/-- Verification bound on Rust-owned references, not a simulated VM error. -/
+@[expose] def referenceLimit : Nat := 1024
+
+private def payload {α : Type} [NativeCodec α] (contents : Term) : Option (Nat × α) := do
+  let .tuple fields := contents | none
+  if size : fields.size = 2 then
+    let .integer count := (fields[0]'(by omega)) | none
+    if 0 < count ∧ count ≤ referenceLimit then
+      let value ← NativeCodec.decode (fields[1]'(by omega))
+      some (count.toNat, value)
+    else none
+  else none
+
+private def lookup {α : Type} [NativeCodec α] (handle : NativeResourceArc α)
+    (env : Environment) : Option (Nat × α) := do
+  let [(_, actualHandleType, .reference target)] :=
+    env.nativeHeap.filter (fun cell => cell.1 == handle.token) | none
+  if actualHandleType != handleType α || target != handle.id then none else
+  let [(_, actualType, contents)] :=
+    env.nativeHeap.filter (fun cell => cell.1 == handle.id) | none
+  if actualType != typeName α then none else
+  let (count, value) ← payload contents
+  let tokens := env.nativeHeap.filter fun cell =>
+    cell.2.1 == handleType α && cell.2.2 == .reference handle.id
+  if tokens.length = count then some (count, value) else none
+
+/-- Allocation requires modeled registration, as ResourceArc::new unwraps the
+registered type. Physical allocation success is an explicit FFI boundary. -/
+@[expose] def new {α : Type} [NativeCodec α] (value : α) : NativeM (NativeResourceArc α) :=
+  .get fun env =>
+    if typeName α ∈ env.nativeResourceTypes then do
+      let id ← NativeM.allocate (typeName α) (.tuple #[.integer 1, NativeCodec.encode value])
+      let token ← NativeM.allocate (handleType α) (.reference id)
+      .ok ⟨id, token⟩
+    else NativeM.fail .panic
+
+/-- Retaining a handle allocates a distinct ownership token for the same cell. -/
+def clone {α : Type} [NativeCodec α] (handle : NativeResourceArc α) :
+    NativeM (NativeResourceArc α) :=
+  .get fun env =>
+    match lookup handle env with
+    | some (count, value) =>
+      let token := env.refCounter + 1
+      if count < referenceLimit && !(env.nativeHeap.any (fun cell => cell.1 == token)) then
+        .set { env with refCounter := token, nativeHeap :=
+          (token, handleType α, .reference handle.id) :: env.nativeHeap.map fun cell =>
+            if cell.1 == handle.id then
+              (handle.id, typeName α, .tuple #[.integer (count + 1), NativeCodec.encode value])
+            else cell }
+          (.ok ⟨handle.id, token⟩)
+      else .error .exhausted
+    | none => .error .exhausted
+
+/-- A shared immutable borrow observes the allocation through its live token. -/
+def deref {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM α :=
+  .get fun env =>
+    match lookup handle env with
+    | some (_, value) => .ok value
+    | none => .error .exhausted
+
+/-- Consume exactly this Rust ownership token. Admission requires a payload with
+no Rust destructor and default resource callbacks. No VM pins are admitted yet. -/
+def release {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM Unit :=
+  .get fun env =>
+    match lookup handle env with
+    | some (count, value) =>
+      let remaining := env.nativeHeap.filter (fun cell => cell.1 != handle.token)
+      let heap := if count = 1 then remaining.filter (fun cell => cell.1 != handle.id)
+        else remaining.map fun cell => if cell.1 == handle.id then
+          (handle.id, typeName α, .tuple #[.integer (count - 1), NativeCodec.encode value]) else cell
+      .set { env with nativeHeap := heap } (.ok ())
+    | none => .error .exhausted
+
+instance {α : Type} [NativeCodec α] : NativeDrop (NativeResourceArc α) where
+  drop := release
+
+/-- An absent loader registration produces Rustler's constructor panic. -/
+theorem new_unregistered {α : Type} [NativeCodec α] (value : α) (env : Environment)
+    (absent : typeName α ∉ env.nativeResourceTypes) :
+    new value env = (.error (.error (.atom "rust_panicked")), env) := by
+  simp [new, absent, NativeM.fail]
+
+/-- A consumed or absent ownership token cannot observe a resource. This is
+verification exhaustion, not an Elixir-visible badarg result. -/
+theorem deref_missing {α : Type} [NativeCodec α] (handle : NativeResourceArc α)
+    (env : Environment)
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == handle.token) = []) :
+    deref handle env = (.error .exhausted, env) := by
+  simp [deref, lookup, missing]
+
+theorem clone_missing {α : Type} [NativeCodec α] (handle : NativeResourceArc α)
+    (env : Environment)
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == handle.token) = []) :
+    clone handle env = (.error .exhausted, env) := by
+  simp [clone, lookup, missing]
+
+/-- Releasing an already consumed token cannot decrement another owner's count. -/
+theorem release_missing {α : Type} [NativeCodec α] (handle : NativeResourceArc α)
+    (env : Environment)
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == handle.token) = []) :
+    release handle env = (.error .exhausted, env) := by
+  simp [release, lookup, missing]
+
+/-- A forged count cannot keep a resource alive without the corresponding owners. -/
+theorem deref_inconsistent_count {α : Type} [NativeCodec α]
+    (handle : NativeResourceArc α) (value : α) (env : Environment)
+    (distinct : handle.id ≠ handle.token)
+    (stored : env.nativeHeap = [
+      (handle.token, handleType α, .reference handle.id),
+      (handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value])]) :
+    deref handle env = (.error .exhausted, env) := by
+  simp [deref, lookup, payload, stored, distinct, Ne.symm distinct,
+    NativeCodec.roundtrip, referenceLimit, handleType, typeName]
+
+/-- Clone retains the allocation after the original owner is consumed. Final
+release removes both the last token and allocation; other runtime fields survive. -/
+theorem clone_release_cycle {α : Type} [NativeCodec α] (value : α) (env : Environment)
+    (registered : typeName α ∈ env.nativeResourceTypes)
+    (empty : env.nativeHeap = []) :
+    (do
+      let first ← new value
+      let retained ← clone first
+      release first
+      let observed ← deref retained
+      release retained
+      Result.ok observed) env =
+        (.ok value, { env with refCounter := env.refCounter + 3 }) := by
+  simp only [new, Result.get_bind, Result.get_continuation_apply, ite_eq_left registered]
+  simp [clone, release, deref, lookup, payload, NativeM.allocate,
+    empty, NativeCodec.roundtrip, referenceLimit, handleType, typeName, Nat.add_assoc]
+
+end NativeResourceArc
+end Lynx
