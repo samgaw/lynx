@@ -218,14 +218,24 @@ defmodule Lynx.Rust.Extraction do
 
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
 
+    backend_document =
+      if compiler_drop_queries == [],
+        do: backend_document,
+        else: Lynx.Rust.LLBCJson.restore_type_references!(backend_document, discovery.document)
+
+    {backend_document, native_guard_storage} =
+      Lynx.Rust.NativeGuardStorage.lower!(
+        backend_document,
+        audit,
+        models,
+        Keyword.get(opts, :futures, :reject)
+      )
+
     backend_llbc =
-      if compiler_drop_queries == [] do
+      if compiler_drop_queries == [] and native_guard_storage == [] do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
-
-        backend_document =
-          Lynx.Rust.LLBCJson.restore_type_references!(backend_document, discovery.document)
 
         File.write!(path, Lynx.Rust.LLBCJson.encode_like!(backend_document, llbc))
         path
@@ -255,7 +265,8 @@ defmodule Lynx.Rust.Extraction do
                     Enum.reject(Map.values(audit.external_calls), & &1.builtin),
                     &Map.merge(
                       %{
-                        "rust_pattern" => &1.rust_name,
+                        "rust_pattern" =>
+                          Lynx.Rust.NativeGuardStorage.pattern(&1.rust_name, native_guard_storage),
                         "extract_name" => &1.lean,
                         "can_fail" => &1.can_fail,
                         "lift" => &1.lift
@@ -334,6 +345,7 @@ defmodule Lynx.Rust.Extraction do
     %{
       audit: audit,
       compiler_drop_queries: compiler_drop_queries,
+      native_guard_storage: native_guard_storage,
       native_drops: native_drops,
       native_unwind: native_unwind,
       futures: Keyword.get(opts, :futures, :reject),

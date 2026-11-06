@@ -173,6 +173,7 @@ defmodule Lynx.Rust.Report do
           ),
       compiler_drop_queries: Map.get(extraction, :compiler_drop_queries, []),
       native_drop_lowering: Map.get(extraction, :native_drops, []),
+      native_guard_storage: Map.get(extraction, :native_guard_storage, []),
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
       unwind: Map.get(extraction, :unwind, :reject),
       futures: Map.get(extraction, :futures, :reject),
@@ -188,6 +189,12 @@ defmodule Lynx.Rust.Report do
           if(Map.get(extraction, :futures, :reject) == :cancelling,
             do: [
               "Compiler coroutine saved-slot and owned destruction interpretation; actual rustc drop MIR with checked pointer erasure and valid-state guards; one Unpin native owner per frame; Aeneas replacement primitive; native destructors, allocation, physical pinning, FFI and executor correctness remain modeled boundaries"
+            ],
+            else: []
+          ) ++
+          if(Map.get(extraction, :native_guard_storage, []) != [],
+            do: [
+              "Saved native guard capability representation: opaque std MutexGuard lifetime arguments erased after native ownership and borrow admission; explicit guard references and actual executable bodies retained; Rust memory safety, std, OS locking and FFI remain trusted boundaries"
             ],
             else: []
           ) ++

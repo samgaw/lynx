@@ -5,7 +5,7 @@ defmodule Lynx.Rust.NativeBorrows do
   # The backend returns reconstructed mutable borrows only on success. Until
   # failure outputs are supported, a borrowed guard must not be lost on panic.
   # Check actual callee bodies transitively, rather than trusting a contract.
-  def audit!(functions, models, translated, refs) do
+  def audit!(functions, models, translated, refs, frame_inputs \\ %{}) do
     guards =
       for type <- translated["type_decls"], LockModels.guard?(type, refs), do: type["def_id"]
 
@@ -19,7 +19,9 @@ defmodule Lynx.Rust.NativeBorrows do
     implementations = Map.new(functions, &{&1["def_id"], &1})
 
     for function <- functions,
-        borrowed_guard?(CallModels.expand(function["signature"]["inputs"], refs), context),
+        {input, index} <- Enum.with_index(function["signature"]["inputs"], 1),
+        borrowed_guard?(CallModels.expand(input, refs), context),
+        index not in Map.get(frame_inputs, function["def_id"], []),
         not nonpanicking?(function["def_id"], implementations, models, []) do
       LLBC.failure!(
         function,
