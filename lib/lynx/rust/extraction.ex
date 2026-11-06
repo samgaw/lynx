@@ -166,6 +166,17 @@ defmodule Lynx.Rust.Extraction do
     audit = Lynx.Rust.BytesModels.scope(audit, module)
     codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
+    {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
+
+    backend_llbc =
+      if compiler_drop_queries == [] do
+        backend_llbc
+      else
+        path = Path.rootname(llbc) <> ".aeneas.llbc"
+        File.write!(path, Lynx.Rust.LLBCJson.encode_like!(backend_document, llbc))
+        path
+      end
+
     model_args =
       if models == [] and map_size(audit.external_calls) == 0 do
         []
@@ -266,6 +277,7 @@ defmodule Lynx.Rust.Extraction do
 
     %{
       audit: audit,
+      compiler_drop_queries: compiler_drop_queries,
       native_drops: native_drops,
       native_unwind: native_unwind,
       unwind: unwind,
@@ -295,6 +307,7 @@ defmodule Lynx.Rust.Extraction do
                )
         end),
       llbc: llbc,
+      backend_llbc: backend_llbc,
       output: output,
       module: module,
       model_modules:
