@@ -14,12 +14,18 @@ defmodule Lynx.Rustler do
   using an explicit FFI type model. The immutable `as_slice` accessor and standard
   slice length have explicitly reported external models; other Binary methods
   remain rejected.
+  `Vec<u8>` arguments and results, including tuple/result fields, use proper-list
+  encoding and sequential element decoding through Rustler's u32-to-u8 narrowing
+  conversion. Improper tails panic after preceding elements decode; an earlier
+  invalid element returns badarg first. Byte-vector codecs have an explicit
+  1,048,576-element verification bound; larger values produce exhaustion, not a
+  simulated native decoding error. Native allocation within the bound is trusted.
   Native environment/term handles, allocation and atom-cache initialization are
   explicitly reported FFI models. Strings and lists exceeding the supported
   4,294,967,295 byte/element bound produce verification exhaustion. Generated
   atom caches currently must be in the facade crate's expanded source.
   Rustler 0.38.0 or 0.39.0 and the pinned
-  Charon/Aeneas toolchain are required; see `docs/rust-verification-investigation.md`.
+  Charon/Aeneas toolchain are required; install with `tools/setup-rust-verification.sh`.
 
   `prepare!/3` builds the selected library, discovers its compiled exports,
   extracts the original Rust bodies and their first-party dependencies, and

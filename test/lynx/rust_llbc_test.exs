@@ -210,6 +210,48 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
+  test "byte-vector NIF types require actual alloc Vec identity and u8 elements" do
+    args = %{
+      "regions" => [],
+      "types" => [%{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}],
+      "const_generics" => [],
+      "trait_refs" => []
+    }
+
+    vector = %{"Adt" => %{"id" => 5, "builtin" => nil, "generics" => args}}
+
+    declaration = %{
+      "def_id" => 5,
+      "kind" => "Opaque",
+      "item_meta" => %{"name" => Enum.map(~w(alloc vec Vec), &%{"Ident" => [&1, 0]})},
+      "generics" => %{
+        "regions" => [],
+        "types" => [%{"index" => 0}],
+        "const_generics" => [],
+        "trait_clauses" => [],
+        "outlives" => [],
+        "trait_type_constraints" => []
+      }
+    }
+
+    audit = %{references: %{}, translated: %{"type_decls" => [declaration]}}
+    assert %{"vec" => "u8"} = LLBC.nif_type!(vector, audit)
+
+    assert_raise ArgumentError, ~r/unsupported NIF ADT identity/, fn ->
+      LLBC.nif_type!(put_in(vector, ["Adt", "generics", "types"], [%{"Scalar" => "Bool"}]), audit)
+    end
+
+    for changed <- [
+          put_in(declaration, ["item_meta", "name"], [%{"Ident" => ["ShadowVec", 0]}]),
+          put_in(declaration, ["kind"], %{"Struct" => []}),
+          put_in(declaration, ["generics", "types"], [])
+        ] do
+      assert_raise ArgumentError, ~r/unsupported NIF ADT identity/, fn ->
+        LLBC.nif_type!(vector, put_in(audit, [:translated, "type_decls"], [changed]))
+      end
+    end
+  end
+
   test "rejects missing, opaque and inconsistent extraction dependencies" do
     audit = LLBC.audit!(document([function()]), ["first_party"])
 

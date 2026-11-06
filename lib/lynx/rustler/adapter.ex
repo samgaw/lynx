@@ -147,6 +147,14 @@ defmodule Lynx.Rustler.Adapter do
       encode: "Lynx.Rustler.encodeBinary"
     }
 
+  defp type!(%{"vec" => "u8"}),
+    do: %{
+      lean: "(alloc.vec.Vec U8)",
+      decode: "Lynx.Rustler.decodeByteVec",
+      encode: nil,
+      encode_m: "Lynx.Rustler.encodeByteVec"
+    }
+
   defp type!(<<sign, width::binary>> = type)
        when sign in [?i, ?u] and width in ["8", "16", "32", "64"] do
     signed = sign == ?i

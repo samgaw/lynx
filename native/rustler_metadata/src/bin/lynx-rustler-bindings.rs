@@ -68,6 +68,23 @@ fn supported_type(ty: &Type, output: bool) -> Result<Value, String> {
             .map(|segment| segment.ident.to_string())
             .collect();
         if path.qself.is_none()
+            && (names == ["Vec"]
+                || names == ["std", "vec", "Vec"]
+                || names == ["alloc", "vec", "Vec"])
+        {
+            let segment = path.path.segments.last().ok_or("missing Vec segment")?;
+            if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
+                if arguments.args.len() == 1 {
+                    if let Some(syn::GenericArgument::Type(element)) = arguments.args.first() {
+                        if supported_type(element, output)? == json!("u8") {
+                            return Ok(json!({"vec": "u8"}));
+                        }
+                    }
+                }
+            }
+            return Err("Rustler Vec currently requires exactly one u8 element type".into());
+        }
+        if path.qself.is_none()
             && (names == ["Binary"]
                 || names == ["rustler", "Binary"]
                 || names == ["rustler", "types", "binary", "Binary"])
@@ -432,6 +449,27 @@ mod tests {
             1,
         );
         assert_eq!(unsupported.errors.len(), 1);
+    }
+
+    #[test]
+    fn discovers_byte_vectors_without_approving_other_elements_or_allocators() {
+        let bindings = discover(
+            "fn native(value: Vec<u8>) -> (bool, std::vec::Vec<u8>) { todo!() }",
+            1,
+        );
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(bindings.entries[0]["arguments"], json!([{"vec": "u8"}]));
+        assert_eq!(
+            bindings.entries[0]["result"],
+            json!({"tuple": ["bool", {"vec": "u8"}]})
+        );
+        for source in [
+            "fn native(value: Vec<bool>) -> bool { true }",
+            "fn native(value: Vec<u8, CustomAllocator>) -> bool { true }",
+            "fn native(value: other::Vec<u8>) -> bool { true }",
+        ] {
+            assert_eq!(discover(source, 1).errors.len(), 1);
+        }
     }
 
     #[test]
