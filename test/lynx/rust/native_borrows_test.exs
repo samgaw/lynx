@@ -62,4 +62,88 @@ defmodule Lynx.Rust.NativeBorrowsTest do
       assert MapSet.member?(result, 1) == op in ~w(BitAnd BitOr BitXor)
     end
   end
+
+  test "retains other owners only across a nonpanicking consuming implementation" do
+    args = fn types ->
+      %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
+    end
+
+    params = %{
+      "regions" => [],
+      "types" => [%{"index" => 0}],
+      "const_generics" => [],
+      "trait_clauses" => [],
+      "trait_type_constraints" => [],
+      "outlives" => []
+    }
+
+    declaration = %{
+      "def_id" => 1,
+      "kind" => "Opaque",
+      "generics" => params,
+      "item_meta" => %{
+        "name" => Enum.map(~w(std sync poison mutex Mutex), &%{"Ident" => [&1, 0]})
+      }
+    }
+
+    scalar = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
+    owner = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args.([scalar])}}
+    unit = %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args.([])}}
+
+    place = fn local ->
+      %{"kind" => %{"Local" => local}, "ty" => if(local == 0, do: unit, else: owner)}
+    end
+
+    call = fn id, local ->
+      %{
+        "kind" => %{
+          "Call" => %{
+            "call" => %{
+              "func" => %{"Regular" => %{"kind" => %{"Fun" => id}}},
+              "args" => [%{"Move" => place.(local)}]
+            },
+            "dest" => place.(0)
+          }
+        }
+      }
+    end
+
+    function = fn id, count, statements ->
+      %{
+        "def_id" => id,
+        "signature" => %{"inputs" => List.duplicate(owner, count)},
+        "item_meta" => %{"name" => [%{"Ident" => ["consume#{id}", 0]}]},
+        "body" => %{
+          "Structured" => %{
+            "locals" => %{
+              "arg_count" => count,
+              "locals" => for(i <- 0..count, do: %{"index" => i, "ty" => place.(i)["ty"]})
+            },
+            "body" => %{"statements" => statements}
+          }
+        }
+      }
+    end
+
+    caller = function.(1, 2, [call.(2, 1), call.(100, 2), %{"kind" => "Return"}])
+    callee = function.(2, 1, [call.(100, 1), %{"kind" => "Return"}])
+    translated = %{"files" => [], "type_decls" => [declaration], "fun_decls" => [caller, callee]}
+    models = %{100 => %{can_fail: false, native_dispose: true}}
+    NativeLifetimes.audit!([caller, callee], models, translated, %{})
+
+    panicking =
+      function.(2, 1, [
+        call.(100, 1),
+        %{"kind" => %{"Panic" => %{"on_unwind" => %{"statements" => []}}}}
+      ])
+
+    assert_raise CompileError, ~r/native owner lifetime/, fn ->
+      NativeLifetimes.audit!(
+        [caller, panicking],
+        models,
+        Map.put(translated, "fun_decls", [caller, panicking]),
+        %{}
+      )
+    end
+  end
 end

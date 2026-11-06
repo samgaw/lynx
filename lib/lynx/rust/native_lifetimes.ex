@@ -598,6 +598,7 @@ defmodule Lynx.Rust.NativeLifetimes do
                  MapSet.member?(ctx.implementations, id))) or
              (MapSet.member?(ctx.nonpanicking, id) and
                 (MapSet.equal?(remaining, live) or
+                   MapSet.member?(ctx.implementations, id) or
                    (model && (model[:native_dispose] || model[:native_replace]))))),
        do: reject!(ctx)
 
