@@ -79,9 +79,12 @@ defmodule Lynx.Rust do
   supported native owner across suspension, and destruction consumes it through
   the checked destructor model. Slot removal uses Aeneas's existing mutable
   replacement primitive. Invalid state tags and missing saved owners exhaust
-  verification. Owned captures requiring destruction, multiple native owners per
-  frame, non-Unpin fields, executor integration and async NIF composition remain
-  unsupported. Native allocation, physical pinning, standard primitives and FFI
+  verification. The owned-captures backend also retains one supported native
+  capture in an optional initial slot, moves it into saved storage on suspension,
+  and executes the actual compiler cleanup on unstarted or suspended cancellation.
+  `owned_drops: true` allows the supported mutex-containing resource payloads.
+  Multiple simultaneously live native owners per frame, non-Unpin fields,
+  executor integration and async NIF composition remain unsupported. Native allocation, physical pinning, standard primitives and FFI
   retain their reported trusted boundaries.
 
   Saved `std::sync::MutexGuard` values are also supported in cancelling mode

@@ -274,6 +274,20 @@ pub async fn guarded_suspending(mutex: &Mutex<effects_core::Counter>, amount: u6
     changed
 }
 
+/// Retains a shared resource owner across a cross-crate suspension.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+pub async fn resource_suspending(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let _progress = effects_core::paused_counter(amount).await;
+    let changed = resource_locked_increment(&resource, amount);
+    resource_release(resource);
+    changed
+}
+
 /// Retains an owned capture, exercising cancellation cleanup rejection.
 pub async fn owned_immediate(value: Vec<u8>) -> usize {
     value.len()
