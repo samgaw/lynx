@@ -13,6 +13,12 @@ defmodule Lynx.Rust do
   exhaustion. These standard-library operations are explicitly reported models,
   not proofs of Rust core's implementation. Other slice/string operations remain
   rejected unless separately supported.
+
+  Fixed-width signed/unsigned integers from 8 through 128 bits also support
+  `to_le_bytes`, `to_be_bytes`, `from_le_bytes` and `from_be_bytes` through
+  Aeneas's existing bit-vector models. Admission checks the exact scalar,
+  byte-array width, compiler identity and safe Rust signature. Native-endian
+  conversions are not included. These are reported standard-library models.
   """
 
   @doc """
