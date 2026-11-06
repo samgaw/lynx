@@ -92,7 +92,7 @@ defmodule Lynx.RustlerRuntimeTest do
           proof_modules: ["RuntimeNif.Properties"],
           required_properties:
             Enum.map(
-              ~w(increment_spec internal_state facade_adapter_continuation released_adapter_continuation released_handler_continuation),
+              ~w(increment_spec internal_state facade_adapter_continuation released_adapter_continuation released_handler_continuation released_handler_prefix),
               &("RuntimeNif.Properties." <> &1)
             )
         ]
@@ -253,11 +253,11 @@ defmodule Lynx.RustlerRuntimeTest do
           Lynx.Exception.classTerm, Lynx.Exception.reason]
         """
       law panic_after_cleanup,
-        expects: (try do LynxEffectsFixture.Native.released(7, false) catch :error, :nif_panicked -> true end),
+        expects: (try do LynxEffectsFixture.Native.released(7, false); false catch :error, :nif_panicked -> true end),
         proof: ~LEAN"""
         simp [Lynx.concurrent_eq_run, «panic_after_cleanup:ensures/0», Elixir.LynxEffectsFixture.Native.«released/2»,
           Elixir.LynxEffectsFixture.Native.«released:execution/2», Lynx.Rustler.decodeUnsigned,
-          Lynx.Rustler.decodeBool, Lynx.Result.ofExcept, RuntimeNif.Properties.released_handler_continuation,
+          Lynx.Rustler.decodeBool, Lynx.Result.ofExcept, RuntimeNif.Properties.released_handler_prefix,
           Lynx.Exception.classTerm, Lynx.Exception.reason]
         """
     end

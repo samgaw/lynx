@@ -115,4 +115,19 @@ theorem released_handler_continuation {β : Type} (value : U64) (accepted : Bool
       NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeCodec.roundtrip,
       NativeM.massert, NativeM.fail, NativeM.ok, empty, Rustler.encodeBool]
 
+theorem released_handler_prefix {β γ : Type} (value : U64) (accepted : Bool)
+    (tail : Term → Result β) (next : β → Result γ) (handler : Exception → Result γ)
+    (env : Environment) (empty : env.nativeHeap = []) :
+    Result.tryWith (do
+      let encoded ← Rustler.executeNative (__RELEASED__ value accepted) Rustler.encodeBool
+      tail encoded) next handler env =
+      if accepted then Result.tryWith (tail Term.true) next handler { env with refCounter := env.refCounter + 1 }
+      else handler (.error (.atom "nif_panicked")) { env with refCounter := env.refCounter + 1 } := by
+  cases accepted <;>
+    simp [__RELEASED__, mutex_dispose_then_assert, Rustler.executeNative,
+      Result.tryWith, Result.handle, Result.bind, NativeMutex.new, NativeM.allocate, NativeDrop.drop,
+      NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeCodec.roundtrip,
+      NativeM.massert, NativeM.fail, NativeM.ok, empty, Rustler.encodeBool]
+
+
 end RuntimeNif.Properties
