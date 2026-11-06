@@ -126,7 +126,21 @@ structure Environment where
   refCounter : Nat := 0
   /-- Process dictionary of the process running the current computation. -/
   pdict : List (Term × Term) := []
+  /-- Shared native cells: logical identity, nominal type tag and encoded contents.
+  Native backends validate typed access. -/
+  nativeHeap : List (Nat × String × Term) := []
 deriving Repr, Inhabited
+
+namespace Environment
+
+/-- Replace the process dictionary while preserving the native state admission. -/
+def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
+  {env with pdict}
+
+@[simp] theorem pdict_setPdict (env : Environment) (pdict : List (Term × Term)) :
+    (env.setPdict pdict).pdict = pdict := by rfl
+
+end Environment
 
 /-- How a run ended. The final environment is returned separately by the
 low-level runners, so laws and callers of `Lynx.sequential` compare outcomes alone. -/

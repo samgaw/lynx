@@ -28,6 +28,35 @@ theorem result_constructors :
     (Result.error (.error (.tuple #[.atom "badkey", .nil])) : Result) ≠
       .error (.error (.tuple #[.atom "badmap", .nil])) := by simp
 
+/-- Updating the process dictionary never discards shared native cells. -/
+theorem nativeHeap_pdict (env : Environment) (dictionary : List (Term × Term)) :
+    (env.setPdict dictionary).nativeHeap = env.nativeHeap := rfl
+
+private def publishNativeCell : Result := .get fun env =>
+  .set { env with nativeHeap := [(1, "counter", .integer 7)] }
+    (.get fun env => .set (env.setPdict [(.atom "worker", .atom "only")]) (.ok .nil))
+
+private def nativeCellExchange : Result :=
+  .schedule publishNativeCell fun _ => .get fun env => .ok (.integer env.nativeHeap.length)
+
+/-- The child and parent share native storage, while process dictionaries remain local.
+These concrete schedules exercise scheduler save/activate and process completion. -/
+theorem nativeHeap_shared_processes :
+    (nativeCellExchange.run { schedule := [.swap 2] }) =
+      (.ok (.integer 1), { pidCounter := 2, nativeHeap := [(1, "counter", .integer 7)] }) ∧
+    (nativeCellExchange.run { schedule := [.current] }) =
+      (.ok (.integer 0), { pidCounter := 2, nativeHeap := [(1, "counter", .integer 7)] }) := by
+  cbv
+  constructor <;> rfl
+
+/-- A failure preserves the shared heap accumulated before the exception. -/
+theorem nativeHeap_before_failure (env : Environment) :
+    (Result.set { env with nativeHeap := [(1, "counter", .integer 7)] }
+      (.error (.throw (.atom "failed"))) : Result) env =
+      (.error (.throw (.atom "failed")),
+        { env with nativeHeap := [(1, "counter", .integer 7)] }) := by
+  rfl
+
 end LynxTest.Term
 
 run_cmd do
