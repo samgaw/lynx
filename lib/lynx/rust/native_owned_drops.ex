@@ -1,6 +1,144 @@
 defmodule Lynx.Rust.NativeOwnedDrops do
   @moduledoc false
 
+  def function_for(payload, translated, refs) do
+    with true <- get_in(translated, ["options", "owned_drops"]) == true,
+         payload = Lynx.Rust.CallModels.expand(payload, refs),
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- payload,
+         true <- args == Lynx.Rust.ResourceModels.args([]),
+         type when not is_nil(type) <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
+         %{"src" => "Normal", "needs_drop" => true, "kind" => %{"Struct" => _}} <- type,
+         true <- type["item_meta"]["opacity"] == "Transparent",
+         true <- Enum.all?(Map.values(type["generics"]), &(&1 == [])),
+         name = type["item_meta"]["name"] ++ [%{"Ident" => ["drop_owned", 0]}],
+         [function] <-
+           Enum.filter(translated["fun_decls"], &(&1 && &1["item_meta"]["name"] == name)),
+         %{
+           "body" => %{"Structured" => _},
+           "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig
+         } <- function,
+         true <- Enum.all?(Map.values(function["generics"]), &(&1 == [])),
+         true <- Lynx.Rust.CallModels.expand(sig["inputs"], refs) == [payload],
+         %{"Adt" => %{"builtin" => "Tuple", "generics" => output}} <-
+           Lynx.Rust.CallModels.expand(sig["output"], refs),
+         true <- output == Lynx.Rust.ResourceModels.args([]),
+         true <-
+           structural_nonpanicking?(function["body"]["Structured"]["body"], translated, refs) do
+      function
+    else
+      _ -> nil
+    end
+  end
+
+  # Resource drop dispatch is classified as cutoff-only by the lifetime audit.
+  # Admit only structural cleanup of validated nonpanicking mutex primitives;
+  # custom or first-party destructor calls need a separate unwind composition.
+  defp structural_nonpanicking?(%{"statements" => statements}, translated, refs) do
+    Enum.all?(statements, fn statement ->
+      case statement["kind"] do
+        kind when kind == "Return" ->
+          true
+
+        %{"StorageLive" => _} ->
+          true
+
+        %{"StorageDead" => _} ->
+          true
+
+        %{"Assign" => [_, value]} ->
+          Enum.any?(~w(Use Aggregate), &Map.has_key?(value, &1))
+
+        %{"Drop" => drop} ->
+          # Check the primitive kind before consulting drop dictionaries. A
+          # recursive ResourceArc field must not re-enter resource admission.
+          mutex_type?(drop["place"]["ty"], translated, refs) and
+            match?(
+              {:ok, %{native_kind: :mutex}},
+              Lynx.Rust.NativeDrops.site(drop, translated, refs)
+            )
+
+        %{
+          "Call" => %{
+            "call" => %{
+              "func" => %{
+                "Regular" => %{"kind" => %{"Fun" => id}, "generics" => %{"types" => [self]}}
+              }
+            }
+          }
+        } ->
+          function = Enum.find(translated["fun_decls"], &(&1 && &1["def_id"] == id))
+
+          with %{"Adt" => %{"id" => type}} <- Lynx.Rust.CallModels.expand(self, refs),
+               declaration <- Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == type)),
+               true <- Lynx.Rust.MutexModels.type?(declaration),
+               %{native_dispose: true} <-
+                 Lynx.Rust.NativeDrops.resolve(function, translated, refs) do
+            true
+          else
+            _ -> false
+          end
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp mutex_type?(type, translated, refs) do
+    case Lynx.Rust.CallModels.expand(type, refs) do
+      %{"Adt" => %{"id" => id}} ->
+        Lynx.Rust.MutexModels.type?(
+          Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id))
+        )
+
+      _ ->
+        false
+    end
+  end
+
+  # Insert a concrete dictionary immediately after the actual Aeneas declaration.
+  # No default dictionary exists for a dropful resource. Order or formatting changes
+  # fail closed instead of silently using the old destructor-free release path.
+  def install_instances!(plan, translation, source) do
+    Enum.reduce(plan, source, fn type, source ->
+      if is_integer(type.native_cleanup) do
+        {mapping, typename} =
+          case {Enum.filter(translation["functions"], &(&1["def_id"] == type.native_cleanup)),
+                Enum.filter(translation["types"], &(&1["def_id"] == type["def_id"]))} do
+            {[mapping], [typename]} -> {mapping, typename}
+            _ -> raise ArgumentError, "missing or ambiguous owning cleanup correspondence"
+          end
+
+        if mapping["is_opaque"] or mapping["is_rec"],
+          do: raise(ArgumentError, "unsupported owning destructor declaration")
+
+        marker = "/-- [#{mapping["rust_name"]}]:"
+
+        case String.split(source, marker) do
+          [before, body] ->
+            case Regex.run(~r/\n(?=\/--|end |namespace )/, body, return: :index) do
+              [{offset, _}] ->
+                {definition, rest} = String.split_at(body, offset)
+
+                dictionary =
+                  "\ninstance : Lynx.NativeResourceCleanup #{typename["lean_name"]} where\n  cleanup := #{mapping["lean_name"]}\n"
+
+                before <> marker <> definition <> dictionary <> rest
+
+              _ ->
+                raise ArgumentError, "missing owning destructor declaration boundary"
+            end
+
+          _ ->
+            raise ArgumentError, "missing or ambiguous emitted owning destructor"
+        end
+      else
+        source
+      end
+    end)
+  end
+
   def arguments!(false, _), do: []
 
   def arguments!(true, tools) do

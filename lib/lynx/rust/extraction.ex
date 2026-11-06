@@ -336,7 +336,7 @@ defmodule Lynx.Rust.Extraction do
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
 
     codec_hashes =
-      Enum.map(codec_modules, fn name ->
+      Enum.map([module <> ".Funs" | codec_modules], fn name ->
         {name,
          Lynx.Rust.Fingerprint.file!(Path.join(output, String.replace(name, ".", "/") <> ".lean"))}
       end)
@@ -352,6 +352,16 @@ defmodule Lynx.Rust.Extraction do
       compiler_drop_queries: compiler_drop_queries,
       native_guard_storage: native_guard_storage,
       owned_drops: Keyword.get(opts, :owned_drops, false),
+      resource_cleanup:
+        for(
+          type <- codec_plan,
+          is_integer(type.native_cleanup),
+          do: %{
+            type_id: type["def_id"],
+            function_id: type.native_cleanup,
+            lean_name: Map.fetch!(implementations, type.native_cleanup)["lean_name"]
+          }
+        ),
       native_drops: native_drops,
       native_unwind: native_unwind,
       futures: Keyword.get(opts, :futures, :reject),

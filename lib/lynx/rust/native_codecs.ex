@@ -24,7 +24,31 @@ defmodule Lynx.Rust.NativeCodecs do
     Enum.map(plan, fn type ->
       schema = schema!(type, audit, Map.new(plan, &{&1["def_id"], &1}))
 
-      Map.put(type, :native_tag, JSON.encode!(schema))
+      cleanup =
+        if get_in(audit.translated, ["options", "owned_drops"]) == true do
+          if type["needs_drop"] == false do
+            :trivial
+          else
+            payload = %{
+              "Adt" => %{
+                "id" => type["def_id"],
+                "builtin" => nil,
+                "generics" => Lynx.Rust.ResourceModels.args([])
+              }
+            }
+
+            case Lynx.Rust.NativeOwnedDrops.function_for(
+                   payload,
+                   audit.translated,
+                   audit.references
+                 ) do
+              nil -> nil
+              function -> function["def_id"]
+            end
+          end
+        end
+
+      type |> Map.put(:native_tag, JSON.encode!(schema)) |> Map.put(:native_cleanup, cleanup)
     end)
   end
 
@@ -80,6 +104,15 @@ defmodule Lynx.Rust.NativeCodecs do
       %{"Scalar" => %{"Integer" => %{"Unsigned" => width}}}
       when width in ~w(U8 U16 U32 U64 U128 Usize) ->
         found
+
+      %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => [payload]} = args}} ->
+        type = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
+
+        unless Lynx.Rust.MutexModels.type?(type) and
+                 args == Lynx.Rust.ResourceModels.args([payload]),
+               do: raise(ArgumentError, "unsupported native heap handle identity")
+
+        visit!(payload, audit, found, visiting)
 
       %{
         "Adt" => %{
@@ -172,7 +205,9 @@ defmodule Lynx.Rust.NativeCodecs do
     unless String.contains?(source, marker),
       do: raise(ArgumentError, "missing generated Types import")
 
-    File.write!(funs, String.replace(source, marker, marker <> "\npublic import " <> module))
+    source = String.replace(source, marker, marker <> "\npublic import " <> module)
+    source = Lynx.Rust.NativeOwnedDrops.install_instances!(plan, translation, source)
+    File.write!(funs, source)
     [module]
   end
 
@@ -223,6 +258,8 @@ defmodule Lynx.Rust.NativeCodecs do
             cases value
             simp [NativeCodec.roundtrip]
 
+        #{if type.native_cleanup == :trivial, do: "instance : NativeResourceCleanup #{identifier!(lean)} where\n  cleanup _ := .ok ()", else: ""}
+
         @[simp] theorem #{quote!("typeName::" <> rust)} :
             NativeCodec.typeName (α := #{identifier!(lean)}) = #{JSON.encode!(type.native_tag)} := rfl
         """
@@ -238,16 +275,32 @@ defmodule Lynx.Rust.NativeCodecs do
     [
       nominal!(type),
       Enum.map(type["kind"]["Struct"], fn field ->
-        value =
-          case CallModels.expand(field["ty"], audit.references) do
-            %{"Scalar" => "Bool"} -> "bool"
-            %{"Scalar" => %{"Integer" => %{"Unsigned" => width}}} -> String.downcase(width)
-            %{"Adt" => %{"id" => id}} -> schema!(Map.fetch!(types, id), audit, types)
-          end
+        value = schema_type!(field["ty"], audit, types)
 
         [field["name"], value]
       end)
     ]
+  end
+
+  defp schema_type!(type, audit, types) do
+    case CallModels.expand(type, audit.references) do
+      %{"Scalar" => "Bool"} ->
+        "bool"
+
+      %{"Scalar" => %{"Integer" => %{"Unsigned" => width}}} ->
+        String.downcase(width)
+
+      %{"Adt" => %{"id" => id, "generics" => %{"types" => [payload]}}} ->
+        declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
+
+        unless Lynx.Rust.MutexModels.type?(declaration),
+          do: raise(ArgumentError, "unsupported heap handle schema")
+
+        ["std::sync::Mutex", schema_type!(payload, audit, types)]
+
+      %{"Adt" => %{"id" => id}} ->
+        schema!(Map.fetch!(types, id), audit, types)
+    end
   end
 
   defp nominal!(type) do

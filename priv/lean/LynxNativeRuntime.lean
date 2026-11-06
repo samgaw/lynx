@@ -10,8 +10,9 @@ and divergence are verification exhaustion, never successful native returns.
 Mutex construction initializes logical shared cells. Bounded blocking acquisition
 uses atomic state waits; borrowed guard views reconstruct payload updates.
 Normal release commits reconstructed guard payloads and unlocks owned cells.
-Rust-owned resource tokens share immutable heap payloads, with explicit loader
-registration and bounded retain/release. Resource extraction admission, VM pins,
+Rust-owned resource tokens share heap payload identities; mutex fields retain
+shared cells. Explicit loader registration, bounded retain/release and optional
+extracted structural cleanup cover supported Rust-owned lifecycles. Resource extraction admission, VM pins,
 callbacks, native executors and FFI execution require separate checks/models. -/
 
 public section
@@ -189,6 +190,14 @@ namespace NativeMutex
 
 @[expose] def typeName (α : Type) [NativeCodec α] : String :=
   "std::sync::Mutex<" ++ NativeCodec.typeName (α := α) ++ ">"
+
+instance {α : Type} [NativeCodec α] : NativeCodec (NativeMutex α) where
+  typeName := NativeMutex.typeName α
+  encode mutex := .reference mutex.id
+  decode
+    | .reference id => some ⟨id⟩
+    | _ => none
+  decode_encode mutex := by cases mutex; rfl
 
 /-- Model only the initialization of a fresh unlocked, unpoisoned mutex. -/
 @[expose] def new {α : Type} [NativeCodec α] (value : α) : NativeM (NativeMutex α) := do
@@ -519,6 +528,22 @@ structure NativeResourceArc (α : Type) where
   id : Nat
   token : Nat
 
+/-- An admitted payload cleanup linked either to compiler-certified absence of
+Drop or to the actual extracted owning destructor. No default instance exists. -/
+class NativeResourceCleanup (α : Type) where
+  cleanup : α → NativeM Unit
+
+/-- Owned-destruction mode uses a separate dispatch with no destructor-free Arc
+fallback. Each concrete resource requires a validated payload cleanup instance. -/
+class NativeOwnedDrop (α : Type) where
+  drop : α → NativeM Unit
+
+instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeMutex α) where
+  drop := NativeMutex.dispose
+
+instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeGuard α) where
+  drop := NativeGuard.release
+
 namespace NativeResourceArc
 
 universe u
@@ -611,6 +636,130 @@ def release {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : Nativ
 
 instance {α : Type} [NativeCodec α] : NativeDrop (NativeResourceArc α) where
   drop := release
+
+/-- Registration failure unwinds the still-owned argument before reporting panic.
+Physical allocation success and the VM callback remain explicit FFI boundaries. -/
+@[expose] def newOwned {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (value : α) : NativeM (NativeResourceArc α) :=
+  .get fun env =>
+    if typeName α ∈ env.nativeResourceTypes then new value
+    else do
+      NativeResourceCleanup.cleanup value
+      NativeM.fail .panic
+
+/-- Nonfinal release retains the shared payload. Final release runs the admitted
+actual cleanup before reclaiming the resource cell and this ownership token. -/
+def releaseOwned {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) : NativeM Unit :=
+  .get fun env =>
+    match lookup handle env with
+    | some (count, value) => do
+      if count = 1 then NativeResourceCleanup.cleanup value else .ok ()
+      release handle
+    | none => .error .exhausted
+
+instance {α : Type} [NativeCodec α] [NativeResourceCleanup α] :
+    NativeOwnedDrop (NativeResourceArc α) where
+  drop := releaseOwned
+
+/-- A validated final token executes payload cleanup before reclaiming the Arc. -/
+theorem releaseOwned_last_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (value : α) (next : Unit → NativeM β) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 1) :
+    (releaseOwned handle >>= next) env =
+      (do NativeResourceCleanup.cleanup value; release handle >>= next) env := by
+  simp [releaseOwned, lookup, payload, token, stored, owners,
+    NativeCodec.roundtrip, referenceLimit]
+
+/-- Releasing one of two validated tokens does not run payload destruction. -/
+theorem releaseOwned_retained_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (value : α) (next : Unit → NativeM β) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 2) :
+    (releaseOwned handle >>= next) env = (release handle >>= next) env := by
+  simp [releaseOwned, lookup, payload, token, stored, owners,
+    NativeCodec.roundtrip, referenceLimit]
+
+/-- A live resource borrow retains its exact shared payload identity. -/
+theorem deref_single_next {α β : Type} [NativeCodec α]
+    (handle : NativeResourceArc α) (value : α) (next : α → NativeM β) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 1) :
+    (deref handle >>= next) env = next value env := by
+  simp [deref, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
+
+/-- Retaining a validated sole owner creates another token for the same value. -/
+theorem clone_single_next {α β : Type} [NativeCodec α]
+    (handle : NativeResourceArc α) (value : α) (next : NativeResourceArc α → NativeM β)
+    (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 1)
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (clone handle >>= next) env = next ⟨handle.id, env.refCounter + 1⟩ {env with
+      refCounter := env.refCounter + 1, nativeHeap :=
+        (env.refCounter + 1, handleType α, .reference handle.id) :: env.nativeHeap.map fun cell =>
+          if cell.1 == handle.id then
+            (handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value]) else cell} := by
+  simp [clone, lookup, payload, token, stored, owners, fresh,
+    NativeCodec.roundtrip, referenceLimit]
+
+/-- Consuming a nonfinal token preserves payload cells and the other owner. -/
+theorem releaseOwned_retained_run_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (value : α) (next : Unit → NativeM β) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 2) :
+    (releaseOwned handle >>= next) env = next () {env with nativeHeap :=
+      (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
+        if cell.1 == handle.id then
+          (handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value]) else cell} := by
+  rw [releaseOwned_retained_next handle value next env token stored owners]
+  simp [release, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
+
+/-- Successful final cleanup may change payload-owned cells, while retaining the
+Arc bookkeeping until release consumes it. All other environment fields survive. -/
+theorem releaseOwned_last_run_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (value : α) (next : Unit → NativeM β) (env after : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 1)
+    (cleaned : ∀ next : NativeM β,
+      (do NativeResourceCleanup.cleanup value; next) env = next after)
+    (tokenAfter : after.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (storedAfter : after.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
+    (ownersAfter : (after.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 1) :
+    (releaseOwned handle >>= next) env = next () {after with nativeHeap :=
+      (after.nativeHeap.filter fun cell => cell.1 != handle.token).filter fun cell => cell.1 != handle.id} := by
+  rw [releaseOwned_last_next handle value next env token stored owners]
+  rw [cleaned (release handle >>= next)]
+  simp [release, lookup, payload, tokenAfter, storedAfter, ownersAfter,
+    NativeCodec.roundtrip, referenceLimit]
 
 /-- A VM resource term retains a distinct ownership token. Its registry cell is
 separate from Rust tokens; repeated encoding of the allocation reuses its term

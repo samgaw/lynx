@@ -35,7 +35,7 @@ defmodule Lynx.Rust.ResourceAudit do
         else
           _ ->
             raise ArgumentError,
-                  "resource call requires a concrete default Resource implementation with a compiler-certified destructor-free payload"
+                  "resource call requires a concrete default Resource implementation with a compiler-certified destructor-free payload or an extracted owning destructor"
         end
       end
     end
@@ -54,7 +54,9 @@ defmodule Lynx.Rust.ResourceAudit do
   def payload?(payload, dictionary, trait, translated, refs, traits) do
     payload = CallModels.expand(payload, refs)
 
-    with true <- NativeDrops.destructor_free?(payload, translated, refs),
+    with true <-
+           NativeDrops.destructor_free?(payload, translated, refs) or
+             Lynx.Rust.NativeOwnedDrops.function_for(payload, translated, refs) != nil,
          %{"Adt" => %{"id" => type, "builtin" => nil, "generics" => empty}} <- payload,
          true <- empty == ResourceModels.args([]),
          %{

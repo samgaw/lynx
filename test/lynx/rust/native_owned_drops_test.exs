@@ -35,4 +35,52 @@ defmodule Lynx.Rust.NativeOwnedDropsTest do
       ])
     end
   end
+
+  test "requires the actual emitted owning destructor before installing its dictionary" do
+    plan = [%{"def_id" => 4, native_cleanup: 7}]
+
+    function = %{
+      "def_id" => 7,
+      "rust_name" => "probe::Payload::drop_owned",
+      "lean_name" => "probe.Payload.drop_owned",
+      "is_opaque" => false,
+      "is_rec" => false
+    }
+
+    translation = %{
+      "functions" => [function],
+      "types" => [%{"def_id" => 4, "lean_name" => "probe.Payload"}]
+    }
+
+    source = """
+    namespace probe
+    /-- [probe::Payload::drop_owned]: compiler body -/
+    def Payload.drop_owned (payload : Payload) := NativeOwnedDrop.drop payload.mutex
+    end probe
+    """
+
+    installed = NativeOwnedDrops.install_instances!(plan, translation, source)
+    assert String.contains?(installed, "cleanup := probe.Payload.drop_owned")
+    assert String.contains?(installed, "NativeOwnedDrop.drop payload.mutex")
+
+    for invalid <- [source <> source, "namespace probe\nend probe\n"] do
+      assert_raise ArgumentError, ~r/missing or ambiguous emitted/, fn ->
+        NativeOwnedDrops.install_instances!(plan, translation, invalid)
+      end
+    end
+
+    for invalid <- [put_in(translation, ["functions"], []), put_in(translation, ["types"], [])] do
+      assert_raise ArgumentError, ~r/cleanup correspondence/, fn ->
+        NativeOwnedDrops.install_instances!(plan, invalid, source)
+      end
+    end
+
+    for key <- ~w(is_opaque is_rec) do
+      invalid = put_in(translation, ["functions"], [Map.put(function, key, true)])
+
+      assert_raise ArgumentError, ~r/unsupported owning destructor/, fn ->
+        NativeOwnedDrops.install_instances!(plan, invalid, source)
+      end
+    end
+  end
 end

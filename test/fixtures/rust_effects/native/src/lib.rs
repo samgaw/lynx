@@ -191,6 +191,39 @@ pub fn resource_increment(resource: &rustler::ResourceArc<CounterResource>, amou
     effects_core::increment(&mut resource.state.lock().unwrap(), amount)
 }
 
+/// Retains the same mutex-containing resource without copying its shared state.
+pub fn resource_clone(
+    resource: &rustler::ResourceArc<CounterResource>,
+) -> rustler::ResourceArc<CounterResource> {
+    resource.clone()
+}
+
+/// Updates the shared resource through the cross-crate poison-recovering section.
+pub fn resource_locked_increment(
+    resource: &rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    effects_core::locked_increment(&resource.state, amount)
+}
+
+/// Consumes one Rust ownership token, running payload cleanup on final release.
+pub fn resource_release(resource: rustler::ResourceArc<CounterResource>) {
+    drop(resource);
+}
+
+/// Retains an alias, releases the original, updates shared state, and reclaims it.
+///
+/// # Panics
+/// Panics when the loader has not registered the resource type.
+pub fn resource_cycle(value: u64, amount: u64) -> bool {
+    let first = resource_new(value);
+    let retained = resource_clone(&first);
+    resource_release(first);
+    let changed = resource_locked_increment(&retained, amount);
+    resource_release(retained);
+    changed
+}
+
 /// Calls the actual first-party Future implementation, retaining its mutable state.
 pub fn poll_paused(
     future: std::pin::Pin<&mut effects_core::PausedCounter>,

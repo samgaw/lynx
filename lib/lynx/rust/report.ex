@@ -178,6 +178,7 @@ defmodule Lynx.Rust.Report do
       unwind: Map.get(extraction, :unwind, :reject),
       futures: Map.get(extraction, :futures, :reject),
       owned_drops: Map.get(extraction, :owned_drops, false),
+      resource_cleanup: Map.get(extraction, :resource_cleanup, []),
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++

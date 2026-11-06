@@ -29,7 +29,11 @@ defmodule Lynx.Rust.NativeDrops do
          true <- mutex != nil or guard != nil or resource != nil do
       %{
         rust_name: "core::mem::drop",
-        lean: "Lynx.NativeDrop.drop",
+        lean:
+          if(get_in(translated, ["options", "owned_drops"]) == true,
+            do: "Lynx.NativeOwnedDrop.drop",
+            else: "Lynx.NativeDrop.drop"
+          ),
         builtin: false,
         can_fail: true,
         native_cutoff_only: true,
@@ -37,7 +41,12 @@ defmodule Lynx.Rust.NativeDrops do
         native_dispose: true,
         native_codec_drop: true,
         label:
-          "Consuming destruction model: Mutex with a destructor-free payload removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; Rust-owned ResourceArc consumes one token and reclaims a destructor-free allocation on final release under default Resource callbacks; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
+          if(get_in(translated, ["options", "owned_drops"]) == true,
+            do:
+              "Consuming native destruction with validated nonpanicking structural resource payload cleanup linked to actual compiler drop MIR; mutex and guard primitives, Rust std, allocation, VM callbacks and FFI remain modeled boundaries; custom resource destructor unwind unsupported",
+            else:
+              "Consuming destruction model: Mutex with a destructor-free payload removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; Rust-owned ResourceArc consumes one token and reclaims a destructor-free allocation on final release under default Resource callbacks; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
+          )
       }
       |> then(fn model ->
         if mutex, do: Map.put(model, :native_mutex_type, mutex["def_id"]), else: model
