@@ -117,7 +117,7 @@ defmodule Lynx.Rust.PollDriverTest do
   end
 
   @tag :tmp_dir
-  test "rejects the unsafe pin macro helper for an owned resource future", %{tmp_dir: tmp} do
+  test "rejects direct unsafe pin helper calls", %{tmp_dir: tmp} do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -128,14 +128,16 @@ defmodule Lynx.Rust.PollDriverTest do
 
     File.write!(
       source,
-      File.read!(source) <>
+      "#![feature(pin_macro_internals)]\n" <>
+        File.read!(source) <>
         """
 
         pub fn macro_driver(resource: rustler::ResourceArc<CounterResource>, amount: u64,
             context: &mut std::task::Context<'_>) -> std::task::Poll<bool> {
             use std::future::Future;
-            let mut future = std::pin::pin!(resource_suspending(resource, amount));
-            future.as_mut().poll(context)
+            let mut storage = std::pin::PinMacroHelper { value: resource_suspending(resource, amount) };
+            let future = unsafe { std::pin::pin_new_unchecked_in_helper(&mut storage) };
+            future.poll(context)
         }
         """
     )
