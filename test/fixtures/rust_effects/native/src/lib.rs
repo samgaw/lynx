@@ -197,6 +197,19 @@ pub async fn immediate_increment(value: u64) -> u64 {
     effects_core::saturating_increment(value)
 }
 
+/// Suspends while retaining the actual future from another first-party crate.
+pub async fn suspended_increment(value: u64) -> u64 {
+    effects_core::paused_counter(value).await
+}
+
+/// Keeps an owned mutex across suspension, requiring saved-field drop support.
+pub async fn owned_suspending(value: u64) -> u64 {
+    let mutex = Mutex::new(value);
+    let result = effects_core::paused_counter(value).await;
+    drop(mutex);
+    result
+}
+
 /// Retains an owned capture, exercising cancellation cleanup rejection.
 pub async fn owned_immediate(value: Vec<u8>) -> usize {
     value.len()
@@ -414,22 +427,22 @@ pub fn mutex_discard_custom(value: u64) {
 #[cfg(test)]
 mod tests {
     use super::mutex_new_incremented;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+    #[derive(Default)]
+    struct Notification(AtomicBool);
+    impl Wake for Notification {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::Release);
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[test]
     fn paused_future_preserves_progress_across_explicit_polls() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        use std::task::{Context, Poll, Wake, Waker};
-        #[derive(Default)]
-        struct Notification(AtomicBool);
-        impl Wake for Notification {
-            fn wake(self: Arc<Self>) {
-                self.0.store(true, Ordering::Release);
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
         for value in [0, 7, u64::MAX] {
             let notification = Arc::new(Notification::default());
             let waker = Waker::from(Arc::clone(&notification));
@@ -446,6 +459,27 @@ mod tests {
                 super::poll_paused(future.as_mut(), &mut context),
                 Poll::Ready(value.saturating_add(1))
             );
+        }
+    }
+
+    #[test]
+    fn compiler_future_suspends_resumes_and_rejects_repolling() {
+        use std::future::Future;
+        for value in [0, 7, u64::MAX] {
+            let notification = Arc::new(Notification::default());
+            let waker = Waker::from(Arc::clone(&notification));
+            let mut future = std::pin::pin!(super::suspended_increment(value));
+            let mut context = Context::from_waker(&waker);
+            assert_eq!(future.as_mut().poll(&mut context), Poll::Pending);
+            assert!(notification.0.load(Ordering::Acquire));
+            assert_eq!(
+                future.as_mut().poll(&mut context),
+                Poll::Ready(value.saturating_add(1))
+            );
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                future.as_mut().poll(&mut context)
+            }))
+            .is_err());
         }
     }
 
