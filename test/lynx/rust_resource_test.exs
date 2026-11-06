@@ -44,14 +44,14 @@ defmodule Lynx.Rust.ResourceTest do
       proof_modules: ["Resource.Properties"],
       required_properties:
         Enum.map(
-          ~w(counter_reader resource_reader retained_value scope_value unregistered_panics),
+          ~w(counter_reader resource_reader retained_value scope_value unregistered_panics vm_owned_roundtrip),
           &("Resource.Properties." <> &1)
         )
     ]
 
     result = Lynx.Rust.verify!(workspace, "effects-native", opts)
     assert [%{status: :ok}] = result.reports
-    assert length(result.verification.properties) == 5
+    assert length(result.verification.properties) == 6
     assert Enum.any?(result.verification.guarantees, &(&1.kind == :cross_crate_contract))
     assert Enum.any?(result.extraction.native_drops, &(&1[:destructor] != nil))
     assert Enum.any?(result.verification.external_models, &String.contains?(&1, "ResourceArc"))
@@ -73,6 +73,12 @@ defmodule Lynx.Rust.ResourceTest do
 
     original = File.read!(property)
     File.write!(property, String.replace(original, "env.refCounter + 3", "env.refCounter + 2"))
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.Project.build!(project, ["Resource.Properties"])
+    end
+
+    File.write!(property, String.replace(original, "env.refCounter + 5", "env.refCounter + 4"))
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rust.Project.build!(project, ["Resource.Properties"])

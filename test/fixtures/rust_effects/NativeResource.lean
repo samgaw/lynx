@@ -39,4 +39,33 @@ theorem scope_value (value : U64) (env : Environment)
       (.ok value, { env with refCounter := env.refCounter + 3 }) := by
   simpa [scalar_resource_scope, scalar_resource_cycle] using
     retained_value value env registered empty
+
+
+/-- The actual extracted constructor and cross-crate reader preserve a payload
+through independent VM and Rust ownership. The VM pin remains live after both
+Rust owners are released; garbage collection is outside this property. -/
+theorem vm_owned_roundtrip (value : U64) (env : Environment)
+    (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes)
+    (empty : env.nativeHeap = []) :
+    (do
+      let original ← scalar_resource_new value
+      let term ← NativeResourceArc.encode original
+      let again ← NativeResourceArc.encode original
+      NativeResourceArc.release original
+      let decoded ← NativeResourceArc.decode (α := ScalarResource) term
+      let observed ← scalar_resource_read decoded
+      NativeResourceArc.release decoded
+      Result.ok (observed, term == again)) env =
+      (.ok (value, true), { env with refCounter := env.refCounter + 5, nativeHeap := [
+        (env.refCounter + 4, NativeResourceArc.termType ScalarResource,
+          .tuple #[.reference (env.refCounter + 1), .reference (env.refCounter + 3)]),
+        (env.refCounter + 3, NativeResourceArc.handleType ScalarResource,
+          .reference (env.refCounter + 1)),
+        (env.refCounter + 1, NativeResourceArc.typeName ScalarResource,
+          .tuple #[.integer 1, NativeCodec.encode (ScalarResource.mk (effects_core.Counter.mk value))])] }) := by
+  have cycle := NativeResourceArc.vm_roundtrip_next
+    (ScalarResource.mk (effects_core.Counter.mk value))
+    (fun resource same => Result.ok (resource.counter.value, same)) env registered empty
+  simpa [scalar_resource_new, resource_reader, bind_assoc, NativeM.ok] using cycle
+
 end Resource.Properties
