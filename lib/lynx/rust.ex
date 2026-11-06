@@ -84,8 +84,17 @@ defmodule Lynx.Rust do
   and executes the actual compiler cleanup on unstarted or suspended cancellation.
   `owned_drops: true` allows the supported mutex-containing resource payloads.
   Multiple simultaneously live native owners per frame, non-Unpin fields,
-  executor integration and async NIF composition remain unsupported. Native allocation, physical pinning, standard primitives and FFI
+  native executor integration and async NIF composition remain unsupported. Native allocation, physical pinning, standard primitives and FFI
   retain their reported trusted boundaries.
+
+  `Lynx.NativeTask.drive` can execute a concrete extracted poll/destructor pair
+  in the logical runtime. Pending tasks wait for an atomic wake consumption or
+  caller-specified cancellation observation before another poll. The updated
+  Context is retained; completion and between-poll cancellation invoke the actual
+  destructor. Returned values and cancellation are distinct, and exhausted poll
+  budgets never count as successful completion. This is an explicit executor
+  policy model: native executor/callback correspondence and cancellation delivery
+  remain trusted boundaries. Async Rustler binding generation is still unsupported.
 
   Saved `std::sync::MutexGuard` values are also supported in cancelling mode
   for the existing destructor-free payload subset. Actual first-party mutations

@@ -1636,5 +1636,111 @@ theorem wakeByRef_missing_next {α : Type} (waker : NativeWaker)
   rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp
 
+/-- A task waits between polls; cancellation wins over a queued notification. -/
+inductive Signal where
+  | wake
+  | cancel
+
+/-- Atomically consume one coalesced wake or observe cancellation. An idle task
+blocks. Invalid capabilities exhaust verification rather than becoming ready. -/
+@[expose] def pollAwait (waker : NativeWaker) (cancelled : Environment → Bool)
+    (env : Environment) : Option (Except Exception Signal × Environment) :=
+  match env.nativeHeap.filter (fun cell => cell.1 == waker.id) with
+  | [(_, tag, .atom status)] =>
+    if waker.id ≤ env.refCounter ∧ tag = typeName ∧ (status = "idle" ∨ status = "notified") then
+      if cancelled env then some (.ok .cancel, env)
+      else if status = "notified" then
+        some (.ok .wake, {env with nativeHeap := env.nativeHeap.map fun cell =>
+          if cell.1 == waker.id then (waker.id, typeName, .atom "idle") else cell})
+      else none
+    else some (.error .exhausted, env)
+  | _ => some (.error .exhausted, env)
+
+@[expose] def await (waker : NativeWaker) (cancelled : Environment → Bool) : NativeM Signal :=
+  .wait (pollAwait waker cancelled) fun reply => match reply with
+    | .ok signal => .ok signal
+    | .error exception => .error exception
+
+theorem await_notified_next {α : Type} (waker : NativeWaker)
+    (cancelled : Environment → Bool) (next : Signal → NativeM α) (env : Environment)
+    (bounded : waker.id ≤ env.refCounter) (active : cancelled env = false)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
+      [(waker.id, typeName, .atom "notified")]) :
+    (await waker cancelled >>= next) env = next .wake {env with
+      nativeHeap := env.nativeHeap.map fun cell =>
+        if cell.1 == waker.id then (waker.id, typeName, .atom "idle") else cell} := by
+  have ready : pollAwait waker cancelled env = some (.ok .wake, {env with
+      nativeHeap := env.nativeHeap.map fun cell =>
+        if cell.1 == waker.id then (waker.id, typeName, .atom "idle") else cell}) := by
+    simp [pollAwait, bounded, stored, active]
+  unfold await
+  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+theorem await_cancelled_next {α : Type} (waker : NativeWaker)
+    (cancelled : Environment → Bool) (next : Signal → NativeM α) (env : Environment)
+    (bounded : waker.id ≤ env.refCounter) (requested : cancelled env = true)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
+      [(waker.id, typeName, .atom "notified")]) :
+    (await waker cancelled >>= next) env = next .cancel env := by
+  have ready : pollAwait waker cancelled env = some (.ok .cancel, env) := by
+    simp [pollAwait, bounded, stored, requested]
+  unfold await
+  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+theorem pollAwait_idle (waker : NativeWaker) (cancelled : Environment → Bool)
+    (env : Environment) (bounded : waker.id ≤ env.refCounter) (active : cancelled env = false)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
+      [(waker.id, typeName, .atom "idle")]) :
+    pollAwait waker cancelled env = none := by
+  simp [pollAwait, bounded, stored, active]
+
+theorem await_cancelled_idle_next {α : Type} (waker : NativeWaker)
+    (cancelled : Environment → Bool) (next : Signal → NativeM α) (env : Environment)
+    (bounded : waker.id ≤ env.refCounter) (requested : cancelled env = true)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
+      [(waker.id, typeName, .atom "idle")]) :
+    (await waker cancelled >>= next) env = next .cancel env := by
+  have ready : pollAwait waker cancelled env = some (.ok .cancel, env) := by
+    simp [pollAwait, bounded, stored, requested]
+  unfold await
+  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
+theorem pollAwait_missing (waker : NativeWaker) (cancelled : Environment → Bool)
+    (env : Environment) (missing : env.nativeHeap.filter (fun cell => cell.1 == waker.id) = []) :
+    pollAwait waker cancelled env = some (.error .exhausted, env) := by
+  simp [pollAwait, missing]
+
 end NativeWaker
+
+/- Logical task execution invokes a concrete extracted poll and destructor.
+Physical executor dispatch, cancellation delivery and native callbacks are models. -/
+namespace NativeTask
+
+inductive Step (α σ : Type) where
+  | pending : σ → NativeTaskContext → Step α σ
+  | ready : α → σ → Step α σ
+
+/-- Poll only after a notification, destroy on completion or between-poll
+cancellation, and distinguish cancellation from a returned value. Fuel exhaustion
+is a verification cutoff, never successful completion or implicit destruction. -/
+@[expose] def drive {α σ : Type} (poll : σ → NativeTaskContext → NativeM (Step α σ))
+    (destroy : σ → NativeM Unit) (cancelled : Environment → Bool)
+    (context : NativeTaskContext) : Nat → σ → NativeM (Option α)
+  | 0, _ => .error .exhausted
+  | fuel + 1, state => do
+    match ← poll state context with
+    | .ready value finished =>
+      destroy finished
+      .ok (some value)
+    | .pending retained updatedContext =>
+      match ← NativeWaker.await updatedContext.waker cancelled with
+      | .wake => drive poll destroy cancelled updatedContext fuel retained
+      | .cancel =>
+        destroy retained
+        .ok none
+
+end NativeTask
 end Lynx
