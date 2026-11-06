@@ -1,0 +1,25 @@
+--- a/src/extract/ExtractBase.ml
++++ b/src/extract/ExtractBase.ml
+@@ -2059,9 +2059,9 @@
+               (* Derive the var name from the last ident of the type name
+                  Ex.: ["hashmap"; "HashMap"] ~~> "HashMap" -> "hash_map" -> "hm"
+               *)
+-              (* The name shouldn't be empty, and its last element (after we remove
+-                 the target architecture suffix) should be an ident *)
++              (* Instantiation and target suffixes do not provide a variable basename. *)
+               let name = LlbcAstUtils.strip_target_suffix def.item_meta.name in
++              let name = List.filter (function T.PeInstantiated _ -> false | _ -> true) name in
+               let cl = Collections.List.last name in
+               name_from_type_ident (TypesUtils.as_ident cl))
+       | TVar _ -> (
+--- a/src/extract/ExtractBuiltinLean.ml
++++ b/src/extract/ExtractBuiltinLean.ml
+@@ -87,8 +87,6 @@
+     mk_type "core::panicking::AssertKind" "core.panicking.AssertKind"
+       ~kind:
+         (KEnum [ ("Eq", Some "Eq"); ("Ne", Some "Ne"); ("Match", Some "Match") ]);
+-    (* file: "Aeneas/Std/Core/Pin.lean", line: 8 *)
+-    mk_type "core::pin::Pin" "core.pin.Pin";
+     (* file: "Aeneas/Std/Core/Pin.lean", line: 12 *)
+     mk_type "core::pin::helper::PinHelper" "core.pin.helper.PinHelper";
+     (* file: "Aeneas/Std/Core/Ptr.lean", line: 77 *)

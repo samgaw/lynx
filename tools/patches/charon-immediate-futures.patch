@@ -1,0 +1,540 @@
+--- a/charon/src/bin/charon-driver/hax/types/new/full_def.rs
++++ b/charon/src/bin/charon-driver/hax/types/new/full_def.rs
+@@ -176,6 +176,7 @@
+     }
+
+     if let FullDefKind::Closure(Closure { param_env, .. })
++    | FullDefKind::Coroutine(Coroutine { param_env, .. })
+     | FullDefKind::Const(Const { param_env, .. }) = &mut kind
+         && def_id.is_typeck_child(s)
+     {
+@@ -383,6 +384,8 @@
+     AssocFn(AssocFn<'tcx>),
+     /// A closure, coroutine, or coroutine-closure.
+     Closure(Closure<'tcx>),
++    /// A compiler-lowered coroutine, distinct from a callable closure.
++    Coroutine(Coroutine<'tcx>),
+
+     // Constants
+     Const(Const<'tcx>),
+@@ -965,6 +968,15 @@
+             })
+             .as_ref()
+     }
++}
++
++/// Compiler data for a coroutine. This does not assign Fn* closure semantics.
++#[derive(Debug, Clone)]
++pub struct Coroutine<'tcx> {
++    pub self_ty: ty::Ty<'tcx>,
++    pub param_env: ParamEnv<'tcx>,
++    pub upvar_tys: Vec<Ty<'tcx>>,
++    pub captures_need_drop: bool,
+ }
+
+ /// A closure, coroutine, or coroutine-closure.
+@@ -1439,6 +1451,19 @@
+                 fn_trait_impls: OnceCell::new(),
+             })
+         }
++        RDefKind::Closure { .. } if matches!(type_of_self().kind(), ty::Coroutine(..)) => {
++            let self_ty = type_of_self();
++            let coroutine = args_or_default.as_coroutine();
++            FullDefKind::Coroutine(Coroutine {
++                self_ty,
++                param_env: get_param_env(s, args),
++                upvar_tys: coroutine.upvar_tys().sinto(s),
++                captures_need_drop: coroutine
++                    .upvar_tys()
++                    .iter()
++                    .any(|ty| ty.needs_drop(tcx, s.typing_env())),
++            })
++        }
+         RDefKind::Closure { .. } => {
+             let closure_ty = ty::Ty::new_closure(tcx, def_id, args_or_default);
+             let closure = args_or_default.as_closure();
+@@ -1684,6 +1709,7 @@
+         Some(match &self.kind {
+             FullDefKind::Adt(adt) => adt.self_ty,
+             FullDefKind::Closure(closure) => closure.fn_trait_args[0],
++            FullDefKind::Coroutine(coroutine) => coroutine.self_ty,
+             _ => {
+                 let def_id = self.def_id().as_real_def_id()?;
+                 let args = self.this().rustc_args(s);
+@@ -1748,6 +1774,7 @@
+             FullDefKind::FnPtr(d) => Some(d.param_env()),
+             FullDefKind::AssocFn(d) => Some(d.param_env()),
+             FullDefKind::Closure(d) => Some(d.param_env()),
++            FullDefKind::Coroutine(d) => Some(&d.param_env),
+             FullDefKind::Const(d) => Some(d.param_env()),
+             FullDefKind::AssocConst(d) => Some(d.param_env()),
+             FullDefKind::Static(d) => Some(d.param_env()),
+--- a/charon/src/bin/charon-driver/translate/get_mir.rs
++++ b/charon/src/bin/charon-driver/translate/get_mir.rs
+@@ -37,8 +37,17 @@
+         item_ref: &hax::ItemRef<'tcx>,
+     ) -> Result<Option<mir::Body<'tcx>>, Error> {
+         let tcx = self.t_ctx.tcx;
+-        let mir_level = self.t_ctx.options.mir_level;
+         let def_id = &item_ref.def_id;
++        let is_coroutine = matches!(def_id.kind, hax::DefKind::Closure)
++            && matches!(
++                def_id.type_of(&self.hax_state).skip_binder().kind(),
++                ty::Coroutine(..)
++            );
++        let mir_level = if is_coroutine {
++            MirLevel::Optimized
++        } else {
++            self.t_ctx.options.mir_level
++        };
+         Ok(match get_mir_for_def_id_and_level(tcx, def_id, mir_level) {
+             Some(body) => {
+                 let s = self.hax_state_with_id();
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -3,6 +3,7 @@
+ //! us to handle, and easier to maintain - rustc's representation can evolve
+ //! independently.
+
++use crate::hax::SInto;
+ use itertools::Itertools;
+ use rustc_hash::FxHashMap as HashMap;
+ use rustc_hir::attrs::LangItem;
+@@ -1117,7 +1118,9 @@
+                         ty::Tuple(_types) => ProjectionElem::Field(None, field_id),
+                         // We get there when we access one of the fields of the state captured by a
+                         // closure.
+-                        ty::Closure(..) => ProjectionElem::Field(None, field_id),
++                        ty::Closure(..) | ty::Coroutine(..) => {
++                            ProjectionElem::Field(None, field_id)
++                        }
+                         _ => panic!(),
+                     }
+                 }
+@@ -1223,6 +1226,26 @@
+     ) -> Result<Rvalue, Error> {
+         match rvalue {
+             mir::Rvalue::Use(operand, retag) => {
++                // Rust's generated poll prologue projects a pinned mutable reference
++                // with `Copy`. Treat its use as a reborrow, preserving the original
++                // input borrow for backward reconstruction rather than duplicating it.
++                if self.item_src.kind == TransItemSourceKind::CoroutinePoll
++                    && let mir::Operand::Copy(place) = operand
++                    && place.local.as_usize() == 1
++                    && let [mir::ProjectionElem::Field(field, _)] = place.projection.as_ref()
++                    && field.as_usize() == 0
++                    && matches!(self.local_decls[place.local].ty.kind(), ty::Adt(def, _)
++                        if Some(def.did()) == self.tcx.lang_items().pin_type())
++                    && matches!(place.ty(self.local_decls, self.tcx).ty.kind(),
++                        ty::Ref(_, inner, rustc_hir::Mutability::Mut) if inner.is_coroutine())
++                {
++                    let place = self.translate_place(span, place)?.deref();
++                    return Ok(Rvalue::Ref {
++                        place,
++                        kind: BorrowKind::Mut,
++                        ptr_metadata: Self::missing_ptr_metadata(),
++                    });
++                }
+                 let retag = match retag {
+                     mir::WithRetag::Yes => WithRetag::Yes,
+                     mir::WithRetag::No => WithRetag::No,
+@@ -1465,8 +1488,20 @@
+                 Ok(Rvalue::UnaryOp(unop, operand))
+             }
+             mir::Rvalue::Discriminant(place) => {
++                let rust_ty = place.ty(self.local_decls, self.tcx).ty;
+                 let place = self.translate_place(span, place)?;
+-                Ok(Rvalue::Discriminant(place))
++                if let ty::Coroutine(_, args) = rust_ty.kind() {
++                    let field = FieldId::new(args.as_coroutine().upvar_tys().len());
++                    let ty = Ty::new(TyKind::Scalar(ScalarTy::Integer(IntegerTy::Unsigned(
++                        UIntTy::U32,
++                    ))));
++                    Ok(Rvalue::Use(
++                        Operand::Copy(place.project(ProjectionElem::Field(None, field), ty)),
++                        WithRetag::No,
++                    ))
++                } else {
++                    Ok(Rvalue::Discriminant(place))
++                }
+             }
+             mir::Rvalue::Aggregate(aggregate_kind, operands) => {
+                 // It seems this instruction is not present in certain passes:
+@@ -1563,8 +1598,26 @@
+
+                         Ok(Rvalue::Aggregate(akind, operands_t))
+                     }
+-                    mir::AggregateKind::Coroutine(..)
+-                    | mir::AggregateKind::CoroutineClosure(..) => {
++                    mir::AggregateKind::Coroutine(def_id, generics) => {
++                        if !self.options.immediate_futures {
++                            raise_error!(self, span, "Coroutines are not supported");
++                        }
++                        let item = hax::translate_item_ref(&self.hax_state, *def_id, generics);
++                        let tref = self.translate_type_decl_ref(span, &item)?;
++                        let poll: FunDeclId =
++                            self.register_item(span, &item, TransItemSourceKind::CoroutinePoll);
++                        let parent = self.item_id;
++                        self.record_containment(parent, ItemOrModuleId::Item(poll.into()));
++                        let mut operands_t = operands_t;
++                        operands_t.push(Operand::Const(
++                            IntegerValue::from_unchecked_uint(UIntTy::U32, 0).to_constant(),
++                        ));
++                        Ok(Rvalue::Aggregate(
++                            AggregateKind::Adt(tref, None, None),
++                            operands_t,
++                        ))
++                    }
++                    mir::AggregateKind::CoroutineClosure(..) => {
+                         raise_error!(self, span, "Coroutines are not supported");
+                     }
+                 }
+@@ -1633,9 +1686,28 @@
+                 place,
+                 variant_index,
+             } => {
++                let rust_ty = place.ty(self.local_decls, self.tcx).ty;
+                 let t_place = self.translate_place(span, place)?;
+-                let variant_id = self.translate_variant_id(*variant_index);
+-                Some(StatementKind::SetDiscriminant(t_place, variant_id))
++                if let ty::Coroutine(_, args) = rust_ty.kind() {
++                    let field = FieldId::new(args.as_coroutine().upvar_tys().len());
++                    let ty = Ty::new(TyKind::Scalar(ScalarTy::Integer(IntegerTy::Unsigned(
++                        UIntTy::U32,
++                    ))));
++                    let state = Operand::Const(
++                        IntegerValue::from_unchecked_uint(
++                            UIntTy::U32,
++                            variant_index.as_u32().into(),
++                        )
++                        .to_constant(),
++                    );
++                    Some(StatementKind::Assign(
++                        t_place.project(ProjectionElem::Field(None, field), ty),
++                        Rvalue::Use(state, WithRetag::No),
++                    ))
++                } else {
++                    let variant_id = self.translate_variant_id(*variant_index);
++                    Some(StatementKind::SetDiscriminant(t_place, variant_id))
++                }
+             }
+             mir::StatementKind::StorageLive(local) => {
+                 let var_id = self.translate_local(local).unwrap();
+@@ -1812,17 +1884,36 @@
+                 unwind,
+             } => {
+                 let on_unwind = self.translate_unwind_action(span, unwind);
+-                let kind = self.translate_assert_kind(span, msg)?;
+-                let assert = Assert {
+-                    cond: self.translate_operand(span, cond)?,
+-                    expected: *expected,
+-                    check_kind: Some(kind),
+-                };
+-                let target = self.translate_basic_block_id(*target);
+-                ullbc_ast::TerminatorKind::Assert {
+-                    assert,
+-                    target,
+-                    on_unwind,
++                let cond = self.translate_operand(span, cond)?;
++                if matches!(
++                    **msg,
++                    mir::AssertKind::ResumedAfterDrop(..)
++                        | mir::AssertKind::ResumedAfterPanic(..)
++                        | mir::AssertKind::ResumedAfterReturn(..)
++                ) && matches!(&cond, Operand::Const(value) if matches!(value.kind(), ConstantExprKind::Bool(value) if value != expected))
++                {
++                    // The compiler emits an always-failing assertion with a self-loop
++                    // success edge. Preserve its actual panic and unwind edge directly.
++                    let panic_id = self.tcx.lang_items().get(msg.panic_function()).unwrap();
++                    let panic_id = panic_id.sinto(&self.hax_state);
++                    let name = self.translate_name(&TransItemSource::polymorphic(
++                        &panic_id,
++                        TransItemSourceKind::Fun,
++                    ))?;
++                    ullbc_ast::TerminatorKind::Panic { name, on_unwind }
++                } else {
++                    let check_kind = Some(self.translate_assert_kind(span, msg)?);
++                    let assert = Assert {
++                        cond,
++                        expected: *expected,
++                        check_kind,
++                    };
++                    let target = self.translate_basic_block_id(*target);
++                    ullbc_ast::TerminatorKind::Assert {
++                        assert,
++                        target,
++                        on_unwind,
++                    }
+                 }
+             }
+             TerminatorKind::FalseEdge {
+@@ -2257,11 +2348,9 @@
+                 let operand = self.translate_operand(span, operand)?;
+                 Ok(BuiltinAssertKind::InvalidEnumConstruction(operand))
+             }
+-            mir::AssertKind::ResumedAfterDrop(..)
+-            | mir::AssertKind::ResumedAfterPanic(..)
+-            | mir::AssertKind::ResumedAfterReturn(..) => {
+-                raise_error!(self, span, "Coroutines are not supported");
+-            }
++            mir::AssertKind::ResumedAfterDrop(..) => Ok(BuiltinAssertKind::ResumedAfterDrop),
++            mir::AssertKind::ResumedAfterPanic(..) => Ok(BuiltinAssertKind::ResumedAfterPanic),
++            mir::AssertKind::ResumedAfterReturn(..) => Ok(BuiltinAssertKind::ResumedAfterReturn),
+         }
+     }
+
+--- a/charon/src/bin/charon-driver/translate/translate_crate.rs
++++ b/charon/src/bin/charon-driver/translate/translate_crate.rs
+@@ -71,6 +71,8 @@
+     CallableMethod(ClosureKind),
+     /// A cast of a stateless closure to a function pointer.
+     ClosureAsFnCast,
++    /// The compiler-generated state-machine poll body of an async function.
++    CoroutinePoll,
+     /// The `drop_glue` method of a `Destruct` impl. It contains the drop glue that calls
+     /// `Drop::drop` for the type and then drops its fields. This is a method implementation (and
+     /// the DefId is that of the ADT or closure for which to generate the drop glue).
+@@ -470,8 +472,8 @@
+                     Global | VTableInstance(..) => {
+                         ItemId::Global(self.translated.global_decls.reserve_slot())
+                     }
+-                    Fun | CallableMethod(..) | ClosureAsFnCast | DropGlueMethod(..)
+-                    | VTableMethod(..) | VTableDropShim(..) => {
++                    Fun | CoroutinePoll | CallableMethod(..) | ClosureAsFnCast
++                    | DropGlueMethod(..) | VTableMethod(..) | VTableDropShim(..) => {
+                         ItemId::Fun(self.translated.fun_decls.reserve_slot())
+                     }
+                     InherentImpl | Module => {
+--- a/charon/src/bin/charon-driver/translate/translate_generics.rs
++++ b/charon/src/bin/charon-driver/translate/translate_generics.rs
+@@ -560,6 +560,7 @@
+             | FullDefKind::FnPtr(_)
+             | FullDefKind::AssocFn(_)
+             | FullDefKind::Closure(_)
++            | FullDefKind::Coroutine(_)
+             | FullDefKind::Const(_)
+             | FullDefKind::AssocConst(_)
+             | FullDefKind::Static(_) => PredicateOrigin::WhereClauseOnFn,
+--- a/charon/src/bin/charon-driver/translate/translate_items.rs
++++ b/charon/src/bin/charon-driver/translate/translate_items.rs
+@@ -147,7 +147,7 @@
+                 let ty = bt_ctx.translate_type_decl(id, item_meta, &def)?;
+                 self.translated.type_decls.set_slot(id, ty);
+             }
+-            TransItemSourceKind::Fun => {
++            TransItemSourceKind::Fun | TransItemSourceKind::CoroutinePoll => {
+                 let id = trans_id.expect_item();
+                 let fun_decl = bt_ctx.translate_fun_decl(id, item_meta, &def)?;
+                 self.translated.fun_decls.set_slot(id, fun_decl);
+@@ -448,6 +448,55 @@
+             }
+             hax::FullDefKind::Adt(_) => self.translate_adt_def(trans_id, span, &item_meta, def),
+             hax::FullDefKind::Closure(c) => self.translate_closure_adt(span, c),
++            hax::FullDefKind::Coroutine(c) => {
++                if !self.tcx.coroutine_is_async(def.def_id().real_rust_def_id()) {
++                    raise_error!(self, span, "Only async future coroutines are supported");
++                }
++                if !self.options.immediate_futures || c.captures_need_drop {
++                    raise_error!(
++                        self,
++                        span,
++                        "Coroutines with owned captures requiring drop are not supported yet"
++                    );
++                }
++                let body = self.get_mir(def.this(), span)?.ok_or_else(|| {
++                    register_error!(self, span, "Missing compiler coroutine body")
++                })?;
++                let Some(layout) = body.coroutine_layout_raw() else {
++                    raise_error!(self, span, "Coroutines require optimized MIR");
++                };
++                if !layout.field_tys.is_empty() || layout.variant_fields.len() != 3 {
++                    raise_error!(
++                        self,
++                        span,
++                        "Coroutines with suspension are not supported yet"
++                    );
++                }
++                let mut fields: charon_lib::ids::IndexVec<FieldId, Field> = c
++                    .upvar_tys
++                    .iter()
++                    .enumerate()
++                    .map(|(id, ty)| {
++                        Ok(Field {
++                            span,
++                            attr_info: AttrInfo::dummy_private(),
++                            name: format!("capture_{id}"),
++                            is_positional: true,
++                            ty: self.translate_ty(span, ty)?,
++                        })
++                    })
++                    .collect::<Result<_, Error>>()?;
++                fields.push(Field {
++                    span,
++                    attr_info: AttrInfo::dummy_private(),
++                    name: "state".to_string(),
++                    is_positional: false,
++                    ty: Ty::new(TyKind::Scalar(ScalarTy::Integer(IntegerTy::Unsigned(
++                        UIntTy::U32,
++                    )))),
++                });
++                Ok(TypeDeclKind::Struct(fields))
++            }
+             _ => panic!("Unexpected item when translating types: {def:?}"),
+         };
+
+@@ -571,6 +620,37 @@
+         let signature = match &def.kind {
+             hax::FullDefKind::Fn(f) => self.translate_fun_sig(span, &f.sig().value)?,
+             hax::FullDefKind::AssocFn(f) => self.translate_fun_sig(span, &f.sig().value)?,
++            hax::FullDefKind::Coroutine(_) => {
++                let body = self.get_mir(def.this(), span)?.ok_or_else(|| {
++                    register_error!(self, span, "Missing compiler coroutine poll body")
++                })?;
++                let mut types: Vec<_> = body
++                    .args_iter()
++                    .map(|local| body.local_decls[local].ty)
++                    .collect();
++                types.push(body.return_ty());
++                let tuple = rustc_middle::ty::Ty::new_tup(self.tcx, &types);
++                let (tuple, regions) = hax::unerase_lifetimes(
++                    self.hax_state_with_id(),
++                    tuple,
++                    rustc_span::Symbol::intern("coroutine_poll"),
++                );
++                let regions: Vec<hax::PlaceholderRegion> = regions.sinto(self.hax_state_with_id());
++                for region in regions {
++                    self.the_only_binder_mut().push_unerased_region(region);
++                }
++                let types = tuple.tuple_fields();
++                FunSig {
++                    inputs: types[..body.arg_count]
++                        .iter()
++                        .map(|ty| self.translate_rustc_ty(span, ty))
++                        .collect::<Result<_, _>>()?,
++                    output: self.translate_rustc_ty(span, &types[body.arg_count])?,
++                    is_unsafe: false,
++                    abi: Abi::rust(),
++                    is_variadic: false,
++                }
++            }
+             hax::FullDefKind::Const(_)
+             | hax::FullDefKind::AssocConst(_)
+             | hax::FullDefKind::Static(_) => {
+--- a/charon/src/bin/charon-driver/translate/translate_meta.rs
++++ b/charon/src/bin/charon-driver/translate/translate_meta.rs
+@@ -444,6 +444,10 @@
+             TransItemSourceKind::TraitImpl(TransImplSource::Marker) => {
+                 unreachable!("marker impls are only used as vtable item sources")
+             }
++            TransItemSourceKind::CoroutinePoll => {
++                name.name
++                    .push(PathElem::Ident("poll".to_string(), Disambiguator::ZERO));
++            }
+             TransItemSourceKind::CallableMethod(kind) => {
+                 let fn_name = kind.method_name().to_string();
+                 name.name
+--- a/charon/src/bin/charon-driver/translate/translate_types.rs
++++ b/charon/src/bin/charon-driver/translate/translate_types.rs
+@@ -325,8 +325,12 @@
+             hax::TyKind::Infer(_) => {
+                 raise_error!(self, span, "Unsupported type: infer type")
+             }
+-            hax::TyKind::Coroutine(..) => {
+-                raise_error!(self, span, "Coroutine types are not supported yet")
++            hax::TyKind::Coroutine(coroutine) => {
++                if !self.options.immediate_futures {
++                    raise_error!(self, span, "Coroutine types are not supported yet");
++                }
++                let tref = self.translate_type_decl_ref(span, &coroutine.item)?;
++                TyKind::Adt(tref)
+             }
+             hax::TyKind::Bound(_) => {
+                 raise_error!(self, span, "Unexpected type kind: bound")
+@@ -715,6 +719,10 @@
+         def: &hax::FullDef<'tcx>,
+         kind: &TypeDeclKind,
+     ) -> Option<Layout> {
++        // The logical coroutine state field does not describe a native byte layout.
++        if matches!(def.kind(), hax::FullDefKind::Coroutine(_)) {
++            return None;
++        }
+         let item = def.this();
+         use rustc_abi as r_abi;
+
+--- a/charon/src/options.rs
++++ b/charon/src/options.rs
+@@ -62,6 +62,12 @@
+     /// MIR optimized is available.
+     #[arg(long)]
+     pub mir: Option<MirLevel>,
++
++    /// Extract compiler-generated immediate future constructors and poll bodies.
++    /// Futures with suspension points or owned captures needing drop are rejected.
++    #[arg(long)]
++    #[serde(default)]
++    pub immediate_futures: bool,
+     /// Extra flags to pass to rustc.
+     #[clap(long = "rustc-arg")]
+     #[serde(default)]
+@@ -765,6 +771,7 @@
+     pub start_from: Vec<StartFrom>,
+     /// The level at which to extract the MIR
+     pub mir_level: MirLevel,
++    pub immediate_futures: bool,
+     /// Usually we skip the provided methods that aren't used. When this flag is on, we translate
+     /// them all.
+     pub translate_all_methods: bool,
+@@ -985,6 +992,7 @@
+         TranslateOptions {
+             start_from,
+             mir_level,
++            immediate_futures: options.immediate_futures,
+             monomorphize_mut: options.monomorphize_mut,
+             hide_marker_traits: options.hide_marker_traits,
+             hide_allocator: options.hide_allocator,
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1265,3 +1265,43 @@
+     assert_eq!(queries["test_crate::Generic"], None);
+     Ok(())
+ }
++
++#[test]
++fn immediate_future_state_machine() -> anyhow::Result<()> {
++    let data = translate(
++        r#"//@ charon-args=--immediate-futures --start-from=crate::ready --opaque=core --opaque=std --include=core::pin::Pin --include=core::task::poll::Poll --monomorphize-mut=all
++//@ rustc-args=--edition=2024 -Zmir-strip-debuginfo=all-locals -Zmir-enable-passes=+DeadStoreElimination-final,+SimplifyLocals-final
++        pub async fn ready(value: u64) -> u64 { value }
++        fn main() {}
++        "#,
++    )?;
++    let future = data
++        .type_decls
++        .iter()
++        .find(|decl| {
++            decl.item_meta
++                .name
++                .debug_repr(&data)
++                .starts_with("test_crate::ready::")
++        })
++        .expect("compiler future type");
++    let TypeDeclKind::Struct(fields) = &future.kind else {
++        panic!("future state must be concrete");
++    };
++    assert_eq!(
++        fields.iter().map(|f| f.name.as_str()).collect_vec(),
++        ["capture_0", "state"]
++    );
++    assert!(future.generics.is_empty());
++    assert!(future.layout.is_empty());
++    let poll = data
++        .fun_decls
++        .iter()
++        .find(|decl| decl.item_meta.name.debug_repr(&data).ends_with("::poll"))
++        .expect("compiler poll implementation");
++    assert!(matches!(poll.body, Body::Structured(_)));
++    assert!(poll.item_meta.started_from);
++    assert_eq!(poll.signature.inputs.len(), 2);
++    assert_eq!(poll.generics.regions.len(), 3);
++    Ok(())
++}

@@ -1,9 +1,9 @@
 defmodule Lynx.Rust.LLBCJson do
   @moduledoc false
 
-  # Charon's compiler query is audit metadata. The pinned Aeneas reader uses
-  # an older, exact record schema; remove only this field at its input boundary.
-  # Keep the original query in the audited document and raw extraction hash.
+  # Compiler queries and extraction flags are retained in the audit and raw
+  # extraction hash. Remove their known fields only at the input boundary of
+  # Aeneas's older, exact record schema.
   def drop_query_metadata!(document) do
     {types, queries} =
       Enum.map_reduce(document["translated"]["type_decls"], [], fn
@@ -23,7 +23,21 @@ defmodule Lynx.Rust.LLBCJson do
           end
       end)
 
-    {put_in(document, ["translated", "type_decls"], types), Enum.reverse(queries)}
+    document = put_in(document, ["translated", "type_decls"], types)
+
+    document =
+      case get_in(document, ["translated", "options", "immediate_futures"]) do
+        nil ->
+          document
+
+        value when is_boolean(value) ->
+          update_in(document, ["translated", "options"], &Map.delete(&1, "immediate_futures"))
+
+        _ ->
+          raise ArgumentError, "invalid compiler future extraction metadata"
+      end
+
+    {document, Enum.reverse(queries)}
   end
 
   # Removing an unreachable block can remove a span's first serialized value,
@@ -169,6 +183,10 @@ defmodule Lynx.Rust.LLBCJson do
         keys == ~w(def_id generics item_meta kind layout marker_traits ptr_metadata src) and
             Enum.sort(old_keys) == Enum.sort(["needs_drop" | keys]) ->
           List.delete(old_keys, "needs_drop")
+
+        "start_from" in keys and "mir" in keys and "preset" in keys and
+            Enum.sort(old_keys) == Enum.sort(["immediate_futures" | keys]) ->
+          List.delete(old_keys, "immediate_futures")
 
         # TraitRef is introduced when lowering a Drop to a consuming call. Its
         # precise shape is fixed by the pinned LLBC schema and checked by audit.
