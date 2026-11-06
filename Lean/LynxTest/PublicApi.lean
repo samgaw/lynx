@@ -21,6 +21,7 @@ private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatch
 
 -- State waits can be reasoned about without importing scheduler internals.
 private theorem publicWaitTraces : True := by
+  have _ := @Lynx.concurrent_eq_run
   have _ := @Lynx.Result.two_wait_interleave
   have _ := @Lynx.Result.two_wait_interleave_child_first
   trivial
@@ -706,6 +707,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.wait",
   "Lynx.Rustler.decodeBool",
   "Lynx.Rustler.encodeBool",
+  "Lynx.Rustler.executeNative",
   "Lynx.ScheduleChoice",
   "Lynx.ScheduleChoice.current",
   "Lynx.ScheduleChoice.swap",

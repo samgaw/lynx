@@ -20,4 +20,29 @@ namespace Lynx.Rustler
     decodeBool (encodeBool value) = .ok value := by
   cases value <;> rfl
 
+/-- Convert the modeled Rust panic after executing a resumable native body.
+State changes and blocking waits remain in the surrounding Lynx runtime;
+verification exhaustion cannot be caught as a native exception. -/
+@[expose] def executeNative {α : Type} (computation : Result α) (encode : α → Term) : Result Term :=
+  Result.handle (do let value ← computation; .ok (encode value)) fun error =>
+    match error with
+    | .error (.atom "rust_panicked") => .error (.error (.atom "nif_panicked"))
+    | _ => .error .exhausted
+
+@[simp] theorem executeNative_ok {α : Type} (value : α) (encode : α → Term) :
+    executeNative (.ok value) encode = .ok (encode value) := rfl
+
+@[simp] theorem executeNative_panic {α : Type} (encode : α → Term) :
+    executeNative (.error (.error (.atom "rust_panicked")) : Result α) encode =
+      .error (.error (.atom "nif_panicked")) := rfl
+
+@[simp] theorem executeNative_exhausted {α : Type} (encode : α → Term) :
+    executeNative (.error .exhausted : Result α) encode = .error .exhausted := rfl
+
+/-- Native state polls execute in the same environment as the caller. -/
+theorem executeNative_wait {α β : Type} (poll : Environment → Option (β × Environment))
+    (next : β → Result α) (encode : α → Term) :
+    executeNative (.wait poll next) encode =
+      .wait poll (fun value => executeNative (next value) encode) := rfl
+
 end Lynx.Rustler

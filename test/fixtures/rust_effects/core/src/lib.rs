@@ -98,3 +98,19 @@ pub fn locked_increment(mutex: &std::sync::Mutex<Counter>, amount: u64) -> bool 
     let guard = recover_guard(mutex.lock());
     update_release(guard, amount)
 }
+
+/// Performs a checked scalar update while retaining lock ownership through release.
+///
+/// # Panics
+/// Recursive acquisition can panic or block; verification rejects that case.
+pub fn locked_scalar_increment(mutex: &std::sync::Mutex<u64>, amount: u64) -> bool {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let mut counter = Counter { value: *guard };
+    let changed = increment(&mut counter, amount);
+    *guard = counter.value;
+    drop(guard);
+    changed
+}

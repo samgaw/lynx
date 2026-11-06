@@ -23,7 +23,12 @@ defmodule Lynx.Rustler.Adapter do
         &("public import " <> identifier!(&1))
       )
 
-    declarations = Enum.map_join(manifest.bindings, "\n", &declaration!/1)
+    execution = Keyword.get(opts, :execution, :pure)
+
+    unless execution in [:pure, :runtime],
+      do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(execution)}")
+
+    declarations = Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution))
 
     source = """
     module
@@ -58,6 +63,7 @@ defmodule Lynx.Rustler.Adapter do
 
     %Lynx.External{
       bindings: bindings,
+      purities: if(execution == :runtime, do: Map.new(bindings, &{&1, :concurrent}), else: %{}),
       files: [file],
       fingerprint: opts[:fingerprint],
       implementation_modules: %{beam_module => implementation},
@@ -68,7 +74,7 @@ defmodule Lynx.Rustler.Adapter do
     }
   end
 
-  defp declaration!(binding) do
+  defp declaration!(binding, execution_model) do
     result = type!(binding["result"])
     args = for index <- indices(binding["arity"]), do: "arg#{index}"
     decoded = Enum.map(args, &("decoded_" <> &1))
@@ -76,6 +82,14 @@ defmodule Lynx.Rustler.Adapter do
 
     if Enum.any?(types, &is_nil(&1.decode)),
       do: raise(ArgumentError, "custom Rustler decoders are unsupported")
+
+    runtime? = execution_model == :runtime
+    monad = if runtime?, do: "Lynx.NativeM", else: "RustM"
+
+    return_type =
+      if runtime?, do: "Lynx.Result Lynx.Term", else: "Except Lynx.Exception Lynx.Term"
+
+    dispatcher = if runtime?, do: "(_dispatcher : Lynx.Dispatcher)", else: ""
 
     params =
       Enum.zip_with(args, types, fn arg, type -> "(#{arg} : #{type.lean})" end) |> Enum.join(" ")
@@ -92,7 +106,9 @@ defmodule Lynx.Rustler.Adapter do
     decode =
       Enum.zip([args, decoded, types])
       |> Enum.map_join("\n", fn {arg, value, type} ->
-        "  let #{value} ← #{type.decode} #{arg}"
+        decoder = "#{type.decode} #{arg}"
+        decoder = if runtime?, do: "Lynx.Result.ofExcept (#{decoder})", else: decoder
+        "  let #{value} ← #{decoder}"
       end)
 
     invocation = Enum.join([execution | decoded], " ")
@@ -101,27 +117,35 @@ defmodule Lynx.Rustler.Adapter do
     adapter_theorem =
       atomic_identifier!(binding["name"] <> ":adapter/" <> Integer.to_string(binding["arity"]))
 
-    wrapper_call = Enum.join([wrapper | args], " ")
+    wrapper_call =
+      Enum.join([wrapper | if(runtime?, do: ["_dispatcher" | args], else: args)], " ")
 
     """
-    @[expose] def #{execution} #{params} : RustM #{result.lean} := #{call}
+    @[expose] def #{execution} #{params} : #{monad} #{result.lean} := #{call}
 
-    @[expose] def #{wrapper} #{term_params} : Except Lynx.Exception Lynx.Term := do
+    @[expose] def #{wrapper} #{dispatcher} #{term_params} : #{return_type} := do
     #{decode}
-      #{execute(invocation, result)}
+      #{execute(invocation, result, execution_model)}
 
-    theorem #{adapter_theorem} #{term_params} :
+    theorem #{adapter_theorem} #{dispatcher} #{term_params} :
         #{wrapper_call} = (do
     #{decode}
-      #{execute(direct, result)}) := rfl
+      #{execute(direct, result, execution_model)}) := rfl
     """
   end
 
-  defp execute(call, %{encode_m: encoder}) do
+  defp execute(call, %{encode_m: encoder}, :runtime) do
+    "Lynx.Rustler.executeNative (do let value ← (#{call}); Lynx.NativeM.fromRust (#{encoder} value)) id"
+  end
+
+  defp execute(call, type, :runtime),
+    do: "Lynx.Rustler.executeNative (#{call}) #{type.encode}"
+
+  defp execute(call, %{encode_m: encoder}, :pure) do
     "Lynx.Rustler.execute (do let value ← (#{call}); #{encoder} value) id"
   end
 
-  defp execute(call, type), do: "Lynx.Rustler.execute (#{call}) #{type.encode}"
+  defp execute(call, type, :pure), do: "Lynx.Rustler.execute (#{call}) #{type.encode}"
 
   defp monadic_encoder(%{encode_m: encoder}), do: encoder
   defp monadic_encoder(type), do: "(fun value => RustM.ok (#{type.encode} value))"
