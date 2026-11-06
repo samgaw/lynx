@@ -617,6 +617,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Environment",
   "Lynx.Environment.currentPid",
   "Lynx.Environment.mk",
+  "Lynx.Environment.nativeHeap",
   "Lynx.Environment.pdict",
   "Lynx.Environment.refCounter",
   "Lynx.Except.andAlso",
