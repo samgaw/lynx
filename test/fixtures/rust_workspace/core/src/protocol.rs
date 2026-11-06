@@ -50,9 +50,45 @@ pub fn prefix_length(input: &[u8], position: usize) -> usize {
     input.split_at(position).0.len()
 }
 
+/// Roundtrips a fixed-width protocol integer in little-endian order.
+pub fn little_endian_roundtrip(value: u32) -> u32 {
+    u32::from_le_bytes(value.to_le_bytes())
+}
+
+/// Roundtrips a fixed-width protocol integer in big-endian order.
+pub fn big_endian_roundtrip(value: u32) -> u32 {
+    u32::from_be_bytes(value.to_be_bytes())
+}
+
+/// Reads a four-byte big-endian header, rejecting short input before indexing.
+pub fn read_header(input: &[u8]) -> Option<u32> {
+    if input.len() < 4 {
+        return None;
+    }
+    Some(u32::from_be_bytes([input[0], input[1], input[2], input[3]]))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_frame, utf8_status};
+    use super::{
+        big_endian_roundtrip, little_endian_roundtrip, parse_frame, read_header, utf8_status,
+    };
+
+    #[test]
+    fn fixed_width_byte_orders_and_header_bounds() {
+        for value in [0, 1, 0x1234_5678, u32::MAX] {
+            assert_eq!(little_endian_roundtrip(value), value);
+            assert_eq!(big_endian_roundtrip(value), value);
+        }
+        for short in [&[][..], &[1][..], &[1, 2, 3][..]] {
+            assert_eq!(read_header(short), None);
+        }
+        assert_eq!(
+            read_header(&[0x12, 0x34, 0x56, 0x78, 0xff]),
+            Some(0x1234_5678)
+        );
+        assert_eq!(read_header(&[0xff; 4]), Some(u32::MAX));
+    }
 
     #[test]
     fn framing_and_utf8_boundaries() {

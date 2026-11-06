@@ -51,3 +51,15 @@ pub fn parse_frame(value: &[u8]) -> Result<u64, u8> {
 pub fn utf8_status(value: &[u8]) -> Result<u64, (u64, u8)> {
     experiment_core::protocol::utf8_status(value)
 }
+
+/// Composes both wire byte orders across a first-party crate boundary.
+pub fn endian_roundtrip(value: u32) -> u32 {
+    experiment_core::protocol::big_endian_roundtrip(
+        experiment_core::protocol::little_endian_roundtrip(value),
+    )
+}
+
+/// Reads a network header through the core crate's bounds check.
+pub fn read_header(input: &[u8]) -> Option<u32> {
+    experiment_core::protocol::read_header(input)
+}
