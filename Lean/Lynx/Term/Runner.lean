@@ -108,6 +108,11 @@ def run (computation : Result α) (env : Environment) (choices : List ScheduleCh
   | .error exception => (.error exception, env)
   | .get next => run (next env) env choices
   | .set next continuation => run continuation next choices
+  | .wait poll next =>
+      match poll env with
+      | some (value, updated) => run (next value) updated choices
+      | none => execute env.currentPid (State.initial env) (.process env.currentPid computation some) none
+          false env.currentPid .current choices
   | Result.schedule _ _ _ | .send _ _ _ | .receive _ _ _ | .request _ _ =>
       execute env.currentPid env (.running (State.initial env)
         [(env.currentPid, Task.root computation)] none false) env.currentPid .current choices
@@ -237,6 +242,15 @@ theorem run_reaches (computation : Result α) (env : Environment) (choices : Lis
     ∃ events last, Concurrent.Run (.start env computation) events last ∧
       Concurrent.Terminal last (computation.run env choices).1 :=
   Term.Runner.run_reaches computation env choices
+
+/-- A ready native wait executes atomically. -/
+@[simp] theorem wait_ready_apply (poll : Environment → Option (β × Environment))
+    (next : β → Result α) (env updated : Environment) (value : β)
+    (ready : poll env = some (value, updated)) :
+    (Result.wait poll next) env = next value updated := by
+  change Term.Runner.run (.wait poll next) env [] = _
+  rw [Term.Runner.run, ready]
+  rfl
 
 @[simp] theorem IsPure.ok_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (choices : List ScheduleChoice) (value : α) :

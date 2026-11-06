@@ -2,6 +2,7 @@ module
 
 import LynxTest.PublicApi
 import LynxTest.Term
+import LynxTest.Term.Wait
 import LynxTest.Term.Bitstring
 import LynxTest.Term.Bitstring.Construction
 import LynxTest.Term.Bitstring.Matching

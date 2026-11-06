@@ -219,6 +219,8 @@ inductive Result : (α : Type := Term) → Type 1 where
   | receive {α β : Type} : ReceiveTimeout → (Environment → Term → Option β) → (Option β → Result α) → Result α
   /-- A request about other processes, then the continuation receiving the reply. -/
   | request {α : Type} : Request → (Term → Result α) → Result α
+  /-- Atomically poll native shared state; suspend while unavailable. -/
+  | wait {α β : Type} : (Environment → Option (β × Environment)) → (β → Result α) → Result α
 
 /-- Validate before scanning, including when a matching message is queued.
 Positive durations are abstract scheduler events, not elapsed milliseconds. -/
@@ -243,6 +245,7 @@ namespace Result
   | .receive timeout select continuation =>
       .receive timeout select fun reply => Result.bind (continuation reply) next
   | .request query continuation => .request query fun reply => Result.bind (continuation reply) next
+  | .wait poll continuation => .wait poll fun value => Result.bind (continuation value) next
 
 instance : Monad @Result where
   pure := .ok
@@ -281,6 +284,7 @@ exception, so it propagates without reaching the handler. -/
       .receive timeout select fun reply => Result.handle (continuation reply) handler
   | .request query continuation =>
       .request query fun reply => Result.handle (continuation reply) handler
+  | .wait poll continuation => .wait poll fun value => Result.handle (continuation value) handler
 
 /-- Catch only the protected computation. Exceptions raised by either
 continuation propagate to an enclosing handler. -/
@@ -374,6 +378,11 @@ instance : MonadExceptOf Exception @Result where
       congr
       funext reply
       exact ih reply
+  | wait poll continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext value
+      exact ih value
 
 private theorem bind_assoc_proof (computation : Result α)
     (next : α → Result β) (final : β → Result γ) :
@@ -403,6 +412,11 @@ private theorem bind_assoc_proof (computation : Result α)
       congr
       funext reply
       exact ih reply next
+  | wait poll continuation ih =>
+      simp only [Result.bind]
+      congr
+      funext value
+      exact ih value next
 
 instance : LawfulMonad @Result := LawfulMonad.mk' _
   (id_map := fun computation => bind_ok computation)
@@ -579,7 +593,7 @@ or make unresolved calls. Every environment read must eventually terminate. -/
   | .ok value => .ok value
   | .error exception => .error exception
   | .get next => toExceptRead (next env) env (readOnly env)
-  | .set .. | .schedule .. | .send .. | .receive .. | .request .. =>
+  | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. =>
       False.elim readOnly
 
 @[simp] theorem ok_bind (value : α) (next : α → Result β) :
@@ -687,7 +701,7 @@ namespace Lynx.Result
   match computation with
   | .ok value => .ok value
   | .error exception => .error exception
-  | .get .. | .set .. | .schedule .. | .send .. | .receive .. | .request .. => False.elim pure
+  | .get .. | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. => False.elim pure
 
 /-- Read-only evaluation agrees with pure extraction when there are no reads. -/
 @[simp] public theorem toExceptRead_pure (computation : Result α) (env : Environment)
