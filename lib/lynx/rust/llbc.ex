@@ -136,6 +136,11 @@ defmodule Lynx.Rust.LLBC do
         direct_calls ++ (trait_dependencies |> Map.values() |> List.flatten())
       )
 
+    case Lynx.Rust.NativeDrops.audit(functions, modelled, translated, refs) do
+      :ok -> :ok
+      {:error, function, message} -> failure!(function, translated, message)
+    end
+
     allowed = %{
       functions: MapSet.new(Enum.map(functions, & &1["def_id"]) ++ Map.keys(modelled)),
       constants: constants
@@ -171,6 +176,9 @@ defmodule Lynx.Rust.LLBC do
         {:ok, drops} -> drops
         {:error, function, message} -> failure!(function, translated, message)
       end
+
+    if Keyword.get(opts, :execution, :pure) == :runtime,
+      do: Lynx.Rust.NativeLifetimes.audit!(functions, modelled, translated, refs)
 
     for type <- translated["type_decls"], type != nil, first_party?(type, first_party) do
       unless is_map(type["kind"]) &&
@@ -634,7 +642,8 @@ defmodule Lynx.Rust.LLBC do
   defp unshare_type(%{"Deduplicated" => id}, refs), do: unshare_type(Map.fetch!(refs, id), refs)
   defp unshare_type(value, _), do: value
 
-  defp failure!(item, translated, message) do
+  @doc false
+  def failure!(item, translated, message) do
     meta = item["item_meta"]
     span = get_in(meta, ["span", "Untagged", "data"]) || get_in(meta, ["span", "data"]) || %{}
     file = Enum.find(translated["files"], &(&1["id"] == span["file_id"]))

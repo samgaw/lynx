@@ -151,10 +151,15 @@ defmodule Lynx.Rust.Report do
       fingerprint: extraction.fingerprint,
       trusted_boundary:
         @trusted ++
+          if(Map.get(extraction, :native_drops, []) != [],
+            do: ["Lynx audited local consuming-drop lowering to core::mem::drop"],
+            else: []
+          ) ++
           if(map_size(extraction.audit.drops.erasures) > 0,
             do: ["Lynx compiler-generated structural drop erasure audit"],
             else: []
           ),
+      native_drop_lowering: Map.get(extraction, :native_drops, []),
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++

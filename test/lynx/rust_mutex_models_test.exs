@@ -108,7 +108,7 @@ defmodule Lynx.Rust.MutexModelsTest do
     }
 
     %{
-      external_calls: %{20 => %{native_mutex_type: 7}},
+      external_calls: %{20 => %{native_mutex_type: 7, native_constructor: true}},
       references: %{},
       first_party: ["first_party"],
       translated: %{"type_decls" => [type]},

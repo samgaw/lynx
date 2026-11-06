@@ -48,7 +48,37 @@ defmodule Lynx.Rust.Extraction do
            ), caches}
       end
 
+    discovery =
+      if Keyword.get(opts, :execution, :pure) == :runtime and
+           Lynx.Rust.NativeDrops.needs_lowering?(discovery.document) do
+        describe!(
+          context,
+          tools,
+          Enum.uniq(roots ++ ["core::mem::drop"]),
+          output,
+          module,
+          Keyword.take(opts, [:external_types]),
+          Enum.map(caches, & &1.opaque_pattern)
+        )
+      else
+        discovery
+      end
+
     %{document: document, llbc: llbc, first_party: first_party, models: models} = discovery
+
+    {document, native_drops} =
+      if Keyword.get(opts, :execution, :pure) == :runtime,
+        do: Lynx.Rust.NativeDropLowering.lower!(document, first_party),
+        else: {document, []}
+
+    backend_llbc =
+      if native_drops == [] do
+        llbc
+      else
+        path = Path.rootname(llbc) <> ".native-drops.llbc"
+        File.write!(path, Lynx.Rust.LLBCJson.encode_like!(document, llbc))
+        path
+      end
 
     cache_models = Lynx.Rustler.AtomCaches.models!(document, caches, module)
 
@@ -165,7 +195,7 @@ defmodule Lynx.Rust.Extraction do
           output,
           "-subdir",
           String.replace(module, ".", "/"),
-          llbc
+          backend_llbc
         ]
     )
 
@@ -190,6 +220,7 @@ defmodule Lynx.Rust.Extraction do
 
     %{
       audit: audit,
+      native_drops: native_drops,
       execution: execution,
       translation: translation,
       implementations: implementations,
@@ -204,8 +235,8 @@ defmodule Lynx.Rust.Extraction do
              else:
                Lynx.Rust.Fingerprint.digest(
                  :erlang.term_to_binary(
-                   {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, models,
-                    requested_calls,
+                   {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
+                    Lynx.Rust.Fingerprint.file!(backend_llbc), models, requested_calls,
                     audit.external_calls
                     |> Map.values()
                     |> Enum.map(&Map.drop(&1, [:function, :definition_id]))

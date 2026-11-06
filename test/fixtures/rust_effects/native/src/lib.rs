@@ -94,6 +94,92 @@ pub fn mutex_snapshot(value: u64, enabled: bool) -> Mutex<effects_core::Snapshot
     })
 }
 
+/// Consumes an owned mutex without constructing it in this function.
+pub fn mutex_consume_scalar(_mutex: Mutex<u64>) {}
+
+/// Consumes a native mutex whose payload has no destructor behavior.
+pub fn mutex_discard_scalar(value: u64) {
+    drop(Mutex::new(value));
+}
+
+/// Lets the compiler destroy an owned scalar mutex at scope exit.
+pub fn mutex_scope_scalar(value: u64) {
+    let _mutex = Mutex::new(value);
+}
+
+/// Returns a value after the compiler-generated scalar mutex destruction.
+pub fn mutex_scope_flag(value: u64) -> bool {
+    let _mutex = Mutex::new(value);
+    true
+}
+
+/// Requires effectful unwinding of a live scalar mutex.
+///
+/// # Panics
+/// Panics when `accepted` is false.
+pub fn mutex_assert_scalar(value: u64, accepted: bool) {
+    let _mutex = Mutex::new(value);
+    assert!(accepted);
+}
+
+/// Applies a first-party update and consumes the scalar mutex holding its result.
+pub fn mutex_checked_discard(value: u64, amount: u64) -> bool {
+    let mut counter = effects_core::Counter { value };
+    let changed = effects_core::increment(&mut counter, amount);
+    drop(Mutex::new(counter.value));
+    changed
+}
+
+/// Consumes the mutex before an assertion, leaving no mutex to unwind.
+///
+/// # Panics
+/// Panics when `accepted` is false, after the mutex has been destroyed.
+pub fn mutex_dispose_then_assert(value: u64, accepted: bool) {
+    {
+        let _mutex = Mutex::new(value);
+    }
+    assert!(accepted);
+}
+
+/// Explicitly consumes a newly initialized native mutex.
+pub fn mutex_discard(value: u64) {
+    drop(Mutex::new(effects_core::Counter { value }));
+}
+
+/// Lets the compiler generate destruction at the end of the scope.
+pub fn mutex_scope(value: u64) {
+    let _mutex = Mutex::new(effects_core::Counter { value });
+}
+
+/// Exercises cleanup required after an assertion failure with a live mutex.
+///
+/// # Panics
+/// Panics when `accepted` is false.
+pub fn mutex_assert(value: u64, accepted: bool) {
+    let _mutex = Mutex::new(effects_core::Counter { value });
+    assert!(accepted);
+}
+
+/// A payload with observable user-defined destruction, deliberately not admitted.
+pub struct PanickingPayload {
+    /// Stored value.
+    pub value: u64,
+}
+
+impl Drop for PanickingPayload {
+    fn drop(&mut self) {
+        panic!("tracked destruction");
+    }
+}
+
+/// Exercises a custom payload destructor through the actual standard mutex.
+///
+/// # Panics
+/// Always panics in the payload destructor.
+pub fn mutex_discard_custom(value: u64) {
+    drop(Mutex::new(PanickingPayload { value }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::mutex_new_incremented;
@@ -114,5 +200,10 @@ mod tests {
         assert!(!mutex.is_poisoned());
         let contents = mutex.try_lock().expect("fresh mutex must be unlocked");
         assert_eq!(contents.value, u64::MAX);
+    }
+    #[test]
+    #[should_panic(expected = "tracked destruction")]
+    fn custom_payload_destruction_is_observable() {
+        super::mutex_discard_custom(7);
     }
 }
