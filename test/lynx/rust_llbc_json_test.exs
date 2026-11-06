@@ -84,6 +84,47 @@ defmodule Lynx.Rust.LLBCJsonTest do
     assert String.contains?(encoded, ~s({"index":1,"name":null,"ty":false}))
   end
 
+  test "restores removed trait dictionaries without resolving type IDs in the same family" do
+    dictionary = %{"kind" => "SelfId", "trait_decl_ref" => %{"id" => 2, "generics" => %{}}}
+    binder = fn value -> %{"regions" => [], "outlives" => [], "skip_binder" => value} end
+
+    original = %{
+      "removed" => %{"Value" => [7, dictionary]},
+      "call" => %{"trait_refs" => [binder.(%{"Deduplicated" => 7})]},
+      "type" => %{"Value" => [7, %{"Scalar" => "Bool"}]},
+      "type_ref" => %{"Deduplicated" => 7}
+    }
+
+    document = Map.delete(original, "removed")
+    restored = binder.(%{"Value" => [7, dictionary]})
+
+    assert %{
+             "call" => %{"trait_refs" => [^restored]},
+             "type" => %{"Value" => [7, %{"Scalar" => "Bool"}]},
+             "type_ref" => %{"Deduplicated" => 7}
+           } = LLBCJson.restore_trait_references!(document, original)
+
+    assert_raise ArgumentError, ~r/missing LLBC trait reference/, fn ->
+      LLBCJson.restore_trait_references!(document, %{})
+    end
+
+    assert_raise ArgumentError, ~r/inconsistent LLBC trait-reference/, fn ->
+      LLBCJson.restore_trait_references!(
+        document,
+        Map.put(original, "conflict", %{"Value" => [7, Map.put(dictionary, "kind", "other")]})
+      )
+    end
+
+    cyclic =
+      put_in(dictionary, ["trait_decl_ref", "generics"], %{
+        "trait_refs" => [binder.(%{"Deduplicated" => 7})]
+      })
+
+    assert_raise ArgumentError, ~r/cyclic LLBC trait reference/, fn ->
+      LLBCJson.restore_trait_references!(document, %{"Value" => [7, cyclic]})
+    end
+  end
+
   @tag :tmp_dir
   test "rejects ambiguous schemas for a new record rather than guessing field order", %{
     tmp_dir: tmp

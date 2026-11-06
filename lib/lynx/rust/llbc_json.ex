@@ -34,6 +34,58 @@ defmodule Lynx.Rust.LLBCJson do
     restore_spans(document, spans)
   end
 
+  # A concrete trait dictionary can first occur in unreachable unwind cleanup.
+  # Rehydrate only its own hash-cons family before subsequent audits/lowering;
+  # trait IDs and type IDs deliberately use separate tables.
+  def restore_trait_references!(document, original) do
+    traits = trait_values(original, %{})
+    restore_traits(document, traits, [])
+  end
+
+  defp trait_values(%{"Value" => [id, %{"kind" => _, "trait_decl_ref" => _} = value]}, refs) do
+    if Map.has_key?(refs, id) and refs[id] != value,
+      do: raise(ArgumentError, "inconsistent LLBC trait-reference identity")
+
+    trait_values(value, Map.put(refs, id, value))
+  end
+
+  defp trait_values(map, refs) when is_map(map), do: trait_values(Map.values(map), refs)
+  defp trait_values(list, refs) when is_list(list), do: Enum.reduce(list, refs, &trait_values/2)
+  defp trait_values(_, refs), do: refs
+
+  defp restore_traits(map, refs, seen) when is_map(map) do
+    Map.new(map, fn
+      {"trait_refs", values} -> {"trait_refs", Enum.map(values, &restore_trait(&1, refs, seen))}
+      {key, value} -> {key, restore_traits(value, refs, seen)}
+    end)
+  end
+
+  defp restore_traits(list, refs, seen) when is_list(list),
+    do: Enum.map(list, &restore_traits(&1, refs, seen))
+
+  defp restore_traits(value, _, _), do: value
+
+  defp restore_trait(
+         %{"regions" => _, "outlives" => _, "skip_binder" => wrapped} = ref,
+         refs,
+         seen
+       ) do
+    case wrapped do
+      %{"Deduplicated" => id} ->
+        if id in seen, do: raise(ArgumentError, "cyclic LLBC trait reference")
+        value = Map.get(refs, id) || raise(ArgumentError, "missing LLBC trait reference #{id}")
+        put_in(ref, ["skip_binder"], %{"Value" => [id, restore_traits(value, refs, [id | seen])]})
+
+      %{"Value" => [id, value]} ->
+        put_in(ref, ["skip_binder"], %{"Value" => [id, restore_traits(value, refs, [id | seen])]})
+
+      _ ->
+        restore_traits(ref, refs, seen)
+    end
+  end
+
+  defp restore_trait(ref, refs, seen), do: restore_traits(ref, refs, seen)
+
   defp span_values(%{"span" => %{"Value" => [id, value]}} = map, spans) do
     case Map.fetch(spans, id) do
       {:ok, other} when other != value -> raise ArgumentError, "inconsistent LLBC span identity"
