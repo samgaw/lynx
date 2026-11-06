@@ -1,0 +1,17 @@
+diff --git i/src/extract/ExtractBase.ml w/src/extract/ExtractBase.ml
+index cfe68b1069b8..69cf66afa585 100644
+--- i/src/extract/ExtractBase.ml
++++ w/src/extract/ExtractBase.ml
+@@ -2488,7 +2488,11 @@ let ctx_compute_global_name_no_suffix (item_meta : T.item_meta)
+     their names registered through {!ctx_add_fun_decl}. *)
+ let ctx_add_global_decl (def : global_decl) (ctx : extraction_ctx) :
+     extraction_ctx =
+-  let name = ctx_compute_global_name_no_suffix def.item_meta def.src ctx in
++  let name =
++    match def.external_info with
++    | Some info -> info.extract_name
++    | None -> ctx_compute_global_name_no_suffix def.item_meta def.src ctx
++  in
+   ctx_add def.item_meta.span (GlobalId def.def_id) name ctx
+
+ let ctx_compute_fun_name (def : fun_decl) (is_trait_decl_field : bool)

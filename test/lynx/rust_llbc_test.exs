@@ -135,6 +135,18 @@ defmodule Lynx.Rust.LLBCTest do
     assert %{0 => _} =
              LLBC.link!(audit, native, result_monad: "Lynx.NativeM", assertion_unwind_input: true)
 
+    global_names = Map.update!(native, "aeneas_version", &(&1 <> "+global-names-v1"))
+
+    assert %{0 => _} =
+             LLBC.link!(audit, global_names,
+               result_monad: "Lynx.NativeM",
+               assertion_unwind_input: true
+             )
+
+    assert_raise ArgumentError, ~r/assertion unwind input/, fn ->
+      LLBC.link!(audit, global_names, result_monad: "Lynx.NativeM", assertion_unwind_input: false)
+    end
+
     for {model, expected} <- [
           {native, false},
           {Map.delete(native, "assertion_unwind_input"), true},

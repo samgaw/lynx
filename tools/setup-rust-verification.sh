@@ -65,6 +65,7 @@ git -C "$aeneas_source" checkout --detach 2b9e3ea4662b48c19262be759dbb704f20c243
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-static-shared-loans.patch"
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-lean-result-monad.patch"
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-assertion-unwind-input.patch"
+git -C "$aeneas_source" apply "$script_dir/patches/aeneas-external-global-names.patch"
 ln -s "$source_dir" "$aeneas_source/charon"
 cp "$script_dir/aeneas.opam.locked" "$aeneas_source/src/aeneas.opam.locked"
 # Keep compiler packages and configuration inside this installation.
@@ -73,7 +74,7 @@ opam init --root="$opam_root" --bare --no-setup --yes
 opam switch create --root="$opam_root" lynx-aeneas ocaml-base-compiler.5.3.0 --yes
 opam install --root="$opam_root" --switch=lynx-aeneas \
   "$aeneas_source/src" --deps-only --locked --yes
-aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1
+aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1
 AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aeneas -- \
   dune build --root "$aeneas_source/src" main.exe
 cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
