@@ -67,8 +67,12 @@ defmodule Lynx.Rust do
   compiler cleanup behind certified nonpanicking calls is recorded and omitted;
   guard destruction during unwind and resource lifetimes remain unsupported.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
-  supported for owned Mutex<bool/unsigned scalar> values. These remove their
-  cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined
+  supported for owned Mutex<bool/unsigned scalar> values and monomorphic
+  first-party structs with supported native codecs when Charon's compiler query
+  certifies `needs_drop = false`. Missing, unknown or true queries reject struct
+  cleanup; fields alone never establish the absence of a user destructor. Install
+  the pinned `needs-drop-v1` Charon patch for this metadata. These operations remove
+  their cells without invoking a payload destructor. Projected, user-defined
   and general unwind drops remain rejected. Resource-handle conversion and
   general native unwind cleanup require separate validated semantics.
   Owners may move into actual extracted first-party callees when no other owner
@@ -92,7 +96,7 @@ defmodule Lynx.Rust do
   handles and effectful custom encoders remain unsupported.
 
   `unwind: :assertions` additionally preserves compiler assertion cleanup for
-  local owned Mutex<bool/unsigned scalar> values. It requires `execution: :runtime`
+  local owned mutexes with the same destructor-free payload subset. It requires `execution: :runtime`
   and the pinned assertion-unwind backend. The default `:reject` retains the
   conservative lifetime boundary. In assertion mode, compiler cleanup is checked
   and lowered before propagating panic. Boolean drop flags are preserved; custom

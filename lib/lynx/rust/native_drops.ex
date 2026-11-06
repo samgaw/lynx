@@ -36,7 +36,7 @@ defmodule Lynx.Rust.NativeDrops do
         native_dispose: true,
         native_codec_drop: true,
         label:
-          "Consuming destruction model: Mutex<scalar> removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
+          "Consuming destruction model: Mutex with a destructor-free payload removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
       }
       |> then(fn model ->
         if mutex, do: Map.put(model, :native_mutex_type, mutex["def_id"]), else: model
@@ -89,7 +89,8 @@ defmodule Lynx.Rust.NativeDrops do
             GuardDrops.site(drop, translated, refs)
 
           type && MutexModels.type?(type) ->
-            with true <- scalar?(payload) and args == arguments([payload]),
+            with true <-
+                   destructor_free?(payload, translated, refs) and args == arguments([payload]),
                  "Precise" <- drop["kind"],
                  %{"kind" => %{"Fun" => fid}, "generics" => call_args} <- drop["fn_ptr"],
                  %{
@@ -123,7 +124,7 @@ defmodule Lynx.Rust.NativeDrops do
             else
               _ ->
                 {:error,
-                 "unsupported native drop payload or inconsistent compiler destructor; only Mutex<bool/unsigned scalar> is supported"}
+                 "unsupported native drop payload or inconsistent compiler destructor; only scalars or compiler-certified destructor-free native structs are supported"}
             end
 
           true ->
@@ -182,7 +183,7 @@ defmodule Lynx.Rust.NativeDrops do
                ),
              %{"types" => [payload], "regions" => [], "const_generics" => [], "trait_refs" => []} <-
                args,
-             true <- scalar?(payload),
+             true <- destructor_free?(payload, translated, refs),
              %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <- dictionary,
              %{
                "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => impl_args}},
@@ -198,7 +199,7 @@ defmodule Lynx.Rust.NativeDrops do
         else
           _ ->
             raise ArgumentError,
-                  "native destruction requires an exact Mutex<scalar> or MutexGuard Destruct implementation; custom payload destructors are unsupported"
+                  "native destruction requires an exact Mutex with a compiler-certified destructor-free payload or MutexGuard Destruct implementation; custom payload destructors are unsupported"
         end
       end
     end
@@ -294,6 +295,37 @@ defmodule Lynx.Rust.NativeDrops do
 
   defp destruct?(id, translated, refs),
     do: Lynx.Rust.DropModels.destruct_trait?(id, translated, refs)
+
+  # Fields alone cannot establish the absence of a user Drop implementation.
+  # Missing or unknown compiler evidence is deliberately not interpreted as false.
+  defp destructor_free?(type, translated, refs) do
+    case CallModels.expand(type, refs) do
+      %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
+        args == arguments([]) and
+          Enum.any?(translated["type_decls"], fn
+            %{
+              "def_id" => ^id,
+              "needs_drop" => false,
+              "kind" => %{"Struct" => _},
+              "generics" => params
+            } ->
+              params == %{
+                "regions" => [],
+                "types" => [],
+                "const_generics" => [],
+                "trait_clauses" => [],
+                "trait_type_constraints" => [],
+                "outlives" => []
+              }
+
+            _ ->
+              false
+          end)
+
+      other ->
+        scalar?(other)
+    end
+  end
 
   defp scalar?(%{"Scalar" => "Bool"}), do: true
 

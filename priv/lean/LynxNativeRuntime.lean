@@ -205,7 +205,7 @@ namespace NativeMutex
   simp [new, NativeM.allocate, fresh]
 
 /-- Destruction of an owned unlocked mutex. Admission separately restricts the
-payload to scalar types, so there is no user destructor to execute. -/
+payload to scalars or compiler-certified destructor-free structs. -/
 @[expose] def dispose {α : Type} [NativeCodec α] (mutex : NativeMutex α) : NativeM Unit := do
   let contents ← NativeM.readCell (typeName α) mutex.id
   match contents with
@@ -224,7 +224,7 @@ payload to scalar types, so there is no user destructor to execute. -/
     else .error .exhausted
   | _ => .error .exhausted
 
-/-- Creating then consuming an owned scalar-compatible mutex reclaims its cell
+/-- Creating then consuming an owned destructor-free mutex reclaims its cell
 without reusing its identity. Rust admission separately checks payload drops. -/
 theorem new_dispose_next {α β : Type} [NativeCodec α] (value : α)
     (next : NativeM β) (env : Environment)

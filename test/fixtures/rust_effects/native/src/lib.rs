@@ -513,6 +513,17 @@ mod facade {
         super::mutex_locked_scalar(value, amount)
     }
 
+    /// Uses compiler unwind cleanup for a destructor-free first-party payload.
+    ///
+    /// # Panics
+    /// Panics when `accepted` is false, after compiler-generated cleanup.
+    #[cfg(feature = "payload-nif")]
+    #[rustler::nif(name = "released_struct", schedule = "DirtyCpu")]
+    fn payload_release(value: u64, accepted: bool) -> bool {
+        super::mutex_assert(value, accepted);
+        true
+    }
+
     /// Raises only after normal destruction has completed.
     ///
     /// # Panics

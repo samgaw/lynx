@@ -74,8 +74,8 @@ defmodule Lynx.Rustler do
       encoders remain unsupported in this mode. Ordinary scalar/tuple/result and
       byte-vector codecs retain their existing decoding rules and cutoffs.
     * `:unwind` — `:reject` by default; `:assertions` selects the existing bounded
-      scalar-mutex assertion-cleanup adapter with runtime execution. Guard unwind
-      and general failing-callee cleanup remain unsupported.
+      mutex assertion-cleanup adapter for destructor-free payloads with runtime
+      execution. Guard unwind and general failing-callee cleanup remain unsupported.
 
   The returned `:verification` separates extracted bodies, checked Rust properties,
   cross-crate composition and generated adapter correspondence theorems. It lists
@@ -222,7 +222,8 @@ defmodule Lynx.Rustler do
 
     bindings =
       Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation,
-        result_monad: if(execution == :runtime, do: "Lynx.NativeM", else: "RustM")
+        result_monad: if(execution == :runtime, do: "Lynx.NativeM", else: "RustM"),
+        assertion_unwind_input: Keyword.get(opts, :unwind, :reject) == :assertions
       )
 
     Lynx.Rust.Project.build!(project, [bridge, prefix <> ".Funs" | proofs])

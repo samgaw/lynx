@@ -227,6 +227,6 @@ defmodule Lynx.Rust.NativeUnwind do
       LLBC.failure!(
         ctx.function,
         ctx.translated,
-        "unsupported assertion unwind cleanup: expected local scalar Mutex destruction, storage cleanup and a final UnwindResume"
+        "unsupported assertion unwind cleanup: expected local destructor-free Mutex destruction, storage cleanup and a final UnwindResume"
       )
 end
