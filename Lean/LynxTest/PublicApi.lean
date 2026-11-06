@@ -20,6 +20,11 @@ private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
 -- State waits can be reasoned about without importing scheduler internals.
+private theorem publicWaitTraces : True := by
+  have _ := @Lynx.Result.two_wait_interleave
+  have _ := @Lynx.Result.two_wait_interleave_child_first
+  trivial
+
 private theorem readyStateWait (poll : Lynx.Environment → Option (β × Lynx.Environment))
     (next : β → Lynx.Result α) (env updated : Lynx.Environment) (value : β)
     (ready : poll env = some (value, updated)) :
