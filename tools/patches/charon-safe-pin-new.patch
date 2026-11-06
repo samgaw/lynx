@@ -1,0 +1,184 @@
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -314,6 +314,122 @@
+                 unreachable!()
+             };
+             *operand = mir::Operand::Move(*place);
++        }
++    }
++
++    /// Inline only safe standard Pin::new calls on mutable Unpin references.
++    /// Check the entire current compiler implementation before reusing its
++    /// one-field constructor; no Deref specification or unsafe helper is admitted.
++    fn normalize_safe_pin_calls(&self, body: &mut mir::Body<'tcx>) {
++        if !self.options.immediate_futures {
++            return;
++        }
++        use crate::hax::UnderOwnerState;
++        let tcx = self.tcx;
++        let pin = tcx.lang_items().pin_type().unwrap();
++        for block in body.basic_blocks.as_mut() {
++            let terminator = block.terminator.as_mut().unwrap();
++            let mir::TerminatorKind::Call {
++                func,
++                args,
++                destination,
++                target: Some(target),
++                ..
++            } = &terminator.kind
++            else {
++                continue;
++            };
++            let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
++                continue;
++            };
++            if tcx.item_name(*id).as_str() != "new"
++                || args.len() != 1
++                || tcx.fn_sig(*id).skip_binder().safety().is_unsafe()
++            {
++                continue;
++            }
++            let Some(parent) = tcx.impl_of_assoc(*id) else {
++                continue;
++            };
++            let parent_ty = tcx
++                .type_of(parent)
++                .instantiate_identity()
++                .skip_normalization();
++            let ty::Adt(parent, _) = parent_ty.kind() else {
++                continue;
++            };
++            if parent.did() != pin {
++                continue;
++            }
++            let pointer = args[0].node.ty(&body.local_decls, tcx);
++            let ty::Ref(_, pointee, rustc_hir::Mutability::Mut) = pointer.kind() else {
++                continue;
++            };
++            if !pointee.is_unpin(tcx, self.hax_state.typing_env()) {
++                continue;
++            }
++            let ty::Adt(output, generics) = destination.ty(&body.local_decls, tcx).ty.kind() else {
++                continue;
++            };
++            if output.did() != pin || generics.type_at(0) != pointer {
++                continue;
++            }
++            let implementation = tcx.optimized_mir(*id);
++            if implementation.arg_count != 1 || implementation.basic_blocks.len() != 1 {
++                continue;
++            }
++            let entry = &implementation.basic_blocks[mir::START_BLOCK];
++            if !matches!(entry.terminator().kind, mir::TerminatorKind::Return) {
++                continue;
++            }
++            let statements: Vec<_> = entry
++                .statements
++                .iter()
++                .filter(|statement| {
++                    !matches!(
++                        statement.kind,
++                        mir::StatementKind::StorageLive(_)
++                            | mir::StatementKind::StorageDead(_)
++                            | mir::StatementKind::Nop
++                    )
++                })
++                .collect();
++            let [statement] = statements.as_slice() else {
++                continue;
++            };
++            let mir::StatementKind::Assign((dest, mir::Rvalue::Aggregate(kind, values))) =
++                &statement.kind
++            else {
++                continue;
++            };
++            if dest.local != mir::RETURN_PLACE
++                || !dest.projection.is_empty()
++                || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _)
++                    if *id == pin && args.type_at(0) == implementation.local_decls[mir::Local::from_usize(1)].ty)
++                || values.len() != 1
++                || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)],
++                    mir::Operand::Copy(place) | mir::Operand::Move(place)
++                    if place.local.as_usize() == 1 && place.projection.is_empty())
++            {
++                continue;
++            }
++            let mut inlined = (*statement).clone();
++            inlined.source_info = terminator.source_info;
++            inlined.kind = mir::StatementKind::Assign(Box::new((
++                *destination,
++                mir::Rvalue::Aggregate(
++                    Box::new(mir::AggregateKind::Adt(
++                        pin,
++                        rustc_abi::VariantIdx::from_usize(0),
++                        generics,
++                        None,
++                        None,
++                    )),
++                    rustc_index::IndexVec::from_raw(vec![args[0].node.clone()]),
++                ),
++            )));
++            block.statements.push(inlined);
++            terminator.kind = mir::TerminatorKind::Goto { target: *target };
+         }
+     }
+
+@@ -748,6 +864,7 @@
+         // Retrieve the body
+         if let Some(mut body) = self.get_mir(def.this(), span)? {
+             self.normalize_pin_get_mut(def, &mut body);
++            self.normalize_safe_pin_calls(&mut body);
+             self.normalize_coroutine_context(def, &mut body)?;
+             self.normalize_coroutine_pin(def, &mut body)?;
+             Ok(self.translate_body(span, body, &def.source_text))
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1468,3 +1468,48 @@
+     );
+     Ok(())
+ }
++
++#[test]
++fn safe_pin_new_inlines_only_the_checked_standard_constructor() -> anyhow::Result<()> {
++    let data = translate(
++        r#"//@ charon-args=--preset=aeneas --immediate-futures --mir=optimized --sysroot=default --start-from=crate::make_pin --start-from=crate::make_shadow --opaque=core --opaque=std --include=core::pin --monomorphize-mut=all
++pub fn make_pin(value: &mut u64) -> std::pin::Pin<&mut u64> { std::pin::Pin::new(value) }
++pub struct Shadow<'a> { value: &'a mut u64 }
++impl<'a> Shadow<'a> {
++    #[inline(never)] pub fn new(value: &'a mut u64) -> Self { Self { value } }
++}
++pub fn make_shadow(value: &mut u64) -> Shadow<'_> { Shadow::new(value) }
++fn main() {}
++"#,
++    )?;
++    let by_name = |name: &str| {
++        data.fun_decls
++            .iter()
++            .find(|f| f.item_meta.name.debug_repr(&data) == name)
++            .unwrap()
++    };
++    let pin = by_name("test_crate::make_pin")
++        .body
++        .as_structured()
++        .unwrap();
++    assert!(pin.body.statements.iter().any(|s| matches!(&s.kind,
++        StatementKind::Assign(_, Rvalue::Aggregate(AggregateKind::Adt(_, None, None), args)) if args.len() == 1)));
++    assert!(
++        !pin.body
++            .statements
++            .iter()
++            .any(|s| matches!(&s.kind, StatementKind::Call { .. }))
++    );
++    let shadow = by_name("test_crate::make_shadow")
++        .body
++        .as_structured()
++        .unwrap();
++    assert!(
++        shadow
++            .body
++            .statements
++            .iter()
++            .any(|s| matches!(&s.kind, StatementKind::Call { .. }))
++    );
++    Ok(())
++}
