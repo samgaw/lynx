@@ -28,7 +28,12 @@ defmodule Lynx.Rustler.Adapter do
     unless execution in [:pure, :runtime],
       do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(execution)}")
 
-    declarations = Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution))
+    resources = Keyword.get(opts, :resource_types, [])
+
+    if resources != [] and execution != :runtime,
+      do: raise(ArgumentError, "resource registration requires runtime execution")
+
+    declarations = Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution, resources))
 
     source = """
     module
@@ -74,7 +79,7 @@ defmodule Lynx.Rustler.Adapter do
     }
   end
 
-  defp declaration!(binding, execution_model) do
+  defp declaration!(binding, execution_model, resources) do
     result = type!(binding["result"])
     args = for index <- indices(binding["arity"]), do: "arg#{index}"
     decoded = Enum.map(args, &("decoded_" <> &1))
@@ -120,19 +125,23 @@ defmodule Lynx.Rustler.Adapter do
     wrapper_call =
       Enum.join([wrapper | if(runtime?, do: ["_dispatcher" | args], else: args)], " ")
 
+    body = "do\n#{decode}\n  #{execute(invocation, result, execution_model)}"
+    direct_body = "do\n#{decode}\n  #{execute(direct, result, execution_model)}"
+
+    registry =
+      if resources == [], do: "", else: "Lynx.Rustler.withResourceTypes #{lean_list(resources)} "
+
     """
     @[expose] def #{execution} #{params} : #{monad} #{result.lean} := #{call}
 
-    @[expose] def #{wrapper} #{dispatcher} #{term_params} : #{return_type} := do
-    #{decode}
-      #{execute(invocation, result, execution_model)}
+    @[expose] def #{wrapper} #{dispatcher} #{term_params} : #{return_type} := #{registry}(#{body})
 
     theorem #{adapter_theorem} #{dispatcher} #{term_params} :
-        #{wrapper_call} = (do
-    #{decode}
-      #{execute(direct, result, execution_model)}) := rfl
+        #{wrapper_call} = #{registry}(#{direct_body}) := rfl
     """
   end
+
+  defp lean_list(strings), do: "[" <> Enum.map_join(strings, ", ", &JSON.encode!/1) <> "]"
 
   defp execute(call, %{encode_m: encoder}, :runtime) do
     "Lynx.Rustler.executeNative (do let value ← (#{call}); Lynx.NativeM.fromRust (#{encoder} value)) id"

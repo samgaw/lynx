@@ -31,6 +31,13 @@ defmodule Lynx.Rustler do
   extracts the original Rust bodies and their first-party dependencies, and
   kernel-checks the modelled decoding, execution and encoding boundary.
   It does not establish native machine-code, Rustler FFI or BEAM correctness.
+  Runtime scalar NIFs may allocate and release Rust-owned resources internally.
+  Registration capabilities are derived from facade inventory records and the
+  generated Rustler 0.39 default loader, checked against compiler-resolved types
+  and the compiled entry's load-callback presence. Successful native loading,
+  linker constructors and registration execution remain trusted FFI behavior.
+  Custom loaders, named resource registrations, dependency-crate registrations
+  and resource handles crossing the NIF boundary remain unsupported.
   Build scripts and procedural macros execute as part of the trusted build.
   Panic conversion requires an unwinding build; aborting builds are rejected.
   Integer decoding follows Rustler exactly, including its narrowing casts for
@@ -220,12 +227,16 @@ defmodule Lynx.Rustler do
         rustler_atoms: if(custom?, do: :discover, else: [])
       )
 
-    if Enum.any?(extraction.audit.external_calls, fn {_, m} -> m[:native_resource_type] end),
-      do:
-        raise(
-          ArgumentError,
-          "resource calls require compiled loader registration adapters, which are not yet supported; resource values crossing the NIF boundary also require VM ownership adapters"
-        )
+    registrations =
+      Lynx.Rustler.Registrations.prepare!(
+        extraction,
+        context,
+        tools,
+        expanded,
+        compiled,
+        project,
+        prefix
+      )
 
     bindings =
       Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation,
@@ -238,6 +249,7 @@ defmodule Lynx.Rustler do
     external =
       Lynx.Rustler.Adapter.external!(bindings, extraction.implementations,
         execution: execution,
+        resource_types: Enum.map(registrations.types, & &1.tag),
         audit_modules: extraction.model_modules,
         proof_modules: proofs,
         bridge_module: bridge,
@@ -245,7 +257,8 @@ defmodule Lynx.Rustler do
         fingerprint:
           Lynx.Rust.Fingerprint.digest(
             :erlang.term_to_binary(
-              {extraction.fingerprint, compiled, Lynx.Rust.Fingerprint.file!(expanded)},
+              {extraction.fingerprint, compiled, Lynx.Rust.Fingerprint.file!(expanded),
+               registrations.fingerprint},
               [:deterministic]
             )
           )
@@ -272,7 +285,13 @@ defmodule Lynx.Rustler do
       reports: reports,
       verification:
         Lynx.Rust.Report.build!(extraction, reports, source_dir: context.record["directory"])
-        |> Lynx.Rust.Report.rustler(bindings, rustler_version),
+        |> Lynx.Rust.Report.rustler(bindings, rustler_version)
+        |> Map.put(:resource_registration, registrations)
+        |> Map.update!(
+          :trusted_boundary,
+          &(&1 ++ if(registrations.boundary, do: [registrations.boundary], else: []))
+        ),
+      resource_registration: registrations,
       project: project,
       library: native,
       native_binary_hash: Lynx.Rust.Fingerprint.file!(native),
@@ -280,13 +299,14 @@ defmodule Lynx.Rustler do
       bindings: bindings,
       extraction: extraction,
       context: context,
-      trusted_boundary: [
-        "rustc, Charon and Aeneas extraction",
-        "reproducible Cargo build and macro expansion",
-        "Rustler #{rustler_version} wrapper, FFI, native code and BEAM",
-        "configured native artifact is installed by the application loader",
-        "Lean kernel and standard logical axioms"
-      ]
+      trusted_boundary:
+        [
+          "rustc, Charon and Aeneas extraction",
+          "reproducible Cargo build and macro expansion",
+          "Rustler #{rustler_version} wrapper, FFI, native code and BEAM",
+          "configured native artifact is installed by the application loader",
+          "Lean kernel and standard logical axioms"
+        ] ++ if(registrations.boundary, do: [registrations.boundary], else: [])
     }
   end
 

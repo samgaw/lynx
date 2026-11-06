@@ -84,8 +84,11 @@ defmodule Lynx.Rust do
   `Environment.nativeResourceTypes`; this does not verify compiled registration.
   Reference counts have a 1024-handle verification bound. VM-held references,
   resource codecs and custom callbacks remain unsupported. Resource extraction
-  requires the pinned `global-names-v1` backend; Rustler adapters reject resource
-  calls until loader and VM ownership correspondence are established.
+  requires the pinned `global-names-v1` backend. Rustler adapters can supply
+  registration capabilities for facade-declared resources after checking the
+  generated default loader, inventory constructors and compiler-resolved types.
+  Custom loaders, named registrations and dependency-crate registrations remain
+  unsupported. Resource values crossing NIF calls still require VM ownership codecs.
   Owners may move into actual extracted first-party callees when no other owner
   remains live in the caller. The callee undergoes the same lifetime audit;
   effects and post-consumption failures compose through the runtime monad.
