@@ -518,6 +518,31 @@ theorem release_owned_next {α β : Type} [NativeCodec α] (guard : NativeGuard 
   rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
   simp
 
+theorem release_owned_handled_next {α β γ : Type} [NativeCodec α] (guard : NativeGuard α)
+    (original : α) (poisoned : Bool) (finish : NativeM β)
+    (handler : Exception → NativeM β) (next : β → NativeM γ) (env : Environment)
+    (owner : guard.ownerContext = env.currentPid)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) =
+      [(guard.mutex.id, NativeMutex.typeName α,
+        NativeMutex.lockedContents guard.ownerContext guard.token poisoned original)]) :
+    ((Result.handle (do release guard; finish) handler) >>= next) env =
+      ((Result.handle finish handler) >>= next) { env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
+      else cell } := by
+  have ready : pollRelease guard env = some (.ok (), { env with
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
+        else cell }) := by
+    cases poisoned <;> simp [pollRelease, NativeMutex.lockedContents, stored, owner,
+      NativeCodec.roundtrip]
+  unfold release
+  simp only [Result.wait_bind, Result.handle]
+  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  simp
+
 end Lynx.NativeGuard
 
 namespace Lynx
@@ -701,6 +726,19 @@ theorem deref_single_next {α β : Type} [NativeCodec α]
     (deref handle >>= next) env = next value env := by
   simp [deref, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
 
+theorem deref_retained_handled_next {α β γ : Type} [NativeCodec α]
+    (handle : NativeResourceArc α) (value : α) (finish : α → NativeM β) (handler : Exception → NativeM β)
+    (next : β → NativeM γ) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 2) :
+    ((Result.handle (deref handle >>= finish) handler) >>= next) env =
+      ((Result.handle (finish value) handler) >>= next) env := by
+  simp [Result.handle, deref, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
+
 /-- Retaining a validated sole owner creates another token for the same value. -/
 theorem clone_single_next {α β : Type} [NativeCodec α]
     (handle : NativeResourceArc α) (value : α) (next : NativeResourceArc α → NativeM β)
@@ -716,7 +754,7 @@ theorem clone_single_next {α β : Type} [NativeCodec α]
       refCounter := env.refCounter + 1, nativeHeap :=
         (env.refCounter + 1, handleType α, .reference handle.id) :: env.nativeHeap.map fun cell =>
           if cell.1 == handle.id then
-            (handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value]) else cell} := by
+            (handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value]) else cell } := by
   simp [clone, lookup, payload, token, stored, owners, fresh,
     NativeCodec.roundtrip, referenceLimit]
 
@@ -732,9 +770,26 @@ theorem releaseOwned_retained_run_next {α β : Type} [NativeCodec α] [NativeRe
     (releaseOwned handle >>= next) env = next () {env with nativeHeap :=
       (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
         if cell.1 == handle.id then
-          (handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value]) else cell} := by
+          (handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value]) else cell } := by
   rw [releaseOwned_retained_next handle value next env token stored owners]
   simp [release, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
+
+theorem releaseOwned_retained_handled_next {α β γ : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (value : α) (finish : NativeM β) (handler : Exception → NativeM β)
+    (next : β → NativeM γ) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 2) :
+    ((Result.handle (do releaseOwned handle; finish) handler) >>= next) env =
+      ((Result.handle finish handler) >>= next) {env with nativeHeap :=
+      (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
+        if cell.1 == handle.id then
+          (handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value]) else cell } := by
+  simp [releaseOwned, release, lookup, payload, token, stored, owners,
+    NativeCodec.roundtrip, referenceLimit, Result.handle]
 
 /-- Successful final cleanup may change payload-owned cells, while retaining the
 Arc bookkeeping until release consumes it. All other environment fields survive. -/
@@ -1235,6 +1290,48 @@ theorem new_encode_release_framed_next {α β : Type} [NativeCodec α] (value : 
     NativeCodec.roundtrip, referenceLimit,
     handleType, typeName, termType, Nat.add_assoc]
 
+set_option maxHeartbeats 1000000 in
+/-- Owned structural cleanup also preserves the VM pin on successful resource return.
+No pre-existing owner or VM registry may refer to the newly allocated identities. -/
+theorem newOwned_encode_release_framed_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α] (value : α)
+    (handler : Exception → NativeM Term) (next : Term → NativeM β) (env : Environment)
+    (registered : typeName α ∈ env.nativeResourceTypes)
+    (frame : FrameBelow α env.refCounter env.nativeHeap) :
+    ((Result.handle (do
+      let owner ← newOwned value
+      let term ← encode owner
+      releaseOwned owner
+      Result.ok term) handler) >>= next) env =
+    next (.reference (env.refCounter + 4)) { env with
+      refCounter := env.refCounter + 4
+      nativeHeap := vmCells value (env.refCounter + 1) (env.refCounter + 3)
+        (env.refCounter + 4) ++ env.nativeHeap } := by
+  have keys : ∀ cell ∈ env.nativeHeap, cell.1 ≤ env.refCounter := fun cell member =>
+    (frame cell member).1
+  have ids1 := frame_filter_id env.nativeHeap env.refCounter (env.refCounter + 1) keys (by omega)
+  have anys1 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 1) keys (by omega)
+  have ids2 := frame_filter_id env.nativeHeap env.refCounter (env.refCounter + 2) keys (by omega)
+  have anys2 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 2) keys (by omega)
+  have anys3 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 3) keys (by omega)
+  have anys4 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 4) keys (by omega)
+  have removes := frame_filter_ne env.nativeHeap env.refCounter (env.refCounter + 2) keys (by omega)
+  have mapTwo := frame_map_update env.nativeHeap env.refCounter (env.refCounter + 1)
+    (fun _ => (env.refCounter + 1, typeName α, .tuple #[.integer 2, NativeCodec.encode value])) keys (by omega)
+  have mapOne := frame_map_update env.nativeHeap env.refCounter (env.refCounter + 1)
+    (fun _ => (env.refCounter + 1, typeName α, .tuple #[.integer 1, NativeCodec.encode value])) keys (by omega)
+  have tokens := frame_tokens env.nativeHeap env.refCounter (env.refCounter + 1) frame (by omega)
+  have terms := frame_terms env.nativeHeap env.refCounter (env.refCounter + 1) frame (by omega)
+  simp only [handleType] at tokens
+  simp only [termEntryOwner, termType, bne_iff_ne, ite_not] at terms
+  simp only [typeName, beq_iff_eq] at mapTwo mapOne
+  simp only [newOwned, new, Result.handle, Result.get_bind, Result.get_continuation_apply,
+    ite_eq_left registered]
+  simp [encode, termOwner, termEntryOwner, clone, releaseOwned, release, lookup,
+    payload, NativeM.allocate, Result.handle, vmCells, ids1, ids2,
+    removes, mapTwo, mapOne, anys1, anys2, anys3, anys4, tokens, terms,
+    NativeCodec.roundtrip, referenceLimit,
+    handleType, typeName, termType, Nat.add_assoc]
+
 set_option maxHeartbeats 800000 in
 /-- Successful resource return keeps the VM pin after releasing the Rust result.
 The native exception handler is retained rather than erased from the adapter. -/
@@ -1320,6 +1417,68 @@ theorem decode_read_pinned_next {α β γ : Type} [NativeCodec α]
     allocation2, owner2, absent2, count2, anyFresh, removes, restores,
     NativeCodec.roundtrip, referenceLimit, typeName, handleType, termType,
     a, b, c, d, Ne.symm a, Ne.symm b, Ne.symm c, Ne.symm d, Ne.symm e, Ne.symm f]
+
+set_option maxHeartbeats 1000000 in
+/-- Decode a pinned term before an effectful native computation, retaining both
+its temporary Rust token and VM pin. Payload-owned cells are preserved. -/
+theorem decode_pinned_next {α β : Type} [NativeCodec α]
+    (value : α) (next : NativeResourceArc α → NativeM β)
+    (env : Environment) (id pin term : Nat) (pinned : Pinned value id pin term env)
+    (registered : typeName α ∈ env.nativeResourceTypes) :
+    (decode (α := α) (.reference term) >>= next) env =
+      next ⟨id, env.refCounter + 1⟩ { env with
+        refCounter := env.refCounter + 1
+        nativeHeap := (env.refCounter + 1, handleType α, .reference id) ::
+          env.nativeHeap.map fun cell => if cell.1 == id then
+            (id, typeName α, .tuple #[.integer 2, NativeCodec.encode value]) else cell } := by
+  have a : id ≠ pin := by have := pinned.ordered; omega
+  have b : id ≠ term := by have := pinned.ordered; omega
+  have c : pin ≠ term := by have := pinned.ordered; omega
+  have d : env.refCounter + 1 ≠ id := by have := pinned.ordered; omega
+  have e : env.refCounter + 1 ≠ pin := by have := pinned.ordered; omega
+  have f : env.refCounter + 1 ≠ term := by have := pinned.ordered; omega
+  have anyFresh := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 1)
+    pinned.keys (by omega)
+  have allocation := pinned.allocation
+  have owner := pinned.owner
+  have registry := pinned.registry
+  have owners := pinned.owners
+  simp only [typeName] at registered
+  simp only [typeName, handleType, termType] at allocation owner registry owners
+  simp [decode, registered, termOwner, termEntryOwner, clone, lookup, payload,
+    allocation, owner, registry, owners, anyFresh, NativeCodec.roundtrip,
+    referenceLimit, typeName, handleType, termType, a, b, c, d, e, f,
+    Ne.symm a, Ne.symm b, Ne.symm c, Ne.symm d, Ne.symm e, Ne.symm f]
+
+theorem decode_pinned_handled_next {α β γ : Type} [NativeCodec α]
+    (value : α) (finish : NativeResourceArc α → NativeM β)
+    (handler : Exception → NativeM β) (next : β → NativeM γ)
+    (env : Environment) (id pin term : Nat) (pinned : Pinned value id pin term env)
+    (registered : typeName α ∈ env.nativeResourceTypes) :
+    ((Result.handle (decode (α := α) (.reference term) >>= finish) handler) >>= next) env =
+      ((Result.handle (finish ⟨id, env.refCounter + 1⟩) handler) >>= next) { env with
+        refCounter := env.refCounter + 1
+        nativeHeap := (env.refCounter + 1, handleType α, .reference id) ::
+          env.nativeHeap.map fun cell => if cell.1 == id then
+            (id, typeName α, .tuple #[.integer 2, NativeCodec.encode value]) else cell } := by
+  have a : id ≠ pin := by have := pinned.ordered; omega
+  have b : id ≠ term := by have := pinned.ordered; omega
+  have c : pin ≠ term := by have := pinned.ordered; omega
+  have d : env.refCounter + 1 ≠ id := by have := pinned.ordered; omega
+  have e : env.refCounter + 1 ≠ pin := by have := pinned.ordered; omega
+  have f : env.refCounter + 1 ≠ term := by have := pinned.ordered; omega
+  have anyFresh := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 1)
+    pinned.keys (by omega)
+  have allocation := pinned.allocation
+  have owner := pinned.owner
+  have registry := pinned.registry
+  have owners := pinned.owners
+  simp only [typeName] at registered
+  simp only [typeName, handleType, termType] at allocation owner registry owners
+  simp [Result.handle, decode, registered, termOwner, termEntryOwner, clone, lookup, payload,
+    allocation, owner, registry, owners, anyFresh, NativeCodec.roundtrip,
+    referenceLimit, typeName, handleType, termType, a, b, c, d, e, f,
+    Ne.symm a, Ne.symm b, Ne.symm c, Ne.symm d, Ne.symm e, Ne.symm f]
 
 set_option maxHeartbeats 800000 in
 /-- Decoding a live VM term temporarily acquires a Rust owner. Reading and
