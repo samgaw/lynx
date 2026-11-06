@@ -149,6 +149,24 @@ pub fn mutex_release_checked(value: u64, accepted: bool) {
     effects_core::release_checked(Mutex::new(value), accepted);
 }
 
+/// Transfers an owner to a first-party callee whose assertion can unwind.
+///
+/// # Panics
+/// Panics when `accepted` is false, after the callee performs unwind cleanup.
+pub fn mutex_assert_release(value: u64, accepted: bool) {
+    effects_core::assert_then_release(Mutex::new(value), accepted);
+}
+
+/// Exercises separate assertion failure paths while one scalar owner is live.
+///
+/// # Panics
+/// Panics when either flag is false, destroying the owned mutex during unwind.
+pub fn mutex_two_assertions(value: u64, first: bool, second: bool) {
+    let _mutex = Mutex::new(value);
+    assert!(first);
+    assert!(second);
+}
+
 /// Exercises the guard update/destruction boundary independently of ResourceArc.
 ///
 /// # Panics

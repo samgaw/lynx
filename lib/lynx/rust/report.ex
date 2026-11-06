@@ -151,6 +151,10 @@ defmodule Lynx.Rust.Report do
       fingerprint: extraction.fingerprint,
       trusted_boundary:
         @trusted ++
+          if(Map.get(extraction, :native_unwind, []) != [],
+            do: ["Lynx validated assertion-unwind cleanup lowering"],
+            else: []
+          ) ++
           if(Map.get(extraction, :native_drops, []) != [],
             do: ["Lynx audited local consuming-drop lowering to core::mem::drop"],
             else: []
@@ -160,12 +164,14 @@ defmodule Lynx.Rust.Report do
             else: []
           ),
       native_drop_lowering: Map.get(extraction, :native_drops, []),
+      native_unwind_lowering: Map.get(extraction, :native_unwind, []),
+      unwind: Map.get(extraction, :unwind, :reject),
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
           if(Map.get(extraction, :execution, :pure) == :runtime,
             do: [
-              "Lynx resumable native interpretation: rust_panicked marker; undef/divergence exhaust verification; resource, lock, unwind cleanup and FFI primitives require separate models"
+              "Lynx resumable native interpretation: rust_panicked marker; undef/divergence exhaust verification; resource, lock, general unwind cleanup and FFI primitives require separate models"
             ],
             else: []
           ) ++

@@ -34,7 +34,7 @@ defmodule Lynx.Rust.NativeDrops do
         native_dispose: true,
         native_mutex_type: mutex["def_id"],
         label:
-          "Consuming Mutex<scalar> destruction model: removes one live unlocked cell; payload has no destructor; Rust std, physical deallocation and FFI correctness unverified; compiler local drops use audited consuming lowering; projected/unwind drops and custom payload destructors unsupported"
+          "Consuming Mutex<scalar> destruction model: removes one live unlocked cell without a Rust panic; invalid cells exhaust verification; payload has no destructor; Rust std, physical deallocation and FFI correctness unverified; compiler local drops use audited consuming lowering; unwind requires validated assertion cleanup lowering; projected drops and custom payload destructors unsupported"
       }
     else
       _ -> nil
