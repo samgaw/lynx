@@ -10,6 +10,7 @@ crate-type = ["rlib", "cdylib"]
 nif = []
 payload-nif = ["nif"]
 resource-nif = ["nif"]
+resource-handles = ["resource-nif"]
 
 [dependencies]
 effects-core = { path = "../core" }
