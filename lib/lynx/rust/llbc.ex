@@ -4,7 +4,9 @@ defmodule Lynx.Rust.LLBC do
   @library_kinds ~w(lib rlib dylib cdylib staticlib)
   @standard_crates ~w(core alloc std proc_macro test)
   @unwind_backend "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1"
-  @runtime_backends ["nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1", @unwind_backend]
+  @global_backend @unwind_backend <> "+global-names-v1"
+  @unwind_backends [@unwind_backend, @global_backend]
+  @runtime_backends ["nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1" | @unwind_backends]
 
   def crate_names!(workspace) do
     names =
@@ -240,14 +242,15 @@ defmodule Lynx.Rust.LLBC do
                "nightly-2026.11.04-2b9e3ea",
                "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1",
                "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1",
-               @unwind_backend
+               @unwind_backend,
+               @global_backend
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
     unwind = Keyword.get(opts, :assertion_unwind_input, false)
 
     unless Map.get(translation, "assertion_unwind_input", false) == unwind and
-             (not unwind or translation["aeneas_version"] == @unwind_backend),
+             (not unwind or translation["aeneas_version"] in @unwind_backends),
            do: raise(ArgumentError, "Aeneas assertion unwind input does not match extraction")
 
     for id <- Map.keys(audit.external_calls),
