@@ -96,6 +96,12 @@ defmodule Lynx.Rust do
   and other guard families remain unsupported. Rust memory safety, standard
   primitives, physical pinning, allocation and FFI remain trusted boundaries.
 
+  `owned_drops: true, execution: :runtime` additionally extracts consuming drop
+  entries for reached monomorphic structs requiring destruction. These use actual
+  optimized compiler drop MIR after checked self-pointer normalization. Unsupported
+  field destructors and native operations remain rejected. This does not yet
+  enable Rustler resource payloads requiring destruction.
+
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`
@@ -195,7 +201,8 @@ defmodule Lynx.Rust do
       :cargo,
       :execution,
       :unwind,
-      :futures
+      :futures,
+      :owned_drops
     ]
 
     for key <- Keyword.keys(opts),
@@ -220,7 +227,8 @@ defmodule Lynx.Rust do
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         execution: Keyword.get(opts, :execution, :pure),
         unwind: Keyword.get(opts, :unwind, :reject),
-        futures: Keyword.get(opts, :futures, :reject)
+        futures: Keyword.get(opts, :futures, :reject),
+        owned_drops: Keyword.get(opts, :owned_drops, false)
       )
 
     Lynx.Rust.Project.build!(project, [prefix <> ".Funs" | proofs])

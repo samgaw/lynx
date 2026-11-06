@@ -177,9 +177,16 @@ defmodule Lynx.Rust.Report do
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
       unwind: Map.get(extraction, :unwind, :reject),
       futures: Map.get(extraction, :futures, :reject),
+      owned_drops: Map.get(extraction, :owned_drops, false),
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
+          if(Map.get(extraction, :owned_drops, false),
+            do: [
+              "Compiler-generated owning ADT destruction: actual optimized rustc drop MIR with checked self-pointer erasure; admitted native field destructors remain explicit models; native layout, allocation and FFI correctness unverified"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :futures, :reject) == :suspending,
             do: [
               "Compiler coroutine saved-slot interpretation; only drop-free Unpin saved fields; physical pinning, cancellation cleanup and executor behavior unverified"
