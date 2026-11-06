@@ -11,6 +11,7 @@ unsupported-float = []
 composite = []
 binary = []
 protocol = ["binary"]
+collections = []
 unsupported-binary-method = ["binary"]
 custom-encoder = []
 

@@ -1,5 +1,12 @@
 //! Rustler facade for the workspace verification fixture.
 
+/// Replaces the first byte through two ordinary workspace crates.
+#[cfg(feature = "collections")]
+#[rustler::nif]
+fn replace_first(input: Vec<u8>, value: u8) -> (bool, Vec<u8>) {
+    experiment_analysis::replace_first(input, value)
+}
+
 /// Restores a boolean through two calls in the first-party dependency graph.
 #[rustler::nif(name = "restore", schedule = "DirtyCpu")]
 fn native_restore(value: bool) -> bool {
@@ -201,6 +208,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
+                + usize::from(cfg!(feature = "collections"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -269,6 +277,13 @@ mod tests {
             if enabled {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
+        }
+        if cfg!(feature = "collections") {
+            expected.push((
+                "replace_first".to_owned(),
+                2,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
         }
         expected.sort();
         assert_eq!(metadata, expected);
