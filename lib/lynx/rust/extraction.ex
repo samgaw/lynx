@@ -89,6 +89,11 @@ defmodule Lynx.Rust.Extraction do
         do: Lynx.Rust.NativeUnwind.lower!(document, first_party),
         else: {document, []}
 
+    document =
+      if nonpanicking_borrows != [] or native_unwind != [],
+        do: Lynx.Rust.LLBCJson.restore_trait_references!(document, discovery.document),
+        else: document
+
     {document, native_drops} =
       if Keyword.get(opts, :execution, :pure) == :runtime,
         do: Lynx.Rust.NativeDropLowering.lower!(document, first_party),
@@ -98,6 +103,11 @@ defmodule Lynx.Rust.Extraction do
       if Keyword.get(opts, :execution, :pure) == :runtime,
         do: Lynx.Rust.NativeUnwind.nonpanicking_drops!(document),
         else: {document, []}
+
+    document =
+      if native_drops != [] or nonpanicking != [],
+        do: Lynx.Rust.LLBCJson.restore_trait_references!(document, discovery.document),
+        else: document
 
     native_unwind = nonpanicking_borrows ++ native_unwind ++ nonpanicking
 
