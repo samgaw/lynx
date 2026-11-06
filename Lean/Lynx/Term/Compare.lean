@@ -1631,3 +1631,13 @@ theorem Term.eq_of_identicalEntries : ∀ {first second : List (Term × Term)},
 end
 
 end Lynx
+
+namespace Lynx.Term
+
+/-- Numeric comparison cannot equate an ordinary term with a different reference. -/
+@[simp] theorem compare_eq_reference (value : Term) (id : List Nat) :
+    compare (fuel value (.reference id)) value (.reference id) = .eq ↔ value = .reference id := by
+  cases value <;> rw [compare_step] <;> simp [Compare.compareStep]
+
+end Lynx.Term
+

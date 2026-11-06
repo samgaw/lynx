@@ -19,6 +19,10 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
 private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
+private theorem publicReferenceComparison : True := by
+  have _ := @Lynx.Term.compare_eq_reference
+  trivial
+
 -- Effectful clients normalize catches through public monadic equations.
 private theorem publicExceptionEquations : True := by
   have _ := @Lynx.Result.handle_get
