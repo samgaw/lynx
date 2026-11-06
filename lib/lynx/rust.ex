@@ -41,6 +41,15 @@ defmodule Lynx.Rust do
   `Native.Extraction`. Also accepts `:tools` (or `LYNX_AENEAS_DIR`), `:build_dir`
   and `:cargo` options as in `Lynx.Rustler.prepare!/3`.
 
+  `:futures` defaults to `:reject`. Selecting `:immediate` extracts actual async
+  constructors and compiler-generated poll bodies, including completed-state panic
+  checks and first-party callees. It requires the pinned immediate-futures backend
+  and pure execution. Suspension points and captures requiring destruction are
+  rejected. The unused task Context is an explicitly reported Unit abstraction;
+  waker access, cancellation, executors and resource ownership across suspension
+  are not supported. Pin's data definition is extracted rather than supplied by
+  an axiom. This does not verify physical pinning, native memory or an executor.
+
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`
@@ -139,7 +148,8 @@ defmodule Lynx.Rust do
       :build_dir,
       :cargo,
       :execution,
-      :unwind
+      :unwind,
+      :futures
     ]
 
     for key <- Keyword.keys(opts),
@@ -163,7 +173,8 @@ defmodule Lynx.Rust do
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         execution: Keyword.get(opts, :execution, :pure),
-        unwind: Keyword.get(opts, :unwind, :reject)
+        unwind: Keyword.get(opts, :unwind, :reject),
+        futures: Keyword.get(opts, :futures, :reject)
       )
 
     Lynx.Rust.Project.build!(project, [prefix <> ".Funs" | proofs])

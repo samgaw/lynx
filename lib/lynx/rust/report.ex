@@ -168,6 +168,7 @@ defmodule Lynx.Rust.Report do
       native_drop_lowering: Map.get(extraction, :native_drops, []),
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
       unwind: Map.get(extraction, :unwind, :reject),
+      futures: Map.get(extraction, :futures, :reject),
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
