@@ -611,6 +611,83 @@ def release {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : Nativ
 instance {α : Type} [NativeCodec α] : NativeDrop (NativeResourceArc α) where
   drop := release
 
+/-- A VM resource term retains a distinct ownership token. Its registry cell is
+separate from Rust tokens; repeated encoding of the allocation reuses its term
+identity. Physical VM references and garbage collection remain FFI models. -/
+@[expose] def termType (α : Type) [NativeCodec α] : String :=
+  "resource-term<" ++ NativeCodec.typeName (α := α) ++ ">"
+
+private def termEntryOwner {α : Type} [NativeCodec α]
+    (cell : Nat × String × Term) : Option (NativeResourceArc α) := do
+  if cell.2.1 != termType α then none else
+  let .tuple fields := cell.2.2 | none
+  if size : fields.size = 2 then
+    let .reference id := (fields[0]'(by omega)) | none
+    let .reference token := (fields[1]'(by omega)) | none
+    some ⟨id, token⟩
+  else none
+
+private def termOwner {α : Type} [NativeCodec α] (term : Term)
+    (env : Environment) : Option (NativeResourceArc α) := do
+  let .reference identity := term | none
+  let [cell] := env.nativeHeap.filter (fun cell => cell.1 == identity) | none
+  termEntryOwner cell
+
+/-- Model enif_make_resource: pin the allocation independently of its Rust owner.
+Existing live terms for the same allocation share identity. No Rust owner is
+consumed by Encoder::encode(&self); the generated wrapper drops it afterwards. -/
+def encode {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM Term :=
+  .get fun env =>
+    match lookup handle env with
+    | none => .error .exhausted
+    | some _ =>
+      let existing := env.nativeHeap.filter fun cell =>
+        match termEntryOwner (α := α) cell with
+        | some owner => owner.id == handle.id
+        | none => false
+      match existing with
+      | [] => do
+        let pin ← clone handle
+        let identity ← NativeM.allocate (termType α)
+          (.tuple #[.reference pin.id, .reference pin.token])
+        .ok (.reference identity)
+      | [(identity, _, _)] =>
+        match termOwner (α := α) (.reference identity) env with
+        | some pin => if (lookup pin env).isSome then .ok (.reference identity)
+            else .error .exhausted
+        | none => .error .exhausted
+      | _ => .error .exhausted
+
+/-- Model ResourceArc::from_term: wrong terms/types produce badarg; a successful
+conversion acquires a fresh Rust ownership token while preserving the VM pin.
+An inconsistent internal heap is verification exhaustion. -/
+def decode {α : Type} [NativeCodec α] (term : Term) : NativeM (NativeResourceArc α) :=
+  .get fun env =>
+    match termOwner term env with
+    | none => .error (.error (.atom "badarg"))
+    | some pin => clone pin
+
+@[simp] theorem decode_nonreference {α : Type} [NativeCodec α] (term : Term)
+    (notReference : ∀ identity, term ≠ .reference identity) (env : Environment) :
+    decode (α := α) term env = (.error (.error (.atom "badarg")), env) := by
+  cases term <;> simp_all [decode, termOwner]
+
+/-- An ordinary reference without a resource registry cell is not a resource. -/
+theorem decode_missing {α : Type} [NativeCodec α] (identity : Nat) (env : Environment)
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == identity) = []) :
+    decode (α := α) (.reference identity) env =
+      (.error (.error (.atom "badarg")), env) := by
+  simp [decode, termOwner, missing]
+
+/-- A reference belonging to another nominal resource type cannot decode. -/
+theorem decode_wrong_type {α : Type} [NativeCodec α] (identity : Nat)
+    (env : Environment) (tag : String) (contents : Term)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == identity) = [(identity, tag, contents)])
+    (different : tag ≠ termType α) :
+    decode (α := α) (.reference identity) env =
+      (.error (.error (.atom "badarg")), env) := by
+  cases contents <;> simp [decode, termOwner, termEntryOwner, stored, different]
+
 /-- An absent loader registration produces Rustler's constructor panic. -/
 theorem new_unregistered {α : Type} [NativeCodec α] (value : α) (env : Environment)
     (absent : typeName α ∉ env.nativeResourceTypes) :
@@ -697,6 +774,31 @@ theorem clone_release_cycle_handled_next {α β γ : Type} [NativeCodec α] (val
     ite_eq_left registered]
   simp [clone, release, deref, lookup, payload, NativeM.allocate, Result.handle,
     empty, NativeCodec.roundtrip, referenceLimit, handleType, typeName, Nat.add_assoc]
+
+set_option maxHeartbeats 800000 in
+/-- A VM pin survives dropping both Rust owners. Repeated encoding preserves
+term identity and decoding creates an independent Rust owner. The remaining
+VM pin is retained explicitly; automatic garbage collection is not modeled. -/
+theorem vm_roundtrip_next {α β : Type} [NativeCodec α] (value : α)
+    (next : α → Bool → NativeM β) (env : Environment)
+    (registered : typeName α ∈ env.nativeResourceTypes) (empty : env.nativeHeap = []) :
+    (do
+      let original ← new value
+      let term ← encode original
+      let again ← encode original
+      release original
+      let decoded ← decode (α := α) term
+      let observed ← deref decoded
+      release decoded
+      next observed (term == again)) env = next value true { env with refCounter := env.refCounter + 5, nativeHeap := [
+        (env.refCounter + 4, termType α,
+          .tuple #[.reference (env.refCounter + 1), .reference (env.refCounter + 3)]),
+        (env.refCounter + 3, handleType α, .reference (env.refCounter + 1)),
+        (env.refCounter + 1, typeName α, .tuple #[.integer 1, NativeCodec.encode value])] } := by
+  simp only [new, Result.get_bind, Result.get_continuation_apply, ite_eq_left registered]
+  simp [encode, decode, termOwner, termEntryOwner, clone, release, deref, lookup, payload,
+    NativeM.allocate, empty, NativeCodec.roundtrip, referenceLimit, handleType,
+    typeName, termType, Nat.add_assoc]
 
 end NativeResourceArc
 end Lynx
