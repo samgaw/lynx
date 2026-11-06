@@ -1,0 +1,248 @@
+diff --git a/charon/src/bin/charon-driver/translate/translate_bodies.rs b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -602,27 +602,24 @@
+         Ok(())
+     }
+
+-    /// Consume the logical future while executing rustc's actual destructor body.
+-    fn translate_owned_coroutine_drop(
++    /// A consuming entry is valid only when self's pointer is never observed or escaped.
++    fn normalize_owned_drop_self(
+         &mut self,
+         span: Span,
+-        def: &hax::FullDef<'tcx>,
+-    ) -> Result<Body, Error> {
++        body: &mut mir::Body<'tcx>,
++        expected_ty: ty::Ty<'tcx>,
++    ) -> Result<(), Error> {
+         use rustc_middle::mir::visit::MutVisitor;
+-        let hax::FullDefKind::Coroutine(coroutine) = def.kind() else {
+-            unreachable!()
+-        };
+-        let mut body = self.get_coroutine_drop_mir(def.this());
+         if body.arg_count != 1
+             || body.local_decls[mir::Local::from_usize(1)]
+                 .ty
+                 .builtin_deref(true)
+-                != Some(coroutine.self_ty)
++                != Some(expected_ty)
+         {
+             raise_error!(
+                 self,
+                 span,
+-                "Unsupported compiler coroutine destruction signature"
++                "Unsupported compiler owned destruction signature"
+             );
+         }
+         struct OwnedSelf<'tcx> {
+@@ -653,15 +650,29 @@
+             tcx: self.tcx,
+             invalid: false,
+         };
+-        visitor.visit_body(&mut body);
++        visitor.visit_body(body);
+         if visitor.invalid {
+             raise_error!(
+                 self,
+                 span,
+-                "Compiler coroutine destruction observes or escapes its self pointer"
++                "Compiler owned destruction observes or escapes its self pointer"
+             );
+         }
+-        body.local_decls[mir::Local::from_usize(1)].ty = coroutine.self_ty;
++        body.local_decls[mir::Local::from_usize(1)].ty = expected_ty;
++        Ok(())
++    }
++
++    /// Consume the logical future while executing rustc's actual destructor body.
++    fn translate_owned_coroutine_drop(
++        &mut self,
++        span: Span,
++        def: &hax::FullDef<'tcx>,
++    ) -> Result<Body, Error> {
++        let hax::FullDefKind::Coroutine(coroutine) = def.kind() else {
++            unreachable!()
++        };
++        let mut body = self.get_coroutine_drop_mir(def.this());
++        self.normalize_owned_drop_self(span, &mut body, coroutine.self_ty)?;
+         let layout_body = self.get_mir(def.this(), span)?.unwrap();
+         let Some(layout) = layout_body.coroutine_layout_raw() else {
+             raise_error!(
+@@ -723,6 +734,15 @@
+     ) -> Result<Body, Error> {
+         if self.item_src.kind == TransItemSourceKind::CoroutineDrop {
+             return self.translate_owned_coroutine_drop(span, def);
++        }
++        if self.item_src.kind == TransItemSourceKind::OwnedDrop {
++            let hax::FullDefKind::Adt(_) = def.kind() else {
++                unreachable!()
++            };
++            let mut body = def.this().drop_glue_shim(self.hax_state());
++            let self_ty = def.type_of(&self.hax_state).unwrap();
++            self.normalize_owned_drop_self(span, &mut body, self_ty)?;
++            return Ok(self.translate_body(span, body, &def.source_text));
+         }
+         // Retrieve the body
+         if let Some(mut body) = self.get_mir(def.this(), span)? {
+diff --git a/charon/src/bin/charon-driver/translate/translate_crate.rs b/charon/src/bin/charon-driver/translate/translate_crate.rs
+--- a/charon/src/bin/charon-driver/translate/translate_crate.rs
++++ b/charon/src/bin/charon-driver/translate/translate_crate.rs
+@@ -75,6 +75,8 @@
+     CoroutinePoll,
+     /// An owned destruction entry using rustc's coroutine drop body.
+     CoroutineDrop,
++    /// Consume a first-party ADT using its actual compiler-generated drop shim.
++    OwnedDrop,
+     /// The `drop_glue` method of a `Destruct` impl. It contains the drop glue that calls
+     /// `Drop::drop` for the type and then drops its fields. This is a method implementation (and
+     /// the DefId is that of the ADT or closure for which to generate the drop glue).
+@@ -474,10 +476,9 @@
+                     Global | VTableInstance(..) => {
+                         ItemId::Global(self.translated.global_decls.reserve_slot())
+                     }
+-                    Fun | CoroutinePoll | CoroutineDrop | CallableMethod(..) | ClosureAsFnCast
+-                    | DropGlueMethod(..) | VTableMethod(..) | VTableDropShim(..) => {
+-                        ItemId::Fun(self.translated.fun_decls.reserve_slot())
+-                    }
++                    Fun | CoroutinePoll | CoroutineDrop | OwnedDrop | CallableMethod(..)
++                    | ClosureAsFnCast | DropGlueMethod(..) | VTableMethod(..)
++                    | VTableDropShim(..) => ItemId::Fun(self.translated.fun_decls.reserve_slot()),
+                     InherentImpl | Module => {
+                         return ItemOrModuleId::Module(src.def_id().real_rust_def_id());
+                     }
+diff --git a/charon/src/bin/charon-driver/translate/translate_items.rs b/charon/src/bin/charon-driver/translate/translate_items.rs
+--- a/charon/src/bin/charon-driver/translate/translate_items.rs
++++ b/charon/src/bin/charon-driver/translate/translate_items.rs
+@@ -149,7 +149,8 @@
+             }
+             TransItemSourceKind::Fun
+             | TransItemSourceKind::CoroutinePoll
+-            | TransItemSourceKind::CoroutineDrop => {
++            | TransItemSourceKind::CoroutineDrop
++            | TransItemSourceKind::OwnedDrop => {
+                 let id = trans_id.expect_item();
+                 let fun_decl = bt_ctx.translate_fun_decl(id, item_meta, &def)?;
+                 self.translated.fun_decls.set_slot(id, fun_decl);
+@@ -584,6 +585,18 @@
+             let ty = def.type_of(&self.hax_state).unwrap();
+             ty.needs_drop(self.hax_state.base().tcx, self.hax_state.typing_env())
+         });
++        if self.options.owned_drops
++            && needs_drop == Some(true)
++            && matches!(kind, TypeDeclKind::Struct(_))
++            && matches!(def.kind(), hax::FullDefKind::Adt(_))
++        {
++            let drop: FunDeclId =
++                self.register_item(item_meta.span, def.this(), TransItemSourceKind::OwnedDrop);
++            // Owning cleanup is an additional extraction entry for each reached ADT.
++            // A type reference alone does not make its drop shim reachable in the
++            // declaration dependency graph.
++            self.record_containment(ContainmentNode::Start, ItemOrModuleId::Item(drop.into()));
++        }
+         Ok(TypeDecl {
+             needs_drop,
+             def_id: trans_id,
+@@ -672,6 +685,17 @@
+         // Translate the function signature
+         trace!("Translating function signature");
+         let signature = match &def.kind {
++            hax::FullDefKind::Adt(_) if self.item_src.kind == TransItemSourceKind::OwnedDrop => {
++                FunSig {
++                    inputs: vec![
++                        self.translate_rustc_ty(span, &def.type_of(&self.hax_state).unwrap())?,
++                    ],
++                    output: Ty::mk_unit(),
++                    is_unsafe: false,
++                    abi: Abi::rust(),
++                    is_variadic: false,
++                }
++            }
+             hax::FullDefKind::Fn(f) => self.translate_fun_sig(span, &f.sig().value)?,
+             hax::FullDefKind::AssocFn(f) => self.translate_fun_sig(span, &f.sig().value)?,
+             hax::FullDefKind::Coroutine(c)
+diff --git a/charon/src/bin/charon-driver/translate/translate_meta.rs b/charon/src/bin/charon-driver/translate/translate_meta.rs
+--- a/charon/src/bin/charon-driver/translate/translate_meta.rs
++++ b/charon/src/bin/charon-driver/translate/translate_meta.rs
+@@ -448,7 +448,7 @@
+                 name.name
+                     .push(PathElem::Ident("poll".to_string(), Disambiguator::ZERO));
+             }
+-            TransItemSourceKind::CoroutineDrop => {
++            TransItemSourceKind::CoroutineDrop | TransItemSourceKind::OwnedDrop => {
+                 name.name.push(PathElem::Ident(
+                     "drop_owned".to_string(),
+                     Disambiguator::ZERO,
+diff --git a/charon/src/options.rs b/charon/src/options.rs
+--- a/charon/src/options.rs
++++ b/charon/src/options.rs
+@@ -76,6 +76,10 @@
+     #[arg(long)]
+     #[serde(default)]
+     pub cancelling_futures: bool,
++    /// Extract consuming wrappers around compiler-generated ADT drop glue.
++    #[arg(long)]
++    #[serde(default)]
++    pub owned_drops: bool,
+     /// Extra flags to pass to rustc.
+     #[clap(long = "rustc-arg")]
+     #[serde(default)]
+@@ -782,6 +786,7 @@
+     pub immediate_futures: bool,
+     pub suspending_futures: bool,
+     pub cancelling_futures: bool,
++    pub owned_drops: bool,
+     /// Usually we skip the provided methods that aren't used. When this flag is on, we translate
+     /// them all.
+     pub translate_all_methods: bool,
+@@ -1005,6 +1010,7 @@
+             immediate_futures: options.immediate_futures,
+             suspending_futures: options.suspending_futures,
+             cancelling_futures: options.cancelling_futures,
++            owned_drops: options.owned_drops,
+             monomorphize_mut: options.monomorphize_mut,
+             hide_marker_traits: options.hide_marker_traits,
+             hide_allocator: options.hide_allocator,
+diff --git a/charon/tests/crate_data.rs b/charon/tests/crate_data.rs
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1364,3 +1364,39 @@
+     Ok(())
+ }
+
++#[test]
++fn owned_drop_entry_retains_compiler_field_cleanup() -> anyhow::Result<()> {
++    let data = translate(
++        r#"//@ charon-args=--preset=aeneas --owned-drops --mir=optimized --sysroot=default --opaque=core --opaque=std --start-from=crate::make
++pub struct Payload { pub mutex: std::sync::Mutex<u64> }
++pub fn make(value: u64) -> Payload { Payload { mutex: std::sync::Mutex::new(value) } }
++fn main() {}
++"#,
++    )?;
++    let drop = data
++        .fun_decls
++        .iter()
++        .find(|decl| decl.item_meta.name.debug_repr(&data) == "test_crate::Payload::drop_owned")
++        .expect("owning drop entry");
++    assert!(drop.item_meta.started_from);
++    assert_eq!(drop.signature.inputs.len(), 1);
++    assert!(!drop.signature.is_unsafe);
++    let TyKind::Adt(input) = drop.signature.inputs[0].kind() else {
++        panic!("drop must consume an ADT, not a pointer");
++    };
++    assert_eq!(input.generics.types.len(), 0);
++    let body = drop
++        .body
++        .as_structured()
++        .expect("actual compiler drop body");
++    assert_eq!(body.locals.arg_count, 1);
++    assert!(body.body.statements.iter().any(|statement| matches!(
++        &statement.kind, StatementKind::Drop { kind: DropKind::Precise, place, .. }
++            if matches!(&place.kind, PlaceKind::Projection(base, ProjectionElem::Field(None, field))
++                if base.kind == PlaceKind::Local(LocalId::new(1)) && *field == FieldId::new(0))
++    )));
++    assert!(data.ordered_decls.as_ref().expect("ordered declarations").iter().any(|group| {
++        matches!(group, DeclarationGroup::Fun(GDeclarationGroup::NonRec(id)) if *id == drop.def_id)
++    }));
++    Ok(())
++}

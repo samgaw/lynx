@@ -211,10 +211,15 @@ defmodule Lynx.Rust.LLBCJsonTest do
     end
   end
 
-  test "retains future selection in audit metadata and removes it only at the backend boundary" do
+  test "retains compiler extraction selection in audit metadata and removes it only at the backend boundary" do
     document = %{
       "translated" => %{
-        "options" => %{"immediate_futures" => true, "suspending_futures" => true},
+        "options" => %{
+          "immediate_futures" => true,
+          "suspending_futures" => true,
+          "cancelling_futures" => false,
+          "owned_drops" => true
+        },
         "type_decls" => []
       }
     }
@@ -224,8 +229,8 @@ defmodule Lynx.Rust.LLBCJsonTest do
 
     assert get_in(document, ["translated", "options", "immediate_futures"]) == true
 
-    for field <- ~w(immediate_futures suspending_futures) do
-      assert_raise ArgumentError, ~r/invalid compiler future extraction metadata/, fn ->
+    for field <- ~w(immediate_futures suspending_futures cancelling_futures owned_drops) do
+      assert_raise ArgumentError, ~r/invalid compiler extraction metadata/, fn ->
         LLBCJson.drop_query_metadata!(put_in(document, ["translated", "options", field], "true"))
       end
     end

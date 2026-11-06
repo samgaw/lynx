@@ -112,6 +112,13 @@ pub struct CounterResource {
     state: Mutex<effects_core::Counter>,
 }
 
+/// Constructs an owned payload whose compiler drop glue releases its mutex.
+pub fn owned_counter_payload(value: u64) -> CounterResource {
+    CounterResource {
+        state: Mutex::new(effects_core::Counter { value }),
+    }
+}
+
 #[rustler::resource_impl]
 impl rustler::Resource for CounterResource {}
 

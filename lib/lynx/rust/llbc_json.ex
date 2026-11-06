@@ -26,19 +26,22 @@ defmodule Lynx.Rust.LLBCJson do
     document = put_in(document, ["translated", "type_decls"], types)
 
     document =
-      Enum.reduce(~w(immediate_futures suspending_futures cancelling_futures), document, fn field,
-                                                                                            document ->
-        case get_in(document, ["translated", "options", field]) do
-          nil ->
-            document
+      Enum.reduce(
+        ~w(immediate_futures suspending_futures cancelling_futures owned_drops),
+        document,
+        fn field, document ->
+          case get_in(document, ["translated", "options", field]) do
+            nil ->
+              document
 
-          value when is_boolean(value) ->
-            update_in(document, ["translated", "options"], &Map.delete(&1, field))
+            value when is_boolean(value) ->
+              update_in(document, ["translated", "options"], &Map.delete(&1, field))
 
-          _ ->
-            raise ArgumentError, "invalid compiler future extraction metadata"
+            _ ->
+              raise ArgumentError, "invalid compiler extraction metadata"
+          end
         end
-      end)
+      )
 
     {document, Enum.reverse(queries)}
   end
@@ -328,10 +331,10 @@ defmodule Lynx.Rust.LLBCJson do
           Enum.sort(old_keys -- keys) != [] and
           Enum.all?(
             old_keys -- keys,
-            &(&1 in ~w(immediate_futures suspending_futures cancelling_futures))
+            &(&1 in ~w(immediate_futures suspending_futures cancelling_futures owned_drops))
           ) and
             keys -- old_keys == [] ->
-          old_keys -- ~w(immediate_futures suspending_futures cancelling_futures)
+          old_keys -- ~w(immediate_futures suspending_futures cancelling_futures owned_drops)
 
         # TraitRef is introduced when lowering a Drop to a consuming call. Its
         # precise shape is fixed by the pinned LLBC schema and checked by audit.
