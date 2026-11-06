@@ -26,6 +26,10 @@ defmodule Lynx.Rust.NativeCriticalTest do
     property = Path.join(project, "Runtime/CriticalProperties.lean")
     proof = File.read!(Path.join(@fixture, "NativeCritical.lean"))
     File.write!(property, proof)
+    concurrent = Path.join(project, "Runtime/CriticalConcurrent.lean")
+    concurrent_proof = File.read!(Path.join(@fixture, "NativeCriticalConcurrent.lean"))
+    File.write!(concurrent, concurrent_proof)
+    modules = ["Runtime.CriticalProperties", "Runtime.CriticalConcurrent"]
     packages = Path.expand("../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
 
     if File.dir?(packages) do
@@ -40,12 +44,16 @@ defmodule Lynx.Rust.NativeCriticalTest do
       lean_project: project,
       build_dir: Path.join(tmp, "build"),
       module_prefix: "Runtime.Critical",
-      proof_modules: ["Runtime.CriticalProperties"],
+      proof_modules: modules,
       required_properties:
         Enum.map(
           ~w(increment_spec callee_contract release_contract recover_success recover_poisoned critical_contract critical_state contention_waits missing_cutoff),
           &("Runtime.CriticalProperties." <> &1)
-        )
+        ) ++
+          Enum.map(
+            ~w(updates_interleave updates_interleave_child_first),
+            &("Runtime.CriticalConcurrent." <> &1)
+          )
     ]
 
     result = Lynx.Rust.verify!(workspace, "effects-native", options)
@@ -160,21 +168,37 @@ defmodule Lynx.Rust.NativeCriticalTest do
       )
     end
 
-    file = Lynx.Rust.Proofs.file!(result.extraction, ["Runtime.CriticalProperties"])
+    file = Lynx.Rust.Proofs.file!(result.extraction, modules)
     export = Path.join(tmp, "critical.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
-    # This is a known public proof-interface gap, not evidence of concurrency verification.
-    File.cp!(
-      Path.join(@fixture, "NativeCriticalConcurrent.lean"),
-      Path.join(project, "Runtime/CriticalConcurrent.lean")
-    )
 
-    assert_raise RuntimeError, ~r/unsolved goals/, fn ->
+    for theorem <- ~w(updates_interleave updates_interleave_child_first) do
+      assert Enum.any?(
+               result.verification.guarantees,
+               &(&1.theorem == "Runtime.CriticalConcurrent." <> theorem)
+             )
+    end
+
+    # Keep the arithmetic assumptions and actual implementation intact while
+    # claiming that the original value survives both positive updates.
+    wrong_concurrent =
+      String.replace(
+        concurrent_proof,
+        "NativeCodec.encode (effects_core.Counter.mk final)])] := by",
+        "NativeCodec.encode (effects_core.Counter.mk before)])] := by"
+      )
+
+    refute wrong_concurrent == concurrent_proof
+    File.write!(concurrent, wrong_concurrent)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rust.Project.build!(project, ["Runtime.CriticalConcurrent"])
     end
+
+    File.write!(concurrent, concurrent_proof)
 
     File.write!(
       property,
