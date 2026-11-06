@@ -188,6 +188,140 @@ verification cutoff from the selected encoder propagates through execution. -/
   cases value
   simp [decodeUnsigned, encodeUnsigned, UScalar.val, upper]
 
+/-- Verification bound for byte-vector codecs. Native allocation success within
+this bound remains trusted; exhaustion is not a native decoding error. -/
+@[expose] def byteVecLimit : Nat := 1048576
+
+private def decodeByteList : Nat → Term → Except Exception (List U8)
+  | _, .nil => .ok []
+  | 0, .cons _ _ => .error .exhausted
+  | fuel + 1, .cons head tail => do
+    let value ← decodeUnsigned .U8 32 head
+    let rest ← decodeByteList fuel tail
+    .ok (value :: rest)
+  | _, _ => .error (.error (.atom "nif_panicked"))
+
+/-- Rustler Vec<u8> decoding is sequential. A non-list root is badarg; an
+improper tail panics after preceding elements decode successfully. -/
+def decodeByteVec (input : Term) : Except Exception (alloc.vec.Vec U8) :=
+  match input with
+  | .nil | .cons _ _ => do
+    let values ← decodeByteList byteVecLimit input
+    if bounds : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat then
+      .ok (alloc.vec.Vec.from values bounds.1)
+    else .error .exhausted
+  | _ => .error (.error (.atom "badarg"))
+
+/-- Rustler encodes Vec<u8> as a proper list of unsigned byte integers. -/
+@[expose] def encodeByteVec (value : alloc.vec.Vec U8) : RustM Term :=
+  if value.val.length ≤ byteVecLimit then
+    .ok (Term.list (value.val.map encodeUnsigned))
+  else .fail .undef
+
+private theorem decodeByte (value : U8) :
+    decodeUnsigned .U8 32 (encodeUnsigned value) = .ok value := by
+  cases value with
+  | mk bytes =>
+    have upper : bytes.toNat < 4294967296 := by
+      have limit := bytes.isLt
+      change bytes.toNat < 256 at limit
+      omega
+    simp [decodeUnsigned, encodeUnsigned, UScalar.val, upper]
+
+private theorem decodeByteList_encoded (values : List U8) (fuel : Nat) :
+    decodeByteList fuel (Term.list (values.map encodeUnsigned)) =
+      if values.length ≤ fuel then .ok values else .error .exhausted := by
+  induction values generalizing fuel with
+  | nil => simp [decodeByteList, Term.list]
+  | cons head tail ih =>
+    cases fuel with
+    | zero => simp [decodeByteList, Term.list]
+    | succ fuel =>
+      simp only [List.map_cons, decodeByteList, decodeByte]
+      rw [ih]
+      by_cases bound : tail.length ≤ fuel <;> simp [bound]
+
+private theorem decodeByteList_values {inputs : List Term} {values : List U8}
+    (decoded : List.Forall₂ (fun input value => decodeUnsigned .U8 32 input = .ok value) inputs values)
+    (fuel : Nat) (bound : values.length ≤ fuel) :
+    decodeByteList fuel (Term.list inputs) = .ok values := by
+  induction decoded generalizing fuel with
+  | nil => simp [decodeByteList, Term.list]
+  | @cons head value tail values paired remaining ih =>
+    cases fuel with
+    | zero => simp at bound
+    | succ fuel =>
+      simp only [decodeByteList, paired]
+      rw [ih fuel (by simpa using bound)]
+      rfl
+
+/-- Element decoding is checked left-to-right, including Rustler's u32-to-u8
+narrowing; this theorem does not restrict accepted integers to 0..255. -/
+theorem decodeByteVec_values {inputs : List Term} {values : List U8}
+    (decoded : List.Forall₂ (fun input value => decodeUnsigned .U8 32 input = .ok value) inputs values)
+    (bound : values.length ≤ byteVecLimit)
+    (native : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat) :
+    decodeByteVec (Term.list inputs) = .ok (alloc.vec.Vec.from values native.1) := by
+  cases decoded with
+  | nil => simp [decodeByteVec, decodeByteList, alloc.vec.Vec.from, byteVecLimit]
+  | @cons head value tail values paired remaining =>
+    simp only [decodeByteVec]
+    change (do
+      let values ← decodeByteList byteVecLimit (Term.list (head :: tail))
+      if bounds : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat then
+        .ok (alloc.vec.Vec.from values bounds.1)
+      else .error .exhausted) = _
+    rw [decodeByteList_values (.cons paired remaining) byteVecLimit bound]
+    change (if bounds : (value :: values).length ≤ Usize.max ∧ (value :: values).length ≤ Isize.max.toNat then
+      (Except.ok (alloc.vec.Vec.from (value :: values) bounds.1) : Except Exception (alloc.vec.Vec U8))
+      else Except.error Exception.exhausted) = _
+    rw [dite_eq_left native]
+
+theorem decodeByteVec_list (values : List U8) (bound : values.length ≤ byteVecLimit)
+    (native : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat) :
+    decodeByteVec (Term.list (values.map encodeUnsigned)) =
+      .ok (alloc.vec.Vec.from values native.1) := by
+  apply decodeByteVec_values ?_ bound native
+  clear bound native
+  induction values with
+  | nil => exact .nil
+  | cons head tail ih => exact .cons (decodeByte head) ih
+
+theorem decodeByteVec_headError (head tail : Term) (error : Exception)
+    (rejected : decodeUnsigned .U8 32 head = .error error) :
+    decodeByteVec (.cons head tail) = .error error := by
+  simp [decodeByteVec, decodeByteList, byteVecLimit, rejected]
+
+theorem decodeByteVec_improper (value : U8) (tail : Int) :
+    decodeByteVec (.cons (encodeUnsigned value) (.integer tail)) =
+      .error (.error (.atom "nif_panicked")) := by
+  simp [decodeByteVec, decodeByteList, byteVecLimit, decodeByte]
+
+theorem decodeByteVec_integer (value : Int) :
+    decodeByteVec (.integer value) = .error (.error (.atom "badarg")) := by
+  simp [decodeByteVec]
+
+theorem decodeByteVec_exhausted (values : List U8) (large : byteVecLimit < values.length) :
+    decodeByteVec (Term.list (values.map encodeUnsigned)) = .error .exhausted := by
+  cases values with
+  | nil => simp at large
+  | cons head tail =>
+    simp only [List.map_cons, decodeByteVec]
+    change (do
+      let values ← decodeByteList byteVecLimit (Term.list ((head :: tail).map encodeUnsigned))
+      if bounds : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat then
+        .ok (alloc.vec.Vec.from values bounds.1)
+      else .error .exhausted) = _
+    rw [decodeByteList_encoded, ite_eq_right (Nat.not_le.mpr large)]
+    rfl
+
+theorem encodeByteVec_spec (value : alloc.vec.Vec U8) (bound : value.val.length ≤ byteVecLimit) :
+    encodeByteVec value = .ok (Term.list (value.val.map encodeUnsigned)) := by
+  simp [encodeByteVec, bound]
+
+theorem encodeByteVec_exhausted (value : alloc.vec.Vec U8) (large : byteVecLimit < value.val.length) :
+    encodeByteVec value = .fail .undef := by simp [encodeByteVec, Nat.not_le.mpr large]
+
 theorem decodeSigned_outOfRange (ty : IScalarTy) (bits : Nat) (value : Int)
     (outside : ¬ (- (2 ^ (bits - 1) : Int) ≤ value ∧ value < (2 ^ (bits - 1) : Int))) :
     decodeSigned ty bits (.integer value) = .error (.error (.atom "badarg")) := by
