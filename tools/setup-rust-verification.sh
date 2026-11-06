@@ -53,6 +53,7 @@ git -C "$source_dir" apply "$script_dir/patches/charon-pin-borrow-transfer.patch
 git -C "$source_dir" apply "$script_dir/patches/charon-suspending-futures.patch"
 git -C "$source_dir" apply "$script_dir/patches/charon-cancelling-futures.patch"
 git -C "$source_dir" apply "$script_dir/patches/charon-owned-drops.patch"
+git -C "$source_dir" apply "$script_dir/patches/charon-owned-future-captures.patch"
 rustup toolchain install nightly-2026-09-17 --profile minimal \
   --component rustc-dev --component llvm-tools --component rust-src --component miri
 cd "$source_dir/charon"
@@ -68,6 +69,8 @@ IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
   --no-default-features --features rustc --test crate_data -- pin_get_mut_transfers_only_the_standard_wrapper
 IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
   --no-default-features --features rustc --test crate_data -- owned_drop_entry_retains_compiler_field_cleanup
+IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+  --no-default-features --features rustc --test crate_data -- owned_future_capture_uses_initial_slot_and_compiler_drop
 cp target/release/charon target/release/charon-driver "$install_dir/"
 
 aeneas_source="$install_dir/aeneas-source"
@@ -93,7 +96,7 @@ AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aen
   dune build --root "$aeneas_source/src" main.exe
 cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
 printf '%s\n' "aeneas=$aeneas_version" \
-  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1+suspending-futures-v1+cancelling-futures-v1+owned-drops-v1' \
+  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1+suspending-futures-v1+cancelling-futures-v1+owned-drops-v1+owned-captures-v1' \
   'aeneas_runtime=lynx-bounded-default-format-v2' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"
