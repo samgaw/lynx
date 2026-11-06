@@ -663,21 +663,32 @@ conversion acquires a fresh Rust ownership token while preserving the VM pin.
 An inconsistent internal heap is verification exhaustion. -/
 def decode {α : Type} [NativeCodec α] (term : Term) : NativeM (NativeResourceArc α) :=
   .get fun env =>
-    match termOwner term env with
-    | none => .error (.error (.atom "badarg"))
-    | some pin => clone pin
+    if typeName α ∈ env.nativeResourceTypes then
+      match termOwner term env with
+      | none => .error (.error (.atom "badarg"))
+      | some pin => clone pin
+    else .error (.error (.atom "badarg"))
 
 @[simp] theorem decode_nonreference {α : Type} [NativeCodec α] (term : Term)
     (notReference : ∀ identity, term ≠ .reference identity) (env : Environment) :
     decode (α := α) term env = (.error (.error (.atom "badarg")), env) := by
-  cases term <;> simp_all [decode, termOwner]
+  by_cases registered : typeName α ∈ env.nativeResourceTypes
+  · cases term <;> simp_all [decode, termOwner]
+  · simp [decode, registered]
+
+/-- Rustler cannot recover a typed resource before its type is registered. -/
+theorem decode_unregistered {α : Type} [NativeCodec α] (term : Term) (env : Environment)
+    (absent : typeName α ∉ env.nativeResourceTypes) :
+    decode (α := α) term env = (.error (.error (.atom "badarg")), env) := by
+  simp [decode, absent]
 
 /-- An ordinary reference without a resource registry cell is not a resource. -/
 theorem decode_missing {α : Type} [NativeCodec α] (identity : Nat) (env : Environment)
     (missing : env.nativeHeap.filter (fun cell => cell.1 == identity) = []) :
     decode (α := α) (.reference identity) env =
       (.error (.error (.atom "badarg")), env) := by
-  simp [decode, termOwner, missing]
+  by_cases registered : typeName α ∈ env.nativeResourceTypes <;>
+    simp [decode, registered, termOwner, missing]
 
 /-- A reference belonging to another nominal resource type cannot decode. -/
 theorem decode_wrong_type {α : Type} [NativeCodec α] (identity : Nat)
@@ -686,7 +697,9 @@ theorem decode_wrong_type {α : Type} [NativeCodec α] (identity : Nat)
     (different : tag ≠ termType α) :
     decode (α := α) (.reference identity) env =
       (.error (.error (.atom "badarg")), env) := by
-  cases contents <;> simp [decode, termOwner, termEntryOwner, stored, different]
+  by_cases registered : typeName α ∈ env.nativeResourceTypes
+  · cases contents <;> simp [decode, registered, termOwner, termEntryOwner, stored, different]
+  · simp [decode, registered]
 
 /-- An absent loader registration produces Rustler's constructor panic. -/
 theorem new_unregistered {α : Type} [NativeCodec α] (value : α) (env : Environment)
@@ -796,9 +809,95 @@ theorem vm_roundtrip_next {α β : Type} [NativeCodec α] (value : α)
         (env.refCounter + 3, handleType α, .reference (env.refCounter + 1)),
         (env.refCounter + 1, typeName α, .tuple #[.integer 1, NativeCodec.encode value])] } := by
   simp only [new, Result.get_bind, Result.get_continuation_apply, ite_eq_left registered]
+  simp only [typeName] at registered
   simp [encode, decode, termOwner, termEntryOwner, clone, release, deref, lookup, payload,
     NativeM.allocate, empty, NativeCodec.roundtrip, referenceLimit, handleType,
-    typeName, termType, Nat.add_assoc]
+    typeName, termType, registered, Nat.add_assoc]
+
+set_option maxHeartbeats 800000 in
+/-- Successful resource return keeps the VM pin after releasing the Rust result.
+The native exception handler is retained rather than erased from the adapter. -/
+theorem new_encode_release_handled_next {α β : Type} [NativeCodec α] (value : α)
+    (handler : Exception → NativeM Term) (next : Term → NativeM β) (env : Environment)
+    (registered : typeName α ∈ env.nativeResourceTypes) (empty : env.nativeHeap = []) :
+    ((Result.handle (do
+      let owner ← new value
+      let term ← encode owner
+      release owner
+      Result.ok term) handler) >>= next) env =
+    next (.reference (env.refCounter + 4)) { env with refCounter := env.refCounter + 4, nativeHeap := [
+      (env.refCounter + 4, termType α,
+        .tuple #[.reference (env.refCounter + 1), .reference (env.refCounter + 3)]),
+      (env.refCounter + 3, handleType α, .reference (env.refCounter + 1)),
+      (env.refCounter + 1, typeName α, .tuple #[.integer 1, NativeCodec.encode value])] } := by
+  simp only [new, Result.handle, Result.get_bind, Result.get_continuation_apply,
+    ite_eq_left registered]
+  simp [encode, termOwner, termEntryOwner, clone, release, lookup, payload,
+    NativeM.allocate, Result.handle, empty, NativeCodec.roundtrip, referenceLimit,
+    handleType, typeName, termType, Nat.add_assoc]
+
+set_option maxHeartbeats 800000 in
+/-- Decoding a live VM term temporarily acquires a Rust owner. Reading and
+releasing it preserves the VM pin and contents, including across NIF calls. -/
+theorem decode_read_release_handled_next {α β γ : Type} [NativeCodec α]
+    (value : α) (finish : α → NativeM β) (handler : Exception → NativeM β)
+    (next : β → NativeM γ) (env : Environment) (id pin term : Nat)
+    (ordered : id < pin ∧ pin < term ∧ term ≤ env.refCounter)
+    (stored : env.nativeHeap = [
+      (term, termType α, .tuple #[.reference id, .reference pin]),
+      (pin, handleType α, .reference id),
+      (id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
+    (registered : typeName α ∈ env.nativeResourceTypes) :
+    (do
+      let owner ← decode (α := α) (.reference term)
+      let result ← Result.handle (do
+        let observed ← deref owner
+        release owner
+        finish observed) handler
+      next result) env =
+      ((Result.handle (finish value) handler) >>= next)
+        {env with refCounter := env.refCounter + 1} := by
+  have a : id ≠ pin := by omega
+  have b : id ≠ term := by omega
+  have c : pin ≠ term := by omega
+  have d : env.refCounter + 1 ≠ id := by omega
+  have e : env.refCounter + 1 ≠ pin := by omega
+  have f : env.refCounter + 1 ≠ term := by omega
+  simp only [typeName] at registered
+  simp [decode, registered, termOwner, termEntryOwner, clone, release, deref, lookup, payload,
+    Result.handle, stored, NativeCodec.roundtrip, referenceLimit, handleType,
+    typeName, termType, a, b, c, d, Ne.symm a, Ne.symm b, Ne.symm c,
+    Ne.symm d, Ne.symm e, Ne.symm f]
+
+set_option maxHeartbeats 800000 in
+/-- If a subsequent argument decoder fails, releasing the acquired Rust owner
+before propagating badarg preserves the VM pin and resource contents. -/
+theorem decode_failure_cleanup_handled_next {α β γ : Type} [NativeCodec α]
+    (value : α) (handler : Exception → NativeM β) (next : β → NativeM γ)
+    (env : Environment) (id pin term : Nat)
+    (ordered : id < pin ∧ pin < term ∧ term ≤ env.refCounter)
+    (stored : env.nativeHeap = [
+      (term, termType α, .tuple #[.reference id, .reference pin]),
+      (pin, handleType α, .reference id),
+      (id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
+    (registered : typeName α ∈ env.nativeResourceTypes) :
+    ((Result.handle (do
+      let owner ← decode (α := α) (.reference term)
+      release owner
+      Result.error (.error (.atom "badarg"))) handler) >>= next) env =
+      (handler (.error (.atom "badarg")) >>= next)
+        {env with refCounter := env.refCounter + 1} := by
+  have a : id ≠ pin := by omega
+  have b : id ≠ term := by omega
+  have c : pin ≠ term := by omega
+  have d : env.refCounter + 1 ≠ id := by omega
+  have e : env.refCounter + 1 ≠ pin := by omega
+  have f : env.refCounter + 1 ≠ term := by omega
+  simp only [typeName] at registered
+  simp [decode, registered, termOwner, termEntryOwner, clone, release, lookup, payload,
+    Result.handle, stored, NativeCodec.roundtrip, referenceLimit, handleType,
+    typeName, termType, a, b, c, d, Ne.symm a, Ne.symm b, Ne.symm c,
+    Ne.symm d, Ne.symm e, Ne.symm f]
 
 end NativeResourceArc
 end Lynx
