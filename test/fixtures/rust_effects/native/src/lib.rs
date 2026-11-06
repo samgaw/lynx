@@ -240,6 +240,28 @@ pub fn poll_paused(
     std::future::Future::poll(future, context)
 }
 
+/// Polls an Unpin first-party future twice, or cancels after its first Pending.
+///
+/// # Panics
+/// A caller-provided waker callback may panic.
+pub fn drive_paused_counter(
+    value: u64,
+    cancel_after_pending: bool,
+    context: &mut std::task::Context<'_>,
+) -> Option<u64> {
+    use std::future::Future;
+    use std::task::Poll;
+    let mut future = effects_core::paused_counter(value);
+    match std::pin::Pin::new(&mut future).poll(context) {
+        Poll::Ready(value) => Some(value),
+        Poll::Pending if cancel_after_pending => None,
+        Poll::Pending => match std::pin::Pin::new(&mut future).poll(context) {
+            Poll::Ready(value) => Some(value),
+            Poll::Pending => None,
+        },
+    }
+}
+
 /// Completes on its first poll through a first-party dependency.
 pub async fn immediate_increment(value: u64) -> u64 {
     effects_core::saturating_increment(value)
@@ -516,6 +538,26 @@ mod tests {
         }
         fn wake_by_ref(self: &Arc<Self>) {
             self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn bounded_driver_polls_the_actual_dependency_and_observes_cancellation() {
+        for value in [0, 7, u64::MAX] {
+            for cancel in [false, true] {
+                let notification = Arc::new(Notification::default());
+                let waker = Waker::from(notification.clone());
+                let mut context = Context::from_waker(&waker);
+                assert_eq!(
+                    super::drive_paused_counter(value, cancel, &mut context),
+                    if cancel {
+                        None
+                    } else {
+                        Some(value.saturating_add(1))
+                    }
+                );
+                assert!(notification.0.load(Ordering::Acquire));
+            }
         }
     }
 
