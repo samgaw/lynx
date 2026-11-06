@@ -19,6 +19,13 @@ defmodule Lynx.Rust do
   Aeneas's existing bit-vector models. Admission checks the exact scalar,
   byte-array width, compiler identity and safe Rust signature. Native-endian
   conversions are not included. These are reported standard-library models.
+
+  Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
+  Aeneas's value and borrow-update models. Owned byte vectors using the standard
+  Global allocator have an explicit logical deallocation model, including
+  compiler-emitted cleanup paths. Drop erasure for custom allocators or element
+  destructors is rejected. This does not admit vector growth or establish native
+  allocation, capacity or deallocation correctness.
   """
 
   @doc """
