@@ -596,7 +596,8 @@ def deref {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM
     | none => .error .exhausted
 
 /-- Consume exactly this Rust ownership token. Admission requires a payload with
-no Rust destructor and default resource callbacks. No VM pins are admitted yet. -/
+no Rust destructor and default resource callbacks. A VM pin is a separate token
+and survives release of every Rust-owned handle. -/
 def release {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM Unit :=
   .get fun env =>
     match lookup handle env with
@@ -814,6 +815,277 @@ theorem vm_roundtrip_next {α β : Type} [NativeCodec α] (value : α)
     NativeM.allocate, empty, NativeCodec.roundtrip, referenceLimit, handleType,
     typeName, termType, registered, Nat.add_assoc]
 
+/-- A resource-visible frame cannot refer to identities above this counter.
+Payload contents are opaque: only ownership tokens and VM registry references
+are inspected by resource operations. This is not whole-runtime reachability. -/
+@[expose] def FrameBelow (α : Type) [NativeCodec α] (limit : Nat)
+    (frame : List (Nat × String × Term)) : Prop :=
+  ∀ cell ∈ frame, cell.1 ≤ limit ∧
+    (cell.2.1 = handleType α → ∀ target, cell.2.2 = .reference target → target ≤ limit) ∧
+    (cell.2.1 = termType α → ∀ fields, cell.2.2 = .tuple fields →
+      ∀ target, Term.reference target ∈ fields.toList → target ≤ limit)
+
+/-- The three logical cells retained by an encoded immutable resource. -/
+@[expose] def vmCells {α : Type} [NativeCodec α] (value : α) (id pin term : Nat) :
+    List (Nat × String × Term) := [
+  (term, termType α, .tuple #[.reference id, .reference pin]),
+  (pin, handleType α, .reference id),
+  (id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])]
+
+theorem FrameBelow.mono {α : Type} [NativeCodec α] {lower upper : Nat}
+    {frame : List (Nat × String × Term)} (bounded : FrameBelow α lower frame)
+    (larger : lower ≤ upper) : FrameBelow α upper frame := by
+  intro cell member
+  have facts := bounded cell member
+  refine ⟨Nat.le_trans facts.1 larger, ?_, ?_⟩
+  · intro tag target contents
+    exact Nat.le_trans (facts.2.1 tag target contents) larger
+  · intro tag fields contents target member
+    exact Nat.le_trans (facts.2.2 tag fields contents target member) larger
+
+theorem FrameBelow.append {α : Type} [NativeCodec α] {limit : Nat}
+    {first second : List (Nat × String × Term)}
+    (left : FrameBelow α limit first) (right : FrameBelow α limit second) :
+    FrameBelow α limit (first ++ second) := by
+  intro cell member
+  rcases List.mem_append.mp member with member | member
+  · exact left cell member
+  · exact right cell member
+
+theorem FrameBelow.vmCells {α : Type} [NativeCodec α] (value : α) (id pin term limit : Nat)
+    (bounds : id ≤ limit ∧ pin ≤ limit ∧ term ≤ limit) :
+    FrameBelow α limit (NativeResourceArc.vmCells value id pin term) := by
+  intro cell member
+  simp only [NativeResourceArc.vmCells, List.mem_cons, List.not_mem_nil, or_false] at member
+  rcases member with rfl | rfl | rfl <;>
+    simp_all [typeName, handleType, termType]
+
+private theorem frame_filter_id (frame : List (Nat × String × Term)) (limit id : Nat)
+    (bounded : ∀ cell ∈ frame, cell.1 ≤ limit) (fresh : limit < id) :
+    frame.filter (fun cell => cell.1 == id) = [] := by
+  apply List.filter_eq_nil_iff.mpr
+  intro cell member
+  have := bounded cell member
+  simp only [beq_iff_eq]
+  omega
+
+private theorem frame_filter_ne (frame : List (Nat × String × Term)) (limit id : Nat)
+    (bounded : ∀ cell ∈ frame, cell.1 ≤ limit) (fresh : limit < id) :
+    frame.filter (fun cell => cell.1 != id) = frame := by
+  apply List.filter_eq_self.mpr
+  intro cell member
+  have := bounded cell member
+  simp only [bne_iff_ne]
+  omega
+
+private theorem frame_map_update (frame : List (Nat × String × Term)) (limit id : Nat)
+    (update : (Nat × String × Term) → (Nat × String × Term))
+    (bounded : ∀ cell ∈ frame, cell.1 ≤ limit) (fresh : limit < id) :
+    frame.map (fun cell => if cell.1 == id then update cell else cell) = frame := by
+  calc
+    _ = frame.map (fun cell => cell) := List.map_congr_left (by
+      intro cell member
+      have bound := bounded cell member
+      have different : cell.1 ≠ id := by omega
+      simp [different])
+    _ = frame := List.map_id' frame
+
+private theorem frame_any_id (frame : List (Nat × String × Term)) (limit id : Nat)
+    (bounded : ∀ cell ∈ frame, cell.1 ≤ limit) (fresh : limit < id) :
+    frame.any (fun cell => cell.1 == id) = false := by
+  simp only [List.any_eq_false]
+  intro cell member
+  have := bounded cell member
+  simp only [beq_iff_eq]
+  omega
+
+private theorem beq_reference (value : Term) (id : Nat) :
+    (value == .reference id) = true ↔ value = .reference id := by
+  rw [Term.beq_iff_compare_eq, Term.compare_eq_reference]
+
+private theorem frame_tokens (frame : List (Nat × String × Term)) (limit id : Nat)
+    {α : Type} [NativeCodec α] (bounded : FrameBelow α limit frame) (fresh : limit < id) :
+    frame.filter (fun cell => cell.2.1 == handleType α && cell.2.2 == .reference id) = [] := by
+  apply List.filter_eq_nil_iff.mpr
+  intro cell member
+  have bound := (bounded cell member).2.1
+  simp only [Bool.and_eq_true, beq_iff_eq, beq_reference]
+  rintro ⟨tag, contents⟩
+  have := bound tag id contents
+  omega
+
+private theorem frame_owner_bound (frame : List (Nat × String × Term)) (limit : Nat)
+    {α : Type} [NativeCodec α] (bounded : FrameBelow α limit frame)
+    (cell : Nat × String × Term) (member : cell ∈ frame) (owner : NativeResourceArc α)
+    (found : termEntryOwner cell = some owner) : owner.id ≤ limit := by
+  have bound := (bounded cell member).2.2
+  unfold termEntryOwner at found
+  split at found
+  · simp_all
+  · rename_i tag
+    have tagEq : cell.2.1 = termType α := by simpa using tag
+    split at found
+    · rename_i fields shape
+      split at found
+      · rename_i size
+        split at found
+        · rename_i target first
+          split at found
+          · rename_i token second
+            cases found
+            exact bound tagEq fields shape target (by
+              simp only [_root_.Array.mem_toList_iff]
+              exact _root_.Array.mem_of_getElem first)
+          · simp_all
+        · simp_all
+      · simp_all
+    · simp_all
+
+private theorem frame_terms (frame : List (Nat × String × Term)) (limit id : Nat)
+    {α : Type} [NativeCodec α] (bounded : FrameBelow α limit frame) (fresh : limit < id) :
+    frame.filter (fun cell => match termEntryOwner (α := α) cell with
+      | some owner => owner.id == id
+      | none => false) = [] := by
+  apply List.filter_eq_nil_iff.mpr
+  intro cell member
+  cases found : termEntryOwner (α := α) cell with
+  | none => simp
+  | some owner =>
+    have := frame_owner_bound frame limit bounded cell member owner found
+    simp only [beq_iff_eq]
+    omega
+
+/-- An immutable VM-held allocation, described by keyed views of the heap.
+Other allocations may occur anywhere in the list. No other Rust owner of this
+allocation is live at this NIF boundary. -/
+structure Pinned {α : Type} [NativeCodec α] (value : α) (id pin term : Nat)
+    (env : Environment) : Prop where
+  ordered : id < pin ∧ pin < term ∧ term ≤ env.refCounter
+  keys : ∀ cell ∈ env.nativeHeap, cell.1 ≤ env.refCounter
+  allocation : env.nativeHeap.filter (fun cell => cell.1 == id) =
+    [(id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])]
+  owner : env.nativeHeap.filter (fun cell => cell.1 == pin) =
+    [(pin, handleType α, .reference id)]
+  registry : env.nativeHeap.filter (fun cell => cell.1 == term) =
+    [(term, termType α, .tuple #[.reference id, .reference pin])]
+  owners : (env.nativeHeap.filter (fun cell =>
+    cell.2.1 == handleType α && cell.2.2 == .reference id)).length = 1
+
+private abbrev replaceCell (id : Nat) (tag : String) (contents : Term)
+    (cell : Nat × String × Term) :=
+  if cell.1 == id then (id, tag, contents) else cell
+
+private theorem replaceCell_fun (id : Nat) (tag : String) (contents : Term) :
+    replaceCell id tag contents = (fun cell => if cell.1 == id then (id, tag, contents) else cell) := rfl
+
+private theorem replaceCell_key (id : Nat) (tag : String) (contents : Term)
+    (cell : Nat × String × Term) : (replaceCell id tag contents cell).1 = cell.1 := by
+  unfold replaceCell
+  split
+  · rename_i same
+    exact (show cell.1 = id from by simpa using same).symm
+  · rfl
+
+private theorem filter_replace (heap : List (Nat × String × Term))
+    (id key : Nat) (tag : String) (contents : Term) :
+    (heap.map (replaceCell id tag contents)).filter (fun cell => cell.1 == key) =
+      (heap.filter (fun cell => cell.1 == key)).map (replaceCell id tag contents) := by
+  simp only [List.filter_map, Function.comp_def, replaceCell_key]
+
+private theorem filter_ne_replace (heap : List (Nat × String × Term))
+    (id key : Nat) (tag : String) (contents : Term) :
+    (heap.map (replaceCell id tag contents)).filter (fun cell => cell.1 != key) =
+      (heap.filter (fun cell => cell.1 != key)).map (replaceCell id tag contents) := by
+  simp only [List.filter_map, Function.comp_def, replaceCell_key]
+
+private theorem known_cell (heap : List (Nat × String × Term)) (id : Nat)
+    (tag : String) (contents : Term)
+    (stored : heap.filter (fun cell => cell.1 == id) = [(id, tag, contents)])
+    (cell : Nat × String × Term) (member : cell ∈ heap) (same : cell.1 = id) :
+    cell = (id, tag, contents) := by
+  have included : cell ∈ heap.filter (fun cell => cell.1 == id) :=
+    List.mem_filter.mpr ⟨member, by simp [same]⟩
+  simpa [stored] using included
+
+private theorem replace_restore (heap : List (Nat × String × Term)) (id : Nat)
+    (tag : String) (before after : Term)
+    (stored : heap.filter (fun cell => cell.1 == id) = [(id, tag, before)]) :
+    (heap.map (replaceCell id tag after)).map (replaceCell id tag before) = heap := by
+  rw [List.map_map]
+  calc
+    _ = heap.map (fun cell => cell) := List.map_congr_left (by
+      intro cell member
+      by_cases same : cell.1 = id
+      · have equal := known_cell heap id tag before stored cell member same
+        subst cell
+        simp [replaceCell]
+      · simp [replaceCell, same])
+    _ = heap := List.map_id' heap
+
+private theorem replace_token_count {α : Type} [NativeCodec α]
+    (heap : List (Nat × String × Term)) (id : Nat) (before after : Term)
+    (stored : heap.filter (fun cell => cell.1 == id) = [(id, typeName α, before)]) :
+    ((heap.map (replaceCell id (typeName α) after)).filter (fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference id)).length =
+    (heap.filter (fun cell => cell.2.1 == handleType α && cell.2.2 == .reference id)).length := by
+  rw [List.filter_map, List.length_map]
+  congr 1
+  apply List.filter_congr
+  intro cell member
+  by_cases same : cell.1 = id
+  · have equal := known_cell heap id (typeName α) before stored cell member same
+    subst cell
+    have tags : typeName α ≠ handleType α := by
+      simp [typeName, handleType, String.append_left_inj]
+    have different : (typeName α == handleType α) = false :=
+      Bool.eq_false_iff.mpr (by
+        intro equal
+        exact tags (_root_.beq_iff_eq.mp equal))
+    simp [replaceCell, different]
+  · simp [replaceCell, same]
+
+set_option maxHeartbeats 1000000 in
+/-- Returning a new resource preserves every cell in a bounded resource frame.
+No pre-existing owner or VM registry may refer to the newly allocated identities. -/
+theorem new_encode_release_framed_next {α β : Type} [NativeCodec α] (value : α)
+    (handler : Exception → NativeM Term) (next : Term → NativeM β) (env : Environment)
+    (registered : typeName α ∈ env.nativeResourceTypes)
+    (frame : FrameBelow α env.refCounter env.nativeHeap) :
+    ((Result.handle (do
+      let owner ← new value
+      let term ← encode owner
+      release owner
+      Result.ok term) handler) >>= next) env =
+    next (.reference (env.refCounter + 4)) { env with
+      refCounter := env.refCounter + 4
+      nativeHeap := vmCells value (env.refCounter + 1) (env.refCounter + 3)
+        (env.refCounter + 4) ++ env.nativeHeap } := by
+  have keys : ∀ cell ∈ env.nativeHeap, cell.1 ≤ env.refCounter := fun cell member =>
+    (frame cell member).1
+  have ids1 := frame_filter_id env.nativeHeap env.refCounter (env.refCounter + 1) keys (by omega)
+  have anys1 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 1) keys (by omega)
+  have ids2 := frame_filter_id env.nativeHeap env.refCounter (env.refCounter + 2) keys (by omega)
+  have anys2 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 2) keys (by omega)
+  have anys3 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 3) keys (by omega)
+  have anys4 := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 4) keys (by omega)
+  have removes := frame_filter_ne env.nativeHeap env.refCounter (env.refCounter + 2) keys (by omega)
+  have mapTwo := frame_map_update env.nativeHeap env.refCounter (env.refCounter + 1)
+    (fun _ => (env.refCounter + 1, typeName α, .tuple #[.integer 2, NativeCodec.encode value])) keys (by omega)
+  have mapOne := frame_map_update env.nativeHeap env.refCounter (env.refCounter + 1)
+    (fun _ => (env.refCounter + 1, typeName α, .tuple #[.integer 1, NativeCodec.encode value])) keys (by omega)
+  have tokens := frame_tokens env.nativeHeap env.refCounter (env.refCounter + 1) frame (by omega)
+  have terms := frame_terms env.nativeHeap env.refCounter (env.refCounter + 1) frame (by omega)
+  simp only [handleType] at tokens
+  simp only [termEntryOwner, termType, bne_iff_ne, ite_not] at terms
+  simp only [typeName, beq_iff_eq] at mapTwo mapOne
+  simp only [new, Result.handle, Result.get_bind, Result.get_continuation_apply,
+    ite_eq_left registered]
+  simp [encode, termOwner, termEntryOwner, clone, release, lookup,
+    payload, NativeM.allocate, Result.handle, vmCells, ids1, ids2,
+    removes, mapTwo, mapOne, anys1, anys2, anys3, anys4, tokens, terms,
+    NativeCodec.roundtrip, referenceLimit,
+    handleType, typeName, termType, Nat.add_assoc]
+
 set_option maxHeartbeats 800000 in
 /-- Successful resource return keeps the VM pin after releasing the Rust result.
 The native exception handler is retained rather than erased from the adapter. -/
@@ -835,6 +1107,70 @@ theorem new_encode_release_handled_next {α β : Type} [NativeCodec α] (value :
   simp [encode, termOwner, termEntryOwner, clone, release, lookup, payload,
     NativeM.allocate, Result.handle, empty, NativeCodec.roundtrip, referenceLimit,
     handleType, typeName, termType, Nat.add_assoc]
+
+set_option maxHeartbeats 1000000 in
+/-- Reading a pinned allocation preserves the complete heap, independent of the
+positions and contents of unrelated cells. Only a fresh temporary Rust owner is
+allocated and released. -/
+theorem decode_read_pinned_next {α β γ : Type} [NativeCodec α]
+    (value : α) (finish : α → NativeM β) (handler : Exception → NativeM β)
+    (next : β → NativeM γ) (env : Environment) (id pin term : Nat)
+    (pinned : Pinned value id pin term env)
+    (registered : typeName α ∈ env.nativeResourceTypes) :
+    (do
+      let owner ← decode (α := α) (.reference term)
+      let result ← Result.handle (do
+        let observed ← deref owner
+        release owner
+        finish observed) handler
+      next result) env =
+      ((Result.handle (finish value) handler) >>= next)
+        {env with refCounter := env.refCounter + 1} := by
+  have a : id ≠ pin := by have := pinned.ordered; omega
+  have b : id ≠ term := by have := pinned.ordered; omega
+  have c : pin ≠ term := by have := pinned.ordered; omega
+  have d : env.refCounter + 1 ≠ id := by have := pinned.ordered; omega
+  have e : env.refCounter + 1 ≠ pin := by have := pinned.ordered; omega
+  have f : env.refCounter + 1 ≠ term := by have := pinned.ordered; omega
+  let changed := env.nativeHeap.map (replaceCell id (typeName α)
+    (.tuple #[.integer 2, NativeCodec.encode value]))
+  have allocation2 : changed.filter (fun cell => cell.1 == id) =
+      [(id, typeName α, .tuple #[.integer 2, NativeCodec.encode value])] := by
+    simp [changed, filter_replace, pinned.allocation, replaceCell]
+  have owner2 : changed.filter (fun cell => cell.1 == pin) =
+      [(pin, handleType α, .reference id)] := by
+    simp [changed, filter_replace, pinned.owner, replaceCell, a, Ne.symm a]
+  have fresh := frame_filter_id env.nativeHeap env.refCounter (env.refCounter + 1)
+    pinned.keys (by omega)
+  have absent2 : changed.filter (fun cell => cell.1 == env.refCounter + 1) = [] := by
+    simp [changed, filter_replace, fresh]
+  have anyFresh := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 1)
+    pinned.keys (by omega)
+  have count2 : (changed.filter (fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference id)).length = 1 := by
+    rw [show changed = _ from rfl, replace_token_count env.nativeHeap id
+      (.tuple #[.integer 1, NativeCodec.encode value]) _ pinned.allocation]
+    exact pinned.owners
+  have removeFresh := frame_filter_ne env.nativeHeap env.refCounter (env.refCounter + 1)
+    pinned.keys (by omega)
+  have removes : changed.filter (fun cell => cell.1 != env.refCounter + 1) = changed := by
+    simp [changed, filter_ne_replace, removeFresh]
+  have restores : changed.map (replaceCell id (typeName α)
+      (.tuple #[.integer 1, NativeCodec.encode value])) = env.nativeHeap :=
+    replace_restore env.nativeHeap id (typeName α) _ _ pinned.allocation
+  have allocation := pinned.allocation
+  have owner := pinned.owner
+  have registry := pinned.registry
+  have owners := pinned.owners
+  simp only [typeName] at registered
+  simp only [typeName, handleType, termType] at allocation owner registry owners
+  dsimp only [changed] at allocation2 owner2 absent2 count2 removes restores
+  simp only [replaceCell_fun, typeName, handleType, beq_iff_eq] at allocation2 owner2 absent2 count2 removes restores
+  simp [decode, registered, termOwner, termEntryOwner, clone, release, deref,
+    lookup, payload, Result.handle, allocation, owner, registry, owners,
+    allocation2, owner2, absent2, count2, anyFresh, removes, restores,
+    NativeCodec.roundtrip, referenceLimit, typeName, handleType, termType,
+    a, b, c, d, Ne.symm a, Ne.symm b, Ne.symm c, Ne.symm d, Ne.symm e, Ne.symm f]
 
 set_option maxHeartbeats 800000 in
 /-- Decoding a live VM term temporarily acquires a Rust owner. Reading and
