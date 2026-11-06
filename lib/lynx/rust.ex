@@ -50,8 +50,11 @@ defmodule Lynx.Rust do
   codecs are generated with kernel-checked roundtrips; they are not Rustler
   encoders or native memory layouts. Recursive, borrowed, generic and other
   payloads are rejected. This does not admit locking, resource lifetimes or async.
-  Native facade conversion and effectful external primitives require separate
-  validated models. Guard destruction and native unwind cleanup remain unsupported.
+  Explicit `core::mem::drop` and compiler-generated local normal drops are also
+  supported for owned Mutex<bool/unsigned scalar> values. These remove their
+  cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined
+  and unwind drops remain rejected. Native facade conversion, locks and native
+  unwind cleanup require separate validated semantics.
   Unsupported recursive/trait combinations fail elaboration.
   """
   def verify!(workspace, package, opts) do

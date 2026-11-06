@@ -164,6 +164,17 @@ helper is not a Rustler resource decoder or an Elixir-visible failure. -/
     readCell typeName id env = (.ok value, env) := by
   simp [readCell, stored]
 
+/-- Consume a unique typed cell. The caller must establish the destructor's
+payload/ownership requirements; malformed identities exhaust verification. -/
+@[expose] def removeCell (typeName : String) (id : Nat) : NativeM Term :=
+  .get fun env =>
+    match env.nativeHeap.filter (fun cell => cell.1 == id) with
+    | [(_, storedType, value)] =>
+      if storedType == typeName then
+        .set { env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != id) } (.ok value)
+      else .error .exhausted
+    | _ => .error .exhausted
+
 end NativeM
 
 /-- Movable logical mutex identity. Mutable payloads live in the shared heap. -/
@@ -190,5 +201,65 @@ namespace NativeMutex
           .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]) :: env.nativeHeap }) := by
   simp [new, NativeM.allocate, fresh]
 
+/-- Destruction of an owned unlocked mutex. Admission separately restricts the
+payload to scalar types, so there is no user destructor to execute. -/
+@[expose] def dispose {α : Type} [NativeCodec α] (mutex : NativeMutex α) : NativeM Unit := do
+  let contents ← NativeM.readCell (typeName α) mutex.id
+  match contents with
+  | .tuple fields =>
+    if size : fields.size = 3 then
+      let lockState := fields[0]'(by omega)
+      let poisonState := fields[1]'(by omega)
+      let payload := fields[2]'(by omega)
+      if lockState == .atom "unlocked" && poisonState == .atom "unpoisoned" then
+        match NativeCodec.decode (α := α) payload with
+        | some _ =>
+          let _ ← NativeM.removeCell (typeName α) mutex.id
+          return ()
+        | none => .error .exhausted
+      else .error .exhausted
+    else .error .exhausted
+  | _ => .error .exhausted
+
+/-- Creating then consuming an owned scalar-compatible mutex reclaims its cell
+without reusing its identity. Rust admission separately checks payload drops. -/
+theorem new_dispose_next {α β : Type} [NativeCodec α] (value : α)
+    (next : NativeM β) (env : Environment)
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    ((do let mutex ← new value; dispose mutex; next) : NativeM β) env =
+      next { env with refCounter := env.refCounter + 1 } := by
+  have absent : env.nativeHeap.filter (fun cell => cell.1 == env.refCounter + 1) = [] := by
+    simpa only [List.filter_eq_nil_iff, List.any_eq_false] using fresh
+  have kept : env.nativeHeap.filter (fun cell => cell.1 != env.refCounter + 1) = env.nativeHeap := by
+    apply List.filter_eq_self.mpr
+    intro cell member
+    have unused := (List.any_eq_false.mp fresh) cell member
+    simpa using unused
+  simp [new, NativeM.allocate, dispose, NativeM.readCell, NativeM.removeCell,
+    fresh, absent, kept, NativeCodec.roundtrip]
+
+theorem new_dispose {α : Type} [NativeCodec α] (value : α) (env : Environment)
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    ((new value >>= dispose) : NativeM Unit) env =
+      (.ok (), { env with refCounter := env.refCounter + 1 }) := by
+  have unit_id : (fun _ : Unit => (Result.ok () : NativeM Unit)) = Result.ok := by
+    funext token
+    cases token
+    rfl
+  simpa only [unit_id, Result.bind_ok, Result.ok_apply] using
+    new_dispose_next value (Result.ok ()) env fresh
+
 end NativeMutex
+end Lynx
+
+namespace Lynx
+
+/-- Consuming destruction selected by audited Rust call sites. An instance is
+not a proof of an arbitrary Rust destructor. -/
+class NativeDrop (α : Type) where
+  drop : α → NativeM Unit
+
+instance {α : Type} [NativeCodec α] : NativeDrop (NativeMutex α) where
+  drop := NativeMutex.dispose
+
 end Lynx

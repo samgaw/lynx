@@ -10,7 +10,11 @@ defmodule Lynx.Rust.CallModels do
 
     for function <- functions,
         model =
-          if(execution == :runtime, do: Lynx.Rust.MutexModels.resolve(function, translated, refs)) ||
+          if(execution == :runtime,
+            do:
+              Lynx.Rust.MutexModels.resolve(function, translated, refs) ||
+                Lynx.Rust.NativeDrops.resolve(function, translated, refs)
+          ) ||
             Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
             Lynx.Rust.SliceModels.resolve(function, translated, refs) ||
             Lynx.Rust.CollectionModels.resolve(function, translated, refs) ||

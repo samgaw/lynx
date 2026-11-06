@@ -527,6 +527,10 @@ defmodule Lynx.Rust.DropModels do
       end)
   end
 
+  @doc false
+  def destruct_trait?(id, translated, refs),
+    do: destruct_trait?(id, %{traits: declarations(translated["trait_decls"]), refs: refs})
+
   defp destruct_trait?(id, ctx) do
     case ctx.traits[id] do
       %{

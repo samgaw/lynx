@@ -7,7 +7,7 @@ defmodule Lynx.Rust.NativeCodecs do
   def plan!(audit) do
     constructors =
       for {id, model} <- audit.external_calls,
-          Map.has_key?(model, :native_mutex_type),
+          model[:native_constructor] == true,
           into: MapSet.new(),
           do: id
 
