@@ -184,6 +184,14 @@ pub fn resource_increment(resource: &rustler::ResourceArc<CounterResource>, amou
     effects_core::increment(&mut resource.state.lock().unwrap(), amount)
 }
 
+/// Calls the actual first-party Future implementation, retaining its mutable state.
+pub fn poll_paused(
+    future: std::pin::Pin<&mut effects_core::PausedCounter>,
+    context: &mut std::task::Context<'_>,
+) -> std::task::Poll<u64> {
+    std::future::Future::poll(future, context)
+}
+
 /// Completes on its first poll through a first-party dependency.
 pub async fn immediate_increment(value: u64) -> u64 {
     effects_core::saturating_increment(value)
@@ -406,6 +414,40 @@ pub fn mutex_discard_custom(value: u64) {
 #[cfg(test)]
 mod tests {
     use super::mutex_new_incremented;
+
+    #[test]
+    fn paused_future_preserves_progress_across_explicit_polls() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Wake, Waker};
+        #[derive(Default)]
+        struct Notification(AtomicBool);
+        impl Wake for Notification {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::Release);
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        for value in [0, 7, u64::MAX] {
+            let notification = Arc::new(Notification::default());
+            let waker = Waker::from(Arc::clone(&notification));
+            let mut future = std::pin::pin!(effects_core::paused_counter(value));
+            let mut context = Context::from_waker(&waker);
+            assert_eq!(
+                super::poll_paused(future.as_mut(), &mut context),
+                Poll::Pending
+            );
+            assert!(!future.waiting);
+            assert!(notification.0.load(Ordering::Acquire));
+            assert_eq!(future.counter.value, value);
+            assert_eq!(
+                super::poll_paused(future.as_mut(), &mut context),
+                Poll::Ready(value.saturating_add(1))
+            );
+        }
+    }
 
     #[test]
     fn immediate_future_completes_and_rejects_repolling() {

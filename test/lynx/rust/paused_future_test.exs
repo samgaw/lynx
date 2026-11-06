@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.PausedFutureTest do
   use ExUnit.Case
-  alias Lynx.Rust.{LibraryHelpers, Project, Proofs}
+  alias Lynx.Rust.{FutureModels, LibraryHelpers, Project, Proofs}
   @fixture Path.expand("../../fixtures/rust_effects", __DIR__)
   @tools System.get_env("LYNX_AENEAS_DIR")
   @moduletag timeout: 900_000
@@ -39,7 +39,8 @@ defmodule Lynx.Rust.PausedFutureTest do
 
     options = [
       roots: ["effects_native::poll_paused", "effects_core::paused_counter"],
-      futures: :immediate,
+      futures: :polling,
+      execution: :runtime,
       tools: @tools,
       lean_project: project,
       build_dir: Path.join(tmp, "build"),
@@ -47,7 +48,7 @@ defmodule Lynx.Rust.PausedFutureTest do
       proof_modules: ["Poll.Properties"],
       required_properties:
         Enum.map(
-          ~w(initial_state core_increment callee_pending callee_ready caller_pending no_early_completion two_polls),
+          ~w(initial_state core_increment callee_pending callee_ready caller_pending no_early_completion missing_registration two_polls),
           &("Poll.Properties." <> &1)
         )
     ]
@@ -62,10 +63,38 @@ defmodule Lynx.Rust.PausedFutureTest do
 
     refute Enum.any?(result.verification.guarantees, &(&1.kind in [:nif_adapter, :elixir_law]))
 
+    assert Enum.any?(
+             result.verification.trusted_boundary,
+             &String.starts_with?(&1, "Registered nonpanicking wake callback relation")
+           )
+
+    assert [
+             %{native_wake_operation: :context_waker, implementation_verified: false},
+             %{native_wake_operation: :wake_by_ref, implementation_verified: false}
+           ] =
+             result.verification.unverified_external_calls
+             |> Enum.filter(& &1[:native_wake_operation])
+             |> Enum.map(&Map.take(&1, [:native_wake_operation, :implementation_verified]))
+             |> Enum.sort_by(& &1.native_wake_operation)
+
     assert [%{status: :ok, cached: true}] =
              Lynx.Rust.verify!(workspace, "effects-native", options).reports
 
     translated = result.extraction.audit.translated
+
+    for {_id, model} <- result.extraction.audit.external_calls, model[:native_wake_operation] do
+      refute FutureModels.resolve(
+               put_in(model.function, ["signature", "is_unsafe"], true),
+               translated,
+               result.extraction.audit.references
+             )
+
+      refute FutureModels.resolve(
+               put_in(model.function, ["signature", "abi"], "C"),
+               translated,
+               result.extraction.audit.references
+             )
+    end
 
     [getter] =
       Enum.filter(translated["fun_decls"], &(&1 && LibraryHelpers.selected?(&1, translated)))
@@ -115,15 +144,16 @@ defmodule Lynx.Rust.PausedFutureTest do
       assert [%{status: :error}] = Lynx.Commands.verify!(project, [file])
     end
 
-    File.write!(
-      property,
+    broken =
       String.replace(
         original,
-        "RustM.ok (core.task.poll.Poll.Pending",
-        "RustM.ok (core.task.poll.Poll.Ready 0#u64",
+        "next (core.task.poll.Poll.Pending",
+        "next (core.task.poll.Poll.Ready 0#u64",
         global: false
       )
-    )
+
+    refute broken == original
+    File.write!(property, broken)
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Project.build!(project, ["Poll.Properties"])
@@ -133,13 +163,17 @@ defmodule Lynx.Rust.PausedFutureTest do
 
     core = Path.join(workspace, "core/src/lib.rs")
 
-    File.write!(
-      core,
-      String.replace(File.read!(core), "this.waiting = false;", "this.waiting = true;")
-    )
+    original_core = File.read!(core)
 
-    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Rust.verify!(workspace, "effects-native", options)
+    for {before, after_text} <- [
+          {"this.waiting = false;", "this.waiting = true;"},
+          {"context.waker().wake_by_ref();", "let _wake_identity = context.waker();"}
+        ] do
+      File.write!(core, String.replace(original_core, before, after_text))
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rust.verify!(workspace, "effects-native", options)
+      end
     end
   end
 end
