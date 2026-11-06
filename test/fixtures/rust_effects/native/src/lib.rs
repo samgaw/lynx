@@ -1,6 +1,11 @@
 //! Real native APIs used to measure extraction support, not assumed models.
 use std::sync::Mutex;
 
+/// Runs a complete critical section in another first-party workspace crate.
+pub fn locked_increment(mutex: &Mutex<effects_core::Counter>, amount: u64) -> bool {
+    effects_core::locked_increment(mutex, amount)
+}
+
 /// Reads a borrowed guard through another first-party crate.
 pub fn guard_read(guard: &std::sync::MutexGuard<'_, effects_core::Counter>) -> u64 {
     effects_core::read_guard(guard)
@@ -337,6 +342,53 @@ pub fn mutex_discard_custom(value: u64) {
 #[cfg(test)]
 mod tests {
     use super::mutex_new_incremented;
+
+    #[test]
+    fn complete_critical_section_rejects_overflow_without_poisoning() {
+        let mutex = std::sync::Mutex::new(effects_core::Counter { value: u64::MAX });
+        assert!(!super::locked_increment(&mutex, 1));
+        assert!(!mutex.is_poisoned());
+        assert_eq!(
+            mutex
+                .try_lock()
+                .expect("critical section must release")
+                .value,
+            u64::MAX
+        );
+    }
+
+    #[test]
+    fn complete_critical_section_retains_existing_poison() {
+        let mutex = std::sync::Mutex::new(effects_core::Counter { value: 7 });
+        let failed = std::panic::catch_unwind(|| {
+            let mut guard = mutex.lock().expect("fresh mutex must not be poisoned");
+            guard.value = 9;
+            panic!("poison before recovery");
+        });
+        assert!(failed.is_err());
+        assert!(super::locked_increment(&mutex, 4));
+        assert!(mutex.is_poisoned());
+        let guard = match mutex.try_lock() {
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+            _ => panic!("recovery must release the lock and retain the poison flag"),
+        };
+        assert_eq!(guard.value, 13);
+    }
+
+    #[test]
+    fn native_threads_complete_both_extracted_critical_sections() {
+        let mutex = std::sync::Mutex::new(effects_core::Counter { value: 7 });
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| super::locked_increment(&mutex, 3));
+            let second = scope.spawn(|| super::locked_increment(&mutex, 4));
+            assert!(first.join().expect("first critical section must finish"));
+            assert!(second.join().expect("second critical section must finish"));
+        });
+        assert_eq!(
+            mutex.try_lock().expect("both workers must release").value,
+            14
+        );
+    }
 
     #[test]
     fn owned_update_is_visible_after_release() {

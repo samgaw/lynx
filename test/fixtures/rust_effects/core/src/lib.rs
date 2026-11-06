@@ -79,3 +79,22 @@ pub fn release_guard(guard: std::sync::MutexGuard<'_, Counter>) {
 pub fn update_scope(mut guard: std::sync::MutexGuard<'_, Counter>, amount: u64) -> bool {
     increment_guard(&mut guard, amount)
 }
+
+/// Retains ownership of a poisoned guard without clearing the poison flag.
+pub fn recover_guard(
+    acquired: std::sync::LockResult<std::sync::MutexGuard<'_, Counter>>,
+) -> std::sync::MutexGuard<'_, Counter> {
+    match acquired {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    }
+}
+
+/// Applies the checked transition under a complete native critical section.
+///
+/// # Panics
+/// Recursive acquisition may panic or block; verification rejects that case.
+pub fn locked_increment(mutex: &std::sync::Mutex<Counter>, amount: u64) -> bool {
+    let guard = recover_guard(mutex.lock());
+    update_release(guard, amount)
+}

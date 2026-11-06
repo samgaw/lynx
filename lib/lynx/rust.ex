@@ -74,6 +74,16 @@ defmodule Lynx.Rust do
   effects and post-consumption failures compose through the runtime monad.
   Assumed external contracts cannot satisfy this ownership-transfer check.
 
+  Normal branches are audited independently and must consume or return every
+  owner, with consistent ownership at joins. A single-field enum variant can
+  transfer its complete owned payload; partial moves from multiple-field variants
+  remain unsupported. The validated `PoisonError::into_inner` model transfers
+  ownership without clearing poison, allowing complete critical sections to
+  compose acquisition, explicit poisoned-result recovery, checked mutation and
+  normal release across first-party crates. Panicking unwrap and guard unwind
+  remain unsupported. Scheduled native execution still needs a public runner
+  proof interface; successful standalone proofs do not establish concurrency.
+
   `unwind: :assertions` additionally preserves compiler assertion cleanup for
   local owned Mutex<bool/unsigned scalar> values. It requires `execution: :runtime`
   and the pinned assertion-unwind backend. The default `:reject` retains the

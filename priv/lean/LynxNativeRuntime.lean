@@ -282,6 +282,11 @@ before acquisition. This is not an Elixir exception. -/
 structure NativePoisonError (α : Type) where
   value : α
 
+/-- Consuming a poisoned result transfers its payload and leaves poison status
+in the shared cell unchanged. It does not release an owned guard. -/
+@[expose] def NativePoisonError.into_inner {α : Type} (error : NativePoisonError α) : α :=
+  error.value
+
 namespace NativeGuard
 
 /-- Shared borrowing observes the guard's payload view. -/
