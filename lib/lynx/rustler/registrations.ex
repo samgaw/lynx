@@ -18,7 +18,12 @@ defmodule Lynx.Rustler.Registrations do
           )
 
       raw =
-        Extraction.describe!(context, tools, roots, project, prefix <> ".ResourceRegistration")
+        Extraction.describe!(context, tools, roots, project, prefix <> ".ResourceRegistration",
+          # Inventory roots can also select NIF records in anonymous constants.
+          # Their raw FFI entry bodies are irrelevant to registration metadata.
+          # Actual selected NIF computations were extracted and audited above.
+          opaque_functions: [crate <> "::_::__INVENTORY::nif_func"]
+        )
 
       entries = resolve!(metadata, raw.document, crate)
       required = required_types!(extraction)

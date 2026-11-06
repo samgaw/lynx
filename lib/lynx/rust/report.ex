@@ -160,7 +160,9 @@ defmodule Lynx.Rust.Report do
             else: []
           ) ++
           if(Map.get(extraction, :native_unwind, []) != [],
-            do: ["Lynx validated native cleanup lowering and nonpanicking-call analysis"],
+            do: [
+              "Lynx validated native cleanup, constant drop-flag lowering and nonpanicking-call analysis"
+            ],
             else: []
           ) ++
           if(Map.get(extraction, :native_drops, []) != [],

@@ -48,6 +48,12 @@ defmodule Lynx.Rust.LLBCJsonTest do
     restored_constant = %{"Value" => [7, [hd(constant), type]]}
 
     assert %{
+             "place" => %{"ty" => %{"Deduplicated" => 7}},
+             "switch" => %{"branches" => [[%{"Value" => [7, ^constant]}, 0]]},
+             "span" => %{"Deduplicated" => 7}
+           } = LLBCJson.restore_constant_references!(document, original)
+
+    assert %{
              "place" => %{"ty" => ^type},
              "switch" => %{"branches" => [[^restored_constant, 0]]},
              "span" => %{"Deduplicated" => 7},

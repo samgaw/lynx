@@ -64,6 +64,12 @@ defmodule Lynx.Rust.LLBCJson do
         "type"
       )
 
+    document |> restore_constant_references!(original) |> restore_types(refs)
+  end
+
+  # Rehydrate constants before another cleanup analysis, without expanding type
+  # references twice or mixing independently hash-consed reference families.
+  def restore_constant_references!(document, original) do
     # Cleanup lowering rehydrates trait dictionaries, including those inside
     # constant calls. Compare equal representations before checking identity.
     original = restore_trait_references!(original, original)
@@ -76,7 +82,7 @@ defmodule Lynx.Rust.LLBCJson do
         "constant"
       )
 
-    document |> restore_constants(constants) |> restore_types(refs)
+    restore_constants(document, constants)
   end
 
   defp merge_references!(left, right, kind) do
