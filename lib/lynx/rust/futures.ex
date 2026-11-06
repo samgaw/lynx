@@ -3,7 +3,7 @@ defmodule Lynx.Rust.Futures do
 
   def arguments!(:reject, _tools), do: []
 
-  def arguments!(mode, tools) when mode in [:immediate, :polling] do
+  def arguments!(mode, tools) when mode in [:immediate, :polling, :suspending] do
     versions = File.read!(Path.join(tools, "lynx-toolchain")) |> String.split("\n")
 
     unless Enum.all?(["charon=", "aeneas="], fn prefix ->
@@ -19,18 +19,39 @@ defmodule Lynx.Rust.Futures do
                "immediate futures require the pinned immediate-futures-v1 backend"
              )
 
-    [
-      "--immediate-futures",
-      "--monomorphize-mut=all",
-      "--rustc-arg=-Zmir-strip-debuginfo=all-locals",
-      "--rustc-arg=-Zmir-enable-passes=+DeadStoreElimination-final,+SimplifyLocals-final",
-      "--include",
-      "core::task::poll::Poll",
-      "--include",
-      "core::pin",
-      "--include",
-      "core::future::future::Future"
-    ]
+    if mode == :suspending and
+         not Enum.all?(
+           [{"charon=", "suspending-futures-v1"}, {"aeneas=", "undefined-behavior-v1"}],
+           fn {prefix, capability} ->
+             Enum.any?(
+               versions,
+               &(String.starts_with?(&1, prefix) and capability in String.split(&1, "+"))
+             )
+           end
+         ),
+       do:
+         raise(
+           ArgumentError,
+           "suspending futures require the pinned suspending-futures-v1 and undefined-behavior-v1 backends"
+         )
+
+    if(mode == :suspending, do: ["--suspending-futures"], else: []) ++
+      [
+        "--immediate-futures",
+        "--monomorphize-mut=all",
+        "--rustc-arg=-Zmir-strip-debuginfo=all-locals",
+        "--rustc-arg=-Zmir-enable-passes=+DeadStoreElimination-final,+SimplifyLocals-final",
+        "--include",
+        "core::task::poll::Poll",
+        "--include",
+        "core::pin",
+        "--include",
+        "core::future::future::Future",
+        "--include",
+        "core::future::into_future",
+        "--include",
+        "core::option::Option"
+      ]
   end
 
   def arguments!(other, _tools),
@@ -77,7 +98,7 @@ defmodule Lynx.Rust.Futures do
     end
   end
 
-  def type_models!(:polling, document, prefix) do
+  def type_models!(mode, document, prefix) when mode in [:polling, :suspending] do
     module = (prefix |> String.split(".") |> hd()) <> ".NativeRuntime"
 
     for {name, lean} <- [{"Context", "Lynx.NativeTaskContext"}, {"Waker", "Lynx.NativeWaker"}] do

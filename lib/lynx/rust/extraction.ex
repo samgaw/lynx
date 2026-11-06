@@ -19,7 +19,7 @@ defmodule Lynx.Rust.Extraction do
          Keyword.get(opts, :execution, :pure) != :pure,
        do: raise(ArgumentError, "immediate future extraction currently requires pure execution")
 
-    if Keyword.get(opts, :futures, :reject) == :polling and
+    if Keyword.get(opts, :futures, :reject) in [:polling, :suspending] and
          Keyword.get(opts, :execution, :pure) != :runtime,
        do: raise(ArgumentError, "stateful future polling requires runtime execution")
 
@@ -155,7 +155,10 @@ defmodule Lynx.Rust.Extraction do
 
     requested_calls =
       Keyword.get(opts, :external_calls, []) ++
-        if(Keyword.get(opts, :futures, :reject) == :polling, do: [:native_wakers], else: [])
+        if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending],
+          do: [:native_wakers],
+          else: []
+        )
 
     if :rustler_encoders in requested_calls do
       for {rust, lean} <- [

@@ -26,16 +26,18 @@ defmodule Lynx.Rust.LLBCJson do
     document = put_in(document, ["translated", "type_decls"], types)
 
     document =
-      case get_in(document, ["translated", "options", "immediate_futures"]) do
-        nil ->
-          document
+      Enum.reduce(~w(immediate_futures suspending_futures), document, fn field, document ->
+        case get_in(document, ["translated", "options", field]) do
+          nil ->
+            document
 
-        value when is_boolean(value) ->
-          update_in(document, ["translated", "options"], &Map.delete(&1, "immediate_futures"))
+          value when is_boolean(value) ->
+            update_in(document, ["translated", "options"], &Map.delete(&1, field))
 
-        _ ->
-          raise ArgumentError, "invalid compiler future extraction metadata"
-      end
+          _ ->
+            raise ArgumentError, "invalid compiler future extraction metadata"
+        end
+      end)
 
     {document, Enum.reverse(queries)}
   end
@@ -185,8 +187,10 @@ defmodule Lynx.Rust.LLBCJson do
           List.delete(old_keys, "needs_drop")
 
         "start_from" in keys and "mir" in keys and "preset" in keys and
-            Enum.sort(old_keys) == Enum.sort(["immediate_futures" | keys]) ->
-          List.delete(old_keys, "immediate_futures")
+          Enum.sort(old_keys -- keys) != [] and
+          Enum.all?(old_keys -- keys, &(&1 in ~w(immediate_futures suspending_futures))) and
+            keys -- old_keys == [] ->
+          old_keys -- ~w(immediate_futures suspending_futures)
 
         # TraitRef is introduced when lowering a Drop to a consuming call. Its
         # precise shape is fixed by the pinned LLBC schema and checked by audit.

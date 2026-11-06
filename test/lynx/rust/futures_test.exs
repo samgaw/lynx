@@ -2,7 +2,7 @@ defmodule Lynx.Rust.FuturesTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.Futures
 
-  test "rejects runtime future interpretation until effectful polling is supported" do
+  test "keeps immediate future extraction in pure execution mode" do
     assert_raise ArgumentError, ~r/requires pure execution/, fn ->
       Lynx.Rust.Extraction.run!(%{}, "/unused", ["probe::future"], "/unused", "Probe.Extraction",
         futures: :immediate,
@@ -23,6 +23,32 @@ defmodule Lynx.Rust.FuturesTest do
     assert_raise ArgumentError, ~r/unsupported Rust future/, fn ->
       Futures.arguments!(:all, tmp)
     end
+  end
+
+  @tag :tmp_dir
+  test "suspension requires both compiler storage and backend cutoff capabilities", %{
+    tmp_dir: tmp
+  } do
+    immediate = "charon=base+immediate-futures-v1\naeneas=base+immediate-futures-v1\n"
+
+    for manifest <- [
+          immediate,
+          String.replace(immediate, "charon=base", "charon=base+suspending-futures-v1"),
+          String.replace(immediate, "aeneas=base", "aeneas=base+undefined-behavior-v1")
+        ] do
+      File.write!(Path.join(tmp, "lynx-toolchain"), manifest)
+
+      assert_raise ArgumentError, ~r/suspending-futures-v1 and undefined-behavior-v1/, fn ->
+        Futures.arguments!(:suspending, tmp)
+      end
+    end
+
+    File.write!(
+      Path.join(tmp, "lynx-toolchain"),
+      "charon=base+immediate-futures-v1+suspending-futures-v1\naeneas=base+immediate-futures-v1+undefined-behavior-v1\n"
+    )
+
+    assert "--suspending-futures" in Futures.arguments!(:suspending, tmp)
   end
 
   test "admits only the compiler Context shape as an explicit unobserved type model" do

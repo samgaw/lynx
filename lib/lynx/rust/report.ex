@@ -179,6 +179,12 @@ defmodule Lynx.Rust.Report do
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
+          if(Map.get(extraction, :futures, :reject) == :suspending,
+            do: [
+              "Compiler coroutine saved-slot interpretation; only drop-free Unpin saved fields; physical pinning, cancellation cleanup and executor behavior unverified"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :execution, :pure) == :runtime,
             do: [
               "Lynx resumable native interpretation: rust_panicked marker; undef/divergence exhaust verification; resource, lock, general unwind cleanup and FFI primitives require separate models"

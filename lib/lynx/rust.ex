@@ -64,6 +64,15 @@ defmodule Lynx.Rust do
   is retained with a checked final mutable-borrow transfer; other Pin operations
   are not implicitly admitted.
 
+  `futures: :suspending, execution: :runtime` additionally extracts compiler
+  coroutine suspension with saved fields. Captures and saved fields requiring
+  destruction are rejected. Saved pointees must be Unpin. The logical state
+  retains empty or initialized saved slots rather than assigning values to
+  uninitialized memory. Reading an empty slot exhausts verification. The compiler's
+  private Context pointer round-trip is validated and represented as a borrow;
+  other pointer observations and escapes are rejected. This supports explicit
+  polling, not an executor, cancellation cleanup or guards across suspension.
+
   `:execution` is `:pure` by default. `:runtime` interprets extracted computations
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`
