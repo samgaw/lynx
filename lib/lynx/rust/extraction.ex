@@ -5,14 +5,27 @@ defmodule Lynx.Rust.Extraction do
   # clients must kernel-check their properties and audit the generated modules.
   def run!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key not in [:external_types, :external_calls, :rustler_atoms, :execution],
+        key not in [:external_types, :external_calls, :rustler_atoms, :execution, :unwind],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
+
+    unwind = Keyword.get(opts, :unwind, :reject)
+    Lynx.Rust.NativeUnwind.charon_arguments(unwind)
+
+    if unwind != :reject and Keyword.get(opts, :execution, :pure) != :runtime,
+      do: raise(ArgumentError, "assertion unwind requires runtime execution")
 
     if :rustler_encoders in Keyword.get(opts, :external_calls, []),
       do: Lynx.Rustler.require_rustler!(context)
 
     discovery =
-      describe!(context, tools, roots, output, module, Keyword.take(opts, [:external_types]))
+      describe!(
+        context,
+        tools,
+        roots,
+        output,
+        module,
+        Keyword.take(opts, [:external_types, :unwind])
+      )
 
     {discovery, caches} =
       case Keyword.get(opts, :rustler_atoms, []) do
@@ -43,7 +56,7 @@ defmodule Lynx.Rust.Extraction do
              roots,
              output,
              module,
-             Keyword.take(opts, [:external_types]),
+             Keyword.take(opts, [:external_types, :unwind]),
              opaque
            ), caches}
       end
@@ -57,7 +70,7 @@ defmodule Lynx.Rust.Extraction do
           Enum.uniq(roots ++ ["core::mem::drop"]),
           output,
           module,
-          Keyword.take(opts, [:external_types]),
+          Keyword.take(opts, [:external_types, :unwind]),
           Enum.map(caches, & &1.opaque_pattern)
         )
       else
@@ -66,13 +79,25 @@ defmodule Lynx.Rust.Extraction do
 
     %{document: document, llbc: llbc, first_party: first_party, models: models} = discovery
 
+    {document, native_unwind} =
+      if unwind == :assertions,
+        do: Lynx.Rust.NativeUnwind.lower!(document, first_party),
+        else: {document, []}
+
     {document, native_drops} =
       if Keyword.get(opts, :execution, :pure) == :runtime,
         do: Lynx.Rust.NativeDropLowering.lower!(document, first_party),
         else: {document, []}
 
+    {document, nonpanicking} =
+      if unwind == :assertions,
+        do: Lynx.Rust.NativeUnwind.nonpanicking_drops!(document),
+        else: {document, []}
+
+    native_unwind = native_unwind ++ nonpanicking
+
     backend_llbc =
-      if native_drops == [] do
+      if native_drops == [] and native_unwind == [] do
         llbc
       else
         path = Path.rootname(llbc) <> ".native-drops.llbc"
@@ -114,6 +139,7 @@ defmodule Lynx.Rust.Extraction do
     audit =
       Lynx.Rust.LLBC.audit!(document, first_party,
         external_calls: requested_calls,
+        unwind: unwind,
         execution: Keyword.get(opts, :execution, :pure),
         rustler_atom_caches: {caches, module}
       )
@@ -183,6 +209,7 @@ defmodule Lynx.Rust.Extraction do
     run!(
       Path.join(tools, "aeneas"),
       runtime_args ++
+        Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools) ++
         model_args ++
         [
           "-backend",
@@ -201,7 +228,13 @@ defmodule Lynx.Rust.Extraction do
 
     translation_bytes = File.read!(Path.join(output, "translation.json"))
     translation = JSON.decode!(translation_bytes)
-    implementations = Lynx.Rust.LLBC.link!(audit, translation, result_monad: result_monad)
+
+    implementations =
+      Lynx.Rust.LLBC.link!(audit, translation,
+        result_monad: result_monad,
+        assertion_unwind_input: unwind == :assertions
+      )
+
     Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)
     Lynx.Rust.BytesModels.install!(audit, translation, output, module)
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
@@ -221,6 +254,8 @@ defmodule Lynx.Rust.Extraction do
     %{
       audit: audit,
       native_drops: native_drops,
+      native_unwind: native_unwind,
+      unwind: unwind,
       execution: execution,
       translation: translation,
       implementations: implementations,
@@ -236,7 +271,8 @@ defmodule Lynx.Rust.Extraction do
                Lynx.Rust.Fingerprint.digest(
                  :erlang.term_to_binary(
                    {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
-                    Lynx.Rust.Fingerprint.file!(backend_llbc), models, requested_calls,
+                    Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
+                    requested_calls,
                     audit.external_calls
                     |> Map.values()
                     |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
@@ -259,7 +295,7 @@ defmodule Lynx.Rust.Extraction do
   @doc false
   def describe!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key != :external_types,
+        key not in [:external_types, :unwind],
         do: raise(ArgumentError, "unknown Rust discovery option: #{key}")
 
     describe!(context, tools, roots, output, module, opts, [])
@@ -306,30 +342,28 @@ defmodule Lynx.Rust.Extraction do
     llbc = Path.join(output, String.replace(module, ".", "_") <> ".llbc")
 
     args =
-      [
-        "rustc",
-        "--sysroot",
-        "default",
-        "--preset=aeneas",
-        "--opaque",
-        "core",
-        "--opaque",
-        "alloc",
-        "--opaque",
-        "std",
-        "--include",
-        "core::result::Result",
-        "--include",
-        "core::option::Option",
-        "--include",
-        "core::ops::control_flow::ControlFlow",
-        "--include",
-        "core::fmt::Error",
-        "--include",
-        "core::str::error::Utf8Error",
-        "--dest-file",
-        llbc
-      ] ++
+      ["rustc", "--sysroot", "default"] ++
+        Lynx.Rust.NativeUnwind.charon_arguments(Keyword.get(opts, :unwind, :reject)) ++
+        [
+          "--opaque",
+          "core",
+          "--opaque",
+          "alloc",
+          "--opaque",
+          "std",
+          "--include",
+          "core::result::Result",
+          "--include",
+          "core::option::Option",
+          "--include",
+          "core::ops::control_flow::ControlFlow",
+          "--include",
+          "core::fmt::Error",
+          "--include",
+          "core::str::error::Utf8Error",
+          "--dest-file",
+          llbc
+        ] ++
         root_args ++
         includes ++
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++

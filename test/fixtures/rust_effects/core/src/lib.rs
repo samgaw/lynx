@@ -33,3 +33,12 @@ pub fn release_checked(mutex: std::sync::Mutex<u64>, accepted: bool) {
     drop(mutex);
     assert!(accepted);
 }
+
+/// Uses compiler-generated unwind cleanup when the request is rejected.
+///
+/// # Panics
+/// Panics when `accepted` is false, destroying the owned mutex during unwind.
+pub fn assert_then_release(mutex: std::sync::Mutex<u64>, accepted: bool) {
+    assert!(accepted);
+    drop(mutex);
+}

@@ -5,7 +5,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   # Extraction can reconstruct assertions without their unwind drops. Logical
   # heap ownership still needs cleanup. Until unwind is interpreted, admit only
   # straight-line owner lifetimes without a potentially failing intervening step.
-  def audit!(functions, models, translated, refs) do
+  def audit!(functions, models, translated, refs, opts \\ []) do
     mutexes =
       for type <- translated["type_decls"], type && MutexModels.type?(type), do: type["def_id"]
 
@@ -28,7 +28,9 @@ defmodule Lynx.Rust.NativeLifetimes do
           models: models,
           implementations: implementations,
           function: function,
-          translated: translated
+          translated: translated,
+          branching: Keyword.get(opts, :branching, false),
+          booleans: boolean_constants(translated, %{})
         }
 
         block!(body["body"], live, context)
@@ -57,8 +59,113 @@ defmodule Lynx.Rust.NativeLifetimes do
 
   defp contains_native?(_, _, _, _, _), do: false
 
-  defp block!(%{"statements" => statements}, live, ctx),
-    do: Enum.reduce(statements, live, &statement!(&1["kind"], &2, ctx))
+  defp block!(block, live, ctx), do: block_state!(block, %{live: live, known: %{}}, ctx)
+
+  defp block_state!(%{"statements" => statements}, state, ctx) do
+    Enum.reduce_while(statements, state, fn statement, state ->
+      case statement["kind"] do
+        %{"Switch" => switch} ->
+          case switch!(switch, state, ctx) do
+            :terminal -> {:halt, :terminal}
+            state -> {:cont, state}
+          end
+
+        kind ->
+          case statement!(kind, state.live, ctx) do
+            :terminal -> {:halt, :terminal}
+            live -> {:cont, %{live: live, known: known_after(kind, state.known, ctx)}}
+          end
+      end
+    end)
+  end
+
+  defp switch!(%{"data" => data, "branches" => branches}, state, ctx) do
+    if not ctx.branching and MapSet.size(state.live) > 0, do: reject!(ctx)
+
+    value =
+      case data["scrutinee"] do
+        %{"Value" => operand} -> boolean(operand, state.known, ctx)
+        _ -> :unknown
+      end
+
+    if is_boolean(value) do
+      index =
+        Enum.find_value(data["branches"], data["fallback"], fn [constant, index] ->
+          if constant_boolean(constant, ctx) == value, do: index
+        end)
+
+      block_state!(Enum.fetch!(branches, index), state, ctx)
+    else
+      states =
+        Enum.map(branches, &block_state!(&1, state, ctx)) |> Enum.reject(&(&1 == :terminal))
+
+      case states do
+        [] ->
+          :terminal
+
+        [first | rest] ->
+          unless Enum.all?(rest, &MapSet.equal?(&1.live, first.live)), do: reject!(ctx)
+
+          known =
+            Map.filter(first.known, fn {id, value} ->
+              Enum.all?(rest, &(&1.known[id] == value))
+            end)
+
+          %{first | known: known}
+      end
+    end
+  end
+
+  defp known_after(%{"Assign" => [%{"kind" => %{"Local" => local}}, value]}, known, ctx) do
+    value =
+      case value do
+        %{"Use" => [operand, _]} -> boolean(operand, known, ctx)
+        _ -> :unknown
+      end
+
+    if is_boolean(value), do: Map.put(known, local, value), else: Map.delete(known, local)
+  end
+
+  defp known_after(%{"StorageDead" => local}, known, _), do: Map.delete(known, local)
+
+  # A call can update booleans through aliases. Retain no constant fact across
+  # one; compiler drop flags are re-established by explicit assignments.
+  defp known_after(%{"Call" => _}, _, _), do: %{}
+  defp known_after(%{"Assign" => _}, _, _), do: %{}
+
+  defp known_after(_, known, _), do: known
+
+  defp boolean(%{"Const" => constant}, _, ctx), do: constant_boolean(constant, ctx)
+
+  defp boolean(%{"Copy" => %{"kind" => %{"Local" => local}}}, known, _),
+    do: Map.get(known, local, :unknown)
+
+  defp boolean(%{"Move" => %{"kind" => %{"Local" => local}}}, known, _),
+    do: Map.get(known, local, :unknown)
+
+  defp boolean(_, _, _), do: :unknown
+  defp constant_boolean(%{"Value" => [_, [%{"Bool" => value}, _]]}, _), do: value
+  defp constant_boolean(%{"Deduplicated" => id}, ctx), do: Map.get(ctx.booleans, id, :unknown)
+  defp constant_boolean(_, _), do: :unknown
+
+  # Constants have their own hash-cons family, separate from type IDs.
+  defp boolean_constants(%{"Value" => [id, [%{"Bool" => value}, _]]}, found) do
+    case Map.fetch(found, id) do
+      {:ok, previous} when previous != value ->
+        raise ArgumentError, "inconsistent native lifetime boolean constant identity"
+
+      _ ->
+        Map.put(found, id, value)
+    end
+  end
+
+  defp boolean_constants(map, found) when is_map(map),
+    do: boolean_constants(Map.values(map), found)
+
+  defp boolean_constants(list, found) when is_list(list),
+    do: Enum.reduce(list, found, &boolean_constants/2)
+
+  defp boolean_constants(_, found), do: found
 
   defp statement!(%{"StorageLive" => _}, live, _), do: live
 
@@ -91,12 +198,12 @@ defmodule Lynx.Rust.NativeLifetimes do
 
   defp statement!("Return", live, ctx) do
     if MapSet.size(MapSet.delete(live, 0)) > 0, do: reject!(ctx)
-    live
+    :terminal
   end
 
-  defp statement!(%{"Switch" => %{"branches" => branches}}, live, ctx) do
+  defp statement!(%{"Panic" => %{"on_unwind" => %{"statements" => []}}}, live, ctx) do
     if MapSet.size(live) > 0, do: reject!(ctx)
-    Enum.reduce(branches, live, &MapSet.union(&2, block!(&1, live, ctx)))
+    :terminal
   end
 
   defp statement!(kind, live, ctx) do

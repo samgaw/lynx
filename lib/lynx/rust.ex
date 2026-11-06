@@ -53,12 +53,22 @@ defmodule Lynx.Rust do
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned Mutex<bool/unsigned scalar> values. These remove their
   cells; scalar payloads cannot invoke a custom destructor. Projected, user-defined
-  and unwind drops remain rejected. Native facade conversion, locks and native
-  unwind cleanup require separate validated semantics.
+  and general unwind drops remain rejected. Native facade conversion, locks and
+  general native unwind cleanup require separate validated semantics.
   Owners may move into actual extracted first-party callees when no other owner
   remains live in the caller. The callee undergoes the same lifetime audit;
   effects and post-consumption failures compose through the runtime monad.
   Assumed external contracts cannot satisfy this ownership-transfer check.
+
+  `unwind: :assertions` additionally preserves compiler assertion cleanup for
+  local owned Mutex<bool/unsigned scalar> values. It requires `execution: :runtime`
+  and the pinned assertion-unwind backend. The default `:reject` retains the
+  conservative lifetime boundary. In assertion mode, compiler cleanup is checked
+  and lowered before propagating panic. Boolean drop flags are preserved; custom
+  payload destructors and projected cleanup remain unsupported. Cleanup behind
+  potentially panicking calls and mutable-reference outputs on failure are not
+  implemented. Disabling fallible-operation resugaring can expose arithmetic
+  forms the backend rejects; this mode does not imply general overflow cleanup.
   Unsupported recursive/trait combinations fail elaboration.
   """
   def verify!(workspace, package, opts) do
@@ -75,7 +85,8 @@ defmodule Lynx.Rust do
       :tools,
       :build_dir,
       :cargo,
-      :execution
+      :execution,
+      :unwind
     ]
 
     for key <- Keyword.keys(opts),
@@ -98,7 +109,8 @@ defmodule Lynx.Rust do
 
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
-        execution: Keyword.get(opts, :execution, :pure)
+        execution: Keyword.get(opts, :execution, :pure),
+        unwind: Keyword.get(opts, :unwind, :reject)
       )
 
     Lynx.Rust.Project.build!(project, [prefix <> ".Funs" | proofs])
