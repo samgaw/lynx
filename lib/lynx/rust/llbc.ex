@@ -140,6 +140,11 @@ defmodule Lynx.Rust.LLBC do
         direct_calls ++ (trait_dependencies |> Map.values() |> List.flatten())
       )
 
+    case Lynx.Rust.ResourceAudit.audit(functions, modelled, translated, refs) do
+      :ok -> :ok
+      {:error, function, message} -> failure!(function, translated, message)
+    end
+
     case Lynx.Rust.NativeDrops.audit(functions, modelled, translated, refs) do
       :ok -> :ok
       {:error, function, message} -> failure!(function, translated, message)

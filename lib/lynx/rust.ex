@@ -65,7 +65,7 @@ defmodule Lynx.Rust do
   preserving poison status. Acquisition tokens and execution contexts are checked.
   Actual owning updates can compose with reacquisition across crates. Unreachable
   compiler cleanup behind certified nonpanicking calls is recorded and omitted;
-  guard destruction during unwind and resource lifetimes remain unsupported.
+  guard destruction during unwind remains unsupported.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned Mutex<bool/unsigned scalar> values and monomorphic
   first-party structs with supported native codecs when Charon's compiler query
@@ -75,6 +75,17 @@ defmodule Lynx.Rust do
   their cells without invoking a payload destructor. Projected, user-defined
   and general unwind drops remain rejected. Resource-handle conversion and
   general native unwind cleanup require separate validated semantics.
+  Rustler 0.39 `ResourceArc` allocation, clone, immutable dereference, explicit
+  release and local scope cleanup are supported for monomorphic first-party
+  payloads with native codecs and compiler-certified `needs_drop = false`.
+  Concrete Resource dictionaries must inherit the default callbacks and flags.
+  Resource payloads share a heap identity; each Rust-owned handle has a distinct
+  consuming token. Properties must state loader registration explicitly using
+  `Environment.nativeResourceTypes`; this does not verify compiled registration.
+  Reference counts have a 1024-handle verification bound. VM-held references,
+  resource codecs and custom callbacks remain unsupported. Resource extraction
+  requires the pinned `global-names-v1` backend; Rustler adapters reject resource
+  calls until loader and VM ownership correspondence are established.
   Owners may move into actual extracted first-party callees when no other owner
   remains live in the caller. The callee undergoes the same lifetime audit;
   effects and post-consumption failures compose through the runtime monad.

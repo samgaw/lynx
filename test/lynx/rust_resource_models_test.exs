@@ -4,11 +4,13 @@ defmodule Lynx.Rust.ResourceModelsTest do
   @fixture Path.expand("../fixtures/rust_effects", __DIR__)
   @tools System.get_env("LYNX_AENEAS_DIR")
   @moduletag timeout: 600_000
-  unless @tools && File.regular?(Path.join(@tools, "lynx-toolchain")),
-    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned Rust backend")
+  @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
+               String.contains?(File.read!(Path.join(@tools, "lynx-toolchain")), "needs-drop-v1")
+  unless @available,
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned compiler-drop-query backend")
 
   @tag :tmp_dir
-  test "checks actual resource method identities without admitting incomplete extraction", %{
+  test "checks actual resource methods and concrete destructor-free Resource dictionaries", %{
     tmp_dir: tmp
   } do
     workspace = Path.join(tmp, "workspace")
@@ -80,14 +82,64 @@ defmodule Lynx.Rust.ResourceModelsTest do
       end
     end
 
-    assert [] ==
-             Enum.filter(
-               Map.values(CallModels.resolve(functions, translated, refs, [], :runtime)),
-               & &1[:native_resource_type]
-             )
+    models = CallModels.resolve(functions, translated, refs, [], :runtime)
+    assert Enum.any?(models, fn {_, m} -> m[:native_resource_type] end)
+    assert :ok = Lynx.Rust.ResourceAudit.audit(functions, models, translated, refs)
+    assert :ok = Lynx.Rust.NativeDrops.audit(functions, models, translated, refs)
+
+    changed =
+      update_in(translated, ["fun_decls"], fn declarations ->
+        Enum.map(declarations, fn f ->
+          if f && List.last(f["item_meta"]["name"]) == %{"Builtin" => ["DropGlue", 0]},
+            do: put_in(f, ["signature", "is_unsafe"], false),
+            else: f
+        end)
+      end)
+
+    assert {:error, _, _} = Lynx.Rust.NativeDrops.audit(functions, models, changed, refs)
+
+    resource =
+      Enum.find(translated["type_decls"], fn type ->
+        type && type["item_meta"]["name"] == path(~w(effects_native ScalarResource))
+      end)
+
+    for invalid <- [nil, true] do
+      changed =
+        update_in(translated, ["type_decls"], fn types ->
+          Enum.map(types, fn type ->
+            if type && type["def_id"] == resource["def_id"],
+              do: Map.put(type, "needs_drop", invalid),
+              else: type
+          end)
+        end)
+
+      assert {:error, _, _} = Lynx.Rust.ResourceAudit.audit(functions, models, changed, refs)
+    end
+
+    changed =
+      update_in(translated, ["trait_impls"], fn implementations ->
+        Enum.map(implementations, fn impl ->
+          if impl && impl["methods"] == [nil, nil],
+            do: Map.put(impl, "methods", [%{"custom" => true}, nil]),
+            else: impl
+        end)
+      end)
+
+    assert {:error, _, _} = Lynx.Rust.ResourceAudit.audit(functions, models, changed, refs)
+
+    changed =
+      update_in(translated, ["global_decls"], fn globals ->
+        Enum.map(globals, fn global ->
+          if global && match?(%{"TraitDefault" => _}, global["src"]),
+            do: Map.put(global, "src", "Normal"),
+            else: global
+        end)
+      end)
+
+    assert {:error, _, _} = Lynx.Rust.ResourceAudit.audit(functions, models, changed, refs)
 
     assert_raise CompileError, fn ->
-      LLBC.audit!(raw.document, raw.first_party, execution: :runtime)
+      LLBC.audit!(raw.document, raw.first_party, execution: :pure)
     end
   end
 

@@ -220,6 +220,13 @@ defmodule Lynx.Rustler do
         rustler_atoms: if(custom?, do: :discover, else: [])
       )
 
+    if Enum.any?(extraction.audit.external_calls, fn {_, m} -> m[:native_resource_type] end),
+      do:
+        raise(
+          ArgumentError,
+          "resource calls require compiled loader registration adapters, which are not yet supported; resource values crossing the NIF boundary also require VM ownership adapters"
+        )
+
     bindings =
       Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation,
         result_monad: if(execution == :runtime, do: "Lynx.NativeM", else: "RustM"),

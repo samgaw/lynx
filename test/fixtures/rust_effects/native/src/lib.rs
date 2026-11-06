@@ -158,6 +158,17 @@ pub fn scalar_resource_cycle(value: u64) -> u64 {
     observed
 }
 
+/// Uses compiler-generated scope cleanup for the final retained handle.
+///
+/// # Panics
+/// Panics when the loader has not registered the resource type.
+pub fn scalar_resource_scope(value: u64) -> u64 {
+    let first = scalar_resource_new(value);
+    let retained = scalar_resource_clone(&first);
+    drop(first);
+    scalar_resource_read(&retained)
+}
+
 /// Allocates the actual Rustler resource. Requires Rustler resource registration.
 pub fn resource_new(value: u64) -> rustler::ResourceArc<CounterResource> {
     rustler::ResourceArc::new(CounterResource {
@@ -550,6 +561,16 @@ mod runtime_nif_tests {
 /// Rustler exports exercising the native runtime through ordinary scalar codecs.
 #[cfg(feature = "nif")]
 mod facade {
+    /// Runs the Rust-owned lifecycle; formal adapters still require a loader model.
+    ///
+    /// # Panics
+    /// Panics when the resource type has not been registered.
+    #[cfg(feature = "resource-nif")]
+    #[rustler::nif(name = "retained", schedule = "DirtyCpu")]
+    fn resource_retained(value: u64) -> u64 {
+        super::scalar_resource_cycle(value)
+    }
+
     /// Preserves the checked result across allocation and normal destruction.
     #[rustler::nif(name = "checked", schedule = "DirtyCpu")]
     fn checked(value: u64, amount: u64) -> bool {

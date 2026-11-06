@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.NativeDrops do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, MutexModels, LockModels, GuardDrops}
+  alias Lynx.Rust.{CallModels, MutexModels, LockModels, GuardDrops, ResourceModels, ResourceDrops}
 
   def resolve(function, translated, refs) do
     with %{
@@ -25,7 +25,8 @@ defmodule Lynx.Rust.NativeDrops do
          true <- destruct?(trait, translated, refs),
          mutex = Enum.find(translated["type_decls"], &(&1 && MutexModels.type?(&1))),
          guard = Enum.find(translated["type_decls"], &LockModels.guard?(&1, refs)),
-         true <- mutex != nil or guard != nil do
+         resource = Enum.find(translated["type_decls"], &ResourceModels.type?/1),
+         true <- mutex != nil or guard != nil or resource != nil do
       %{
         rust_name: "core::mem::drop",
         lean: "Lynx.NativeDrop.drop",
@@ -36,13 +37,16 @@ defmodule Lynx.Rust.NativeDrops do
         native_dispose: true,
         native_codec_drop: true,
         label:
-          "Consuming destruction model: Mutex with a destructor-free payload removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
+          "Consuming destruction model: Mutex with a destructor-free payload removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; Rust-owned ResourceArc consumes one token and reclaims a destructor-free allocation on final release under default Resource callbacks; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
       }
       |> then(fn model ->
         if mutex, do: Map.put(model, :native_mutex_type, mutex["def_id"]), else: model
       end)
       |> then(fn model ->
         if guard, do: Map.put(model, :native_guard_type, guard["def_id"]), else: model
+      end)
+      |> then(fn model ->
+        if resource, do: Map.put(model, :native_resource_type, resource["def_id"]), else: model
       end)
     else
       _ -> nil
@@ -61,7 +65,7 @@ defmodule Lynx.Rust.NativeDrops do
         Enum.any?(
           translated["type_decls"],
           &(&1 && &1["def_id"] == id &&
-              (MutexModels.type?(&1) or LockModels.guard?(&1, refs)))
+              (MutexModels.type?(&1) or LockModels.guard?(&1, refs) or ResourceModels.type?(&1)))
         )
 
       _ ->
@@ -85,6 +89,9 @@ defmodule Lynx.Rust.NativeDrops do
         type = Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id))
 
         cond do
+          ResourceModels.type?(type) ->
+            ResourceDrops.site(drop, translated, refs)
+
           LockModels.guard?(type, refs) ->
             GuardDrops.site(drop, translated, refs)
 
@@ -167,7 +174,8 @@ defmodule Lynx.Rust.NativeDrops do
       if cleanup,
         do: raise(ArgumentError, "native consuming calls during unwind are not yet translated")
 
-      if not GuardDrops.call?(generics, translated, refs, traits) do
+      if not GuardDrops.call?(generics, translated, refs, traits) and
+           not ResourceDrops.call?(generics, translated, refs, traits) do
         with %{
                "types" => [type],
                "regions" => [],
@@ -199,7 +207,7 @@ defmodule Lynx.Rust.NativeDrops do
         else
           _ ->
             raise ArgumentError,
-                  "native destruction requires an exact Mutex with a compiler-certified destructor-free payload or MutexGuard Destruct implementation; custom payload destructors are unsupported"
+                  "native destruction requires an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload where consumed; custom payload destructors are unsupported"
         end
       end
     end
@@ -298,7 +306,7 @@ defmodule Lynx.Rust.NativeDrops do
 
   # Fields alone cannot establish the absence of a user Drop implementation.
   # Missing or unknown compiler evidence is deliberately not interpreted as false.
-  defp destructor_free?(type, translated, refs) do
+  def destructor_free?(type, translated, refs) do
     case CallModels.expand(type, refs) do
       %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
         args == arguments([]) and
