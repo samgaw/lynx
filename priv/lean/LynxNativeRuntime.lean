@@ -2021,6 +2021,8 @@ pre-admitted independent file remains an explicitly disjoint host capability. -/
 @[expose] def writableHandleTypeName : String := "rust:file-handle:read-write"
 @[expose] def closedHandleTypeName : String := "rust:file-handle:closed"
 @[expose] def namespaceTypeName : String := "rust:file-namespace"
+@[expose] def directoryTypeName : String := "rust:file-directory"
+@[expose] def closedDirectoryTypeName : String := "rust:file-directory:closed"
 
 structure Handle where
   inode : Nat
@@ -2280,11 +2282,65 @@ Physical Unix/filesystem atomicity and error correspondence are external models.
     | .ok value => .ok value
     | .error exception => .error exception
 
+/-- Only the admitted current directory is supported in addition to regular
+portable leaf names. Ambient cwd changes and nested/symlink traversal are closed. -/
+@[expose] def supportedOpenPath (path : ByteArray) : Bool :=
+  supportedPath path || path.data == #[46]
+
+@[expose] def directoryHandle (file : NativeFile) (env : Environment) : Option Term := do
+  if file.id = 0 || file.id > env.refCounter then none else
+  match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
+  | [(_,tag,.tuple fields)] =>
+    if tag == directoryTypeName then
+      if size : fields.size = 1 then some (fields[0]'(by omega)) else none
+    else none
+  | _ => none
+
+@[expose] def storeDirectory (file : NativeFile) (tag : String) (script : Term)
+    (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == file.id then (file.id,tag,.tuple #[script]) else cell}
+
+/-- Directory fsync commits the visible namespace checkpoint and clears pending
+metadata snapshots on success. It does not synchronize regular-file contents.
+On error the last guaranteed checkpoint is unchanged; unsynchronized snapshots
+may still have reached disk. Filesystem/device fsync correspondence is assumed. -/
+@[expose] def pollDirectorySync (file : NativeFile) (env : Environment) :
+    Option (Except Exception (core.result.Result Unit NativeIoError) × Environment) :=
+  let invalid := some (.error .exhausted,env)
+  match directoryHandle file env with
+  | none => invalid
+  | some script =>
+    if script matches .cons (.atom "blocked") _ then none else
+    match action "sync_dir" script, namespaceSnapshot env with
+    | some (success,error,mask,rest), some state =>
+      if mask.size != 0 || (success && error != 0) then invalid else
+      let updated := storeDirectory file directoryTypeName rest env
+      if success then
+        some (.ok (.Ok ()),storeNamespace {state with committed := state.names, pending := []} updated)
+      else some (.ok (.Err ⟨error⟩),updated)
+    | _,_ => invalid
+
+/-- Directory destruction consumes the capability on either close outcome and
+never supplies the namespace synchronization guarantee of fsync. -/
+@[expose] def pollDirectoryClose (file : NativeFile) (env : Environment) :
+    Option (Except Exception Unit × Environment) :=
+  let invalid := some (.error .exhausted,env)
+  match directoryHandle file env with
+  | none => invalid
+  | some script =>
+    if script matches .cons (.atom "blocked") _ then none else
+    match action "close_dir" script with
+    | some (success,error,mask,rest) =>
+      if mask.size != 0 || (success && error != 0) then invalid
+      else some (.ok (),storeDirectory file closedDirectoryTypeName rest env)
+    | _ => invalid
+
 @[expose] def pollOpenReadOnly (path : Str) (env : Environment) :
     Option (Except Exception (core.result.Result NativeFile NativeIoError) × Environment) :=
   let invalid := some (.error .exhausted, env)
   let path := bytes path
-  if !supportedPath path then invalid else
+  if !supportedOpenPath path then invalid else
   match namespaceState env with
   | none => invalid
   | some (names, script) =>
@@ -2294,7 +2350,14 @@ Physical Unix/filesystem atomicity and error correspondence are external models.
     | some (success, error, ioScript, rest) =>
       if success then
         if error != 0 then invalid else
-        match names.filter (fun entry => entry.1.data == path.data) with
+        if path.data == #[46] then
+          let fresh := env.refCounter + 1
+          if env.nativeHeap.any (fun cell => cell.1 == fresh) then invalid else
+          let updated := replaceNamespaceScript rest env
+          some (.ok (.Ok ⟨fresh⟩),{updated with
+            refCounter := fresh
+            nativeHeap := (fresh,directoryTypeName,.tuple #[ioScript]) :: updated.nativeHeap})
+        else match names.filter (fun entry => entry.1.data == path.data) with
         | [(_, id)] =>
           match inode id env with
           | none => invalid
@@ -2395,7 +2458,7 @@ all visible file contents and length. Directory/device correspondence is assumed
 @[expose] def pollSync (file : NativeFile) (env : Environment) :
     Option (Except Exception (core.result.Result Unit NativeIoError) × Environment) :=
   match lookup file env with
-  | none => some (.error .exhausted, env)
+  | none => pollDirectorySync file env
   | some state =>
     if blocked state then none else
     match syncStep state with
@@ -2464,7 +2527,7 @@ remain explicit trusted boundaries. -/
 @[expose] def pollClose (file : NativeFile) (env : Environment) :
     Option (Except Exception Unit × Environment) :=
   match lookup file env with
-  | none => some (.error .exhausted, env)
+  | none => pollDirectoryClose file env
   | some state =>
     if blocked state then none else
     match closeStep state with

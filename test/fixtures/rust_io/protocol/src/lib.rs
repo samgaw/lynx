@@ -291,3 +291,19 @@ pub fn create_fresh(path: &str) -> io::Result<File> {
 pub fn rename_visible(from: &str, to: &str) -> io::Result<()> {
     io_core::rename_file(from, to)
 }
+
+/// Synchronizes the containing directory through a first-party dependency.
+/// # Errors
+/// Propagates the operating system's opening or synchronization error.
+pub fn sync_directory() -> io::Result<()> {
+    let directory = io_core::open_readonly(".")?;
+    io_core::synchronize(&directory)
+}
+
+/// Opens and closes the directory without promising namespace persistence.
+/// # Errors
+/// Propagates the operating system's opening error.
+pub fn close_directory() -> io::Result<()> {
+    let _directory = io_core::open_readonly(".")?;
+    Ok(())
+}
