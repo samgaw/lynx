@@ -82,8 +82,16 @@ defmodule Lynx.Rust do
   records a pending snapshot without advancing the checkpoint; pending snapshots
   may also reach disk. Directory synchronization and recovery of these snapshots
   remain unsupported.
+  `std::fs::rename<&str, &str>` uses an explicit single-directory Unix-style
+  atomic metadata model. Both standard path-conversion dictionaries are checked.
+  Replacement preserves inode contents and existing open capabilities, including
+  handles of an unlinked destination. Renaming two names of the same inode is a
+  no-op. An I/O error may leave the rename applied or unapplied; callers cannot
+  assume rollback. Changed names are pending, and rename does not advance the
+  synchronization checkpoint. Filesystem atomicity and OS/FFI correspondence
+  remain assumptions rather than verified native guarantees.
   Physical close/descriptor reclamation, descriptor cloning, directory durability,
-  rename/unlink, unrestricted concurrent I/O and general crash injection
+  standalone unlink, unrestricted concurrent I/O and general crash injection
   remain unsupported. Compiler-checked resource payloads may own File and
   Mutex<File> fields with `owned_drops: true`; panic cleanup of live files remains
   rejected. This option verifies first-party protocols against the explicit model,

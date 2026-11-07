@@ -29,6 +29,11 @@ defmodule Lynx.Rust.FileModelsTest do
              )
   end
 
+  test "namespace-only operations admit an error type without inventing a File declaration" do
+    assert [%{rust: "core::io::error::Error", lean: "Lynx.NativeIoError"}] =
+             FileModels.type_models([{0, %{native_file_types: {nil, 2}}}], "Rename.Extraction")
+  end
+
   defp parameters(regions \\ []),
     do: %{
       "regions" => Enum.map(regions, &%{"index" => &1}),

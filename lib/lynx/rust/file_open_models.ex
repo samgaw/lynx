@@ -4,7 +4,55 @@ defmodule Lynx.Rust.FileOpenModels do
 
   # Erasing AsRef is justified only by the concrete standard &str dictionary.
   # Custom conversions, owned paths and generic unresolved callers stay closed.
-  def resolve(f, t, refs), do: opening(f, t, refs) || conversion(f, t, refs)
+  def resolve(f, t, refs),
+    do: opening(f, t, refs) || renaming(f, t, refs) || conversion(f, t, refs)
+
+  defp renaming(f, t, refs) do
+    with %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "generics" => p,
+           "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false} = sig
+         } <- f,
+         true <- f["item_meta"]["name"] == name(~w(std fs rename)),
+         true <- params?(p, 0, 2, 2) and p["outlives"] == [],
+         path when not is_nil(path) <- named(t, "type_decls", ~w(std path Path)),
+         true <- path["kind"] == "Opaque" and params?(path["generics"], 0, 0, 0),
+         error when not is_nil(error) <- named(t, "type_decls", ~w(core io error Error)),
+         trait when not is_nil(trait) <- named(t, "trait_decls", ~w(core convert AsRef)),
+         true <- params?(trait["generics"], 0, 2, 0),
+         true <- trait["types"] == [] and trait["consts"] == [] and length(trait["methods"]) == 1,
+         [left, right] <- p["trait_clauses"],
+         true <- clause?(left, trait["def_id"], [variable(0), adt(path["def_id"])], refs),
+         true <- clause?(right, trait["def_id"], [variable(1), adt(path["def_id"])], refs, 1),
+         true <- CallModels.expand(sig["inputs"], refs) == [variable(0), variable(1)],
+         %{"Adt" => %{"id" => result, "builtin" => nil, "generics" => output}} <-
+           CallModels.expand(sig["output"], refs),
+         true <-
+           output ==
+             args([
+               %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args([])}},
+               adt(error["def_id"])
+             ]),
+         true <- LLBC.result_type?(result, %{translated: t, references: refs}) do
+      %{
+        rust_name: "std::fs::rename",
+        lean: "Lynx.NativeFile.rename",
+        builtin: false,
+        can_fail: true,
+        lift: true,
+        keep_params: [false, false],
+        keep_trait_clauses: [false, false],
+        native_file_rename: {path["def_id"], trait["def_id"]},
+        native_file_types: {nil, error["def_id"]},
+        native_cutoff_only: true,
+        label:
+          "Bounded single-directory Unix-style atomic rename model: both concrete standard &str AsRef<Path> dictionaries validated; same-inode aliases are a no-op; replacement retains existing open inode capabilities; errors may leave the operation applied or unapplied; namespace changes are pending, not synchronized; atomicity, paths, filesystem/OS/FFI correspondence remain assumptions; directories, symlinks and unsupported path forms rejected"
+      }
+    else
+      _ -> nil
+    end
+  end
 
   defp opening(f, t, refs) do
     with %{
@@ -68,7 +116,7 @@ defmodule Lynx.Rust.FileOpenModels do
   end
 
   def type_models(calls, prefix) do
-    if Enum.any?(calls, fn {_, m} -> m[:native_file_open] end),
+    if Enum.any?(calls, fn {_, m} -> m[:native_file_open] || m[:native_file_rename] end),
       do: [
         %{
           rust: "std::path::Path",
@@ -89,6 +137,32 @@ defmodule Lynx.Rust.FileOpenModels do
          traits
        ) do
     case models[id] do
+      %{native_file_rename: {path, trait}} ->
+        case g do
+          %{
+            "regions" => [],
+            "types" => [left, right],
+            "const_generics" => [],
+            "trait_refs" => [a, b]
+          } ->
+            found =
+              for {type, dict} <- [{left, a}, {right, b}] do
+                call?(%{args([type]) | "trait_refs" => [dict]}, path, trait, t, refs, traits)
+              end
+
+            case found do
+              [{:ok, x}, {:ok, y}] ->
+                %{id => Enum.uniq(x ++ y)}
+
+              _ ->
+                raise ArgumentError,
+                      "rename requires concrete standard &str AsRef<Path> implementations for both paths"
+            end
+
+          _ ->
+            raise ArgumentError, "rename requires two concrete standard &str path arguments"
+        end
+
       %{native_file_open: {path, trait}} ->
         case call?(g, path, trait, t, refs, traits) do
           {:ok, ids} ->
@@ -266,18 +340,23 @@ defmodule Lynx.Rust.FileOpenModels do
     end
   end
 
+  defp clause?(clause, trait, types, refs, index \\ 0)
+
   defp clause?(
          %{
-           "clause_id" => 0,
+           "clause_id" => index,
            "trait_" => %{"regions" => [], "outlives" => [], "skip_binder" => decl}
          },
          trait,
          types,
-         refs
+         refs,
+         expected
        ),
-       do: decl["id"] == trait and expand_args(decl["generics"], refs) == args(types)
+       do:
+         index == expected and decl["id"] == trait and
+           expand_args(decl["generics"], refs) == args(types)
 
-  defp clause?(_, _, _, _), do: false
+  defp clause?(_, _, _, _, _), do: false
 
   defp params?(p, regions, types, clauses),
     do:

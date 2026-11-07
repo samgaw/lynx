@@ -212,8 +212,13 @@ defmodule Lynx.Rust.FileModels do
           match?({_, id} when is_integer(id), model[:native_file_types])
         end)
 
+      files =
+        Enum.any?(calls, fn {_, model} ->
+          match?({id, _} when is_integer(id), model[:native_file_types])
+        end)
+
       for {rust, lean} <-
-            [{@file_path, "Lynx.NativeFile"}] ++
+            if(files, do: [{@file_path, "Lynx.NativeFile"}], else: []) ++
               if(errors, do: [{@error, "Lynx.NativeIoError"}], else: []) do
         %{
           rust: Enum.join(rust, "::"),

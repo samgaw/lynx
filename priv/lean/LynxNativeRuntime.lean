@@ -2216,6 +2216,70 @@ persistence guarantee. A reported success for an existing name is rejected. -/
     | .ok value => .ok value
     | .error exception => .error exception
 
+/-- Rename outcomes retain the requested pair of names and an explicit atomic
+namespace effect. An error may have applied the operation; callers cannot assume
+that an I/O error rolls back metadata. -/
+@[expose] def renameChoice (source target : ByteArray) :
+    Term → Option (Bool × Nat × Bool × Term)
+  | .cons (.tuple fields) rest => do
+    if size : fields.size = 6 then
+      let .atom operation := fields[0]'(by omega) | none
+      let .bitstring requestedSource fromBits _ := fields[1]'(by omega) | none
+      let .bitstring requestedTarget toBits _ := fields[2]'(by omega) | none
+      let .atom status := fields[3]'(by omega) | none
+      let .integer error := fields[4]'(by omega) | none
+      let .atom effect := fields[5]'(by omega) | none
+      if operation != "rename" || fromBits != 0 || toBits != 0 ||
+          requestedSource.data != source.data || requestedTarget.data != target.data || error < 0 ||
+          (status != "ok" && status != "error") || (effect != "apply" && effect != "keep") then none
+      else some (status == "ok", error.toNat, effect == "apply", rest)
+    else none
+  | _ => none
+
+@[expose] def renamedNames (names : Names) (source target : ByteArray) (node : Nat) : Names :=
+  names.filter (fun entry => entry.1.data != source.data && entry.1.data != target.data) ++ [(target,node)]
+
+/-- Single-directory atomic replacement over regular inodes. Inode data and
+open handles survive rename/unlink of a name. Same-inode aliases are unchanged.
+Physical Unix/filesystem atomicity and error correspondence are external models. -/
+@[expose] def pollRename (source target : Str) (env : Environment) :
+    Option (Except Exception (core.result.Result Unit NativeIoError) × Environment) :=
+  let invalid := some (.error .exhausted, env)
+  let source := bytes source
+  let target := bytes target
+  if !supportedPath source || !supportedPath target then invalid else
+  match namespaceSnapshot env with
+  | none => invalid
+  | some state =>
+    if state.script matches .cons (.atom "blocked") _ then none else
+    match renameChoice source target state.script with
+    | none => invalid
+    | some (success,error,applied,rest) =>
+      if success && (error != 0 || !applied) then invalid else
+      let reply := if success then core.result.Result.Ok () else .Err ⟨error⟩
+      if !applied then some (.ok reply, replaceNamespaceScript rest env) else
+      match state.names.filter (fun entry => entry.1.data == source.data) with
+      | [(_,node)] =>
+        match inode node env with
+        | none => invalid
+        | some _ =>
+          let destination := state.names.filter (fun entry => entry.1.data == target.data)
+          if destination.any (fun entry => (inode entry.2 env).isNone) then invalid else
+          if destination.any (fun entry => entry.2 == node) then
+            some (.ok reply, replaceNamespaceScript rest env)
+          else if state.pending.length ≥ 1024 then invalid else
+            let names := renamedNames state.names source target node
+            some (.ok reply, storeNamespace {state with
+              names := names
+              pending := state.pending ++ [names]
+              script := rest} env)
+      | _ => invalid
+
+@[expose] def rename (source target : Str) : NativeM (core.result.Result Unit NativeIoError) :=
+  .wait (pollRename source target) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
 @[expose] def pollOpenReadOnly (path : Str) (env : Environment) :
     Option (Except Exception (core.result.Result NativeFile NativeIoError) × Environment) :=
   let invalid := some (.error .exhausted, env)
