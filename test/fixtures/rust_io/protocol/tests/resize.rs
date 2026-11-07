@@ -77,3 +77,40 @@ fn repair_discards_only_the_examined_partial_tail() -> io::Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn repair_stops_at_an_invalid_record_before_later_valid_records() -> io::Result<()> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_nanos();
+    let path = Scratch(
+        std::env::temp_dir().join(format!("lynx-malformed-{}-{nonce}", std::process::id())),
+    );
+    let values = [7u16, 9];
+    let prefix = values
+        .into_iter()
+        .flat_map(io_core::encode_record)
+        .collect::<Vec<_>>();
+    let mut bytes = prefix.clone();
+    bytes.extend_from_slice(&[1, 2, 3, 4]);
+    bytes.extend_from_slice(&io_core::encode_record(42));
+    bytes.extend_from_slice(&io_core::encode_record(u16::MAX));
+    bytes.push(7);
+    fs::write(&path.0, &bytes)?;
+    let mut file = OpenOptions::new().read(true).write(true).open(&path.0)?;
+    assert_eq!(io_protocol::recover_log(&mut file, 10)?, values);
+    assert_eq!(file.stream_position()?, 12);
+    assert_eq!(fs::read(&path.0)?, bytes);
+    assert_eq!(io_protocol::repair_log(&mut file, 2)?, None);
+    assert_eq!(fs::read(&path.0)?, bytes);
+    assert_eq!(
+        io_protocol::repair_log(&mut file, 10)?,
+        Some(values.to_vec())
+    );
+    assert_eq!(file.stream_position()?, 12);
+    assert_eq!(fs::read(&path.0)?, prefix);
+    assert!(io_protocol::append_record(&mut file, 42)?);
+    assert_eq!(io_protocol::recover_log(&mut file, 10)?, [7, 9, 42]);
+    Ok(())
+}
