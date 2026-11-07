@@ -17,3 +17,27 @@ pub fn write_then_sync(file: &mut File, bytes: &[u8]) -> io::Result<usize> {
         },
     }
 }
+
+/// Reads a little-endian word, rejecting EOF in either byte.
+///
+/// # Errors
+/// Propagates the first read error without claiming a complete word.
+pub fn read_word(file: &mut File) -> io::Result<Option<u16>> {
+    let mut first = [0u8];
+    match io_core::read_once(file, &mut first) {
+        Err(error) => Err(error),
+        Ok(0) => Ok(None),
+        Ok(_) => {
+            let mut second = [0u8];
+            match io_core::read_once(file, &mut second) {
+                Err(error) => Err(error),
+                Ok(0) => Ok(None),
+                Ok(_) => {
+                    let [low] = first;
+                    let [high] = second;
+                    Ok(Some(u16::from_le_bytes([low, high])))
+                }
+            }
+        }
+    }
+}

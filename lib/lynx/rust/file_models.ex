@@ -36,8 +36,16 @@ defmodule Lynx.Rust.FileModels do
               reference(1, %{"Slice" => [scalar("U8"), nil]}, "Shared")
             ] and
             result?(output, scalar("Usize"), e, translated, refs) and
-              write?(function, f, translated, refs) ->
+              io_method?(function, f, translated, refs, "write", ~w(core io write Write)) ->
             {"std::fs::{core::io::write::Write<std::fs::File>}::write", "write"}
+
+          length(params["regions"]) == 2 and
+            input == [
+              reference(0, f, "Mut"),
+              reference(1, %{"Slice" => [scalar("U8"), nil]}, "Mut")
+            ] and result?(output, scalar("Usize"), e, translated, refs) and
+              io_method?(function, f, translated, refs, "read", ~w(alloc io read Read)) ->
+            {"std::fs::{alloc::io::read::Read<std::fs::File>}::read", "read"}
 
           length(params["regions"]) == 1 and input == [reference(0, f, "Shared")] and
             result?(
@@ -66,7 +74,7 @@ defmodule Lynx.Rust.FileModels do
           native_cutoff_only: true,
           native_file_types: {file["def_id"], error["def_id"]},
           label:
-            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes and bytewise old/new torn persistence; sync_all success persists visible contents and length; std, OS, filesystem/device, namespace and native descriptor correspondence unverified; read/open/close/seek/append modes and concurrent file access unsupported"
+            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence; sync_all success persists visible contents and length; std, OS, filesystem/device, namespace and native descriptor correspondence unverified; open/close/seek/append modes and concurrent file access unsupported"
         }
       end
     else
@@ -100,7 +108,7 @@ defmodule Lynx.Rust.FileModels do
     end
   end
 
-  defp write?(
+  defp io_method?(
          %{
            "def_id" => id,
            "item_meta" => %{
@@ -108,7 +116,7 @@ defmodule Lynx.Rust.FileModels do
                %{"Ident" => ["std", 0]},
                %{"Ident" => ["fs", 0]},
                %{"Impl" => %{"Trait" => impl}},
-               %{"Ident" => ["write", 0]}
+               %{"Ident" => [method, 0]}
              ]
            },
            "src" => %{
@@ -122,7 +130,9 @@ defmodule Lynx.Rust.FileModels do
          },
          file,
          translated,
-         refs
+         refs,
+         method,
+         trait_path
        ) do
     with %{
            "src" => "Normal",
@@ -136,7 +146,7 @@ defmodule Lynx.Rust.FileModels do
          true <- CallModels.expand(generics, refs) == args([file]),
          %{"item_meta" => %{"name" => trait_name}} <-
            Enum.find(translated["trait_decls"], &(&1 && &1["def_id"] == trait)) do
-      trait_name == name(~w(core io write Write)) and
+      trait_name == name(trait_path) and
         Enum.any?(methods, fn
           %{"kind" => %{"TraitMethod" => [^trait, 0]}, "skip_binder" => %{"id" => ^id}} -> true
           _ -> false
@@ -146,7 +156,7 @@ defmodule Lynx.Rust.FileModels do
     end
   end
 
-  defp write?(_, _, _, _), do: false
+  defp io_method?(_, _, _, _, _, _), do: false
 
   defp sync?(
          %{
