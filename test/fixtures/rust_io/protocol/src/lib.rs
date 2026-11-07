@@ -165,3 +165,18 @@ pub fn repair_log(file: &mut File, max_records: usize) -> io::Result<Option<Vec<
         }
     }
 }
+
+/// Appends under a single native file mutex, retaining IO effects on release.
+///
+/// # Errors
+/// Propagates seek, write and synchronization errors.
+///
+/// # Panics
+/// Recursive acquisition may panic or block. Callers must not hold this mutex.
+pub fn locked_append(mutex: &std::sync::Mutex<File>, value: u16) -> io::Result<bool> {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    append_record(&mut guard, value)
+}
