@@ -252,6 +252,53 @@ theorem run_reaches (computation : Result α) (env : Environment) (choices : Lis
   rw [Term.Runner.run, ready]
   rfl
 
+/-- A finite prefix of ready waits in one local execution. The residual
+computation is retained rather than assumed to finish. Readiness and every
+intermediate state are established by the actual polls; this relation does not
+inject a crash or choose concurrent scheduler interleavings. -/
+inductive ReadyPrefix : Result α → Environment → Result α → Environment → Prop where
+  | refl (computation : Result α) (env : Environment) :
+      ReadyPrefix computation env computation env
+  | wait {β : Type} (poll : Environment → Option (β × Environment))
+      (next : β → Result α) (reply : β) (before middle : Environment)
+      (residual : Result α) (after : Environment)
+      (ready : poll before = some (reply,middle))
+      (rest : ReadyPrefix (next reply) middle residual after) :
+      ReadyPrefix (.wait poll next) before residual after
+
+/-- A ready prefix agrees with the existing runner. Completion and its outcome
+remain the responsibility of the residual computation. -/
+theorem ReadyPrefix.apply {computation residual : Result α} {before after : Environment}
+    (trace : ReadyPrefix computation before residual after) :
+    computation before = residual after := by
+  induction trace with
+  | refl => rfl
+  | wait poll next reply before middle residual after ready rest ih =>
+      rw [wait_ready_apply poll next before middle reply ready]
+      exact ih
+
+/-- Extend an existential ready prefix without choosing or rewriting the
+residual computation by hand. -/
+theorem ReadyPrefix.exists_wait {α β : Type}
+    (poll : Environment → Option (β × Environment)) (next : β → Result α)
+    (reply : β) (before middle after : Environment)
+    (ready : poll before = some (reply,middle))
+    (rest : ∃ residual, ReadyPrefix (next reply) middle residual after) :
+    ∃ residual, ReadyPrefix (.wait poll next) before residual after := by
+  obtain ⟨residual,trace⟩ := rest
+  exact ⟨residual,.wait poll next reply before middle residual after ready trace⟩
+
+/-- A caller's continuation can be attached without changing the prefix states. -/
+theorem ReadyPrefix.bind {computation residual : Result α} {before after : Environment}
+    (trace : ReadyPrefix computation before residual after) (next : α → Result β) :
+    ReadyPrefix (computation >>= next) before (residual >>= next) after := by
+  induction trace with
+  | refl => exact .refl _ _
+  | wait poll continuation reply before middle residual after ready rest ih =>
+      rw [wait_bind]
+      exact .wait poll (fun reply => continuation reply >>= next) reply before middle
+        (residual >>= next) after ready ih
+
 /-- A finite sequence of ready polls in one native execution context. Polls
 change only the shared counter and heap; all process and scheduler fields are
 framed. This describes the existing wait nodes rather than combining their IO. -/

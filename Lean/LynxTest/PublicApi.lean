@@ -37,6 +37,18 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.concurrent_eq_run
   have _ := @Lynx.Result.two_wait_interleave
   have _ := @Lynx.Result.two_wait_interleave_child_first
+  have _ := @Lynx.Result.ReadyPrefix
+  have _ := @Lynx.Result.ReadyPrefix.apply
+  have _ := @Lynx.Result.ReadyPrefix.exists_wait
+  have _ := @Lynx.Result.ReadyPrefix.bind
+  have _ := @Lynx.Result.SharedSteps
+  have _ := @Lynx.Result.SharedSteps.apply
+  have _ := @Lynx.Result.ExclusiveSteps
+  have _ := @Lynx.Result.ExclusiveBlocked
+  have _ := @Lynx.Result.two_wait_blocked_orders
+  have _ := @Lynx.Result.ExclusiveSteps.ready
+  have _ := @Lynx.Result.two_wait_serial_orders
+  have _ := @Lynx.Result.two_wait_interleave_steps
   trivial
 
 private theorem readyStateWait (poll : Lynx.Environment → Option (β × Lynx.Environment))
@@ -691,6 +703,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result",
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
+  "Lynx.Result.ReadyPrefix",
   "Lynx.Result.SharedSteps",
   "Lynx.Result.Talks",
   "Lynx.Result.andAlso",
