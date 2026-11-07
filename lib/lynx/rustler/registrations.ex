@@ -260,6 +260,28 @@ defmodule Lynx.Rustler.Registrations do
       end)
       |> Enum.uniq()
 
+    # A checked consuming ResourceArc call also establishes its concrete payload.
+    # Do not infer registration requirements from signature names alone.
+    traits = ResourceModels.trait_references(audit.translated)
+
+    dropped =
+      for f <- audit.functions,
+          {id, args} <- calls(f["body"]),
+          audit.external_calls[id][:native_dispose] == true,
+          Lynx.Rust.ResourceDrops.call?(
+            args,
+            audit.translated,
+            audit.references,
+            traits
+          ),
+          [self] = args["types"],
+          %{"Adt" => %{"generics" => %{"types" => [payload]}}} =
+            CallModels.expand(self, audit.references),
+          %{"Adt" => %{"id" => type}} <- [CallModels.expand(payload, audit.references)],
+          do: type
+
+    ids = Enum.uniq(ids ++ dropped)
+
     plan = NativeCodecs.plan!(audit)
 
     Enum.map(ids, fn id ->

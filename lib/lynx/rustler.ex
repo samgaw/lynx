@@ -37,13 +37,15 @@ defmodule Lynx.Rustler do
   and the compiled entry's load-callback presence. Successful native loading,
   linker constructors and registration execution remain trusted FFI behavior.
   Custom loaders, named resource registrations, dependency-crate registrations
-  remain unsupported. Top-level immutable, destructor-free ResourceArc arguments
-  and results are supported with runtime execution when their payloads occur in
-  audited new/clone/deref calls within the selected extraction. Encoding retains
-  a logical VM pin and decoding acquires an independent Rust owner. VM pins stay
+  remain unsupported. Top-level ResourceArc arguments and results are supported
+  with runtime execution when their concrete payloads occur in audited
+  new/clone/deref or consuming drop calls. Payloads are destructor-free by default; `owned_drops: true` also permits
+  checked structural cleanup of directly owned mutex and File fields. Encoding
+  retains a logical VM pin and decoding acquires an independent Rust owner. VM pins stay
   live for the proof: garbage collection, process-death cleanup, serialization and
   distributed resource terms remain unsupported. Resource fields nested inside
-  tuple/result codecs and signature-only resource payload discovery are rejected.
+  tuple/result codecs and unaudited signature-only resource payload discovery are
+  rejected.
   Build scripts and procedural macros execute as part of the trusted build.
   Panic conversion requires an unwinding build; aborting builds are rejected.
   Integer decoding follows Rustler exactly, including its narrowing casts for
@@ -88,11 +90,17 @@ defmodule Lynx.Rustler do
       unsupported in this mode. Ordinary scalar/tuple/result and
       byte-vector codecs retain their existing decoding rules and cutoffs.
     * `:owned_drops` — `false` by default. With runtime execution, `true` admits
-      the supported mutex-containing ResourceArc payloads using actual extracted
-      structural cleanup. Result encoding and partial argument-decoding cleanup
+      supported ResourceArc payloads that directly own mutex or File fields,
+      using actual extracted structural cleanup. Result encoding and partial argument-decoding cleanup
       use the same owning dispatch as extracted Rust calls. VM pins survive
       temporary Rust owners; VM collection, custom destructor unwind and native
       binary/FFI correctness remain outside these proofs.
+    * `:files` — `:reject` by default. `:regular` with runtime execution forwards
+      the bounded regular-file model to Rust extraction. With `owned_drops: true`,
+      structural resource cleanup may close directly owned File fields through
+      their checked compiler destructors. OS/FFI correspondence remains explicit;
+      opening, descriptor cloning, nested Mutex<File> destruction and live-file
+      panic cleanup remain unsupported.
     * `:futures` — forwarded to `Lynx.Rust`; defaults to `:reject`. Runtime
       modes allow ordinary synchronous NIFs to construct and explicitly poll
       supported first-party futures. Standard `Waker::noop` and
@@ -130,7 +138,8 @@ defmodule Lynx.Rustler do
       :execution,
       :futures,
       :unwind,
-      :owned_drops
+      :owned_drops,
+      :files
     ]
 
     for key <- Keyword.keys(opts),
@@ -141,6 +150,8 @@ defmodule Lynx.Rustler do
 
     unless execution in [:pure, :runtime],
       do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(execution)}")
+
+    Lynx.Rust.FileModels.enabled!(Keyword.get(opts, :files, :reject), execution)
 
     owned = Keyword.get(opts, :owned_drops, false)
 
@@ -250,6 +261,7 @@ defmodule Lynx.Rustler do
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         execution: execution,
         futures: Keyword.get(opts, :futures, :reject),
+        files: Keyword.get(opts, :files, :reject),
         owned_drops: Keyword.get(opts, :owned_drops, false),
         unwind: Keyword.get(opts, :unwind, :reject),
         external_types: models,

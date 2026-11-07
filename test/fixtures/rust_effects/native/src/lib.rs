@@ -947,8 +947,11 @@ pub fn locked_resource_read(resource: rustler::ResourceArc<CounterResource>) -> 
     value
 }
 
-#[cfg(feature = "nif")]
+#[cfg(all(feature = "nif", not(feature = "file-resource-handles")))]
 rustler::init!("Elixir.LynxEffectsFixture.Native");
+
+#[cfg(feature = "file-resource-handles")]
+rustler::init!("Elixir.LynxFileResourceFixture.Native");
 
 /// Completes the actual compiler future with a standard no-op task context.
 ///
@@ -1017,4 +1020,58 @@ pub fn locked_resource_poll_resume(
         std::task::Poll::Ready(changed) => changed,
         std::task::Poll::Pending => false,
     }
+}
+
+/// An owned file retained by a Rustler resource.
+#[derive(Debug)]
+pub struct FileResource {
+    /// The independently admitted regular file.
+    pub file: std::fs::File,
+}
+#[cfg_attr(feature = "file-resource-handles", rustler::resource_impl)]
+#[cfg_attr(
+    not(feature = "file-resource-handles"),
+    rustler::resource_impl(register = false)
+)]
+impl rustler::Resource for FileResource {}
+/// Allocates a registered resource around an owned file.
+/// # Panics
+/// Panics if the resource type has not been registered.
+pub fn file_resource_new(file: std::fs::File) -> rustler::ResourceArc<FileResource> {
+    rustler::ResourceArc::new(FileResource { file })
+}
+/// Releases a Rust handle, closing the file only on the final reference.
+pub fn file_resource_release(resource: rustler::ResourceArc<FileResource>) {
+    drop(resource);
+}
+
+/// Retains another Rust token for the same file resource.
+pub fn file_resource_clone(
+    resource: &rustler::ResourceArc<FileResource>,
+) -> rustler::ResourceArc<FileResource> {
+    resource.clone()
+}
+
+/// Clones a resource and releases both Rust owners, closing only on final release.
+/// # Panics
+/// Panics if the resource type has not been registered.
+pub fn file_resource_cycle(file: std::fs::File) {
+    let first = file_resource_new(file);
+    let second = file_resource_clone(&first);
+    file_resource_release(first);
+    file_resource_release(second);
+}
+
+/// Synchronizes the shared file through another first-party crate.
+/// # Errors
+/// Propagates the file synchronization error without consuming the resource.
+pub fn file_resource_sync(resource: &rustler::ResourceArc<FileResource>) -> std::io::Result<()> {
+    effects_core::synchronize_file(&resource.file)
+}
+
+/// Releases the decoded Rust owner while the originating VM term remains live.
+#[cfg(feature = "file-resource-handles")]
+#[rustler::nif(name = "file_release", schedule = "DirtyIo")]
+pub fn file_resource_nif_release(resource: rustler::ResourceArc<FileResource>) {
+    file_resource_release(resource);
 }

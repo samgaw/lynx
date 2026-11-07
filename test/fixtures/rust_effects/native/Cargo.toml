@@ -13,6 +13,7 @@ resource-nif = ["nif"]
 resource-handles = ["resource-nif"]
 locked-resource-handles = ["nif"]
 future-resource-handles = ["locked-resource-handles"]
+file-resource-handles = ["nif"]
 
 [dependencies]
 effects-core = { path = "../core" }

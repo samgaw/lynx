@@ -158,3 +158,10 @@ impl std::future::Future for PausedCounter {
         }
     }
 }
+
+/// Synchronizes a borrowed regular file without changing its Rust ownership.
+/// # Errors
+/// Propagates the native synchronization error.
+pub fn synchronize_file(file: &std::fs::File) -> std::io::Result<()> {
+    file.sync_all()
+}
