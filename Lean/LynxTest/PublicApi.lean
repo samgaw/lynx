@@ -21,6 +21,7 @@ private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatch
 
 private theorem publicReferenceComparison : True := by
   have _ := @Lynx.Term.compare_eq_reference
+  have _ := @Lynx.Term.compare_atoms
   trivial
 
 -- Effectful clients normalize catches through public monadic equations.

@@ -930,6 +930,12 @@ end Lynx.Term
 
 namespace Lynx.Term
 
+/-- Atom ordering agrees with the ordering of atom names. -/
+@[simp] theorem compare_atoms (a b : String) :
+    compare (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
+  rw [compare_step]
+  rfl
+
 @[simp] theorem compare_reference (a b : List Nat) :
     compare (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = Ord.compare a b := by
   rw [compare_step]
