@@ -1823,6 +1823,7 @@ structure NativeIoError where
 namespace NativeFile
 
 @[expose] def typeName : String := "rust:regular-file"
+@[expose] def closedTypeName : String := "rust:closed-file"
 @[expose] def limit : Nat := 1048576
 
 /-- The script is an explicit choice of OS outcomes, not a verified OS implementation.
@@ -2093,6 +2094,42 @@ and filesystem correspondence remain explicit OS assumptions. -/
     | .ok value => .ok value
     | .error exception => .error exception
 
+/-- File destruction consumes ownership even when the host close reports an error.
+The retained image is ghost disk state, not a reusable descriptor. Close does not
+acknowledge durability. Physical descriptor reclamation and std/OS/FFI behavior
+remain explicit trusted boundaries. -/
+@[expose] def closeStep (state : State) : Option State := do
+  let (success, value, mask, rest) ← action "close" state.script
+  if success && value != 0 then none else do
+  let durable ← persist state.durable state.visible mask
+  some {state with durable := durable, script := rest}
+
+@[expose] def lookupClosed (file : NativeFile) (env : Environment) : Option State :=
+  if file.id ≤ env.refCounter then
+    match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
+    | [(_, tag, contents)] => if tag == closedTypeName then decode contents else none
+    | _ => none
+  else none
+
+@[expose] def retire (file : NativeFile) (state : State) (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == file.id then (file.id, closedTypeName, encode state) else cell}
+
+@[expose] def pollClose (file : NativeFile) (env : Environment) :
+    Option (Except Exception Unit × Environment) :=
+  match lookup file env with
+  | none => some (.error .exhausted, env)
+  | some state =>
+    if blocked state then none else
+    match closeStep state with
+    | none => some (.error .exhausted, env)
+    | some updated => some (.ok (), retire file updated env)
+
+@[expose] def close (file : NativeFile) : NativeM Unit :=
+  .wait (pollClose file) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
 /-- A single independent file's possible persistent image after power loss.
 The high-water mark is ghost freshness bookkeeping, not on-disk application data.
 Native opening and namespace correspondence are separate trusted boundaries. -/
@@ -2103,7 +2140,7 @@ structure Image where
 /-- Permit any additional persistence allowed by the file model before power
 loss, including torn unsynchronized writes. No volatile process state is saved. -/
 @[expose] def crashImage (file : NativeFile) (mask : ByteArray) (env : Environment) : Option Image := do
-  let state ← lookup file env
+  let state ← (lookup file env).orElse (fun _ => lookupClosed file env)
   let durable ← persist state.durable state.visible mask
   some ⟨durable, env.refCounter⟩
 
@@ -2118,4 +2155,11 @@ Old capabilities and all previous process/resource/lock state are discarded. -/
       nativeHeap := [(file.id, typeName, encode ⟨image.bytes, image.bytes, 0, script⟩)] })
 
 end NativeFile
+
+instance : NativeDrop NativeFile where
+  drop := NativeFile.close
+
+instance : NativeOwnedDrop NativeFile where
+  drop := NativeFile.close
+
 end Lynx

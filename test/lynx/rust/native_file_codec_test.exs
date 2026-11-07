@@ -42,6 +42,23 @@ defmodule Lynx.Rust.NativeFileCodecTest do
     }
   end
 
+  test "bare consuming inputs still require an admitted file capability" do
+    audit = fixture()
+    file = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args([])}}
+    call = %{args([file]) | "trait_refs" => [%{}]}
+
+    audit =
+      audit
+      |> put_in([:functions, Access.at(0), "body", "Regular", "generics"], call)
+      |> put_in([:external_calls, 10], %{native_codec_drop: true})
+
+    assert NativeCodecs.plan!(audit) == []
+
+    assert_raise ArgumentError, ~r/unsupported native heap struct identity/, fn ->
+      NativeCodecs.plan!(%{audit | external_calls: Map.delete(audit.external_calls, 20)})
+    end
+  end
+
   test "admits only the validated standard file capability as an opaque heap payload" do
     audit = fixture()
     assert NativeCodecs.plan!(audit) == []

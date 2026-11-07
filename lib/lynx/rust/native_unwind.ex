@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.NativeUnwind do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, LLBC, NativeDrops}
+  alias Lynx.Rust.{CallModels, FileDrops, LLBC, NativeDrops}
 
   # Reuse the Aeneas preset's operations without the two assertion-resugaring
   # passes, which can erase cleanup. This is deliberately an explicit opt-in.
@@ -56,7 +56,7 @@ defmodule Lynx.Rust.NativeUnwind do
     {put_in(document, ["translated", "fun_decls"], functions), Enum.reverse(records)}
   end
 
-  # The closed mutex/normal-guard destruction models update the cell or
+  # The closed mutex/normal-guard/File destruction models update the cell or
   # exhaust verification; they cannot raise a Rust panic. Compiler cleanup behind
   # that call is unreachable in this model. Validate every concrete dictionary
   # before omitting its unwind-only block, including calls introduced by lowering.
@@ -67,7 +67,9 @@ defmodule Lynx.Rust.NativeUnwind do
 
     models =
       for function <- functions,
-          model = NativeDrops.resolve(function, translated, refs),
+          model =
+            NativeDrops.resolve(function, translated, refs) ||
+              FileDrops.resolve(function, translated, refs),
           model != nil,
           into: %{},
           do: {function["def_id"], model}

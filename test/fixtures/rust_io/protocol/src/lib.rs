@@ -224,3 +224,21 @@ pub fn locked_append_or_rollback(mutex: &std::sync::Mutex<File>, value: u16) -> 
     };
     append_record_or_rollback(&mut guard, value)
 }
+
+/// Consumes an owned file. Native close errors are ignored by Rust's destructor.
+pub fn consume_file(file: File) {
+    drop(file);
+}
+
+/// Scope exit invokes the compiler-generated file destructor.
+pub fn implicit_close(_file: File) {}
+
+/// Preserves the synchronization result and closes on both result branches.
+///
+/// # Errors
+/// Propagates synchronization errors. Closing does not acknowledge durability.
+pub fn synchronize_then_close(file: File) -> io::Result<()> {
+    let reply = io_core::synchronize(&file);
+    drop(file);
+    reply
+}

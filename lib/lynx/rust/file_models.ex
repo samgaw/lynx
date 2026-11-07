@@ -92,13 +92,15 @@ defmodule Lynx.Rust.FileModels do
           native_file_types: {file["def_id"], error["def_id"]},
           file_seek_type: if(lean == "seek", do: seek_id(translated), else: nil),
           label:
-            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; write errors preserve visible bytes and offset while retaining permitted background persistence (std/OS model assumption); reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); sync_all success persists visible contents and length; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); crash-image/restart host admission, std, OS, filesystem/device, namespace and native descriptor correspondence unverified; open/close/append modes and unrestricted concurrent file access unsupported; synchronized callers may be verified against these per-operation transitions"
+            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; write errors preserve visible bytes and offset while retaining permitted background persistence (std/OS model assumption); reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); sync_all success persists visible contents and length; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); crash-image/restart host admission, std, OS, filesystem/device, namespace and native descriptor correspondence unverified; open/append modes and unrestricted concurrent file access unsupported; owned File destruction requires the separately validated close model; synchronized callers may be verified against these per-operation transitions"
         }
       end
     else
       _ -> nil
     end
   end
+
+  def declaration(translated), do: type(translated, @file_path)
 
   def file_type?(translated, id) do
     case type(translated, @file_path) do
@@ -205,7 +207,14 @@ defmodule Lynx.Rust.FileModels do
 
   def type_models(calls, prefix) do
     if Enum.any?(calls, fn {_, model} -> model[:native_file_types] != nil end) do
-      for {rust, lean} <- [{@file_path, "Lynx.NativeFile"}, {@error, "Lynx.NativeIoError"}] do
+      errors =
+        Enum.any?(calls, fn {_, model} ->
+          match?({_, id} when is_integer(id), model[:native_file_types])
+        end)
+
+      for {rust, lean} <-
+            [{@file_path, "Lynx.NativeFile"}] ++
+              if(errors, do: [{@error, "Lynx.NativeIoError"}], else: []) do
         %{
           rust: Enum.join(rust, "::"),
           lean: lean,

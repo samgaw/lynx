@@ -17,7 +17,12 @@ defmodule Lynx.Rust.NativeDropLowering do
 
     mem_drop =
       Enum.find(translated["fun_decls"], fn f ->
-        f && match?(%{native_dispose: true}, NativeDrops.resolve(f, translated, refs))
+        f &&
+          match?(
+            %{native_dispose: true},
+            NativeDrops.resolve(f, translated, refs) ||
+              Lynx.Rust.FileDrops.resolve(f, translated, refs)
+          )
       end)
 
     functions = translated["fun_decls"]

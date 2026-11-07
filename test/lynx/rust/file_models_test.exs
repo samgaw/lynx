@@ -18,6 +18,17 @@ defmodule Lynx.Rust.FileModelsTest do
     assert FileModels.type_models([], "Disk.Extraction") == []
   end
 
+  test "close-only extraction admits the File type without inventing an I/O error dependency" do
+    assert [%{rust: "std::fs::File", lean: "Lynx.NativeFile", import: "Close.NativeRuntime"}] =
+             FileModels.type_models([{0, %{native_file_types: {1, nil}}}], "Close.Extraction")
+
+    assert [%{rust: "std::fs::File"}, %{rust: "core::io::error::Error"}] =
+             FileModels.type_models(
+               [{0, %{native_file_types: {1, nil}}}, {1, %{native_file_types: {1, 2}}}],
+               "Close.Extraction"
+             )
+  end
+
   defp parameters(regions \\ []),
     do: %{
       "regions" => Enum.map(regions, &%{"index" => &1}),
