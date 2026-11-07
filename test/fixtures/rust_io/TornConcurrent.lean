@@ -99,7 +99,7 @@ theorem torn_rollback_stalls (data : ByteArray) (first second : U16)
       rest fits offset short secondWrite secondResize) choices
   simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared] using result
 
-private theorem overwrite_append (head tail : List U8) (amount : Nat) :
+theorem overwrite_append (head tail : List U8) (amount : Nat) :
     overwrite (disk head) (disk head).size (disk tail) amount = disk (head ++ tail.take amount) := by
   by_cases zero : amount = 0
   · simp [overwrite, zero, disk]
@@ -223,6 +223,10 @@ private theorem persist_keep_visible (old visible : ByteArray) :
     have inside : i < visible.size := by simpa only [ByteArray.size_data] using hj
     simp [fullMask, getElem!_pos, inside]
     rfl
+
+/-- A concrete all-new persistence choice exists for any visible file image. -/
+theorem visible_choice (old visible : ByteArray) : ∃ mask, persist old visible mask = some visible :=
+  ⟨fullMask visible, persist_keep_visible old visible⟩
 
 theorem tail_size (value : U16) : (crop (encoded value) 2).size = 2 := by
   simp [crop, encoded, fourBytes, ← ByteArray.size_data]
