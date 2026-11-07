@@ -16,7 +16,7 @@ theorem content_size (value : U16) : (content value).size = 2 := by
 
 
 /-- The actual facade reports complete versus partial writes while retaining its VM-held file. -/
-theorem write_next {α : Type} (env : Environment) (before after : State) (counter : Nat)
+theorem write_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (before after : State) (counter : Nat)
     (bounded : 6 ≤ counter) (valid : Valid before) (ready : blocked before = false)
     (value : U16) (count : Usize)
     (step : writeStep before (wire value) = some (.Ok count,after))
@@ -25,15 +25,15 @@ theorem write_next {α : Type} (env : Environment) (before after : State) (count
     (do
       let owner ← NativeResourceArc.decode (.reference 6)
       let result ← Rustler.executeNative (__WRITE__ owner value) Rustler.encodeBool
-      next result) (pinnedEnv env before counter) =
-    next (Rustler.encodeBool (count = 2#usize)) (pinnedEnv env after (counter + 1)) := by
+      next result) (pinnedEnv env before counter ns) =
+    next (Rustler.encodeBool (count = 2#usize)) (pinnedEnv env after (counter + 1) ns) := by
   have trace : Result.ReadyPrefix (effects_core.write_shared_file payload.file (wire value))
-      (decodedEnv env before counter) (.ok (.Ok count)) (decodedEnv env after counter) := by
+      (decodedEnv env before counter ns) (.ok (.Ok count)) (decodedEnv env after counter ns) := by
     simp only [effects_core.write_shared_file,monadLift_self,write,Result.wait_bind,payload]
     apply Result.ReadyPrefix.wait _ _ (.ok (.Ok count,⟨2⟩)) _ _ _ _
-      (write_poll env before after counter bounded valid (wire value) ready (.Ok count) step)
+      (write_poll (ns := ns) env before after counter bounded valid (wire value) ready (.Ok count) step)
     simpa [NativeM.ok] using Result.ReadyPrefix.refl
-      (Result.ok (.Ok count : core.result.Result Usize NativeIoError)) (decodedEnv env after counter)
+      (Result.ok (.Ok count : core.result.Result Usize NativeIoError)) (decodedEnv env after counter ns)
   let finish := fun outcome : core.result.Result Usize NativeIoError => do
     let result : Bool ← match outcome with
       | .Ok written => NativeM.ok (written = Slice.len (wire value))
@@ -42,7 +42,7 @@ theorem write_next {α : Type} (env : Environment) (before after : State) (count
   let handler : Exception → Result Term := fun error => match error with
     | .error (.atom "rust_panicked") => Result.error (.error (.atom "nif_panicked"))
     | _ => Result.error .exhausted
-  have result := retained_effect_next env before after counter bounded
+  have result := retained_effect_next (ns := ns) env before after counter bounded
     (fun resource => effects_core.write_shared_file resource.file (wire value))
     (.Ok count) finish handler next registered trace
   have length : Slice.len (wire value) = 2#usize := by
@@ -71,19 +71,19 @@ theorem write_next {α : Type} (env : Environment) (before after : State) (count
 
 
 /-- The verified write contract applies in an ordinary caller's current environment. -/
-theorem write_env {α : Type} (before after : State) (valid : Valid before)
+theorem write_env {ns : NamespaceSnapshot} {α : Type} (before after : State) (valid : Valid before)
     (ready : blocked before = false) (value : U16) (count : Usize)
     (step : writeStep before (wire value) = some (.Ok count,after)) (next : Term → Result α)
     (env : Environment) (bounded : 6 ≤ env.refCounter)
-    (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before)
+    (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before ns)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
       let owner ← NativeResourceArc.decode (.reference 6)
       let result ← Rustler.executeNative (__WRITE__ owner value) Rustler.encodeBool
       next result) env = next (Rustler.encodeBool (count = 2#usize))
-        (pinnedEnv env after (env.refCounter + 1)) := by
+        (pinnedEnv env after (env.refCounter + 1) ns) := by
   simpa only [pinnedEnv,← heap] using
-    write_next env before after env.refCounter bounded valid ready value count step next registered
+    write_next (ns := ns) env before after env.refCounter bounded valid ready value count step next registered
 
 @[expose] def writeChoice (count : Nat) : Term :=
   .cons (.tuple #[.atom "write",.atom "ok",.integer count,.bitstring ByteArray.empty 0]) (syncChoice .nil)
@@ -133,10 +133,10 @@ theorem create_write_sync (env : Environment) (value : U16)
     (written value).durable = ByteArray.empty ∧
     (synced value).durable = content value ∧ (synced value).durable.size = 2 := by
   constructor
-  · rw [create_next env before.script _ registered,returned_before]
-    rw [write_next env before (written value) 6 (by omega) before_valid before_ready value 2#usize
+  · rw [create_next (rest := .nil) env before.script _ registered,returned_before]
+    rw [write_next (ns := pendingNamespace) env before (written value) 6 (by omega) before_valid before_ready value 2#usize
       (full_step value) _ registered]
-    exact sync_run (written value) (synced value) (written_valid value) (written_ready value)
+    exact sync_run (ns := pendingNamespace) (written value) (synced value) (written_valid value) (written_ready value)
       (sync_step value) _ (by simp [pinnedEnv]) rfl registered
   · simp [written,synced,content_size]
 
@@ -164,14 +164,14 @@ theorem short_not_acknowledged (env : Environment) (value : U16)
       let owner ← NativeResourceArc.decode term
       Rustler.executeNative (__WRITE__ owner value) Rustler.encodeBool) (initial env partialBefore.script) =
       (.ok Term.false,pinnedEnv env (partialWritten value) 7) := by
-  rw [create_next env partialBefore.script _ registered]
+  rw [create_next (rest := .nil) env partialBefore.script _ registered]
   change (do
       let owner ← NativeResourceArc.decode (.reference 6)
       Rustler.executeNative (__WRITE__ owner value) Rustler.encodeBool)
     (pinnedEnv env partialBefore 6) = _
   have valid : Valid partialBefore := by simp [Valid,partialBefore,limit,← ByteArray.size_data]
   simpa [Result.bind_ok,Result.ok_apply,Rustler.encodeBool] using
-    write_next env partialBefore (partialWritten value) 6 (by omega) valid rfl value 1#usize
+    write_next (ns := pendingNamespace) env partialBefore (partialWritten value) 6 (by omega) valid rfl value 1#usize
       (partial_step value) Result.ok registered
 
 end FileResource.Write
