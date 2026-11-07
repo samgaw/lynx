@@ -252,6 +252,130 @@ theorem run_reaches (computation : Result α) (env : Environment) (choices : Lis
   rw [Term.Runner.run, ready]
   rfl
 
+/-- A finite sequence of ready polls in one native execution context. Polls
+change only the shared counter and heap; all process and scheduler fields are
+framed. This describes the existing wait nodes rather than combining their IO. -/
+inductive SharedSteps (pid : PID) : Result α →
+    (Nat × List (Nat × String × Term)) → α → (Nat × List (Nat × String × Term)) → Prop where
+  | done (value : α) (shared : Nat × List (Nat × String × Term)) :
+      SharedSteps pid (.ok value) shared value shared
+  | wait {β : Type} (poll : Environment → Option (β × Environment))
+      (next : β → Result α) (reply : β) (before after final : Nat × List (Nat × String × Term))
+      (value : α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.refCounter = before.1 →
+        env.nativeHeap = before.2 →
+        poll env = some (reply, {env with refCounter := after.1, nativeHeap := after.2}))
+      (rest : SharedSteps pid (next reply) after value final) :
+      SharedSteps pid (.wait poll next) before value final
+
+private def traceEnv (pid : PID) (saved : List (PID × ProcessState))
+    (shared : Nat × List (Nat × String × Term)) : Environment :=
+  { currentPid := pid, pidCounter := 2, processes := saved,
+    refCounter := shared.1, nativeHeap := shared.2 }
+
+private theorem sharedSteps_left {α : Type} {computation : Result α} {value : α}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps 1 computation before value after)
+    (child : Result Term) (finished : Term.Runner.Finished α) :
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 1 [(2, {})] before))
+      (.parallel (.process 1 computation some) (.process 2 child (fun _ => none))) finished .current =
+    Term.Runner.execute 1 (traceEnv 1 [(2, {})] after)
+      (.parallel .empty (.process 2 child (fun _ => none))) (some (.ok value, {})) .current := by
+  induction trace with
+  | done value shared =>
+      rw [Term.Runner.execute]
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv]
+  | wait poll next reply before middle final value ready rest ih =>
+      rw [Term.Runner.execute]
+      have polled := ready (traceEnv 1 [(2, {})] before) rfl rfl rfl
+      simp only [traceEnv] at polled
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, Term.Runner.schedule, traceEnv, polled]
+      exact ih
+
+private theorem sharedSteps_right {α : Type} {computation : Result Term} {value : Term}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps 2 computation before value after) (rootValue : α) (previous : PID) :
+    Term.Runner.execute 1 (traceEnv previous [(2, {})] before)
+      (.parallel .empty (.process 2 computation (fun _ => none))) (some (.ok rootValue, {})) .current =
+      (.ok rootValue, traceEnv 1 [] after) := by
+  induction trace generalizing previous with
+  | done value shared =>
+      rw [Term.Runner.execute]
+      by_cases same : previous = 2
+      all_goals simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.findTimeout,
+        Term.Runner.step, Term.Runner.activate, Term.Runner.findProcess,
+        Term.Runner.removeProcess, Term.Runner.execute, Term.Runner.restore,
+        Term.Runner.isEmpty, traceEnv, same, (eq_comm (a := 2) (b := previous))]
+  | wait poll next reply before middle final value ready rest ih =>
+      rw [Term.Runner.execute]
+      have polled := ready (traceEnv 2 [] before) rfl rfl rfl
+      simp only [traceEnv] at polled
+      by_cases same : previous = 2
+      all_goals
+        simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.findTimeout,
+          Term.Runner.step, Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+          Term.Runner.removeProcess, Term.Runner.schedule, traceEnv, polled, same,
+          (eq_comm (a := 2) (b := previous))]
+        exact ih 2
+
+/-- Two contending workers retain every IO wait in their finite ready traces.
+The root acquires first, a child acquisition is attempted while held, then both
+traces execute. This is a concrete schedule theorem, not an arbitrary-schedule
+or fairness guarantee. -/
+theorem two_wait_interleave_steps
+    (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
+    (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
+    (parentValue : β) (childValue : γ) (rootValue childResult : Term)
+    (s0 s1 s2 s3 s4 : Nat × List (Nat × String × Term)) :
+    let atState := fun (pid : PID) (saved : List (PID × ProcessState))
+        (choices : List ScheduleChoice) (shared : Nat × List (Nat × String × Term)) =>
+      ({ currentPid := pid, pidCounter := 2, processes := saved, schedule := choices,
+         refCounter := shared.1, nativeHeap := shared.2 } : Environment)
+    parentPoll (atState 1 [(2, {})] [.swap 2] s0) =
+      some (parentValue, atState 1 [(2, {})] [.swap 2] s1) →
+    SharedSteps 1 (parentNext parentValue) s1 rootValue s2 →
+    childPoll (atState 2 [(1, {})] [] s1) = none →
+    childPoll (atState 2 [] [] s2) = some (childValue, atState 2 [] [] s3) →
+    SharedSteps 2 (childNext childValue) s3 childResult s4 →
+    (Result.schedule (.wait childPoll childNext) (fun _ => .wait parentPoll parentNext))
+      { refCounter := s0.1, nativeHeap := s0.2, schedule := [.current, .swap 2] } =
+      (.ok rootValue, atState 1 [] [] s4) := by
+  dsimp only
+  intro acquired parent blocked childAcquired child
+  change Term.Runner.run _ _ = _
+  rw [Term.Runner.run, Term.Runner.execute]
+  simp [Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.step, Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+    Term.Runner.removeProcess, Term.Runner.schedule]
+  rw [Term.Runner.execute]
+  simp [Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.step, Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+    Term.Runner.removeProcess, Term.Runner.schedule, acquired]
+  let env := Term.Runner.save (traceEnv 1 [(2, {})] s1)
+  let pool : Term.Runner.Pool Term := .parallel
+    (.process 1 (parentNext parentValue) some) (.process 2 (.wait childPoll childNext) (fun _ => none))
+  have selected : Term.Runner.choose pool env (.swap 2) = Term.Runner.choose pool env .current := by
+    simp [Term.Runner.choose, pool, Term.Runner.findReady,
+      env, traceEnv, Term.Runner.activate, Term.Runner.save,
+      Term.Runner.findProcess, Term.Runner.removeProcess, blocked]
+  change Term.Runner.execute 1 env pool none (.swap 2) = _
+  have fallback : Term.Runner.execute 1 env pool none (.swap 2) =
+      Term.Runner.execute 1 env pool none .current := by
+    conv => lhs; rw [Term.Runner.execute]
+    conv => rhs; rw [Term.Runner.execute]
+    rw [selected]
+  rw [fallback]
+  rw [sharedSteps_left parent (.wait childPoll childNext) none]
+  rw [Term.Runner.execute]
+  simp [Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.step, Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+    Term.Runner.removeProcess, Term.Runner.schedule, traceEnv, childAcquired]
+  exact sharedSteps_right child rootValue 2
+
 /-- A finite two-worker trace: the root acquires, the child blocks, the root
 releases and finishes, then the child acquires and releases. Poll equations
 specify every shared-state transition; neither fairness nor unbounded schedule
