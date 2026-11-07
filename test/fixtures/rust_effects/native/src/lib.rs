@@ -999,3 +999,22 @@ pub fn finish_resource(
         ready => ready,
     }
 }
+
+/// Completes a suspended resource future with two explicit polls.
+///
+/// This discards wake requests and does not wait for external readiness.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+#[cfg(feature = "future-resource-handles")]
+#[rustler::nif(name = "counter_poll_resume", schedule = "DirtyCpu")]
+pub fn locked_resource_poll_resume(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match finish_resource(resource, amount, &mut context) {
+        std::task::Poll::Ready(changed) => changed,
+        std::task::Poll::Pending => false,
+    }
+}
