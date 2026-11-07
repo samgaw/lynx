@@ -26,6 +26,7 @@ private theorem publicReferenceComparison : True := by
 
 -- Effectful clients normalize catches through public monadic equations.
 private theorem publicExceptionEquations : True := by
+  have _ := @Lynx.Result.consumeNativeCapability
   have _ := @Lynx.Result.handle_get
   have _ := @Lynx.Result.handle_set
   have _ := @Lynx.Result.handle_error
@@ -708,6 +709,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.Talks",
   "Lynx.Result.andAlso",
   "Lynx.Result.bind",
+  "Lynx.Result.consumeNativeCapability",
   "Lynx.Result.error",
   "Lynx.Result.get",
   "Lynx.Result.guard",
