@@ -1806,6 +1806,16 @@ Separate descriptors of the same physical file are outside this initial model. -
 structure NativeFile where
   id : Nat
 
+/-- Internal heap representation of a borrowed file capability, not a Rustler
+codec or a native descriptor. File contents remain in their independent cell. -/
+instance : NativeCodec NativeFile where
+  typeName := "std::fs::File:borrowed-capability-v1"
+  encode file := .reference file.id
+  decode
+    | .reference id => some ⟨id⟩
+    | _ => none
+  decode_encode file := by cases file; rfl
+
 /-- Opaque I/O error identity. No error payload, kind or destructor is modeled. -/
 structure NativeIoError where
   identity : Nat
