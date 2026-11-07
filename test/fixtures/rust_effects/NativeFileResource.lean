@@ -166,8 +166,8 @@ theorem cycle_keeps_disk (env : Environment)
     (by
       simp [closeStep, action, closeChoice, persist, ← ByteArray.size_data]
       decide), ?_, ?_⟩
-  · simp [lookup, retired, closedCell, typeName, closedTypeName]
-  · simp [crashImage, lookup, lookupClosed, retired, closedCell, typeName, closedTypeName,
+  · simp [lookup, retired, closedCell, typeName, closedTypeName, handleTypeName, writableHandleTypeName, closedHandleTypeName]
+  · simp [crashImage, lookup, lookupClosed, retired, closedCell, typeName, closedTypeName, handleTypeName, writableHandleTypeName, closedHandleTypeName,
       decode, encode, limit, persist, ← ByteArray.size_data]
     decide
 

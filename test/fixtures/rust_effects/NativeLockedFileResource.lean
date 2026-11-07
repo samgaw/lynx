@@ -188,8 +188,8 @@ theorem cycle_keeps_disk (env : Environment)
     (by
       simp [NativeCodec.typeName,closeStep, action, closeChoice, persist, ← ByteArray.size_data]
       decide), ?_, ?_⟩
-  · simp [NativeCodec.typeName,lookup, retired, closedCell, typeName, closedTypeName]
-  · simp [NativeCodec.typeName,crashImage, lookup, lookupClosed, retired, closedCell, typeName, closedTypeName,
+  · simp [NativeCodec.typeName,lookup, retired, closedCell, typeName, closedTypeName, handleTypeName, writableHandleTypeName, closedHandleTypeName]
+  · simp [NativeCodec.typeName,crashImage, lookup, lookupClosed, retired, closedCell, typeName, closedTypeName, handleTypeName, writableHandleTypeName, closedHandleTypeName,
       decode, encode, limit, persist, ← ByteArray.size_data]
     decide
 
