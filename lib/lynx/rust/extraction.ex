@@ -268,8 +268,15 @@ defmodule Lynx.Rust.Extraction do
         path
       end
 
+    # Aeneas also visits unused opaque declarations retained by discovery (for
+    # example the drop helper requested before unreachable cleanup is pruned).
+    # Supply their validated primitive names to prevent unnecessary axiom
+    # templates. Only actual call dependencies belong in the verification report;
+    # their scoped mappings take precedence over the unreferenced candidates.
+    backend_calls = Map.merge(audit.available_external_calls, audit.external_calls)
+
     model_args =
-      if models == [] and map_size(audit.external_calls) == 0 do
+      if models == [] and map_size(backend_calls) == 0 do
         []
       else
         path = Path.join(output, String.replace(module, ".", "_") <> ".external-types.json")
@@ -289,7 +296,7 @@ defmodule Lynx.Rust.Extraction do
                   ),
                 "functions" =>
                   Enum.map(
-                    Enum.reject(Map.values(audit.external_calls), & &1.builtin),
+                    Enum.reject(Map.values(backend_calls), & &1.builtin),
                     &Map.merge(
                       %{
                         "rust_pattern" =>
