@@ -193,4 +193,49 @@ defmodule Lynx.Rust.NativeBorrowsTest do
       )
     end
   end
+
+  test "implicit destruction becomes nonpanicking only after validated lowering" do
+    function = fn id, statements ->
+      %{
+        "def_id" => id,
+        "body" => %{
+          "Structured" => %{"body" => %{"statements" => statements ++ [%{"kind" => "Return"}]}}
+        }
+      }
+    end
+
+    call = fn id ->
+      %{
+        "kind" => %{
+          "Call" => %{"call" => %{"func" => %{"Regular" => %{"kind" => %{"Fun" => id}}}}}
+        }
+      }
+    end
+
+    caller = function.(2, [call.(1)])
+    raw = function.(1, [%{"kind" => %{"Drop" => %{}}}])
+    refute MapSet.member?(NativeBorrows.nonpanicking_calls([caller, raw], %{}), 2)
+    lowered = function.(1, [call.(9)])
+
+    for {model, expected} <- [
+          {%{can_fail: true, native_cutoff_only: true}, true},
+          {%{can_fail: false}, true},
+          {%{can_fail: true}, false}
+        ] do
+      safe = NativeBorrows.nonpanicking_calls([caller, lowered], %{9 => model})
+      assert MapSet.member?(safe, 2) == expected
+    end
+
+    panicking = function.(1, [call.(9), %{"kind" => %{"Panic" => %{}}}])
+
+    refute MapSet.member?(
+             NativeBorrows.nonpanicking_calls(
+               [caller, panicking],
+               %{9 => %{can_fail: true, native_cutoff_only: true}}
+             ),
+             2
+           )
+
+    refute MapSet.member?(NativeBorrows.nonpanicking_calls([caller, lowered], %{}), 2)
+  end
 end

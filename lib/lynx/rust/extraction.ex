@@ -106,18 +106,20 @@ defmodule Lynx.Rust.Extraction do
 
     %{document: document, llbc: llbc, first_party: first_party, models: models} = discovery
 
+    runtime_call_models =
+      Keyword.get(opts, :external_calls, []) ++
+        file_models ++
+        if Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
+          do: [:native_wakers],
+          else: []
+
     {document, nonpanicking_borrows} =
       if Keyword.get(opts, :execution, :pure) == :runtime,
         do:
           Lynx.Rust.NativeBorrows.prune_owned_calls!(
             document,
             first_party,
-            Keyword.get(opts, :external_calls, []) ++
-              file_models ++
-              if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
-                do: [:native_wakers],
-                else: []
-              )
+            runtime_call_models
           ),
         else: {document, []}
 
@@ -156,7 +158,26 @@ defmodule Lynx.Rust.Extraction do
         do: Lynx.Rust.LLBCJson.restore_trait_references!(document, discovery.document),
         else: document
 
-    native_unwind = nonpanicking_borrows ++ cleanup_flags ++ native_unwind ++ nonpanicking
+    # A first-party callee may contain implicit native destruction. Only after
+    # those sites are validated and lowered can the existing analysis certify
+    # its callers as nonpanicking. Recheck their original unwind cleanup rather
+    # than erasing a raw destructor or assuming that an opaque call is safe.
+    {document, nonpanicking_after_drops} =
+      if Keyword.get(opts, :execution, :pure) == :runtime and native_drops != [],
+        do:
+          Lynx.Rust.NativeBorrows.prune_owned_calls!(
+            document,
+            first_party,
+            runtime_call_models
+          ),
+        else: {document, []}
+
+    native_unwind =
+      nonpanicking_borrows ++
+        cleanup_flags ++
+        native_unwind ++
+        nonpanicking ++
+        nonpanicking_after_drops
 
     document =
       if native_drops != [] or native_unwind != [],
