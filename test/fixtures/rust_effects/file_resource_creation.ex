@@ -10,7 +10,7 @@ defmodule LynxEffectsFixture.FileCreation do
       Elixir.LynxFileResourceFixture.Native.«file_create:execution/0»,
       Lynx.Rustler.withResourceTypes,Lynx.Result.get_bind,Lynx.Result.set_bind,
       Lynx.Result.get_continuation_apply,Lynx.Result.set_continuation_apply,bind_assoc]
-    rw [FileResource.Creation.create_env Lynx.Term.nil]
+    rw [FileResource.Creation.create_env (rest := .nil) Lynx.Term.nil]
     all_goals simp [FileResource.Creation.seed,FileResource.Creation.initial,
       Lynx.NativeResourceArc.typeName,Lynx.NativeCodec.typeName,
       Erlang.erlang.«is_reference/1»]
