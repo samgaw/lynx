@@ -84,3 +84,10 @@ pub fn open_readonly(path: &str) -> io::Result<File> {
 pub fn create_new_file(path: &str) -> io::Result<File> {
     File::create_new(path)
 }
+
+/// Renames a file within the admitted directory.
+/// # Errors
+/// Propagates the operating system's rename error.
+pub fn rename_file(from: &str, to: &str) -> io::Result<()> {
+    std::fs::rename(from, to)
+}

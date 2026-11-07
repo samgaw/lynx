@@ -284,3 +284,10 @@ pub fn open_pair(path: &str) -> io::Result<(File, File)> {
 pub fn create_fresh(path: &str) -> io::Result<File> {
     io_core::create_new_file(path)
 }
+
+/// Renames a regular-file name through the low-level crate.
+/// # Errors
+/// Propagates the operating system's rename error.
+pub fn rename_visible(from: &str, to: &str) -> io::Result<()> {
+    io_core::rename_file(from, to)
+}
