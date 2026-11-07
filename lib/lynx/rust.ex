@@ -71,6 +71,11 @@ defmodule Lynx.Rust do
   files remain rejected. This option verifies first-party
   protocols against the explicit model, not the operating system.
 
+  Standard Result `?` propagation reuses Aeneas's Try/FromResidual primitives.
+  Every residual conversion requires the concrete standard identity From
+  dictionary; custom or unresolved error conversions remain unsupported. These
+  primitives are reported Rust core models, not verified core implementations.
+
   `:futures` defaults to `:reject`. Selecting `:immediate` extracts actual async
   constructors and compiler-generated poll bodies, including completed-state panic
   checks and first-party callees. It requires the pinned immediate-futures backend

@@ -28,6 +28,7 @@ defmodule Lynx.Rust.CallModels do
                 Lynx.Rust.NativeDrops.resolve(function, translated, refs)
           ) ||
             Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
+            Lynx.Rust.TryModels.resolve(function, translated, refs) ||
             Lynx.Rust.SliceModels.resolve(function, translated, refs) ||
             Lynx.Rust.ArrayModels.resolve(function, translated, refs) ||
             Lynx.Rust.IndexModels.resolve(function, translated, refs) ||
