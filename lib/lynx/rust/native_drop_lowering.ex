@@ -183,6 +183,22 @@ defmodule Lynx.Rust.NativeDropLowering do
   def place_type!(%{"kind" => kind, "ty" => annotation}, ctx, borrowed) do
     type =
       case kind do
+        %{"Projection" => [parent, "PtrMetadata"]} when borrowed ->
+          case place_type!(parent, ctx, borrowed) do
+            %{"Ref" => [_, %{"Adt" => %{"builtin" => "Str"}}, _]} ->
+              %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+
+            %{"Ref" => [_, %{"Slice" => _}, _]} ->
+              %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+
+            _ ->
+              LLBC.failure!(
+                ctx.function,
+                ctx.translated,
+                "unsupported native ownership pointer metadata"
+              )
+          end
+
         %{"Projection" => [parent, "Deref"]} when borrowed ->
           case place_type!(parent, ctx, borrowed) do
             %{"Ref" => [_, type, _]} ->

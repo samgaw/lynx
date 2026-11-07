@@ -1835,6 +1835,11 @@ structure NativeIoError where
 
 namespace NativeFile
 
+@[expose] def asRefStr (path : Str) : RustM Str := RustM.ok path
+
+@[expose] def asRefShared {T U : Type} (inst : core.convert.AsRef T U) (value : T) : RustM U :=
+  inst.as_ref value
+
 @[expose] def typeName : String := "rust:regular-file"
 @[expose] def closedTypeName : String := "rust:closed-file"
 @[expose] def limit : Nat := 1048576
@@ -2009,16 +2014,170 @@ The descriptor offset is unchanged. Durability still requires synchronization. -
     let durable ← persist state.durable state.visible mask
     some (.Err ⟨value⟩, {state with durable := durable, script := rest})
 
+/-- Named files use one inode image and distinct handle offsets/scripts. A
+pre-admitted independent file remains an explicitly disjoint host capability. -/
+@[expose] def inodeTypeName : String := "rust:file-inode"
+@[expose] def handleTypeName : String := "rust:file-handle:read"
+@[expose] def closedHandleTypeName : String := "rust:file-handle:closed"
+@[expose] def namespaceTypeName : String := "rust:file-namespace"
+
+structure Handle where
+  inode : Nat
+  position : Nat
+  script : Term
+
+@[expose] def encodeHandle (handle : Handle) : Term :=
+  .tuple #[.reference handle.inode, .integer handle.position, handle.script]
+
+@[expose] def decodeHandle : Term → Option Handle
+  | .tuple fields => do
+    if size : fields.size = 3 then
+      let .reference inode := fields[0]'(by omega) | none
+      let .integer position := fields[1]'(by omega) | none
+      if inode = 0 || position < 0 || position.toNat > limit then none
+      else some ⟨inode, position.toNat, fields[2]'(by omega)⟩
+    else none
+  | _ => none
+
+@[expose, simp] def getHandle (file : NativeFile) (tag : String) (env : Environment) : Option Handle := do
+  if file.id = 0 || file.id > env.refCounter then none else
+  match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
+  | [(_, actual, contents)] => if actual == tag then decodeHandle contents else none
+  | _ => none
+
+@[expose] def inode (id : Nat) (env : Environment) : Option State := do
+  if id = 0 || id > env.refCounter then none else
+  match env.nativeHeap.filter (fun cell => cell.1 == id) with
+  | [(_, tag, contents)] =>
+    if tag == inodeTypeName then do
+      let state ← decode contents
+      if state.position = 0 && state.script == .nil then some state else none
+    else none
+  | _ => none
+
+@[expose] def sharedLookup (file : NativeFile) (tag : String) (env : Environment) : Option State := do
+  let handle ← getHandle file tag env
+  let state ← inode handle.inode env
+  some {state with position := handle.position, script := handle.script}
+
+@[expose] def sharedStore (file : NativeFile) (handle : Handle) (state : State)
+    (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == file.id then
+      (file.id, handleTypeName, encodeHandle {handle with position := state.position, script := state.script})
+    else if cell.1 == handle.inode then
+      (handle.inode, inodeTypeName, encode {state with position := 0, script := .nil})
+    else cell}
+
+/-- Portable, single-component ASCII names, at most 255 bytes. Path traversal,
+symlinks, directories, OS-specific path encodings and ambient cwd changes are
+outside this closed namespace model and exhaust verification. -/
+@[expose] def supportedPath (path : ByteArray) : Bool :=
+  0 < path.size && path.size ≤ 255 && path.data != #[46] && path.data != #[46,46] &&
+    path.data.toList.all (fun byte =>
+      (48 ≤ byte && byte ≤ 57) || (65 ≤ byte && byte ≤ 90) || (97 ≤ byte && byte ≤ 122) ||
+      byte == 45 || byte == 46 || byte == 95)
+
+@[expose] def namespaceEntry : Term → Option (ByteArray × Nat)
+  | .tuple fields => do
+    if size : fields.size = 2 then
+      let .bitstring path bits _ := fields[0]'(by omega) | none
+      let .reference id := fields[1]'(by omega) | none
+      if bits != 0 || id = 0 || !supportedPath path then none else some (path,id)
+    else none
+  | _ => none
+
+/-- The id-zero namespace contains a finite table of regular-file names and an
+explicit script of host open outcomes. Duplicate names are rejected. Host
+initialization, pathname/OS correspondence and permissions remain assumptions. -/
+@[expose] def namespaceState (env : Environment) : Option (List (ByteArray × Nat) × Term) := do
+  match env.nativeHeap.filter (fun cell => cell.1 == 0) with
+  | [(_, tag, .tuple fields)] =>
+    if tag == namespaceTypeName then
+      if size : fields.size = 2 then
+        let .tuple entries := fields[0]'(by omega) | none
+        let names ← entries.toList.mapM namespaceEntry
+        if (names.map (fun entry => entry.1.data)).eraseDups.length != names.length then none
+        else some (names, fields[1]'(by omega))
+      else none
+    else none
+  | _ => none
+
+@[expose] def replaceNamespaceScript (script : Term) (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == 0 then match cell.2.2 with
+      | .tuple fields => (0, namespaceTypeName, .tuple (fields.set! 1 script))
+      | _ => cell
+    else cell}
+
+/-- Each outcome names the actual requested path and gives an independent
+script for the new handle: (open, path, ok|error, error-identity, handle-script). -/
+@[expose] def openChoice (path : ByteArray) : Term → Option (Bool × Nat × Term × Term)
+  | .cons (.tuple fields) rest => do
+    if size : fields.size = 5 then
+      let .atom operation := fields[0]'(by omega) | none
+      let .bitstring requested bits _ := fields[1]'(by omega) | none
+      let .atom status := fields[2]'(by omega) | none
+      let .integer error := fields[3]'(by omega) | none
+      if operation != "open" || bits != 0 || requested.data != path.data || error < 0 ||
+          (status != "ok" && status != "error") then none
+      else some (status == "ok", error.toNat, fields[4]'(by omega), rest)
+    else none
+  | _ => none
+
+@[expose] def pollOpenReadOnly (path : Str) (env : Environment) :
+    Option (Except Exception (core.result.Result NativeFile NativeIoError) × Environment) :=
+  let invalid := some (.error .exhausted, env)
+  let path := bytes path
+  if !supportedPath path then invalid else
+  match namespaceState env with
+  | none => invalid
+  | some (names, script) =>
+    if script matches .cons (.atom "blocked") _ then none else
+    match openChoice path script with
+    | none => invalid
+    | some (success, error, ioScript, rest) =>
+      if success then
+        if error != 0 then invalid else
+        match names.filter (fun entry => entry.1.data == path.data) with
+        | [(_, id)] =>
+          match inode id env with
+          | none => invalid
+          | some _ =>
+            let fresh := env.refCounter + 1
+            if env.nativeHeap.any (fun cell => cell.1 == fresh) then invalid else
+            let updated := replaceNamespaceScript rest env
+            some (.ok (.Ok ⟨fresh⟩), {updated with
+              refCounter := fresh
+              nativeHeap := (fresh, handleTypeName, encodeHandle ⟨id,0,ioScript⟩) :: updated.nativeHeap})
+        | _ => invalid
+      else some (.ok (.Err ⟨error⟩), replaceNamespaceScript rest env)
+
+@[expose] def openReadOnly (path : Str) : NativeM (core.result.Result NativeFile NativeIoError) :=
+  .wait (pollOpenReadOnly path) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
 @[expose] def lookup (file : NativeFile) (env : Environment) : Option State :=
   if file.id ≤ env.refCounter then
     match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
-    | [(_, tag, contents)] => if tag == typeName then decode contents else none
+    | [(_, tag, contents)] => if tag == typeName then decode contents
+      else if tag == handleTypeName then sharedLookup file handleTypeName env else none
     | _ => none
   else none
 
 @[expose] def store (file : NativeFile) (state : State) (env : Environment) : Environment :=
-  {env with nativeHeap := env.nativeHeap.map fun cell =>
-    if cell.1 == file.id then (file.id, typeName, encode state) else cell}
+  match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
+  | [(_, tag, contents)] =>
+    if tag == typeName then
+      {env with nativeHeap := env.nativeHeap.map fun cell =>
+        if cell.1 == file.id then (file.id, typeName, encode state) else cell}
+    else if tag == handleTypeName then
+      match decodeHandle contents with
+      | some handle => sharedStore file handle state env
+      | none => env
+    else env
+  | _ => env
 
 @[expose] def blocked (state : State) : Bool :=
   match state.script with | .cons (.atom "blocked") _ => true | _ => false
@@ -2033,7 +2192,10 @@ Write completion does not assert persistence. Invalid capabilities/choices cut o
     if blocked state then none else
     match writeStep state data with
     | none => some (.error .exhausted, env)
-    | some (reply, updated) => some (.ok (reply, file), store file updated env)
+    | some (reply, updated) =>
+      match reply, getHandle file handleTypeName env with
+      | .Ok _, some _ => some (.error .exhausted, env)
+      | _, _ => some (.ok (reply, file), store file updated env)
 
 @[expose] def write (file : NativeFile) (data : Slice U8) :
     NativeM (core.result.Result Usize NativeIoError × NativeFile) :=
@@ -2100,7 +2262,10 @@ and filesystem correspondence remain explicit OS assumptions. -/
     if blocked state then none else
     match setLenStep state length with
     | none => some (.error .exhausted, env)
-    | some (reply, updated) => some (.ok reply, store file updated env)
+    | some (reply, updated) =>
+      match reply, getHandle file handleTypeName env with
+      | .Ok _, some _ => some (.error .exhausted, env)
+      | _, _ => some (.ok reply, store file updated env)
 
 @[expose] def setLen (file : NativeFile) (length : U64) : NativeM (core.result.Result Unit NativeIoError) :=
   .wait (pollSetLen file length) fun reply => match reply with
@@ -2120,13 +2285,26 @@ remain explicit trusted boundaries. -/
 @[expose] def lookupClosed (file : NativeFile) (env : Environment) : Option State :=
   if file.id ≤ env.refCounter then
     match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
-    | [(_, tag, contents)] => if tag == closedTypeName then decode contents else none
+    | [(_, tag, contents)] => if tag == closedTypeName then decode contents
+      else if tag == closedHandleTypeName then sharedLookup file closedHandleTypeName env else none
     | _ => none
   else none
 
 @[expose] def retire (file : NativeFile) (state : State) (env : Environment) : Environment :=
-  {env with nativeHeap := env.nativeHeap.map fun cell =>
-    if cell.1 == file.id then (file.id, closedTypeName, encode state) else cell}
+  match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
+  | [(_, tag, contents)] =>
+    if tag == typeName then
+      {env with nativeHeap := env.nativeHeap.map fun cell =>
+        if cell.1 == file.id then (file.id, closedTypeName, encode state) else cell}
+    else if tag == handleTypeName then
+      match decodeHandle contents with
+      | none => env
+      | some handle =>
+        let updated := sharedStore file handle state env
+        {updated with nativeHeap := updated.nativeHeap.map fun cell =>
+          if cell.1 == file.id then (file.id, closedHandleTypeName, cell.2.2) else cell}
+    else env
+  | _ => env
 
 @[expose] def pollClose (file : NativeFile) (env : Environment) :
     Option (Except Exception Unit × Environment) :=

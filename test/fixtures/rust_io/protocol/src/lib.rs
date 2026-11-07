@@ -256,3 +256,24 @@ pub fn file_mutex_cycle(file: File) {
     let mutex = std::sync::Mutex::new(file);
     consume_file_mutex(mutex);
 }
+
+/// Opens a read-only handle through a first-party dependency.
+/// # Errors
+/// Propagates the opening error without creating an owned handle.
+pub fn open_readonly(path: &str) -> io::Result<File> {
+    io_core::open_readonly(path)
+}
+
+/// Opens two independent handles of the same named file.
+/// # Errors
+/// Propagates either opening error, closing the first handle if the second fails.
+pub fn open_pair(path: &str) -> io::Result<(File, File)> {
+    let first = io_core::open_readonly(path)?;
+    match io_core::open_readonly(path) {
+        Ok(second) => Ok((first, second)),
+        Err(error) => {
+            drop(first);
+            Err(error)
+        }
+    }
+}

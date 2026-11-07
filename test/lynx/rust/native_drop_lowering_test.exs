@@ -77,4 +77,42 @@ defmodule Lynx.Rust.NativeDropLoweringTest do
              "TypeVar" => %{"Free" => 1}
            })
   end
+
+  test "inspects only checked str and slice length metadata without consuming a borrow" do
+    usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+    args = %{"regions" => [], "types" => [], "const_generics" => [], "trait_refs" => []}
+    string = %{"Adt" => %{"id" => 1, "builtin" => "Str", "generics" => args}}
+    slice = %{"Slice" => [%{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}, nil]}
+
+    for pointee <- [string, slice] do
+      reference = %{"Ref" => ["Erased", pointee, "Shared"]}
+      parent = %{"kind" => %{"Local" => 1}, "ty" => reference}
+      place = %{"kind" => %{"Projection" => [parent, "PtrMetadata"]}, "ty" => usize}
+
+      ctx = %{
+        locals: %{1 => reference},
+        refs: %{},
+        translated: %{"files" => []},
+        function: %{"item_meta" => %{"name" => [%{"Ident" => ["probe", 0]}]}}
+      }
+
+      assert NativeDropLowering.place_type!(place, ctx, true) == usize
+
+      assert_raise CompileError, ~r/cannot consume through a borrowed/, fn ->
+        NativeDropLowering.place_type!(place, ctx)
+      end
+
+      assert_raise CompileError, ~r/inconsistent field type/, fn ->
+        NativeDropLowering.place_type!(Map.put(place, "ty", %{"Scalar" => "Bool"}), ctx, true)
+      end
+
+      raw = %{"RawPtr" => [pointee, "Const"]}
+      parent = Map.put(parent, "ty", raw)
+      raw_place = put_in(place, ["kind", "Projection"], [parent, "PtrMetadata"])
+
+      assert_raise CompileError, ~r/unsupported native ownership pointer metadata/, fn ->
+        NativeDropLowering.place_type!(raw_place, %{ctx | locals: %{1 => raw}}, true)
+      end
+    end
+  end
 end

@@ -63,13 +63,23 @@ defmodule Lynx.Rust do
   and leaves contents unchanged. Seek errors preserve position under the same
   explicit std/OS boundary. `NativeFile.crashImage` permits additional modeled
   persistence at power loss; `restart` admits that image in a fresh environment.
-  Restart is a host/file-opening boundary, not verification of `File::open`.
-  Only nonappend files with independent descriptions are supported. Native opening,
-  physical close/descriptor reclamation, descriptor cloning, directory durability,
-  unrestricted concurrent I/O and general crash injection remain unsupported. Compiler-checked resource payloads may directly own File fields with
-  `owned_drops: true`. Nested Mutex<File> destruction and panic cleanup of live
-  files remain rejected. This option verifies first-party
-  protocols against the explicit model, not the operating system.
+  Restart remains a host admission boundary. `File::open<&str>` additionally
+  supports an explicitly admitted flat namespace of regular files: portable ASCII
+  names of 1 through 255 bytes, shared inode contents and separate read-only
+  handle offsets. Exact standard AsRef<Path> dictionaries are validated before
+  erasure; custom conversions and owned path types are rejected. Namespace cell
+  zero maps names to inode identities and scripts host opening outcomes. Opening
+  errors consume their outcome without allocating a handle; two successful opens
+  allocate distinct handles to the same inode. Unsupported paths, malformed
+  namespace state and inconsistent outcomes exhaust verification. This verifies
+  extracted opening/cleanup protocols against the model, not native pathname
+  resolution or physical descriptor allocation.
+  Physical close/descriptor reclamation, descriptor cloning, directory durability,
+  namespace mutation, unrestricted concurrent I/O and general crash injection
+  remain unsupported. Compiler-checked resource payloads may own File and
+  Mutex<File> fields with `owned_drops: true`; panic cleanup of live files remains
+  rejected. This option verifies first-party protocols against the explicit model,
+  not the operating system.
 
   Standard Result `?` propagation reuses Aeneas's Try/FromResidual primitives.
   Every residual conversion requires the concrete standard identity From

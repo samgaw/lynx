@@ -70,3 +70,10 @@ pub fn resize_to(file: &File, length: u64) -> io::Result<()> {
 pub fn consume_file_mutex(mutex: std::sync::Mutex<File>) {
     drop(mutex);
 }
+
+/// Opens an existing regular file for reading.
+/// # Errors
+/// Propagates pathname and operating-system errors.
+pub fn open_readonly(path: &str) -> io::Result<File> {
+    File::open(path)
+}

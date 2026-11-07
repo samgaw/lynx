@@ -115,7 +115,8 @@ defmodule Lynx.Rust.NativeLifetimes do
           refs: refs,
           locals:
             Map.new(body["locals"]["locals"], &{&1["index"], CallModels.expand(&1["ty"], refs)}),
-          booleans: boolean_constants(translated, %{})
+          booleans: boolean_constants(translated, %{}),
+          discriminants: discriminant_constants(translated, %{})
         }
 
         unless block!(body["body"], live, context) == :terminal, do: reject!(context)
@@ -389,7 +390,11 @@ defmodule Lynx.Rust.NativeLifetimes do
       states =
         Enum.with_index(branches)
         |> Enum.map(fn {branch, index} ->
-          block_state!(branch, refine_coroutine(data, index, state, ctx), ctx)
+          block_state!(
+            branch,
+            refine_coroutine(data, index, refine_enum(data, index, state, ctx), ctx),
+            ctx
+          )
         end)
         |> Enum.reject(&(&1 == :terminal))
 
@@ -418,6 +423,114 @@ defmodule Lynx.Rust.NativeLifetimes do
       end
     end
   end
+
+  # A Result error (or another empty enum variant) does not own the native
+  # payload of its alternative. Derive this from the actual instantiated fields
+  # and compiler discriminants, never from a constructor name or annotation alone.
+  defp refine_enum(
+         %{"scrutinee" => %{"Discriminant" => %{"kind" => %{"Local" => root}} = place}} = data,
+         index,
+         state,
+         ctx
+       ) do
+    if MapSet.member?(ctx.owners, root) and not MapSet.member?(ctx.borrowed, root) do
+      type = Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
+
+      with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- type,
+           %{"kind" => %{"Enum" => variants}} <- ctx.types[id] do
+        declared = Enum.map(variants, & &1["id"])
+
+        branches =
+          Enum.map(data["branches"], fn [constant, branch] ->
+            {actual, variant} = discriminant_constant!(constant, ctx)
+
+            unless Lynx.Rust.NativeDropLowering.same_runtime_type?(actual, type) and
+                     variant in declared,
+                   do: reject!(ctx)
+
+            {variant, branch}
+          end)
+
+        tags = Enum.map(branches, &elem(&1, 0))
+
+        unless length(Enum.uniq(tags)) == length(tags) and
+                 (data["fallback"] != nil or Enum.sort(tags) == Enum.sort(declared)),
+               do: reject!(ctx)
+
+        selected = for {variant, branch} <- branches, branch == index, do: variant
+
+        selected =
+          if data["fallback"] == index,
+            do: selected ++ (declared -- Enum.map(branches, &elem(&1, 0))),
+            else: selected
+
+        if selected == [] do
+          state
+        else
+          owned =
+            Enum.any?(variants, fn variant ->
+              variant["id"] in selected and
+                Enum.any?(variant["fields"], fn field ->
+                  contains_native?(
+                    CallModels.instantiate(CallModels.expand(field["ty"], ctx.refs), args),
+                    ctx.native,
+                    ctx.types,
+                    ctx.refs,
+                    []
+                  )
+                end)
+            end)
+
+          if owned do
+            unless MapSet.member?(state.live, root), do: reject!(ctx)
+            state
+          else
+            %{
+              state
+              | live: MapSet.delete(state.live, root),
+                known: Map.put(state.known, {:empty, root}, true)
+            }
+          end
+        end
+      else
+        _ -> state
+      end
+    else
+      state
+    end
+  end
+
+  defp refine_enum(_, _, state, _), do: state
+
+  defp discriminant_constant!(%{"Value" => [_, [%{"Discriminant" => [type, variant]}, _]]}, ctx),
+    do: {CallModels.expand(%{"Adt" => type}, ctx.refs), variant}
+
+  defp discriminant_constant!(%{"Deduplicated" => id}, ctx) do
+    case ctx.discriminants[id] do
+      nil -> reject!(ctx)
+      constant -> discriminant_constant!(constant, ctx)
+    end
+  end
+
+  defp discriminant_constant!(_, ctx), do: reject!(ctx)
+
+  defp discriminant_constants(%{"Value" => [id, [%{"Discriminant" => _}, _]]} = value, found) do
+    case Map.fetch(found, id) do
+      {:ok, previous} when previous != value ->
+        raise ArgumentError, "inconsistent native enum discriminant identity"
+
+      _ ->
+        Map.put(found, id, value)
+    end
+  end
+
+  defp discriminant_constants(map, found) when is_map(map),
+    do: discriminant_constants(Map.values(map), found)
+
+  defp discriminant_constants(list, found) when is_list(list),
+    do: Enum.reduce(list, found, &discriminant_constants/2)
+
+  defp discriminant_constants(_, found), do: found
 
   defp refine_coroutine(data, index, state, ctx) do
     fact =
