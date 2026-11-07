@@ -1,0 +1,41 @@
+diff --git i/src/pure/PureMicroPasses.ml w/src/pure/PureMicroPasses.ml
+index e2f2c4a0e070..0dc2089b9c55 100644
+--- i/src/pure/PureMicroPasses.ml
++++ w/src/pure/PureMicroPasses.ml
+@@ -234,2 +234,4 @@ let passes :
+     (None, "update_match_over_isize_usize", update_match_over_isize_usize);
++    (Some (fun _ -> Config.backend () = Lean), "project_lean_back_function_bindings",
++      project_lean_back_function_bindings);
+   ]
+diff --git i/src/pure/PureMicroPassesGeneral.ml w/src/pure/PureMicroPassesGeneral.ml
+index 1c49561b2442..b2d08e15e17e 100644
+--- i/src/pure/PureMicroPassesGeneral.ml
++++ w/src/pure/PureMicroPassesGeneral.ml
+@@ -3740 +3740,27 @@ let inline_anon_const_initializers =
+   lift_expr_map_visitor inline_anon_const_initializers_visitor
++
++
++(** Lean 4.35 rejects tuple pattern binders whose function-typed fields contain
++    delayed numeral-bound proofs. Projections avoid that elaboration-order
++    dependency while preserving the original computation and back functions. *)
++let project_lean_back_function_bindings (ctx : ctx) (def : fun_decl) : fun_decl =
++  let span = def.item_meta.span in
++  let visitor = object
++    inherit [_] map_expr as super
++    method! visit_Let env monadic lv re next =
++      match lv.pat, lv.ty with
++      | PAdt { variant_id = None; fields }, TAdt (TTuple, generics)
++        when List.exists (fun (field : tpat) -> match field.ty with TArrow _ -> true | _ -> false) fields ->
++          let tmp : fvar = { id = ctx.fresh_fvar_id (); basename = None; ty = lv.ty } in
++          let tmp_pat = mk_tpat_from_fvar None tmp in
++          let tmp_expr = mk_texpr_from_fvar tmp in
++          let projected = FieldId.mapi (fun field_id (pat : tpat) ->
++            let projection = { e = Qualif { id = Proj { adt_id = TTuple; field_id }; generics };
++              ty = mk_arrow lv.ty pat.ty } in
++            pat, [%add_loc] mk_app span projection tmp_expr) fields in
++          let body = List.fold_right (fun (pat, value) body -> mk_opened_let false pat value body)
++            projected next in
++          super#visit_Let env monadic tmp_pat re body
++      | _ -> super#visit_Let env monadic lv re next
++  end in
++  lift_expr_map_visitor (fun _ _ -> visitor) ctx def
