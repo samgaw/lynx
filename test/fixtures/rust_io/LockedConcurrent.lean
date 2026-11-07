@@ -82,45 +82,61 @@ private theorem sync_poll (before after : State) (counter : Nat) (contents : Ter
   simp only [pollSync, found]
   simp [ready, step, store, heap, shared, ← count]
 
-/-- Each actual IO primitive remains a separate wait in the extracted caller. -/
-private theorem critical_trace (pid token counter : Nat) (before sought written committed : State)
-    (value : U16) (position : U64) (fresh : 2 ≤ counter)
+private theorem held_blocked (pid peer token counter : Nat) (state : State)
+    (different : pid ≠ peer) (env : Environment) (owner : env.currentPid = peer)
+    (heap : env.nativeHeap = (shared counter (owned pid token) state).2) :
+    NativeMutex.pollLock (α := NativeFile) ⟨1⟩ env = none := by
+  simp [NativeMutex.pollLock, heap, shared, owned, NativeMutex.lockedContents,
+    owner, different]
+
+/-- Each actual IO primitive remains a separate wait and excludes peer acquisition. -/
+private theorem critical_exclusive (pid peer token counter : Nat) (different : pid ≠ peer)
+    (before sought written committed : State) (value : U16) (position : U64) (fresh : 2 ≤ counter)
     (valid0 : Valid before) (valid1 : Valid sought) (valid2 : Valid written)
     (ready0 : blocked before = false) (ready1 : blocked sought = false) (ready2 : blocked written = false)
     (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
     (write : writeStep sought (payload value) = some (.Ok 4#usize, written))
     (sync : syncStep written = some (.Ok (), committed)) :
-    Result.SharedSteps pid
+    Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
       (postAcquire value (.ok (.Ok ⟨⟨1⟩, token, pid, ⟨2⟩⟩)))
       (shared counter (owned pid token) before) Term.true (shared counter free committed) := by
   simp only [postAcquire, recoverGuard]
   rw [append_contract]
   simp only [bind_assoc, NativeFile.seek, Result.wait_bind]
   refine .wait _ _ (.ok (.Ok position, (⟨2⟩ : NativeFile))) _
-    (shared counter (owned pid token) sought) _ _ ?_ ?_
+    (shared counter (owned pid token) sought) _ _ ?_ ?_ ?_
   · intro env _ count heap
     exact seek_poll before sought position counter _ valid0 ready0 seek fresh env count heap
+  · intro env owner _ heap
+    exact held_blocked pid peer token counter before different env owner heap
   · simp only [Result.ok_bind, NativeFile.write, Result.wait_bind]
     refine .wait _ _ (.ok (.Ok 4#usize, (⟨2⟩ : NativeFile))) _
-      (shared counter (owned pid token) written) _ _ ?_ ?_
+      (shared counter (owned pid token) written) _ _ ?_ ?_ ?_
     · intro env _ count heap
       exact write_poll sought written value counter _ valid1 ready1 write fresh env count heap
+    · intro env owner _ heap
+      exact held_blocked pid peer token counter sought different env owner heap
     · simp only [Result.ok_bind, NativeFile.syncAll, Result.wait_bind]
       refine .wait _ _ (.ok (.Ok ())) _
-        (shared counter (owned pid token) committed) _ _ ?_ ?_
+        (shared counter (owned pid token) committed) _ _ ?_ ?_ ?_
       · intro env _ count heap
         exact sync_poll written committed counter _ valid2 ready2 sync fresh env count heap
+      · intro env owner _ heap
+        exact held_blocked pid peer token counter written different env owner heap
       · simp only [Result.ok_bind, NativeM.ok, NativeGuard.release, Result.wait_bind]
-        refine .wait _ _ (.ok ()) _ (shared counter free committed) _ _ ?_ ?_
+        refine .wait _ _ (.ok ()) _ (shared counter free committed) _ _ ?_ ?_ ?_
         · intro env owner count heap
           simp [NativeGuard.pollRelease, heap, shared, owned, free,
             NativeMutex.lockedContents, NativeCodec.encode, NativeCodec.decode, owner, count]
+        · intro env owner _ heap
+          exact held_blocked pid peer token counter committed different env owner heap
         · exact .done Term.true _
 
-private theorem append_trace (pid token counter : Nat) (fresh : 2 ≤ counter)
+private theorem append_exclusive (pid peer token counter : Nat) (different : pid ≠ peer) (fresh : 2 ≤ counter)
     (data : ByteArray) (value : U16) (position : Nat) (rest : Term)
     (fits : data.size + 4 ≤ limit) (offset : position ≤ limit) :
-    Result.SharedSteps pid (postAcquire value (.ok (.Ok ⟨⟨1⟩, token, pid, ⟨2⟩⟩)))
+    Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
+      (postAcquire value (.ok (.Ok ⟨⟨1⟩, token, pid, ⟨2⟩⟩)))
       (shared counter (owned pid token) (appendInput data position rest)) Term.true
       (shared counter free (appended (appendInput data position rest) value rest)) := by
   let before := appendInput data position rest
@@ -136,7 +152,7 @@ private theorem append_trace (pid token counter : Nat) (fresh : 2 ≤ counter)
   have valid2 := written_valid afterSeek (payload value) 4 (zeroMask data) data
     (outcome "sync_all" true 0 ByteArray.empty rest) valid1
     (by simp [payload, layout]) fits accepted
-  refine critical_trace pid token counter before afterSeek afterWrite (appended before value rest) value
+  refine critical_exclusive pid peer token counter different before afterSeek afterWrite (appended before value rest) value
     (U64.ofNatCore data.size (by simp only [limit] at bound; scalar_tac)) fresh valid0 valid1 valid2
     (by simp [before, appendInput, blocked, outcome])
     (by simp [afterSeek, sought, blocked, outcome])
@@ -148,6 +164,14 @@ private theorem append_trace (pid token counter : Nat) (fresh : 2 ≤ counter)
       (action_outcome _ _ _ _ _) accepted
   · simp [syncStep, afterWrite, written, afterSeek, sought, before, appendInput,
       appended, action_outcome]
+
+private theorem append_trace (pid token counter : Nat) (fresh : 2 ≤ counter)
+    (data : ByteArray) (value : U16) (position : Nat) (rest : Term)
+    (fits : data.size + 4 ≤ limit) (offset : position ≤ limit) :
+    Result.SharedSteps pid (postAcquire value (.ok (.Ok ⟨⟨1⟩, token, pid, ⟨2⟩⟩)))
+      (shared counter (owned pid token) (appendInput data position rest)) Term.true
+      (shared counter free (appended (appendInput data position rest) value rest)) :=
+  (append_exclusive pid (pid + 1) token counter (by omega) fresh data value position rest fits offset).ready
 
 @[expose] def extended (data : ByteArray) (value : U16) : ByteArray :=
   overwrite data data.size (bytes (payload value)) 4
@@ -204,5 +228,81 @@ theorem appends_interleave (data : ByteArray) (first second : U16) (position : N
   · have bytes := append_bytes (extended data first) second
     have earlier := append_bytes data first
     simpa only [after, next, appended, appendInput, extended, earlier] using bytes
+
+private theorem lock_poll (pid counter : Nat) (state : State) (fresh : 2 ≤ counter)
+    (env : Environment) (owner : env.currentPid = pid) (count : env.refCounter = counter)
+    (heap : env.nativeHeap = (shared counter free state).2) :
+    NativeMutex.pollLock (α := NativeFile) ⟨1⟩ env =
+      some (.ok (.Ok ⟨⟨1⟩, counter + 1, pid, ⟨2⟩⟩),
+        {env with
+          refCounter := counter + 1
+          nativeHeap := (shared (counter + 1) (owned pid (counter + 1)) state).2}) := by
+  simp [NativeMutex.pollLock, heap, shared, free, owned, NativeMutex.lockedContents,
+    NativeCodec.encode, NativeCodec.decode, count, owner]
+  omega
+
+private theorem full_append_trace (pid : Nat) (data : ByteArray) (value : U16)
+    (position : Nat) (rest : Term) (fits : data.size + 4 ≤ limit) (offset : position ≤ limit) :
+    Result.SharedSteps pid (.wait (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire value))
+      (shared 3 free (appendInput data position rest)) Term.true
+      (shared 4 free (appended (appendInput data position rest) value rest)) := by
+  refine .wait _ _ (.ok (.Ok (⟨⟨1⟩, 4, pid, ⟨2⟩⟩ : NativeGuard NativeFile))) _
+    (shared 4 (owned pid 4) (appendInput data position rest)) _ _ ?_
+    (append_trace pid 4 4 (by decide) data value position rest fits offset)
+  intro env owner count heap
+  exact lock_poll pid 3 _ (by decide) env owner count heap
+
+/-- Under every finite scheduler choice list, the actual two Rust callers
+produce one of the two serial append images. Both images retain the original
+prefix and both synchronized encodings; a return after release is not a write. -/
+theorem appends_all_schedules (data : ByteArray) (first second : U16) (position : Nat) (rest : Term)
+    (fits : data.size + 8 ≤ limit) (offset : position ≤ limit) (choices : List ScheduleChoice) :
+    let nextFirst := appendInput (extended data first) (data.size + 4) rest
+    let nextSecond := appendInput (extended data second) (data.size + 4) rest
+    let before := appendInput data position nextFirst.script
+    let worker := fun value : U16 => (do
+      let reply ← locked_append ⟨1⟩ value
+      finish reply : Result Term)
+    let observed := (do
+      let _ ← Result.schedule (worker second) .ok
+      worker first : Result Term)
+      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
+        (.ok Term.true, shared 4 free (appended nextFirst second rest)) ∨
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
+        (.ok Term.true, shared 4 free (appended nextSecond first rest)) := by
+  dsimp only
+  let nextFirst := appendInput (extended data first) (data.size + 4) rest
+  let nextSecond := appendInput (extended data second) (data.size + 4) rest
+  let before := appendInput data position nextFirst.script
+  let middleRoot := appended before first nextFirst.script
+  let middleChild := appended before second nextFirst.script
+  have firstFits : data.size + 4 ≤ limit := by omega
+  have secondFits (value : U16) : (extended data value).size + 4 ≤ limit := by rw [extended_size]; omega
+  have scripts : nextFirst.script = nextSecond.script := by
+    simp [nextFirst, nextSecond, appendInput, zeroMask, extended_size]
+  have rootNext : middleRoot = nextFirst := rfl
+  have childNext : middleChild = nextSecond := by
+    simpa only [middleChild, appended, before, appendInput, nextSecond, extended] using
+      congrArg (fun script => (State.mk (extended data second) (extended data second) (data.size + 4) script)) scripts
+  have rootExclusive := append_exclusive 1 2 3 3 (by decide) (by decide)
+    data first position nextFirst.script firstFits offset
+  have childExclusive := append_exclusive 2 1 3 3 (by decide) (by decide)
+    data second position nextFirst.script firstFits offset
+  have childAfter := full_append_trace 2 (extended data first) second (data.size + 4) rest (secondFits first) (by omega)
+  have rootAfter := full_append_trace 1 (extended data second) first (data.size + 4) rest (secondFits second) (by omega)
+  have result := Result.two_wait_serial_orders
+    (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
+    (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
+    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩)) Term.true Term.true
+    (shared 2 free before) (shared 3 (owned 1 3) before) (shared 3 free middleRoot)
+    (shared 4 free (appended nextFirst second rest))
+    (shared 3 (owned 2 3) before) (shared 3 free middleChild)
+    (shared 4 free (appended nextSecond first rest))
+    (lock_poll 1 2 before (by decide)) (lock_poll 2 2 before (by decide))
+    rootExclusive (by simpa only [rootNext] using childAfter)
+    childExclusive (by simpa only [childNext] using rootAfter) choices
+  simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared,
+    before, nextFirst, nextSecond] using result
 
 end Record.LockedConcurrent

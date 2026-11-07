@@ -122,7 +122,11 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(critical_contract append_contract locked_ready locked_success critical_error_steps contention_waits),
             &("Record.LockedProperties." <> &1)
-          ) ++ ["Record.LockedConcurrent.appends_interleave"]
+          ) ++
+          [
+            "Record.LockedConcurrent.appends_interleave",
+            "Record.LockedConcurrent.appends_all_schedules"
+          ]
     ]
 
     result = Lynx.Rust.verify!(workspace, "io-protocol", options)
@@ -226,6 +230,12 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.LockedConcurrent.appends_interleave")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.LockedConcurrent.appends_all_schedules")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
@@ -308,6 +318,25 @@ defmodule Lynx.Rust.FileAppendTest do
 
     refute lost == correct
     File.write!(property, lost)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Project.build!(project, options[:proof_modules])
+      end
+
+    assert error.message =~ "Record/LockedConcurrent.lean:"
+    File.write!(property, correct)
+
+    ordered =
+      String.replace(
+        correct,
+        "(.ok Term.true, shared 4 free (appended nextSecond first rest))",
+        "(.ok Term.true, shared 4 free (appended nextFirst second rest))",
+        global: false
+      )
+
+    refute ordered == correct
+    File.write!(property, ordered)
 
     error =
       assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
