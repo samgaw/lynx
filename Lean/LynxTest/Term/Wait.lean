@@ -114,6 +114,13 @@ private theorem update_full (pid value : Nat) :
   intro env owner counter heap
   simp [acquire, heap, counter, owner]
 
+/-- Finite ready traces frame mailboxes and choices while retaining all shared updates. -/
+theorem ready_trace_frames_environment (env : Environment) (value : Nat)
+    (empty : env.nativeHeap = []) (count : env.refCounter = value) :
+    (Result.wait acquire postUpdate) env =
+      (.ok .nil, {env with refCounter := value + 3, nativeHeap := []}) :=
+  (update_full env.currentPid value).apply env rfl count empty
+
 /-- Intermediate ready waits remain scheduler steps while a competitor blocks;
 the same shared cells survive through both complete worker traces. -/
 theorem contending_multi_wait_updates :
