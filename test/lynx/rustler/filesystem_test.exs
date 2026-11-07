@@ -81,7 +81,9 @@ defmodule Lynx.Rustler.FilesystemTest do
             ~w(Publish.Properties Publish.Payload Publish.NamedRecovery Publish.WordRecovery Publish.Commit Publish.IoErrors Publish.Framed Publish.Native),
           required_properties: ~w(Publish.Native.facade_prefix Publish.Native.adapter_continuation
         Publish.Commit.Framed.commit_shared Publish.Commit.commit_recovery
-        Publish.IoErrors.implicit_cleanup)
+        Publish.IoErrors.implicit_cleanup Publish.Commit.Framed.rejected_prefix
+        Publish.Native.rejected_facade_prefix Publish.Native.rejected_adapter_continuation
+        Publish.Native.rejected_handler_prefix)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -102,6 +104,43 @@ defmodule Lynx.Rustler.FilesystemTest do
 
     assert Enum.any?(reports, &(&1[:initial_environments] == ["Publish.Commit.initial"]))
     assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
+
+    [{_, error_beam}] = Code.compile_file(Path.join(@fixture, "NativeErrorLaws.exs"))
+    error_options = Keyword.put(law_options, :initial_environment, "Publish.IoErrors.rejected")
+    error_reports = Lynx.Laws.verify([error_beam], error_options)
+
+    assert Enum.all?(error_reports, &(&1.status == :ok)),
+           inspect(Enum.filter(error_reports, &(&1.status != :ok)), limit: :infinity)
+
+    assert Enum.any?(error_reports, &(&1[:initial_environments] == ["Publish.IoErrors.rejected"]))
+
+    assert Enum.all?(
+             Lynx.Laws.verify([error_beam], error_options),
+             &(&1.status == :ok and &1.cached)
+           )
+
+    # The checked bundle is reusable, but a different admitted state cannot reuse the law proof.
+    direct = [
+      externals: [checked.external],
+      lean_project: project,
+      initial_environment: "Publish.Native.customRejected"
+    ]
+
+    assert Enum.any?(Lynx.Laws.verify([error_beam], direct), &(&1.status == :error))
+
+    error_export = Path.join(tmp, "filesystem-error.export")
+
+    assert Enum.all?(
+             Lynx.Laws.verify([error_beam], error_options ++ [export: error_export]),
+             &(&1.status == :ok)
+           )
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+
+    {status, output} =
+      Lynx.Commands.lake(project, ["check", "--from-export", error_export] ++ sandbox)
+
+    assert status == 0, output
 
     export = Path.join(tmp, "filesystem.export")
 
@@ -125,6 +164,22 @@ defmodule Lynx.Rustler.FilesystemTest do
     assert Enum.any?(Lynx.Laws.verify([wrong_beam], law_options), &(&1.status == :error))
 
     property = Path.join(project, "Publish/Native.lean")
+
+    leaked =
+      String.replace(
+        source,
+        "nativeHeap := Publish.IoErrors.disposed.nativeHeap",
+        "nativeHeap := Publish.IoErrors.returned.nativeHeap"
+      )
+
+    refute leaked == source
+    File.write!(property, leaked)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.Project.build!(project, options[:proof_modules])
+    end
+
+    File.write!(property, source)
 
     for invalid <- [
           "private axiom nativeTrust : False",
