@@ -307,3 +307,13 @@ pub fn close_directory() -> io::Result<()> {
     let _directory = io_core::open_readonly(".")?;
     Ok(())
 }
+
+/// Publishes an already-written file only after its data and directory are synced.
+/// # Errors
+/// Propagates synchronization, rename and directory-opening errors. An error
+/// does not promise that the rename was rolled back.
+pub fn publish_file(file: File, source: &str, target: &str) -> io::Result<()> {
+    synchronize_then_close(file)?;
+    io_core::rename_file(source, target)?;
+    sync_directory()
+}

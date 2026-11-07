@@ -86,7 +86,18 @@ defmodule Lynx.Rust do
   assumption. An error preserves the last guaranteed checkpoint; closing consumes
   the capability without synchronizing names. Directory synchronization preserves
   every regular inode's byte images and cannot replace file synchronization.
-  Namespace crash-image selection and restart remain unsupported.
+  `NativeFile.filesystemCrashImage` admits a bounded flat filesystem crash image:
+  each unsynchronized pathname may independently select a recorded version,
+  including lost or partially persisted renames; file bytes independently use
+  the existing tearing model. This deliberately does not assume an ordered prefix
+  of metadata persistence. Every registered inode requires exactly one mask,
+  in heap order, with at most 1024 inodes. Unknown paths, missing/duplicate choices
+  and malformed state are rejected. `restartFilesystem` restores only admitted
+  names and inode bytes, discards every old capability/process/resource/lock,
+  and retains a ghost freshness high-water mark. Image admission, restart and
+  filesystem/device correspondence remain explicit external boundaries. These
+  operations permit proofs around actual extracted publication/opening code;
+  they do not verify the operating system's reboot implementation.
   `std::fs::rename<&str, &str>` uses an explicit single-directory Unix-style
   atomic metadata model. Both standard path-conversion dictionaries are checked.
   Replacement preserves inode contents and existing open capabilities, including
