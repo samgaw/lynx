@@ -96,11 +96,24 @@ defmodule Lynx.Rust.NativeGuardTest do
           end
         end)
 
+      # The checker reads compiler declarations to retain complete constant
+      # tables. Change that authoritative body as well as the selected audit copy.
+      callee_id = callee["def_id"]
+      changed = Enum.find(invalid, &(&1["def_id"] == callee["def_id"]))
+
+      invalid_translated =
+        Map.update!(translated, "fun_decls", fn declarations ->
+          Enum.map(declarations, fn
+            %{"def_id" => id} when id == callee_id -> changed
+            declaration -> declaration
+          end)
+        end)
+
       assert_raise CompileError, ~r/borrowed native guard requires nonpanicking/, fn ->
         Lynx.Rust.NativeBorrows.audit!(
           invalid,
           result.extraction.audit.external_calls,
-          translated,
+          invalid_translated,
           refs
         )
       end
