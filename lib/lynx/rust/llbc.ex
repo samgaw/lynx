@@ -556,7 +556,13 @@ defmodule Lynx.Rust.LLBC do
   # Charon uses separate hash-cons tables for types, trait references, etc.
   # Recognize Ty variants only; IDs in other families must not overwrite these.
   @doc false
-  def type_references!(document), do: references(document, %{})
+  def type_references!(document) do
+    # Array lengths belong to the constant family even inside shared types.
+    # Hydrate them before saving types for recursive model expansion.
+    document
+    |> references(%{})
+    |> Lynx.Rust.LLBCJson.restore_constant_references!(document)
+  end
 
   defp references(%{"Value" => [id, value]}, refs)
        when is_integer(id) and
