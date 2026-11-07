@@ -690,6 +690,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result",
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
+  "Lynx.Result.SharedSteps",
   "Lynx.Result.Talks",
   "Lynx.Result.andAlso",
   "Lynx.Result.bind",

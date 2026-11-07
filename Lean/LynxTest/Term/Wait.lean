@@ -78,6 +78,36 @@ theorem contending_updates_complete :
     updates { schedule := [.current, .swap 2] } = (.ok .nil, { pidCounter := 2, refCounter := 2 }) ∧
     updates { schedule := [.swap 2, .swap 1] } = (.ok .nil, { pidCounter := 2, refCounter := 2 }) := by cbv
 
+private def tick (env : Environment) : Option (Unit × Environment) :=
+  some ((), {env with refCounter := env.refCounter + 1})
+
+private def postUpdate (value : Nat) : Result Term :=
+  .wait tick fun _ => .wait tick fun _ => .wait (release (value + 3)) fun _ => .ok .nil
+
+private theorem update_trace (pid value : Nat) :
+    Result.SharedSteps pid (postUpdate value) (value, [(1, "owner", .pid pid)]) .nil (value + 3, []) := by
+  refine .wait _ _ () _ (value + 1, [(1, "owner", .pid pid)]) _ _ ?_ ?_
+  · intro env owner counter heap
+    simp [tick, counter, heap]
+  · refine .wait _ _ () _ (value + 2, [(1, "owner", .pid pid)]) _ _ ?_ ?_
+    · intro env owner counter heap
+      simp [tick, counter, heap, Nat.add_assoc]
+    · refine .wait _ _ () _ (value + 3, []) _ _ ?_ ?_
+      · intro env owner counter heap
+        simp [release, heap, owner]
+      · exact .done Term.nil _
+
+/-- Intermediate ready waits remain scheduler steps while a competitor blocks;
+the same shared cells survive through both complete worker traces. -/
+theorem contending_multi_wait_updates :
+    (Result.schedule (.wait acquire postUpdate) (fun _ => .wait acquire postUpdate))
+      {schedule := [.current, .swap 2]} =
+      (.ok .nil, {pidCounter := 2, refCounter := 6}) := by
+  exact Result.two_wait_interleave_steps acquire postUpdate acquire postUpdate 0 3 .nil .nil
+    (0, []) (0, [(1, "owner", .pid 1)]) (3, []) (3, [(1, "owner", .pid 2)]) (6, [])
+    (by simp [acquire]) (update_trace 1 0) (by simp [acquire])
+    (by simp [acquire]) (update_trace 2 3)
+
 /-- Poll readiness alone never makes the wait read-only or pure. -/
 theorem wait_is_effectful (poll : Environment → Option (β × Environment)) (next : β → Result α) :
     ¬ Result.IsPure (.wait poll next) ∧ ¬ Result.IsReadOnly (.wait poll next) := by
