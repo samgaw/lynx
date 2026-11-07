@@ -947,11 +947,21 @@ pub fn locked_resource_read(resource: rustler::ResourceArc<CounterResource>) -> 
     value
 }
 
-#[cfg(all(feature = "nif", not(feature = "file-resource-handles")))]
+#[cfg(all(
+    feature = "nif",
+    not(feature = "file-resource-handles"),
+    not(feature = "locked-file-resource-handles")
+))]
 rustler::init!("Elixir.LynxEffectsFixture.Native");
 
-#[cfg(feature = "file-resource-handles")]
+#[cfg(all(
+    feature = "file-resource-handles",
+    not(feature = "locked-file-resource-handles")
+))]
 rustler::init!("Elixir.LynxFileResourceFixture.Native");
+
+#[cfg(feature = "locked-file-resource-handles")]
+rustler::init!("Elixir.LynxLockedFileResourceFixture.Native");
 
 /// Completes the actual compiler future with a standard no-op task context.
 ///
@@ -1074,4 +1084,70 @@ pub fn file_resource_sync(resource: &rustler::ResourceArc<FileResource>) -> std:
 #[rustler::nif(name = "file_release", schedule = "DirtyIo")]
 pub fn file_resource_nif_release(resource: rustler::ResourceArc<FileResource>) {
     file_resource_release(resource);
+}
+
+/// A shared file whose access and lifetime are protected by an owned mutex.
+#[derive(Debug)]
+pub struct LockedFileResource {
+    /// The mutex owns the independently admitted regular file.
+    pub state: Mutex<std::fs::File>,
+}
+
+#[cfg_attr(feature = "locked-file-resource-handles", rustler::resource_impl)]
+#[cfg_attr(
+    not(feature = "locked-file-resource-handles"),
+    rustler::resource_impl(register = false)
+)]
+impl rustler::Resource for LockedFileResource {}
+
+/// Moves the file through mutex construction into a shared resource.
+/// # Panics
+/// Panics if the resource type has not been registered.
+pub fn locked_file_resource_new(file: std::fs::File) -> rustler::ResourceArc<LockedFileResource> {
+    let state = Mutex::new(file);
+    rustler::ResourceArc::new(LockedFileResource { state })
+}
+
+/// Releases one owner, destroying the mutex and file only on final release.
+pub fn locked_file_resource_release(resource: rustler::ResourceArc<LockedFileResource>) {
+    drop(resource);
+}
+
+/// Retains another owner of the same mutex and file.
+pub fn locked_file_resource_clone(
+    resource: &rustler::ResourceArc<LockedFileResource>,
+) -> rustler::ResourceArc<LockedFileResource> {
+    resource.clone()
+}
+
+/// Allocates, clones and consumes both owners without discarding file cleanup.
+/// # Panics
+/// Panics if the resource type has not been registered.
+pub fn locked_file_resource_cycle(file: std::fs::File) {
+    let first = locked_file_resource_new(file);
+    let second = locked_file_resource_clone(&first);
+    locked_file_resource_release(first);
+    locked_file_resource_release(second);
+}
+
+/// Holds the mutex while synchronizing through a first-party dependency.
+/// # Errors
+/// Propagates synchronization errors while preserving the shared file identity.
+/// # Panics
+/// Recursive acquisition may panic or block. Callers must not hold this mutex.
+pub fn locked_file_resource_sync(
+    resource: &rustler::ResourceArc<LockedFileResource>,
+) -> std::io::Result<()> {
+    let guard = match resource.state.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    effects_core::synchronize_file(&guard)
+}
+
+/// Releases the decoded Rust owner while the VM term keeps the file and mutex live.
+#[cfg(feature = "locked-file-resource-handles")]
+#[rustler::nif(name = "locked_file_release", schedule = "DirtyIo")]
+pub fn locked_file_resource_nif_release(resource: rustler::ResourceArc<LockedFileResource>) {
+    locked_file_resource_release(resource);
 }

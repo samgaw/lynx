@@ -2201,6 +2201,29 @@ external boundaries. This is not a model for arbitrary payload destructors. -/
     else .error .exhausted
   | _ => .error .exhausted
 
+/-- Compose ready File cleanup with removal of its owning mutex. The mutex
+cell stays present during the close transition; all other cells are framed. -/
+theorem disposeFile_next {α : Type} (mutex : NativeMutex NativeFile)
+    (file : NativeFile) (poisoned : Bool) (env after : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id, typeName NativeFile,
+        .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"),
+          NativeCodec.encode file])])
+    (ready : NativeFile.pollClose file env = some (.ok (), after))
+    (retained : after.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id, typeName NativeFile,
+        .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"),
+          NativeCodec.encode file])])
+    (next : Unit → NativeM α) :
+    (disposeFile mutex >>= next) env =
+      next () {after with nativeHeap := after.nativeHeap.filter (fun cell => cell.1 != mutex.id)} := by
+  cases poisoned <;>
+    simp [disposeFile, NativeM.readCell, stored, NativeCodec.roundtrip,
+      NativeFile.close, Result.wait_bind, bind_assoc]
+  all_goals
+    rw [Result.wait_ready_apply _ _ _ _ _ ready]
+    simp [Result.ok_bind, NativeM.removeCell, retained]
+
 end NativeMutex
 
 instance (priority := 1100) : NativeOwnedDrop (NativeMutex NativeFile) where
