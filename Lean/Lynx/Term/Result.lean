@@ -10,6 +10,19 @@ public section
 
 namespace Lynx.Result
 
+/-- Consume one uniquely registered live native capability. Host admission must
+establish what the tag certifies; this primitive does not validate native memory,
+FFI or cleanup behavior. Invalid identities exhaust verification. -/
+@[expose] def consumeNativeCapability (typeName : String) (identity : Nat) : Result Unit :=
+  .get fun env =>
+    if identity = 0 ∨ env.refCounter < identity then .error .exhausted else
+    match env.nativeHeap.filter (fun cell => cell.1 == identity) with
+    | [(_,storedType,.atom "live")] =>
+      if storedType == typeName then
+        .set {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != identity)} (.ok ())
+      else .error .exhausted
+    | _ => .error .exhausted
+
 /-- Erlang guards select their body only on the atom `true`. -/
 @[expose] def guardPassed : Result → Bool
   | .ok (.atom value) => value == "true"
