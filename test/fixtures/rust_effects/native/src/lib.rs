@@ -982,3 +982,20 @@ pub fn locked_resource_poll_cancel(
         std::task::Poll::Pending
     )
 }
+
+/// Explicitly polls the actual owned resource future twice.
+///
+/// # Panics
+/// A caller-provided waker may panic; recursive mutex acquisition may panic or block.
+pub fn finish_resource(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+    context: &mut std::task::Context<'_>,
+) -> std::task::Poll<bool> {
+    use std::future::Future;
+    let mut future = std::pin::pin!(resource_suspending(resource, amount));
+    match future.as_mut().poll(context) {
+        std::task::Poll::Pending => future.as_mut().poll(context),
+        ready => ready,
+    }
+}

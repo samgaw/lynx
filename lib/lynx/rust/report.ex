@@ -184,6 +184,12 @@ defmodule Lynx.Rust.Report do
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
+          if(Map.get(extraction, :futures, :reject) in [:polling, :suspending, :cancelling],
+            do: [
+              "Checked standard Pin<&mut T>::as_mut reborrow lowering; standard mutable-reference DerefMut semantics, Rust memory safety and physical pinning remain trusted; custom pointer families are not admitted by this rule"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :owned_drops, false),
             do: [
               "Compiler-generated owning ADT destruction: actual optimized rustc drop MIR with checked self-pointer erasure; admitted native field destructors remain explicit models; native layout, allocation and FFI correctness unverified"
