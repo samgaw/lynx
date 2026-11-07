@@ -14,7 +14,12 @@ defmodule Lynx.Rust.FileModels do
   def enabled!(other, _),
     do: raise(ArgumentError, "unsupported Rust file model: #{inspect(other)}")
 
-  def resolve(function, translated, refs) do
+  def resolve(function, translated, refs),
+    do:
+      resolve_shared_write(function, translated, refs) ||
+        resolve_direct(function, translated, refs)
+
+  defp resolve_direct(function, translated, refs) do
     with %{
            "body" => "Opaque",
            "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
@@ -95,6 +100,95 @@ defmodule Lynx.Rust.FileModels do
             "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; write errors preserve visible bytes and offset while retaining permitted background persistence (std/OS model assumption); reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); regular-file sync_all success persists visible contents and length; admitted root-directory sync_all success commits visible namespace names without synchronizing inode bytes, with filesystem/device correspondence assumed; directory sync errors retain the last guaranteed checkpoint; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); single-file and bounded flat-filesystem crash-image/restart host admission, per-path metadata-version choices, std, OS, filesystem/device and native descriptor correspondence unverified; open/append modes and unrestricted concurrent file access unsupported; owned File destruction requires the separately validated close model; synchronized callers may be verified against these per-operation transitions"
         }
       end
+    else
+      _ -> nil
+    end
+  end
+
+  # Write for &File mutably borrows the reference slot, not an owned File.
+  # Validate its inherited lifetime and actual trait-method substitution; the
+  # existing write primitive reconstructs the same file identity after the call.
+  defp resolve_shared_write(function, translated, refs) do
+    with %{
+           "body" => "Opaque",
+           "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+           "generics" => params,
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["std", 0]},
+               %{"Ident" => ["fs", 0]},
+               %{"Impl" => %{"Trait" => impl_id}},
+               %{"Ident" => ["write", 0]}
+             ]
+           },
+           "src" => %{"TraitImpl" => %{"trait_ref" => %{"id" => trait}}}
+         } <- function,
+         file when not is_nil(file) <- type(translated, @file_path),
+         error when not is_nil(error) <- type(translated, @error),
+         true <- plain?(%{params | "outlives" => []}, 3),
+         true <- Enum.map(params["regions"], & &1["index"]) == [0, 1, 2],
+         true <-
+           params["outlives"] == [
+             %{
+               "regions" => [],
+               "outlives" => [],
+               "skip_binder" => [%{"Var" => %{"Free" => 0}}, %{"Var" => %{"Free" => 1}}]
+             }
+           ],
+         f = adt(file["def_id"]),
+         shared = reference(0, f, "Shared"),
+         true <-
+           CallModels.expand(sig["inputs"], refs) == [
+             reference(1, shared, "Mut"),
+             reference(2, %{"Slice" => [scalar("U8"), nil]}, "Shared")
+           ],
+         true <-
+           result?(
+             CallModels.expand(sig["output"], refs),
+             scalar("Usize"),
+             adt(error["def_id"]),
+             translated,
+             refs
+           ),
+         %{
+           "src" => "Normal",
+           "is_unsafe" => false,
+           "is_negative" => false,
+           "generics" => impl_params,
+           "methods" => methods
+         } = impl <-
+           Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
+         true <- plain?(impl_params, 1) and Enum.map(impl_params["regions"], & &1["index"]) == [0],
+         true <- impl["item_meta"]["name"] == Enum.take(function["item_meta"]["name"], 3),
+         true <-
+           CallModels.expand(impl["impl_trait"], refs) == %{
+             "id" => trait,
+             "generics" => args([shared])
+           },
+         %{"item_meta" => %{"name" => trait_name}} <-
+           Enum.find(translated["trait_decls"], &(&1 && &1["def_id"] == trait)),
+         true <- trait_name == name(~w(core io write Write)),
+         selected =
+           Enum.filter(methods, &match?(%{"kind" => %{"TraitMethod" => [^trait, 0]}}, &1)),
+         true <-
+           Lynx.Rust.FormatModels.method_identity?(
+             function,
+             %{impl | "methods" => selected},
+             trait,
+             %{translated: translated, refs: refs}
+           ) do
+      %{
+        rust_name: "std::fs::{core::io::write::Write<&'0 std::fs::File>}::write",
+        lean: "Lynx.NativeFile.write",
+        builtin: false,
+        can_fail: true,
+        lift: true,
+        native_cutoff_only: true,
+        native_file_types: {file["def_id"], error["def_id"]},
+        file_seek_type: nil,
+        label:
+          "Bounded shared File write model (1048576 bytes): exact standard Write<&File> identity, inherited lifetime and method substitution validated; preserves the borrowed file identity; delegates to the existing partial-write, offset, permission and background-persistence transition; std/OS/descriptor/FFI correspondence unverified; open/append flags and unrestricted concurrent writes unsupported"
+      }
     else
       _ -> nil
     end

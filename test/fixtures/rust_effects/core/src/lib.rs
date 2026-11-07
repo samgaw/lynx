@@ -165,3 +165,27 @@ impl std::future::Future for PausedCounter {
 pub fn synchronize_file(file: &std::fs::File) -> std::io::Result<()> {
     file.sync_all()
 }
+
+/// Writes through a shared file handle, retaining partial-write and error results.
+/// # Errors
+/// Returns the operating system's write error without replacing the handle.
+pub fn write_shared_file(file: &std::fs::File, bytes: &[u8]) -> std::io::Result<usize> {
+    use std::io::Write;
+    let mut borrowed = file;
+    borrowed.write(bytes)
+}
+
+#[cfg(test)]
+mod shared_file_tests {
+    #[test]
+    fn shared_writes_advance_one_file_position() -> std::io::Result<()> {
+        let path = std::env::temp_dir().join(format!("lynx-shared-write-{}", std::process::id()));
+        let file = std::fs::File::create_new(&path)?;
+        assert_eq!(super::write_shared_file(&file, &[1, 2])?, 2);
+        assert_eq!(super::write_shared_file(&file, &[3])?, 1);
+        file.sync_all()?;
+        assert_eq!(std::fs::read(&path)?, [1, 2, 3]);
+        drop(file);
+        std::fs::remove_file(path)
+    }
+}

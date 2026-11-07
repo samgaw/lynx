@@ -1035,7 +1035,7 @@ pub fn locked_resource_poll_resume(
 /// An owned file retained by a Rustler resource.
 #[derive(Debug)]
 pub struct FileResource {
-    /// The independently admitted regular file.
+    /// The owned regular file shared by resource handles.
     pub file: std::fs::File,
 }
 #[cfg_attr(feature = "file-resource-handles", rustler::resource_impl)]
@@ -1079,6 +1079,16 @@ pub fn file_resource_sync(resource: &rustler::ResourceArc<FileResource>) -> std:
     effects_core::synchronize_file(&resource.file)
 }
 
+/// Writes through the shared file using another first-party crate.
+/// # Errors
+/// Propagates partial writes and OS errors without consuming the resource.
+pub fn file_resource_write(
+    resource: &rustler::ResourceArc<FileResource>,
+    bytes: &[u8],
+) -> std::io::Result<usize> {
+    effects_core::write_shared_file(&resource.file, bytes)
+}
+
 /// Releases the decoded Rust owner while the originating VM term remains live.
 #[cfg(feature = "file-resource-handles")]
 #[rustler::nif(name = "file_release", schedule = "DirtyIo")]
@@ -1102,7 +1112,7 @@ pub fn file_resource_nif_sync(resource: rustler::ResourceArc<FileResource>) -> b
     }
 }
 
-/// Constructs a real file resource for native runtime calibration.
+/// Creates a new file resource through exclusive creation.
 ///
 /// # Panics
 /// Panics if the fixture path already exists, cannot be created, or the resource
@@ -1112,6 +1122,23 @@ pub fn file_resource_nif_sync(resource: rustler::ResourceArc<FileResource>) -> b
 pub fn file_resource_nif_create() -> rustler::ResourceArc<FileResource> {
     let file = std::fs::File::create_new("resource").expect("cannot create fixture resource file");
     file_resource_new(file)
+}
+
+/// Writes a two-byte little-endian value through the resource's shared file.
+/// Returns true only for a complete write; durability requires a later sync.
+#[cfg(feature = "file-resource-write")]
+#[rustler::nif(name = "file_write", schedule = "DirtyIo")]
+pub fn file_resource_nif_write(resource: rustler::ResourceArc<FileResource>, value: u16) -> bool {
+    let bytes = value.to_le_bytes();
+    let outcome = file_resource_write(&resource, &bytes);
+    file_resource_release(resource);
+    match outcome {
+        Ok(written) => written == bytes.len(),
+        Err(error) => {
+            drop(error);
+            false
+        }
+    }
 }
 
 /// A shared file whose access and lifetime are protected by an owned mutex.
