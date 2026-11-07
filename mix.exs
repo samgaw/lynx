@@ -12,6 +12,7 @@ defmodule Lynx.MixProject do
       test_ignore_filters: [
         "test/fixtures/translations/regenerate.exs",
         "test/support/rust_io.exs",
+        "test/support/nif_fixture.exs",
         ~r{test/fixtures/rust_workspace/}
       ],
       aliases: [
