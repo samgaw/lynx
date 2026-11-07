@@ -175,6 +175,37 @@ pub fn write_shared_file(file: &std::fs::File, bytes: &[u8]) -> std::io::Result<
     borrowed.write(bytes)
 }
 
+/// Reads once without hiding EOF, partial input or operating-system errors.
+/// # Errors
+/// Propagates the operating system's read error.
+pub fn read_file_once(file: &mut std::fs::File, bytes: &mut [u8]) -> std::io::Result<usize> {
+    use std::io::Read;
+    file.read(bytes)
+}
+
+/// Parses a leading little-endian word; either missing byte rejects the input.
+/// # Errors
+/// Propagates the first read error without returning a parsed word.
+pub fn read_file_word(file: &mut std::fs::File) -> std::io::Result<Option<u16>> {
+    let mut first = [0u8];
+    match read_file_once(file, &mut first) {
+        Err(error) => Err(error),
+        Ok(0) => Ok(None),
+        Ok(_) => {
+            let mut second = [0u8];
+            match read_file_once(file, &mut second) {
+                Err(error) => Err(error),
+                Ok(0) => Ok(None),
+                Ok(_) => {
+                    let [low] = first;
+                    let [high] = second;
+                    Ok(Some(u16::from_le_bytes([low, high])))
+                }
+            }
+        }
+    }
+}
+
 /// Synchronizes the current directory and closes its owned descriptor on every return.
 /// # Errors
 /// Propagates errors from opening or synchronizing the directory.
