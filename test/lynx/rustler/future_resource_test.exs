@@ -4,8 +4,8 @@ defmodule Lynx.Rustler.FutureResourceTest do
   @tools System.get_env("LYNX_AENEAS_DIR")
   @moduletag timeout: 900_000
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
-               String.contains?(File.read!(Path.join(@tools, "lynx-toolchain")), "pin-macro-v1")
-  unless @available, do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned pin-macro backend")
+               String.contains?(File.read!(Path.join(@tools, "lynx-toolchain")), "pin-as-mut-v1")
+  unless @available, do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned pin-as-mut backend")
 
   @tag :tmp_dir
   test "proves actual resource future completion and cancellation through Rustler and Elixir", %{
@@ -37,7 +37,13 @@ defmodule Lynx.Rustler.FutureResourceTest do
       module_prefix: "Shared.Extraction",
       build_dir: Path.join(tmp, "build"),
       cargo: [features: ["future-resource-handles"]],
-      only: [counter_new: 1, counter_poll_add: 2, counter_poll_cancel: 2, counter_value: 1]
+      only: [
+        counter_new: 1,
+        counter_poll_add: 2,
+        counter_poll_cancel: 2,
+        counter_poll_resume: 2,
+        counter_value: 1
+      ]
     ]
 
     prepared = Lynx.Rustler.prepare!(options)
@@ -53,6 +59,7 @@ defmodule Lynx.Rustler.FutureResourceTest do
           {"__CREATE__", "counter_new"},
           {"__ADD__", "counter_poll_add"},
           {"__CANCEL__", "counter_poll_cancel"},
+          {"__RESUME__", "counter_poll_resume"},
           {"__READ__", "counter_value"}
         ],
         source,
@@ -101,7 +108,7 @@ defmodule Lynx.Rustler.FutureResourceTest do
           ],
           required_properties:
             Enum.map(
-              ~w(ready_poll ready_drop add_contract pending_poll pending_drop cancel_contract),
+              ~w(ready_poll ready_drop add_contract pending_poll pending_drop cancel_contract resumed_poll completed_drop finish_contract resume_contract),
               &("Shared.Future." <> &1)
             ) ++
               [
@@ -122,13 +129,18 @@ defmodule Lynx.Rustler.FutureResourceTest do
     assert apply(native, :counter_value, [resource]) == 7
     assert apply(native, :counter_poll_add, [resource, 3])
     assert apply(native, :counter_value, [resource]) == 10
+    resumed = apply(native, :counter_new, [7])
+    assert apply(native, :counter_poll_resume, [resumed, 3])
+    assert apply(native, :counter_value, [resumed]) == 10
     maximum = 18_446_744_073_709_551_615
     largest = apply(native, :counter_new, [maximum])
     refute apply(native, :counter_poll_add, [largest, 1])
+    refute apply(native, :counter_poll_resume, [largest, 1])
     assert apply(native, :counter_value, [largest]) == maximum
 
-    for invalid <- [-1, maximum + 1, false] do
-      assert_raise ArgumentError, fn -> apply(native, :counter_poll_add, [resource, invalid]) end
+    for function <- [:counter_poll_add, :counter_poll_resume],
+        invalid <- [-1, maximum + 1, false] do
+      assert_raise ArgumentError, fn -> apply(native, function, [resource, invalid]) end
       assert apply(native, :counter_value, [resource]) == 10
     end
 
@@ -139,7 +151,19 @@ defmodule Lynx.Rustler.FutureResourceTest do
     cancel_laws = File.read!(Path.join(@fixture, "future_resource_laws.ex"))
     [{_, update_beam}] = Code.compile_string(update_laws, Path.join(tmp, "updates.ex"))
     [{_, cancel_beam}] = Code.compile_string(cancel_laws, Path.join(tmp, "cancel.ex"))
-    reports = Lynx.Laws.verify([update_beam, cancel_beam], native: {Lynx.Rustler, options})
+
+    repeated_laws =
+      update_laws
+      |> String.replace("LynxEffectsFixture.SharedLaws", "LynxEffectsFixture.RepeatedLaws")
+      |> String.replace("counter_poll_add", "counter_poll_resume")
+      |> String.replace(
+        "Lynx.Rustler.withResourceTypes,",
+        "Shared.Future.resume_contract, Lynx.Rustler.withResourceTypes,"
+      )
+
+    [{_, repeated_beam}] = Code.compile_string(repeated_laws, Path.join(tmp, "repeated.ex"))
+    beams = [update_beam, cancel_beam, repeated_beam]
+    reports = Lynx.Laws.verify(beams, native: {Lynx.Rustler, options})
     assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
     guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
 
@@ -147,14 +171,14 @@ defmodule Lynx.Rustler.FutureResourceTest do
         do: assert(Enum.any?(guarantees, &(&1.kind == kind)))
 
     assert Enum.all?(
-             Lynx.Laws.verify([update_beam, cancel_beam], native: {Lynx.Rustler, options}),
+             Lynx.Laws.verify(beams, native: {Lynx.Rustler, options}),
              &(&1.status == :ok and &1.cached)
            )
 
     export = Path.join(tmp, "future.export")
 
     assert Enum.all?(
-             Lynx.Laws.verify([update_beam, cancel_beam],
+             Lynx.Laws.verify(beams,
                native: {Lynx.Rustler, options},
                export: export
              ),
@@ -192,20 +216,30 @@ defmodule Lynx.Rustler.FutureResourceTest do
     source = Path.join(workspace, "native/src/lib.rs")
     rust = File.read!(source)
 
-    changed =
-      String.replace(rust, "std::task::Poll::Pending\n    )", "std::task::Poll::Ready(_)\n    )")
+    for changed <- [
+          String.replace(
+            rust,
+            "std::task::Poll::Pending\n    )",
+            "std::task::Poll::Ready(_)\n    )"
+          ),
+          String.replace(
+            rust,
+            "std::task::Poll::Pending => future.as_mut().poll(context)",
+            "std::task::Poll::Pending => std::task::Poll::Pending"
+          )
+        ] do
+      refute changed == rust
+      File.write!(source, changed)
 
-    refute changed == rust
-    File.write!(source, changed)
-
-    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Rustler.prepare!(options)
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
     end
 
     File.write!(source, rust)
 
     assert Enum.all?(
-             Lynx.Laws.verify([update_beam, cancel_beam], native: {Lynx.Rustler, options}),
+             Lynx.Laws.verify(beams, native: {Lynx.Rustler, options}),
              &(&1.status == :ok)
            )
   end
@@ -236,6 +270,7 @@ defmodule Lynx.Rustler.FutureResourceTest do
       def counter_value(_), do: :erlang.nif_error(:not_loaded)
       def counter_poll_add(_, _), do: :erlang.nif_error(:not_loaded)
       def counter_poll_cancel(_, _), do: :erlang.nif_error(:not_loaded)
+      def counter_poll_resume(_, _), do: :erlang.nif_error(:not_loaded)
     end
     """)
 
