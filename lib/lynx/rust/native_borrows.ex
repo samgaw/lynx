@@ -16,7 +16,7 @@ defmodule Lynx.Rust.NativeBorrows do
           do: {type["def_id"], CallModels.expand(type["kind"], refs)}
 
     context = %{guards: guards, types: types}
-    implementations = Map.new(functions, &{&1["def_id"], &1})
+    implementations = implementations(functions, %{translated: translated, references: refs})
 
     for function <- functions,
         {input, index} <- Enum.with_index(function["signature"]["inputs"], 1),
@@ -31,11 +31,13 @@ defmodule Lynx.Rust.NativeBorrows do
     end
   end
 
-  def nonpanicking_calls(functions, models) do
-    by_id = Map.new(functions, &{&1["def_id"], &1})
+  def nonpanicking_calls(functions, models, context \\ %{}) do
+    by_id = implementations(functions, context)
 
     MapSet.new(
-      for id <- Map.keys(by_id) ++ Map.keys(models), nonpanicking?(id, by_id, models, []), do: id
+      for id <- Enum.map(functions, & &1["def_id"]) ++ Map.keys(models),
+          nonpanicking?(id, by_id, models, []),
+          do: id
     )
   end
 
@@ -64,7 +66,8 @@ defmodule Lynx.Rust.NativeBorrows do
       {:error, function, message} -> LLBC.failure!(function, translated, message)
     end
 
-    safe = nonpanicking_calls(functions ++ helpers, models)
+    safe =
+      nonpanicking_calls(functions ++ helpers, models, %{translated: translated, references: refs})
 
     owners =
       for type <- translated["type_decls"],
@@ -207,6 +210,20 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp contains_guard?(_, _, _), do: false
 
+  defp implementations(functions, %{translated: translated} = context) do
+    document = %{"translated" => translated}
+    expanded = Lynx.Rust.LLBCJson.restore_constant_references!(document, document)
+
+    available =
+      Map.new(Enum.reject(expanded["translated"]["fun_decls"], &is_nil/1), &{&1["def_id"], &1})
+
+    functions
+    |> Map.new(&{&1["def_id"], Map.get(available, &1["def_id"], &1)})
+    |> Map.put(:context, context)
+  end
+
+  defp implementations(functions, _), do: Map.new(functions, &{&1["def_id"], &1})
+
   defp nonpanicking?(id, functions, models, seen) do
     cond do
       id in seen ->
@@ -242,6 +259,8 @@ defmodule Lynx.Rust.NativeBorrows do
   defp statement?(%{"Assign" => [_, %{"BinaryOp" => [op, _, _]}]}, _, _, _)
        when op in ~w(BitAnd BitOr BitXor), do: true
 
+  defp statement?(%{"Assign" => [_, %{"UnaryOp" => ["Not", _]}]}, _, _, _), do: true
+
   defp statement?(%{"Assign" => [_, value]}, _, _, _),
     do: Enum.any?(~w(Use Ref Aggregate Discriminant Len), &Map.has_key?(value, &1))
 
@@ -250,8 +269,12 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp statement?(%{"Call" => %{"call" => call}}, functions, models, seen) do
     case get_in(call, ["func", "Regular", "kind"]) do
-      %{"Fun" => id} -> nonpanicking?(id, functions, models, seen)
-      _ -> false
+      %{"Fun" => id} ->
+        nonpanicking?(id, functions, models, seen) or
+          Lynx.Rust.NativeIndexBounds.safe?(call, models[id], functions[:context])
+
+      _ ->
+        false
     end
   end
 

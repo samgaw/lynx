@@ -58,7 +58,12 @@ defmodule Lynx.Rust.NativeLifetimes do
     # analysis. Their completed-state panic cannot lose a live saved guard.
     Lynx.Rust.NativeBorrows.audit!(functions, models, translated, refs, frame_inputs)
     implementations = MapSet.new(functions, & &1["def_id"])
-    nonpanicking = Lynx.Rust.NativeBorrows.nonpanicking_calls(functions, models)
+
+    nonpanicking =
+      Lynx.Rust.NativeBorrows.nonpanicking_calls(functions, models, %{
+        translated: translated,
+        references: refs
+      })
 
     for function <- functions,
         %{"Structured" => body} <- [function["body"]] do
