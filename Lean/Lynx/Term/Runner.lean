@@ -252,13 +252,21 @@ theorem run_reaches (computation : Result α) (env : Environment) (choices : Lis
   rw [Term.Runner.run, ready]
   rfl
 
-/-- A finite prefix of ready waits in one local execution. The residual
+/-- A finite prefix of state reads, state writes and ready waits in one local execution. The residual
 computation is retained rather than assumed to finish. Readiness and every
-intermediate state are established by the actual polls; this relation does not
+intermediate state are established by the actual operations; this relation does not
 inject a crash or choose concurrent scheduler interleavings. -/
 inductive ReadyPrefix : Result α → Environment → Result α → Environment → Prop where
   | refl (computation : Result α) (env : Environment) :
       ReadyPrefix computation env computation env
+  | get (next : Environment → Result α) (before : Environment)
+      (residual : Result α) (after : Environment)
+      (rest : ReadyPrefix (next before) before residual after) :
+      ReadyPrefix (.get next) before residual after
+  | set (middle : Environment) (next : Result α) (before : Environment)
+      (residual : Result α) (after : Environment)
+      (rest : ReadyPrefix next middle residual after) :
+      ReadyPrefix (.set middle next) before residual after
   | wait {β : Type} (poll : Environment → Option (β × Environment))
       (next : β → Result α) (reply : β) (before middle : Environment)
       (residual : Result α) (after : Environment)
@@ -273,6 +281,12 @@ theorem ReadyPrefix.apply {computation residual : Result α} {before after : Env
     computation before = residual after := by
   induction trace with
   | refl => rfl
+  | get next before residual after rest ih =>
+      rw [get_continuation_apply]
+      exact ih
+  | set middle next before residual after rest ih =>
+      rw [set_continuation_apply]
+      exact ih
   | wait poll next reply before middle residual after ready rest ih =>
       rw [wait_ready_apply poll next before middle reply ready]
       exact ih
@@ -294,6 +308,12 @@ theorem ReadyPrefix.bind {computation residual : Result α} {before after : Envi
     ReadyPrefix (computation >>= next) before (residual >>= next) after := by
   induction trace with
   | refl => exact .refl _ _
+  | get continuation before residual after rest ih =>
+      rw [get_bind]
+      exact .get _ _ _ _ ih
+  | set middle continuation before residual after rest ih =>
+      rw [set_bind]
+      exact .set _ _ _ _ _ ih
   | wait poll continuation reply before middle residual after ready rest ih =>
       rw [wait_bind]
       exact .wait poll (fun reply => continuation reply >>= next) reply before middle
@@ -331,6 +351,22 @@ theorem SharedSteps.apply {pid : PID} {computation : Result α} {value : α}
   | wait poll next reply before middle final value ready rest ih =>
       rw [wait_ready_apply poll next env _ reply (ready env owner counter heap)]
       simpa only using ih {env with refCounter := middle.1, nativeHeap := middle.2} owner rfl rfl
+
+/-- Retain a framed native trace as an actual prefix, so its implementation can
+compose with caller continuations and adapters without assuming termination. -/
+theorem SharedSteps.readyPrefix {pid : PID} {computation : Result α} {value : α}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps pid computation before value after) (env : Environment)
+    (owner : env.currentPid = pid) (counter : env.refCounter = before.1)
+    (heap : env.nativeHeap = before.2) :
+    ReadyPrefix computation env (.ok value) {env with refCounter := after.1, nativeHeap := after.2} := by
+  induction trace generalizing env with
+  | done value shared =>
+      simp only [← counter,← heap]
+      exact .refl _ _
+  | wait poll next reply before middle final value ready rest ih =>
+      apply ReadyPrefix.wait _ _ _ _ _ _ _ (ready env owner counter heap)
+      simpa only using ih {env with refCounter := middle.1,nativeHeap := middle.2} owner rfl rfl
 
 private def traceEnv (pid : PID) (saved : List (PID × ProcessState))
     (shared : Nat × List (Nat × String × Term)) : Environment :=

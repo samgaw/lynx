@@ -64,4 +64,22 @@ theorem executeNative_wait {α β : Type} (poll : Environment → Option (β × 
     executeNative (.wait poll next) encode =
       .wait poll (fun value => executeNative (next value) encode) := rfl
 
+/-- The actual native prefix survives panic conversion and result encoding.
+All state transitions remain those of the supplied computation. -/
+theorem executeNative_readyPrefix {α : Type} {computation residual : Result α}
+    {before after : Environment} (trace : Result.ReadyPrefix computation before residual after)
+    (encode : α → Term) :
+    Result.ReadyPrefix (executeNative computation encode) before (executeNative residual encode) after := by
+  induction trace with
+  | refl => exact .refl _ _
+  | get next before residual after rest ih =>
+      change Result.ReadyPrefix (.get fun env => executeNative (next env) encode) _ _ _
+      exact .get _ _ _ _ ih
+  | set middle next before residual after rest ih =>
+      change Result.ReadyPrefix (.set middle (executeNative next encode)) _ _ _
+      exact .set _ _ _ _ _ ih
+  | wait poll next reply before middle residual after ready rest ih =>
+      rw [executeNative_wait]
+      exact .wait _ _ _ _ _ _ _ ready ih
+
 end Lynx.Rustler
