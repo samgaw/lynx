@@ -81,6 +81,36 @@ defmodule Lynx.Rust.LLBCJsonTest do
     end
   end
 
+  test "restores shared global literals from the constant family" do
+    value = %{"Value" => [23, [%{"Str" => "."}, %{"Deduplicated" => 29}]]}
+    globals = [%{"value" => value}, %{"value" => %{"Deduplicated" => 23}}]
+
+    document = %{
+      "global_decls" => globals,
+      "ty" => %{"Value" => [23, %{"Scalar" => "Bool"}]},
+      "span" => %{"Value" => [23, %{"data" => %{}}]},
+      "dictionary" => %{
+        "Value" => [
+          23,
+          %{"kind" => "SelfId", "trait_decl_ref" => %{"id" => 2, "generics" => %{}}}
+        ]
+      }
+    }
+
+    assert [%{"value" => ^value}, %{"value" => ^value}] =
+             LLBCJson.restore_global_constant_values!(globals, document)
+
+    assert_raise ArgumentError, ~r/missing LLBC constant reference 24/, fn ->
+      LLBCJson.restore_global_constant_values!([%{"value" => %{"Deduplicated" => 24}}], document)
+    end
+
+    conflict = %{"Value" => [23, [%{"Str" => "different"}, %{"Deduplicated" => 29}]]}
+
+    assert_raise ArgumentError, ~r/inconsistent LLBC constant reference 23/, fn ->
+      LLBCJson.restore_global_constant_values!(globals, Map.put(document, "conflict", conflict))
+    end
+  end
+
   test "keeps compiler drop evidence in the audit while removing only the backend type field" do
     nested = %{"needs_drop" => "ordinary source data"}
     type = %{"def_id" => 7, "kind" => %{"Struct" => []}, "needs_drop" => false}
