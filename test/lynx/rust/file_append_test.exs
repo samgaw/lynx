@@ -49,7 +49,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"LockedConcurrent", []},
       {"RollbackProperties", []},
       {"InterruptedProperties", []},
-      {"TornConcurrent", []}
+      {"TornConcurrent", []},
+      {"WriteInterrupted", []}
     ]
 
     for {module, replacements} <- sources do
@@ -143,7 +144,10 @@ defmodule Lynx.Rust.FileAppendTest do
             "Record.InterruptedProperties.concurrent_crash_repair",
             "Record.TornConcurrent.torn_rollback_stalls",
             "Record.TornConcurrent.torn_crash_repair",
-            "Record.TornConcurrent.persisted_tail_images"
+            "Record.TornConcurrent.persisted_tail_images",
+            "Record.WriteInterrupted.before_resize_stalls",
+            "Record.WriteInterrupted.before_resize_crash_repair",
+            "Record.WriteInterrupted.before_resize_images"
           ]
     ]
 
@@ -278,6 +282,12 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.TornConcurrent.torn_crash_repair")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.WriteInterrupted.before_resize_crash_repair")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
@@ -290,6 +300,7 @@ defmodule Lynx.Rust.FileAppendTest do
           "Record/RollbackProperties.lean",
           "Record/InterruptedProperties.lean",
           "Record/TornConcurrent.lean",
+          "Record/WriteInterrupted.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -496,6 +507,33 @@ defmodule Lynx.Rust.FileAppendTest do
         end
 
       assert error.message =~ "Record/TornConcurrent.lean:"
+      File.write!(property, correct)
+    end
+
+    property = Path.join(project, "Record/WriteInterrupted.lean")
+    correct = File.read!(property)
+
+    for broken <- [
+          String.replace(
+            correct,
+            "⟨overwrite data data.size (bytes (payload value)) amount,",
+            "⟨data,"
+          ),
+          String.replace(
+            correct,
+            "some (alloc.vec.Vec.from values (by scalar_tac))",
+            "some (alloc.vec.Vec.from [] (by scalar_tac))"
+          )
+        ] do
+      refute broken == correct
+      File.write!(property, broken)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Project.build!(project, options[:proof_modules])
+        end
+
+      assert error.message =~ "Record/WriteInterrupted.lean:"
       File.write!(property, correct)
     end
 
