@@ -91,6 +91,8 @@ defmodule Lynx.Rust.LLBCJson do
   # Global values use the constant-value table too. A repeated literal can be
   # serialized once and referenced by a different global declaration; never
   # resolve that reference through the independently numbered type table.
+  def restore_global_constant_values!([], _document), do: []
+
   def restore_global_constant_values!(globals, document) do
     document = restore_trait_references!(document, document)
     constants = constant_values(document, %{})

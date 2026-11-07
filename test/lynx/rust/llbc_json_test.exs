@@ -111,6 +111,20 @@ defmodule Lynx.Rust.LLBCJsonTest do
     end
   end
 
+  test "an empty global audit does not resolve unrelated missing trait dictionaries" do
+    invalid = %{
+      "trait_refs" => [
+        %{"regions" => [], "outlives" => [], "skip_binder" => %{"Deduplicated" => 4}}
+      ]
+    }
+
+    assert [] = LLBCJson.restore_global_constant_values!([], invalid)
+
+    assert_raise ArgumentError, ~r/missing LLBC trait reference 4/, fn ->
+      LLBCJson.restore_trait_references!(invalid, invalid)
+    end
+  end
+
   test "shared array dimensions retain constant identity across type-table expansion" do
     usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
     literal = [%{"Integer" => %{"Unsigned" => ["Usize", "1"]}}, %{"Value" => [9, usize]}]
