@@ -122,10 +122,16 @@ defmodule Lynx.Rustler do
   compilation and extraction still run to establish the current implementation.
   """
   def prepare!(workspace, package, opts) do
-    Lynx.External.with_preparation_lock(fn -> do_prepare!(workspace, package, opts) end)
+    execution = validate_options!(opts)
+
+    Lynx.External.with_preparation_lock(fn ->
+      do_prepare!(workspace, package, opts, execution)
+    end)
   end
 
-  defp do_prepare!(workspace, package, opts) do
+  # Invalid configuration must fail before waiting for another proof build.
+  # Validation is pure; preparation still serializes all filesystem mutations.
+  defp validate_options!(opts) do
     allowed = [
       :lean_project,
       :module_prefix,
@@ -162,6 +168,10 @@ defmodule Lynx.Rustler do
           "owned resource cleanup requires runtime execution and a boolean owned_drops option"
         )
 
+    execution
+  end
+
+  defp do_prepare!(workspace, package, opts, execution) do
     prefix = Keyword.get(opts, :module_prefix, "Native.Extraction")
     tools = opts[:tools] || System.fetch_env!("LYNX_AENEAS_DIR")
     build_dir = opts[:build_dir] || Path.join([Mix.Project.build_path(), "lynx", "rust", package])
