@@ -8,7 +8,7 @@ defmodule Lynx.RustWorkspaceExampleTest do
   test "the self-contained example proves its native workspace and Elixir laws" do
     {output, status} =
       System.cmd("mix", ["run", "examples/rust_workspace/run.exs"],
-        cd: Path.expand("../..", __DIR__),
+        cd: Path.expand("../../..", __DIR__),
         env: [{"MIX_ENV", "dev"}, {"LYNX_CACHE", "0"}],
         stderr_to_stdout: true
       )
