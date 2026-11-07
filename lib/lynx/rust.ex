@@ -66,8 +66,9 @@ defmodule Lynx.Rust do
   Restart is a host/file-opening boundary, not verification of `File::open`.
   Only nonappend files with independent descriptions are supported. Native opening,
   physical close/descriptor reclamation, descriptor cloning, directory durability,
-  unrestricted concurrent I/O and general crash injection remain unsupported. Nested owning file destruction
-  and panic cleanup of live files are rejected. This option verifies first-party
+  unrestricted concurrent I/O and general crash injection remain unsupported. Compiler-checked resource payloads may directly own File fields with
+  `owned_drops: true`. Nested Mutex<File> destruction and panic cleanup of live
+  files remain rejected. This option verifies first-party
   protocols against the explicit model, not the operating system.
 
   `:futures` defaults to `:reject`. Selecting `:immediate` extracts actual async

@@ -32,7 +32,7 @@ defmodule Lynx.Rust.NativeOwnedDrops do
   end
 
   # Resource drop dispatch is classified as cutoff-only by the lifetime audit.
-  # Admit only structural cleanup of validated nonpanicking mutex primitives;
+  # Admit only structural cleanup of validated nonpanicking mutex/File primitives;
   # custom or first-party destructor calls need a separate unwind composition.
   defp structural_nonpanicking?(%{"statements" => statements}, translated, refs) do
     Enum.all?(statements, fn statement ->
@@ -52,17 +52,20 @@ defmodule Lynx.Rust.NativeOwnedDrops do
         %{"Drop" => drop} ->
           # Check the primitive kind before consulting drop dictionaries. A
           # recursive ResourceArc field must not re-enter resource admission.
-          mutex_type?(drop["place"]["ty"], translated, refs) and
-            match?(
-              {:ok, %{native_kind: :mutex}},
-              Lynx.Rust.NativeDrops.site(drop, translated, refs)
-            )
+          primitive_type?(drop["place"]["ty"], translated, refs) and
+            case Lynx.Rust.NativeDrops.site(drop, translated, refs) do
+              {:ok, %{native_kind: kind}} when kind in [:mutex, :file] -> true
+              _ -> false
+            end
 
         %{
           "Call" => %{
             "call" => %{
               "func" => %{
-                "Regular" => %{"kind" => %{"Fun" => id}, "generics" => %{"types" => [self]}}
+                "Regular" => %{
+                  "kind" => %{"Fun" => id},
+                  "generics" => %{"types" => [self]} = args
+                }
               }
             }
           }
@@ -71,10 +74,21 @@ defmodule Lynx.Rust.NativeOwnedDrops do
 
           with %{"Adt" => %{"id" => type}} <- Lynx.Rust.CallModels.expand(self, refs),
                declaration <- Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == type)),
-               true <- Lynx.Rust.MutexModels.type?(declaration),
-               %{native_dispose: true} <-
-                 Lynx.Rust.NativeDrops.resolve(function, translated, refs) do
-            true
+               true <- primitive_type?(self, translated, refs) do
+            if Lynx.Rust.MutexModels.type?(declaration) do
+              match?(
+                %{native_dispose: true},
+                Lynx.Rust.NativeDrops.resolve(function, translated, refs)
+              )
+            else
+              Lynx.Rust.FileDrops.resolve(function, translated, refs) != nil and
+                Lynx.Rust.FileDrops.call?(
+                  args,
+                  translated,
+                  refs,
+                  Lynx.Rust.ResourceModels.trait_references(translated)
+                )
+            end
           else
             _ -> false
           end
@@ -85,12 +99,12 @@ defmodule Lynx.Rust.NativeOwnedDrops do
     end)
   end
 
-  defp mutex_type?(type, translated, refs) do
+  defp primitive_type?(type, translated, refs) do
     case Lynx.Rust.CallModels.expand(type, refs) do
       %{"Adt" => %{"id" => id}} ->
         Lynx.Rust.MutexModels.type?(
           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id))
-        )
+        ) or Lynx.Rust.FileModels.file_type?(translated, id)
 
       _ ->
         false

@@ -68,8 +68,8 @@ defmodule Lynx.Rust.NativeUnwind do
     models =
       for function <- functions,
           model =
-            NativeDrops.resolve(function, translated, refs) ||
-              FileDrops.resolve(function, translated, refs),
+            FileDrops.resolve(function, translated, refs) ||
+              NativeDrops.resolve(function, translated, refs),
           model != nil,
           into: %{},
           do: {function["def_id"], model}

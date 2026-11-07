@@ -1,6 +1,16 @@
 defmodule Lynx.Rustler.OwnedResourceConfigurationTest do
   use ExUnit.Case, async: true
 
+  test "file models are explicit and require runtime execution before building" do
+    assert_raise ArgumentError, ~r/regular-file models require runtime execution/, fn ->
+      Lynx.Rustler.prepare!("/unused", "unused", files: :regular)
+    end
+
+    assert_raise ArgumentError, ~r/unsupported Rust file model/, fn ->
+      Lynx.Rustler.prepare!("/unused", "unused", execution: :runtime, files: :all)
+    end
+  end
+
   test "requires runtime execution and an explicit boolean cleanup selection" do
     for options <- [[owned_drops: true], [execution: :runtime, owned_drops: :all]] do
       assert_raise ArgumentError, ~r/owned resource cleanup requires runtime execution/, fn ->

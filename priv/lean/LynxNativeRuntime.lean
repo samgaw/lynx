@@ -896,6 +896,19 @@ def decode {α : Type} [NativeCodec α] (term : Term) : NativeM (NativeResourceA
   · cases term <;> simp_all [decode, termOwner]
   · simp [decode, registered]
 
+/-- A rejected non-reference invokes the exception handler without allocating a
+Rust owner or changing the heap, even inside a larger translated computation. -/
+theorem decode_nonreference_handled_next {α β γ : Type} [NativeCodec α]
+    (term : Term) (notReference : ∀ identity, term ≠ .reference identity)
+    (finish : NativeResourceArc α → NativeM β) (handler : Exception → NativeM β)
+    (next : β → NativeM γ) (env : Environment) :
+    ((Result.handle (decode (α := α) term >>= finish) handler) >>= next) env =
+      (handler (.error (.atom "badarg")) >>= next) env := by
+  by_cases registered : typeName α ∈ env.nativeResourceTypes
+  · cases term <;> simp_all [decode, termOwner, Result.handle,
+      Result.get_bind, Result.get_continuation_apply]
+  · simp [decode, registered, Result.handle, Result.get_bind, Result.get_continuation_apply]
+
 /-- Rustler cannot recover a typed resource before its type is registered. -/
 theorem decode_unregistered {α : Type} [NativeCodec α] (term : Term) (env : Environment)
     (absent : typeName α ∉ env.nativeResourceTypes) :
