@@ -472,6 +472,152 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
   end
 
+  @tag :tmp_dir
+  test "ordinary Elixir creates and reuses its verified file resource", %{tmp_dir: tmp} do
+    workspace = Path.join(tmp, "workspace")
+    File.mkdir_p!(workspace)
+
+    for path <- ~w(Cargo.toml Cargo.lock core native),
+        do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
+
+    project = Path.join(tmp, "proofs")
+    File.mkdir_p!(Path.join(project, "FileResource"))
+    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
+
+    if File.dir?(packages) do
+      File.mkdir_p!(Path.join(project, ".lake"))
+      File.ln_s!(packages, Path.join(project, ".lake/packages"))
+    end
+
+    base = [
+      workspace: workspace,
+      package: "effects-native",
+      tools: @tools,
+      lean_project: project,
+      build_dir: Path.join(tmp, "build"),
+      module_prefix: "FileResource.Extraction",
+      cargo: [features: ["file-resource-sync"]],
+      only: [file_create: 0, file_release: 1, file_sync: 1],
+      execution: :runtime,
+      files: :regular,
+      owned_drops: true
+    ]
+
+    prepared = Lynx.Rustler.prepare!(base)
+
+    assert [
+             %{"name" => "file_release", "flags" => 2},
+             %{"name" => "file_sync", "flags" => 2},
+             %{"name" => "file_create", "flags" => 2}
+           ] = prepared.bindings.bindings
+
+    for {fixture, module} <- [
+          {"NativeFileResourceCreation", "Creation"},
+          {"NativeFileResourceCreatedCalls", "CreatedCalls"}
+        ] do
+      source =
+        Enum.reduce(
+          prepared.bindings.bindings,
+          File.read!(Path.join(@fixture, fixture <> ".lean")),
+          fn binding, source ->
+            key =
+              case binding["name"] do
+                "file_create" -> "__CREATE__"
+                "file_release" -> "__RELEASE__"
+                "file_sync" -> "__SYNC__"
+              end
+
+            String.replace(source, key, binding["lean_name"])
+          end
+        )
+
+      File.write!(Path.join(project, "FileResource/#{module}.lean"), source)
+    end
+
+    property = Path.join(project, "FileResource/CreatedCalls.lean")
+    source = File.read!(property)
+
+    options =
+      base ++
+        [
+          proof_modules: ["FileResource.Creation", "FileResource.CreatedCalls"],
+          required_properties:
+            ~w(FileResource.Creation.constructor_prefix FileResource.Creation.create_next
+        FileResource.CreatedCalls.release_next FileResource.CreatedCalls.sync_next FileResource.CreatedCalls.create_release_sync)
+        ]
+
+    checked = Lynx.Rustler.prepare!(options)
+    assert Enum.all?(checked.reports, &(&1.status == :ok))
+    load_native(prepared.library, tmp)
+    path = Path.join(tmp, "creation.ex")
+    File.cp!(Path.join(@fixture, "file_resource_created_calls.ex"), path)
+    [{_, beam}] = Code.compile_file(path)
+
+    reports =
+      Lynx.Laws.verify([beam],
+        native: {Lynx.Rustler, options},
+        initial_environment: "FileResource.CreatedCalls.seed"
+      )
+
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+    guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
+    laws = for %{kind: :elixir_law, status: :verified, theorem: name} <- guarantees, do: name
+    assert Enum.sort(laws) == ["create_release_sync/0", "create_sync_release_sync/0"]
+    assert Enum.any?(guarantees, &match?(%{kind: :rust_implementation, status: :verified}, &1))
+    assert Enum.any?(reports, &(&1[:initial_environments] == ["FileResource.CreatedCalls.seed"]))
+    warm = Lynx.Rustler.prepare!(options)
+    assert Enum.all?(warm.reports, &(&1.status == :ok and &1.cached))
+    export = Path.join(tmp, "creation.export")
+
+    assert Enum.all?(
+             Lynx.Laws.verify([beam],
+               native: {Lynx.Rustler, options},
+               initial_environment: "FileResource.CreatedCalls.seed",
+               export: export
+             ),
+             &(&1.status == :ok)
+           )
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    for extra <- [
+          "private axiom unfinished : False",
+          "private theorem incomplete : True := by sorry"
+        ] do
+      File.write!(property, source <> "\n" <> extra <> "\n")
+
+      assert_raise RuntimeError, ~r/native adapter or proof audit failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    end
+
+    File.write!(property, String.replace(source, "next Term.true", "next Term.false"))
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(property, source)
+    native = Path.join(workspace, "core/src/lib.rs")
+    original = File.read!(native)
+
+    changed =
+      String.replace(
+        original,
+        "pub fn synchronize_file(file: &std::fs::File) -> std::io::Result<()> {\n    file.sync_all()\n}",
+        "pub fn synchronize_file(_file: &std::fs::File) -> std::io::Result<()> {\n    Ok(())\n}"
+      )
+
+    assert changed != original
+    File.write!(native, changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+  end
+
   defp load_native(artifact, tmp) do
     :code.purge(LynxFileResourceFixture.Native)
     :code.delete(LynxFileResourceFixture.Native)
