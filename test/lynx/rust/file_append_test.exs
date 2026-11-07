@@ -552,14 +552,6 @@ defmodule Lynx.Rust.FileAppendTest do
     for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol),
         do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
 
-    source = Path.join(workspace, "protocol/src/lib.rs")
-
-    File.write!(
-      source,
-      File.read!(source) <>
-        "\npub fn consume_file_mutex(mutex: std::sync::Mutex<File>) { drop(mutex); }\n"
-    )
-
     project = Path.join(tmp, "proofs")
     packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
 
