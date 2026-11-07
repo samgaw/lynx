@@ -2175,4 +2175,35 @@ instance : NativeDrop NativeFile where
 instance : NativeOwnedDrop NativeFile where
   drop := NativeFile.close
 
+namespace NativeMutex
+
+/-- Consuming an unlocked mutex that owns a File runs file cleanup before
+retiring the abstract mutex cell. Poisoning does not suppress destruction.
+Raw mutex teardown, descriptor reclamation, std and OS correspondence remain
+external boundaries. This is not a model for arbitrary payload destructors. -/
+@[expose] def disposeFile (mutex : NativeMutex NativeFile) : NativeM Unit := do
+  let contents ← NativeM.readCell (typeName NativeFile) mutex.id
+  match contents with
+  | .tuple fields =>
+    if size : fields.size = 3 then
+      let lockState := fields[0]'(by omega)
+      let poisonState := fields[1]'(by omega)
+      let payload := fields[2]'(by omega)
+      if lockState == .atom "unlocked" &&
+          (poisonState == .atom "unpoisoned" || poisonState == .atom "poisoned") then
+        match NativeCodec.decode (α := NativeFile) payload with
+        | some file => do
+          NativeFile.close file
+          let _ ← NativeM.removeCell (typeName NativeFile) mutex.id
+          return ()
+        | none => .error .exhausted
+      else .error .exhausted
+    else .error .exhausted
+  | _ => .error .exhausted
+
+end NativeMutex
+
+instance (priority := 1100) : NativeOwnedDrop (NativeMutex NativeFile) where
+  drop := NativeMutex.disposeFile
+
 end Lynx

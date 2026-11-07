@@ -27,7 +27,7 @@ defmodule Lynx.Rust.FileDrops do
         native_file_types: {id, nil},
         label:
           Map.get(base, :label, "") <>
-            " Standard File destruction model: consuming a registered file retires its Rust capability while retaining visible/durable disk state; ignored native close errors do not restore ownership or acknowledge durability; admitted close persistence is explicit; physical descriptor reclamation, debug-validity checks, std, allocation, OS and FFI correspondence unverified; nested Mutex<File> destruction and live-file panic cleanup unsupported"
+            " Standard File destruction model: consuming a registered file retires its Rust capability while retaining visible/durable disk state; ignored native close errors do not restore ownership or acknowledge durability; admitted close persistence is explicit; physical descriptor reclamation, debug-validity checks, std, allocation, OS and FFI correspondence unverified; owned Mutex<File> cleanup requires the validated standard mutex destructor and owned_drops; live-file panic cleanup unsupported"
       })
     else
       _ -> nil

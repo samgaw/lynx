@@ -65,3 +65,8 @@ pub fn decode_record(value: u16, inverse: u16) -> Option<u16> {
 pub fn resize_to(file: &File, length: u64) -> io::Result<()> {
     file.set_len(length)
 }
+
+/// Consumes the mutex and its owned file, including when poisoned.
+pub fn consume_file_mutex(mutex: std::sync::Mutex<File>) {
+    drop(mutex);
+}
