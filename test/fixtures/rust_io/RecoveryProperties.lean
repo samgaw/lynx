@@ -74,6 +74,7 @@ theorem recover_success (file : NativeFile) (env : Environment)
     (outcome "read" true 1 mask1 (outcome "read" true 1 mask2 rest))
   have resetValid : Valid reset := by
     have persisted := persist_size _ _ _ _ accepted0
+    rw [max_eq_right valid.2.1] at persisted
     unfold Valid reset sought
     dsimp
     obtain ⟨visible, _, _⟩ := valid
@@ -279,6 +280,7 @@ theorem persist_zero (bytes : ByteArray) : persist bytes bytes (zeroMask bytes) 
     if choice == 1 then bytes[index]! else bytes[index]!⟩
   have accepted : persist bytes bytes (zeroMask bytes) = some result := by
     unfold persist
+    simp only [Nat.min_self, Nat.max_self]
     rw [if_pos conditions]
   rw [persist_same bytes (zeroMask bytes) result accepted] at accepted
   exact accepted

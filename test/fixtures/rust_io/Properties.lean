@@ -21,7 +21,8 @@ theorem action_outcome (operation : String) (success : Bool) (value : Nat)
 theorem decode_encode (state : State) (valid : Valid state) :
     decode (encode state) = some state := by
   obtain ⟨visible, durable, position⟩ := valid
-  simp [decode, encode, not_lt.mpr visible, not_lt.mpr durable, not_lt.mpr position]
+  have durableBound := Nat.le_trans durable visible
+  simp [decode, encode, not_lt.mpr visible, not_lt.mpr durableBound, not_lt.mpr position]
 
 @[expose] def fileEnv (env : Environment) (file : NativeFile) (state : State)
     (frame : List (Nat × String × Term)) : Environment :=
@@ -67,7 +68,7 @@ theorem overwrite_size (old data : ByteArray) (position count : Nat) (bound : co
     omega
 
 theorem persist_size (old visible mask result : ByteArray) (accepted : persist old visible mask = some result) :
-    result.size = mask.size ∧ mask.size ≤ visible.size := by
+    result.size = mask.size ∧ mask.size ≤ max old.size visible.size := by
   unfold persist at accepted
   split at accepted
   · rename_i conditions
@@ -117,6 +118,11 @@ theorem written_valid (before : State) (data : Slice U8) (value : Nat)
   have size := overwrite_size before.visible (bytes data) before.position value
     (by simpa only [bytes_size] using bounded)
   have persisted := persist_size _ _ _ _ accepted
+  have oldBound : before.durable.size ≤ (overwrite before.visible before.position (bytes data) value).size := by
+    rw [size]
+    obtain ⟨_, old, _⟩ := valid
+    split <;> omega
+  rw [max_eq_right oldBound] at persisted
   unfold Valid written
   dsimp
   constructor

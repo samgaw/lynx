@@ -8,18 +8,19 @@ open NativeFile Record.Properties Record.ReadProperties Record.RecoveryPropertie
 
 /-- Transport an arbitrary finite prefix through the actual extracted loop.
 The remaining computation is retained, including errors, waits and exhaustion. -/
-theorem loop_prefix (file : NativeFile) (env : Environment)
+theorem loop_prefix_next (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before after : State)
     (values : List U16) (trace : Records before values after)
     (accumulated : List U16) (maxRecords : Usize) (fuel : Nat)
     (separate : Separate file frame)
     (count : accumulated.length + values.length ≤ maxRecords.val)
     (capacity : accumulated.length + values.length ≤ 262144)
-    (enough : values.length ≤ fuel) (accumulatedValid : accumulated.length ≤ Usize.max) :
-    NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-      fuel (file, alloc.vec.Vec.from accumulated accumulatedValid) (fileEnv env file before frame) =
-    NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-      (fuel - values.length) (file, alloc.vec.Vec.from (accumulated ++ values) (by simp; scalar_tac))
+    (enough : values.length ≤ fuel) (accumulatedValid : accumulated.length ≤ Usize.max)
+    (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
+    (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
+      fuel (file, alloc.vec.Vec.from accumulated accumulatedValid) >>= next) (fileEnv env file before frame) =
+    (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
+      (fuel - values.length) (file, alloc.vec.Vec.from (accumulated ++ values) (by simp; scalar_tac)) >>= next)
       (fileEnv env file after frame) := by
   induction trace generalizing accumulated fuel with
   | nil state => simp
@@ -163,18 +164,19 @@ theorem reader_records (values : List U16) (head tail : List U8) (rest : Term)
 
 /-- Once the valid prefix has been accumulated, the actual loop stops at the
 partial tail, retaining the prefix and the final file state. -/
-theorem loop_truncated (file : NativeFile) (env : Environment)
+theorem loop_truncated_next (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (values : List U16) (tail : List U8)
     (rest : Term) (maxRecords : Usize) (fuel : Nat)
     (separate : Separate file frame) (short : tail.length < 4)
     (bounded : (logBytes values ++ tail).length ≤ limit)
     (more : values.length < maxRecords.val) (enough : 0 < fuel)
-    (valid : values.length ≤ Usize.max) :
-    NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-      fuel (file, alloc.vec.Vec.from values valid)
+    (valid : values.length ≤ Usize.max)
+    (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
+    (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
+      fuel (file, alloc.vec.Vec.from values valid) >>= next)
       (fileEnv env file (reader (disk (logBytes values ++ tail)) rest (4 * values.length)) frame) =
-      (.ok (.Ok (alloc.vec.Vec.from values valid), file),
-        fileEnv env file (finished (disk (logBytes values ++ tail)) rest) frame) := by
+      next (.Ok (alloc.vec.Vec.from values valid), file)
+        (fileEnv env file (finished (disk (logBytes values ++ tail)) rest) frame) := by
   cases fuel with
   | zero => omega
   | succ fuel =>
@@ -191,6 +193,44 @@ theorem loop_truncated (file : NativeFile) (env : Environment)
 /-- Recover every complete record before any tail shorter than four bytes,
 with an arbitrary larger record limit. No exact-length limit is needed to stop.
 Every byte of the partial tail is allowed; it never becomes a recovered record. -/
+theorem recover_truncated_log_next (file : NativeFile) (env : Environment)
+    (frame : List (Nat × String × Term)) (values : List U16) (tail : List U8)
+    (rest : Term) (position : Nat) (maxRecords : Usize)
+    (separate : Separate file frame) (short : tail.length < 4)
+    (bounded : (logBytes values ++ tail).length ≤ limit)
+    (offset : position ≤ limit) (more : values.length < maxRecords.val)
+    (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
+    (recover_log file maxRecords >>= next) (fileEnv env file
+      ⟨disk (logBytes values ++ tail), disk (logBytes values ++ tail), position,
+        outcome "seek" true 0 (zeroMask (disk (logBytes values ++ tail)))
+          (reader (disk (logBytes values ++ tail)) rest 0).script⟩ frame) =
+      next (.Ok (alloc.vec.Vec.from values (by scalar_tac)), file)
+        (fileEnv env file (finished (disk (logBytes values ++ tail)) rest) frame) := by
+  let data := disk (logBytes values ++ tail)
+  have size : data.size = 4 * values.length + tail.length := by
+    simp [data, disk, ← ByteArray.size_data]
+  have bound : data.size ≤ limit := by simpa [data, disk, ← ByteArray.size_data] using bounded
+  have capacity : values.length ≤ 262144 := by
+    simp only [List.length_append, logBytes_length, limit] at bounded
+    omega
+  simp only [recover_log, monadLift_self, bind_assoc]
+  rw [seek_next file 0#u64 env frame _ (reader data rest 0) (.Ok 0#u64) separate]
+  · simp only [recover_log_loop, monadLift_self, NativeM.loop]
+    have trace : Records (reader data rest 0) values (reader data rest (4 * values.length)) := by
+      simpa only [List.nil_append, List.length_nil, Nat.zero_add] using reader_records values [] tail rest bounded
+    have transport := loop_prefix_next file env frame _ _ values trace [] maxRecords 262145 separate
+      (by simp; omega) (by simp; omega) (by omega) (by simp) next
+    simp only [List.nil_append, alloc.vec.Vec.new] at transport ⊢
+    rw [transport]
+    exact loop_truncated_next file env frame values tail rest maxRecords _ separate short bounded more (by omega) _ next
+  · exact ⟨bound, Nat.le_refl _, offset⟩
+  · simp [blocked, outcome]
+  · simpa [reader, sought] using seek_start
+      (⟨data, data, position, outcome "seek" true 0 (zeroMask data) (reader data rest 0).script⟩ : State)
+      0#u64 (zeroMask data) data _ (by simp [limit]) (action_outcome _ _ _ _ _) (persist_zero _)
+
+/-- Execute recovery independently, retaining the same implementation-linked
+EOF property as the continuation form. -/
 theorem recover_truncated_log (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (values : List U16) (tail : List U8)
     (rest : Term) (position : Nat) (maxRecords : Usize)
@@ -203,28 +243,8 @@ theorem recover_truncated_log (file : NativeFile) (env : Environment)
           (reader (disk (logBytes values ++ tail)) rest 0).script⟩ frame) =
       (.ok (.Ok (alloc.vec.Vec.from values (by scalar_tac)), file),
         fileEnv env file (finished (disk (logBytes values ++ tail)) rest) frame) := by
-  let data := disk (logBytes values ++ tail)
-  have size : data.size = 4 * values.length + tail.length := by
-    simp [data, disk, ← ByteArray.size_data]
-  have bound : data.size ≤ limit := by simpa [data, disk, ← ByteArray.size_data] using bounded
-  have capacity : values.length ≤ 262144 := by
-    simp only [List.length_append, logBytes_length, limit] at bounded
-    omega
-  simp only [recover_log, monadLift_self]
-  rw [seek_next file 0#u64 env frame _ (reader data rest 0) (.Ok 0#u64) separate]
-  · simp only [recover_log_loop, monadLift_self, NativeM.loop]
-    have trace : Records (reader data rest 0) values (reader data rest (4 * values.length)) := by
-      simpa only [List.nil_append, List.length_nil, Nat.zero_add] using reader_records values [] tail rest bounded
-    have transport := loop_prefix file env frame _ _ values trace [] maxRecords 262145 separate
-      (by simp; omega) (by simp; omega) (by omega) (by simp)
-    simp only [List.nil_append, alloc.vec.Vec.new] at transport ⊢
-    rw [transport]
-    exact loop_truncated file env frame values tail rest maxRecords _ separate short bounded more (by omega) _
-  · exact ⟨bound, Nat.le_refl _, offset⟩
-  · simp [blocked, outcome]
-  · simpa [reader, sought] using seek_start
-      (⟨data, data, position, outcome "seek" true 0 (zeroMask data) (reader data rest 0).script⟩ : State)
-      0#u64 (zeroMask data) data _ (by simp [limit]) (action_outcome _ _ _ _ _) (persist_zero _)
+  simpa [NativeM.ok] using recover_truncated_log_next file env frame values tail rest position maxRecords
+    separate short bounded offset more (fun result => NativeM.ok result)
 
 /-- Restarting a synchronized file with an incomplete tail recovers precisely
 its complete prefix, for every admitted crash image. The tail is retained on

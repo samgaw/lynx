@@ -132,4 +132,42 @@ defmodule Lynx.Rust.FileModelsTest do
 
     assert is_nil(FileModels.resolve(function, %{"type_decls" => [file, file | rest]}, %{}))
   end
+
+  test "set_len validates its inherent method and actual argument and result widths" do
+    {sync, translated} = sync_fixture()
+    path = Enum.drop(sync["item_meta"]["name"], -1) ++ [%{"Ident" => ["set_len", 0]}]
+
+    function =
+      sync
+      |> put_in(["item_meta", "name"], path)
+      |> put_in(
+        ["signature", "inputs"],
+        sync["signature"]["inputs"] ++
+          [
+            %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
+          ]
+      )
+
+    assert %{lean: "Lynx.NativeFile.setLen", native_cutoff_only: true} =
+             FileModels.resolve(function, translated, %{})
+
+    for altered <- [
+          put_in(function, ["signature", "inputs", Access.at(1)], %{
+            "Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}
+          }),
+          put_in(function, ["signature", "inputs", Access.at(0)], %{
+            "Ref" => [%{"Var" => %{"Free" => 0}}, adt(1), "Mut"]
+          }),
+          put_in(function, ["signature", "output"], adt(3, [adt(1), adt(2)])),
+          put_in(
+            function,
+            ["item_meta", "name", Access.at(2), "Impl", "Ty", "skip_binder"],
+            adt(2)
+          ),
+          put_in(function, ["signature", "is_unsafe"], true),
+          put_in(function, ["signature", "abi"], "C"),
+          put_in(function, ["item_meta", "name", Access.at(3)], %{"Ident" => ["set_len", 1]})
+        ],
+        do: assert(is_nil(FileModels.resolve(altered, translated, %{})))
+  end
 end

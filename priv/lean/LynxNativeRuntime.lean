@@ -1834,16 +1834,16 @@ structure State where
       let .bitstring durable durableBits _ := fields[1]'(by omega) | none
       let .integer position := fields[2]'(by omega) | none
       if bits != 0 || durableBits != 0 || position < 0 || visible.size > limit ||
-          durable.size > visible.size || position.toNat > limit then none
+          durable.size > limit || position.toNat > limit then none
       else some ⟨visible, durable, position.toNat, fields[3]'(by omega)⟩
     else none
   | _ => none
 
 /-- A mask selects each byte from the previous persistent image or current visible
-image. Length may advance but cannot shrink without a modeled truncate operation.
+image. Length may advance or shrink between the durable and visible lengths.
 This assumes bytewise old/new tearing, with no device corruption or namespace loss. -/
 @[expose] def persist (old visible mask : ByteArray) : Option ByteArray :=
-  if old.size ≤ mask.size ∧ mask.size ≤ visible.size ∧
+  if min old.size visible.size ≤ mask.size ∧ mask.size ≤ max old.size visible.size ∧
       mask.data.toList.all (fun byte => byte == 0 || byte == 1) then
     some ⟨mask.data.mapIdx fun index choice =>
       if choice == 1 then visible[index]! else old[index]!⟩
@@ -1967,6 +1967,24 @@ Failure preserves the previous offset under the explicit std/OS model. -/
     let durable ← persist state.durable state.visible mask
     some (.Err ⟨value⟩, {state with durable := durable, script := rest})
 
+/-- Set the visible length, preserving the prefix and zero-filling extension.
+The descriptor offset is unchanged. Durability still requires synchronization. -/
+@[expose] def resize (data : ByteArray) (length : Nat) : ByteArray :=
+  ⟨(data.data.toList.take length ++ List.replicate (length - data.size) 0).toArray⟩
+
+@[expose] def setLenStep (state : State) (length : U64) :
+    Option (core.result.Result Unit NativeIoError × State) := do
+  if length.val > limit then none else do
+  let (success, value, mask, rest) ← action "set_len" state.script
+  if success then
+    if value != 0 then none else do
+      let visible := resize state.visible length.val
+      let durable ← persist state.durable visible mask
+      some (.Ok (), {state with visible := visible, durable := durable, script := rest})
+  else do
+    let durable ← persist state.durable state.visible mask
+    some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+
 @[expose] def lookup (file : NativeFile) (env : Environment) : Option State :=
   if file.id ≤ env.refCounter then
     match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
@@ -2045,6 +2063,23 @@ all visible file contents and length. Directory/device correspondence is assumed
 
 @[expose] def syncAll (file : NativeFile) : NativeM (core.result.Result Unit NativeIoError) :=
   .wait (pollSync file) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
+/-- Model std::fs::File::set_len, including errors and blocking. Native file
+and filesystem correspondence remain explicit OS assumptions. -/
+@[expose] def pollSetLen (file : NativeFile) (length : U64) (env : Environment) :
+    Option (Except Exception (core.result.Result Unit NativeIoError) × Environment) :=
+  match lookup file env with
+  | none => some (.error .exhausted, env)
+  | some state =>
+    if blocked state then none else
+    match setLenStep state length with
+    | none => some (.error .exhausted, env)
+    | some (reply, updated) => some (.ok reply, store file updated env)
+
+@[expose] def setLen (file : NativeFile) (length : U64) : NativeM (core.result.Result Unit NativeIoError) :=
+  .wait (pollSetLen file length) fun reply => match reply with
     | .ok value => .ok value
     | .error exception => .error exception
 

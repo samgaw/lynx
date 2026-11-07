@@ -237,11 +237,16 @@ theorem persist_fresh (value : U16) (old visible mask result : ByteArray)
     (accepted : persist old visible mask = some result) : Fresh value result := by
   have size := persist_size old visible mask result accepted
   have bound := visibleFresh.1
+  have oldBound := oldFresh.1
   refine ⟨by omega, ?_⟩
   intro i inside
   rw [persist_at old visible mask result accepted i inside]
   split
-  · exact visibleFresh.2 i (by omega)
+  · by_cases visibleBound : i < visible.size
+    · exact visibleFresh.2 i visibleBound
+    · left
+      rw [getElem!_neg visible i (by omega)]
+      rfl
   · by_cases oldBound : i < old.size
     · exact oldFresh.2 i oldBound
     · left

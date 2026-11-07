@@ -62,8 +62,18 @@ defmodule Lynx.Rust.FileModels do
               translated,
               refs
             ) and
-              sync?(function, f, refs) ->
+              inherent?(function, f, refs, "sync_all") ->
             {"std::fs::{std::fs::File}::sync_all", "syncAll"}
+
+          length(params["regions"]) == 1 and input == [reference(0, f, "Shared"), scalar("U64")] and
+            result?(
+              output,
+              %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args([])}},
+              e,
+              translated,
+              refs
+            ) and inherent?(function, f, refs, "set_len") ->
+            {"std::fs::{std::fs::File}::set_len", "setLen"}
 
           true ->
             nil
@@ -82,7 +92,7 @@ defmodule Lynx.Rust.FileModels do
           native_file_types: {file["def_id"], error["def_id"]},
           file_seek_type: if(lean == "seek", do: seek_id(translated), else: nil),
           label:
-            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence; sync_all success persists visible contents and length; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); crash-image/restart host admission, std, OS, filesystem/device, namespace and native descriptor correspondence unverified; open/close/append modes and concurrent file access unsupported"
+            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); sync_all success persists visible contents and length; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); crash-image/restart host admission, std, OS, filesystem/device, namespace and native descriptor correspondence unverified; open/close/append modes and concurrent file access unsupported"
         }
       end
     else
@@ -262,7 +272,7 @@ defmodule Lynx.Rust.FileModels do
 
   defp io_method?(_, _, _, _, _, _), do: false
 
-  defp sync?(
+  defp inherent?(
          %{
            "src" => "Normal",
            "item_meta" => %{
@@ -278,16 +288,17 @@ defmodule Lynx.Rust.FileModels do
                    }
                  }
                },
-               %{"Ident" => ["sync_all", 0]}
+               %{"Ident" => [method, 0]}
              ]
            }
          },
          file,
-         refs
+         refs,
+         method
        ),
        do: plain?(params, 0) and CallModels.expand(parent, refs) == file
 
-  defp sync?(_, _, _), do: false
+  defp inherent?(_, _, _, _), do: false
 
   defp result?(
          %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => generics}},
