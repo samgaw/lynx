@@ -131,7 +131,7 @@ theorem contending_multi_wait_all_choices (choices : List ScheduleChoice) :
     let observed := (Result.schedule (.wait acquire postUpdate) (fun _ => .wait acquire postUpdate))
       {schedule := choices}
     (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok Term.nil, 6, []) := by
-  have result := Result.two_wait_serial_orders acquire postUpdate acquire postUpdate 0 0 .nil .nil
+  have result := Result.two_wait_serial_orders acquire postUpdate acquire postUpdate 0 0 .nil .nil .nil .nil
     (0, []) (0, [(1, "owner", .pid 1)]) (3, []) (6, [])
     (0, [(1, "owner", .pid 2)]) (3, []) (6, [])
     (by intro env owner counter heap; simp [acquire, heap, counter, owner])

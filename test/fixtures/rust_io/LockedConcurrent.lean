@@ -294,7 +294,7 @@ theorem appends_all_schedules (data : ByteArray) (first second : U16) (position 
   have result := Result.two_wait_serial_orders
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
-    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩)) Term.true Term.true
+    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩)) Term.true Term.true Term.true Term.true
     (shared 2 free before) (shared 3 (owned 1 3) before) (shared 3 free middleRoot)
     (shared 4 free (appended nextFirst second rest))
     (shared 3 (owned 2 3) before) (shared 3 free middleChild)
