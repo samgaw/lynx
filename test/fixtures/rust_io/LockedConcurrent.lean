@@ -46,7 +46,7 @@ private theorem worker_wait (value : U16) :
 @[expose] def owned (pid token : Nat) : Term :=
   NativeMutex.lockedContents pid token false (⟨2⟩ : NativeFile)
 
-private theorem seek_poll (before after : State) (position : U64) (counter : Nat) (contents : Term)
+theorem seek_poll (before after : State) (position : U64) (counter : Nat) (contents : Term)
     (valid : Valid before) (ready : blocked before = false)
     (step : seekStep before (.end_ 0#i64) = some (.Ok position, after))
     (fresh : 2 ≤ counter) (env : Environment) (count : env.refCounter = counter)
@@ -58,6 +58,21 @@ private theorem seek_poll (before after : State) (position : U64) (counter : Nat
     simp [lookup, heap, shared, decode_encode before valid]
     omega
   simp only [pollSeek, found]
+  simp [ready, step, store, heap, shared, ← count]
+
+theorem write_result_poll (before after : State) (value : U16)
+    (reply : core.result.Result Usize NativeIoError) (counter : Nat) (contents : Term)
+    (valid : Valid before) (ready : blocked before = false)
+    (step : writeStep before (payload value) = some (reply, after))
+    (fresh : 2 ≤ counter) (env : Environment) (count : env.refCounter = counter)
+    (heap : env.nativeHeap = (shared counter contents before).2) :
+    pollWrite (⟨2⟩ : NativeFile) (payload value) env =
+      some (.ok (reply, ⟨2⟩),
+        {env with refCounter := counter, nativeHeap := (shared counter contents after).2}) := by
+  have found : lookup (⟨2⟩ : NativeFile) env = some before := by
+    simp [lookup, heap, shared, decode_encode before valid]
+    omega
+  simp only [pollWrite, found]
   simp [ready, step, store, heap, shared, ← count]
 
 private theorem write_poll (before after : State) (value : U16) (counter : Nat) (contents : Term)
@@ -74,7 +89,7 @@ private theorem write_poll (before after : State) (value : U16) (counter : Nat) 
   simp only [pollWrite, found]
   simp [ready, step, store, heap, shared, ← count]
 
-private theorem sync_poll (before after : State) (counter : Nat) (contents : Term)
+theorem sync_poll (before after : State) (counter : Nat) (contents : Term)
     (valid : Valid before) (ready : blocked before = false)
     (step : syncStep before = some (.Ok (), after))
     (fresh : 2 ≤ counter) (env : Environment) (count : env.refCounter = counter)
@@ -88,7 +103,7 @@ private theorem sync_poll (before after : State) (counter : Nat) (contents : Ter
   simp only [pollSync, found]
   simp [ready, step, store, heap, shared, ← count]
 
-private theorem held_blocked (pid peer token counter : Nat) (state : State)
+theorem held_blocked (pid peer token counter : Nat) (state : State)
     (different : pid ≠ peer) (env : Environment) (owner : env.currentPid = peer)
     (heap : env.nativeHeap = (shared counter (owned pid token) state).2) :
     NativeMutex.pollLock (α := NativeFile) ⟨1⟩ env = none := by
@@ -235,7 +250,7 @@ theorem appends_interleave (data : ByteArray) (first second : U16) (position : N
     have earlier := append_bytes data first
     simpa only [after, next, appended, appendInput, extended, earlier] using bytes
 
-private theorem lock_poll (pid counter : Nat) (state : State) (fresh : 2 ≤ counter)
+theorem lock_poll (pid counter : Nat) (state : State) (fresh : 2 ≤ counter)
     (env : Environment) (owner : env.currentPid = pid) (count : env.refCounter = counter)
     (heap : env.nativeHeap = (shared counter free state).2) :
     NativeMutex.pollLock (α := NativeFile) ⟨1⟩ env =
