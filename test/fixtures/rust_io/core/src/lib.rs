@@ -41,3 +41,19 @@ pub fn seek_to(file: &mut File, offset: u64) -> io::Result<u64> {
 pub fn seek_from(file: &mut File, origin: SeekFrom) -> io::Result<u64> {
     file.seek(origin)
 }
+
+/// Encodes a word followed by its complement for a fresh record slot.
+pub fn encode_record(value: u16) -> [u8; 4] {
+    let [low, high] = value.to_le_bytes();
+    let [inverse_low, inverse_high] = (!value).to_le_bytes();
+    [low, high, inverse_low, inverse_high]
+}
+
+/// Accepts a record only when both words are exact complements.
+pub fn decode_record(value: u16, inverse: u16) -> Option<u16> {
+    if value ^ inverse == u16::MAX {
+        Some(value)
+    } else {
+        None
+    }
+}
