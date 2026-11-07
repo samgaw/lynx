@@ -2,6 +2,8 @@ defmodule Lynx.Rust.LLBCTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.LLBC
 
+  @effectful_backend "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+native-loops-v1+effectful-calls-v1"
+
   test "Cargo dependencies cannot masquerade as standard model crates" do
     library = fn name -> %{"name" => name, "kind" => ["lib"]} end
 
@@ -102,7 +104,12 @@ defmodule Lynx.Rust.LLBCTest do
       Map.put(translation(), "aeneas_version", "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1")
 
     pure = Map.put(pure, "result_monad", "RustM")
-    native = Map.put(pure, "result_monad", "Lynx.NativeM")
+
+    native =
+      pure
+      |> Map.put("result_monad", "Lynx.NativeM")
+      |> Map.put("aeneas_version", @effectful_backend)
+      |> Map.put("effectful_calls_preserved", true)
 
     assert %{0 => _} = LLBC.link!(audit, pure)
     assert %{0 => _} = LLBC.link!(audit, native, result_monad: "Lynx.NativeM")
@@ -120,6 +127,30 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
+  test "rejects runtime extraction without preserved effectful-call provenance" do
+    audit = LLBC.audit!(document([function()]), ["first_party"])
+
+    native =
+      translation()
+      |> Map.put("aeneas_version", @effectful_backend)
+      |> Map.put("result_monad", "Lynx.NativeM")
+      |> Map.put("effectful_calls_preserved", true)
+
+    for invalid <- [
+          Map.delete(native, "effectful_calls_preserved"),
+          Map.put(native, "effectful_calls_preserved", false),
+          Map.put(
+            native,
+            "aeneas_version",
+            String.replace_suffix(@effectful_backend, "+effectful-calls-v1", "")
+          )
+        ] do
+      assert_raise ArgumentError, ~r/effectful-calls-v1/, fn ->
+        LLBC.link!(audit, invalid, result_monad: "Lynx.NativeM")
+      end
+    end
+  end
+
   test "binds assertion unwind provenance to the explicit extraction mode" do
     audit = LLBC.audit!(document([function()]), ["first_party"])
 
@@ -127,15 +158,16 @@ defmodule Lynx.Rust.LLBCTest do
       translation()
       |> Map.put(
         "aeneas_version",
-        "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1"
+        @effectful_backend
       )
+      |> Map.put("effectful_calls_preserved", true)
       |> Map.put("result_monad", "Lynx.NativeM")
       |> Map.put("assertion_unwind_input", true)
 
     assert %{0 => _} =
              LLBC.link!(audit, native, result_monad: "Lynx.NativeM", assertion_unwind_input: true)
 
-    global_names = Map.update!(native, "aeneas_version", &(&1 <> "+global-names-v1"))
+    global_names = native
 
     assert %{0 => _} =
              LLBC.link!(audit, global_names,
@@ -150,9 +182,7 @@ defmodule Lynx.Rust.LLBCTest do
     for {model, expected} <- [
           {native, false},
           {Map.delete(native, "assertion_unwind_input"), true},
-          {Map.put(native, "assertion_unwind_input", "true"), true},
-          {Map.put(native, "aeneas_version", "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1"),
-           true}
+          {Map.put(native, "assertion_unwind_input", "true"), true}
         ] do
       assert_raise ArgumentError, ~r/assertion unwind input/, fn ->
         LLBC.link!(audit, model, result_monad: "Lynx.NativeM", assertion_unwind_input: expected)
@@ -430,7 +460,7 @@ defmodule Lynx.Rust.LLBCTest do
         "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1"
       )
 
-    assert_raise ArgumentError, ~r/native loops require the native-loops-v1/, fn ->
+    assert_raise ArgumentError, ~r/effectful-calls-v1/, fn ->
       LLBC.link!(audit, old_native, result_monad: "Lynx.NativeM")
     end
 

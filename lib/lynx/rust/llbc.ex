@@ -9,13 +9,15 @@ defmodule Lynx.Rust.LLBC do
   @workspace_backend @future_backend <> "+workspace-roots-v1"
   @undefined_backend @workspace_backend <> "+undefined-behavior-v1"
   @loop_backend @undefined_backend <> "+native-loops-v1"
+  @effectful_backend @loop_backend <> "+effectful-calls-v1"
   @unwind_backends [
     @unwind_backend,
     @global_backend,
     @future_backend,
     @workspace_backend,
     @undefined_backend,
-    @loop_backend
+    @loop_backend,
+    @effectful_backend
   ]
   @runtime_backends ["nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1" | @unwind_backends]
 
@@ -253,11 +255,12 @@ defmodule Lynx.Rust.LLBC do
         )
 
     if expected_monad != "RustM" and
-         translation["aeneas_version"] not in @runtime_backends,
+         (translation["aeneas_version"] != @effectful_backend or
+            translation["effectful_calls_preserved"] != true),
        do:
          raise(
            ArgumentError,
-           "native runtime extraction requires the pinned result-monad backend"
+           "native runtime extraction requires the pinned effectful-calls-v1 backend with preserved call provenance"
          )
 
     unless translation["charon_version"] == "0.1.304" && translation["crate"] == audit.crate &&
@@ -270,7 +273,8 @@ defmodule Lynx.Rust.LLBC do
                @future_backend,
                @workspace_backend,
                @undefined_backend,
-               @loop_backend
+               @loop_backend,
+               @effectful_backend
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
@@ -301,7 +305,7 @@ defmodule Lynx.Rust.LLBC do
             validate_loops!(helpers, mapping)
 
             if expected_monad == "Lynx.NativeM" and helpers != [] and
-                 translation["aeneas_version"] != @loop_backend,
+                 translation["aeneas_version"] not in [@loop_backend, @effectful_backend],
                do: raise(ArgumentError, "native loops require the native-loops-v1 Aeneas backend")
 
             {function["def_id"],
