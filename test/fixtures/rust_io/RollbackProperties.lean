@@ -77,7 +77,7 @@ theorem critical_contract (mutex : NativeMutex NativeFile) (value : U16) :
   funext acquired
   cases acquired <;> simp [recoverGuard]
 
-private def postAcquire (value : U16)
+@[expose] def postAcquire (value : U16)
     (reply : Except Exception (core.result.Result (NativeGuard NativeFile)
       (NativePoisonError (NativeGuard NativeFile)))) : Result Term :=
   match reply with
@@ -88,7 +88,7 @@ private def postAcquire (value : U16)
       NativeGuard.release {guard with value := file}
       finish reply
 
-private theorem worker_wait (value : U16) :
+theorem worker_wait (value : U16) :
     (do let reply ← locked_append_or_rollback ⟨1⟩ value
         finish reply : Result Term) = .wait (NativeMutex.pollLock ⟨1⟩) (postAcquire value) := by
   rw [critical_contract]
@@ -97,7 +97,7 @@ private theorem worker_wait (value : U16) :
   funext reply
   cases reply <;> simp [postAcquire, NativeM.ok]
 
-private def afterWrite (guard : NativeGuard NativeFile) (start : U64) (amount : Usize) : Result Term :=
+@[expose] def afterWrite (guard : NativeGuard NativeFile) (start : U64) (amount : Usize) : Result Term :=
   (match amount.val with
     | 4 => NativeFile.syncAll guard.value >>= fun synced =>
       match synced with
@@ -155,7 +155,7 @@ private theorem release_trace (pid peer token counter : Nat) (state : State) (re
     exact held_blocked pid peer token counter state different env owner heap
   · exact .done reply _
 
-private theorem set_len_poll (before after : State) (length : U64) (counter : Nat) (contents : Term)
+theorem set_len_poll (before after : State) (length : U64) (counter : Nat) (contents : Term)
     (valid : Valid before) (ready : blocked before = false)
     (step : setLenStep before length = some (.Ok (), after)) (fresh : 2 ≤ counter)
     (env : Environment) (count : env.refCounter = counter)
@@ -210,7 +210,7 @@ private theorem short_suffix (pid peer token counter : Nat) (different : pid ≠
       exact held_blocked pid peer token counter resized different env owner heap
     · simpa [NativeM.ok, finish, bind_assoc, terminal_bind] using release_trace pid peer token counter committed Term.false different
 
-private theorem truncate_append (data bytes : ByteArray) (amount : Nat) :
+theorem truncate_append (data bytes : ByteArray) (amount : Nat) :
     resize (overwrite data data.size bytes amount) data.size = data := by
   apply ByteArray.ext
   by_cases zero : amount = 0
