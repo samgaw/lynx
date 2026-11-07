@@ -10,12 +10,14 @@ defmodule Lynx.Rust.Workspace do
     {command, args} =
       if toolchain, do: {"rustup", ["run", toolchain, "cargo" | args]}, else: {"cargo", args}
 
-    case System.cmd(command, args ++ cargo_options,
-           cd: Path.dirname(manifest),
-           stderr_to_stdout: true
-         ) do
-      {json, 0} -> decode(json)
-      {message, status} -> {:error, "cargo metadata failed (#{status}): #{message}"}
+    # Cargo may report warnings even on success. Keep diagnostics on stderr;
+    # only stdout is the metadata JSON document.
+    case System.cmd(command, args ++ cargo_options, cd: Path.dirname(manifest)) do
+      {json, 0} ->
+        decode(json)
+
+      {message, status} ->
+        {:error, "cargo metadata failed (#{status}) for #{manifest}: #{message}"}
     end
   rescue
     error in ErlangError -> {:error, "cannot run cargo metadata: #{Exception.message(error)}"}
