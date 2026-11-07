@@ -13,7 +13,7 @@ defmodule Lynx.Rust.IoErrorCleanupTest do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
-    for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol),
+    for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol native),
         do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
 
     project = Path.join(tmp, "proofs")
@@ -46,6 +46,12 @@ defmodule Lynx.Rust.IoErrorCleanupTest do
 
     property = Path.join(project, "Publish/IoErrors.lean")
     File.cp!(Path.join(@fixture, "IoErrorProperties.lean"), property)
+
+    File.cp!(
+      Path.join(@fixture, "FramedCommitProperties.lean"),
+      Path.join(project, "Publish/Framed.lean")
+    )
+
     original = File.read!(property)
     packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
 
@@ -59,6 +65,10 @@ defmodule Lynx.Rust.IoErrorCleanupTest do
         ~w(explicit_cleanup implicit_cleanup missing_cleanup custom_cleanup duplicate_cleanup repeated_cleanup commit_ready acknowledged rejected_ack),
         &("Publish.IoErrors." <> &1)
       )
+
+    properties =
+      properties ++
+        ~w(Publish.Commit.Framed.commit_shared Publish.Commit.Framed.acknowledged_prefix)
 
     options = [
       roots: [
@@ -83,7 +93,8 @@ defmodule Lynx.Rust.IoErrorCleanupTest do
         "Publish.NamedRecovery",
         "Publish.WordRecovery",
         "Publish.Commit",
-        "Publish.IoErrors"
+        "Publish.IoErrors",
+        "Publish.Framed"
       ],
       required_properties: properties
     ]

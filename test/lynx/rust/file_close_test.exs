@@ -14,7 +14,7 @@ defmodule Lynx.Rust.FileCloseTest do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
-    for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol),
+    for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol native),
         do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
 
     project = Path.join(tmp, "proofs")
