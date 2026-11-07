@@ -84,18 +84,35 @@ private def tick (env : Environment) : Option (Unit × Environment) :=
 private def postUpdate (value : Nat) : Result Term :=
   .wait tick fun _ => .wait tick fun _ => .wait (release (value + 3)) fun _ => .ok .nil
 
-private theorem update_trace (pid value : Nat) :
-    Result.SharedSteps pid (postUpdate value) (value, [(1, "owner", .pid pid)]) .nil (value + 3, []) := by
-  refine .wait _ _ () _ (value + 1, [(1, "owner", .pid pid)]) _ _ ?_ ?_
+private theorem update_exclusive (pid peer value : Nat) :
+    Result.ExclusiveSteps pid peer acquire (postUpdate value)
+      (value, [(1, "owner", .pid pid)]) .nil (value + 3, []) := by
+  refine .wait _ _ () _ (value + 1, [(1, "owner", .pid pid)]) _ _ ?_ ?_ ?_
   · intro env owner counter heap
     simp [tick, counter, heap]
-  · refine .wait _ _ () _ (value + 2, [(1, "owner", .pid pid)]) _ _ ?_ ?_
+  · intro env owner counter heap
+    simp [acquire, heap]
+  · refine .wait _ _ () _ (value + 2, [(1, "owner", .pid pid)]) _ _ ?_ ?_ ?_
     · intro env owner counter heap
       simp [tick, counter, heap, Nat.add_assoc]
-    · refine .wait _ _ () _ (value + 3, []) _ _ ?_ ?_
+    · intro env owner counter heap
+      simp [acquire, heap]
+    · refine .wait _ _ () _ (value + 3, []) _ _ ?_ ?_ ?_
       · intro env owner counter heap
         simp [release, heap, owner]
+      · intro env owner counter heap
+        simp [acquire, heap]
       · exact .done Term.nil _
+
+private theorem update_trace (pid value : Nat) :
+    Result.SharedSteps pid (postUpdate value) (value, [(1, "owner", .pid pid)]) .nil (value + 3, []) :=
+  (update_exclusive pid (pid + 1) value).ready
+
+private theorem update_full (pid value : Nat) :
+    Result.SharedSteps pid (.wait acquire postUpdate) (value, []) .nil (value + 3, []) := by
+  refine .wait _ _ value _ (value, [(1, "owner", .pid pid)]) _ _ ?_ (update_trace pid value)
+  intro env owner counter heap
+  simp [acquire, heap, counter, owner]
 
 /-- Intermediate ready waits remain scheduler steps while a competitor blocks;
 the same shared cells survive through both complete worker traces. -/
@@ -107,6 +124,21 @@ theorem contending_multi_wait_updates :
     (0, []) (0, [(1, "owner", .pid 1)]) (3, []) (3, [(1, "owner", .pid 2)]) (6, [])
     (by simp [acquire]) (update_trace 1 0) (by simp [acquire])
     (by simp [acquire]) (update_trace 2 3)
+
+/-- Every finite choice list preserves both updates, even when it requests
+missing processes or switches after release before the earlier worker returns. -/
+theorem contending_multi_wait_all_choices (choices : List ScheduleChoice) :
+    let observed := (Result.schedule (.wait acquire postUpdate) (fun _ => .wait acquire postUpdate))
+      {schedule := choices}
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok Term.nil, 6, []) := by
+  have result := Result.two_wait_serial_orders acquire postUpdate acquire postUpdate 0 0 .nil .nil
+    (0, []) (0, [(1, "owner", .pid 1)]) (3, []) (6, [])
+    (0, [(1, "owner", .pid 2)]) (3, []) (6, [])
+    (by intro env owner counter heap; simp [acquire, heap, counter, owner])
+    (by intro env owner counter heap; simp [acquire, heap, counter, owner])
+    (update_exclusive 1 2 0) (update_full 2 3)
+    (update_exclusive 2 1 0) (update_full 1 3) choices
+  exact result.elim id id
 
 /-- Poll readiness alone never makes the wait read-only or pure. -/
 theorem wait_is_effectful (poll : Environment → Option (β × Environment)) (next : β → Result α) :
