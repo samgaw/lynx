@@ -41,9 +41,9 @@ defmodule Lynx.Rust do
   `Native.Extraction`. Also accepts `:tools` (or `LYNX_AENEAS_DIR`), `:build_dir`
   and `:cargo` options as in `Lynx.Rustler.prepare!/3`.
 
-  `files: :regular, execution: :runtime` admits checked standard `File::read`, `File::write`
-  and `File::sync_all` calls over registered borrowed regular-file capabilities.
-  The default `:reject` admits neither. The bounded model (1 MiB) distinguishes
+  `files: :regular, execution: :runtime` admits checked standard `File::read`, `File::write`,
+  `File::sync_all` and `Seek<File>::seek` calls over registered borrowed regular-file capabilities.
+  The default `:reject` admits none of these calls. The bounded model (1 MiB) distinguishes
   visible bytes, persistent bytes, offsets, partial writes, blocking and I/O errors.
   Explicit outcome scripts describe external choices; malformed choices exhaust
   verification. A successful sync persists visible contents and length. Earlier
@@ -54,10 +54,16 @@ defmodule Lynx.Rust do
   Read counts select a visible prefix; unread buffer bytes survive. Read errors
   preserve the buffer and offset in this bounded external model; these are explicit
   std/OS correspondence assumptions rather than verified native guarantees.
-  Only nonappend files with independent descriptions are supported: opening,
-  closing, seeking, truncation, descriptor cloning, directory durability, concurrent
-  I/O, crash and recovery operations remain unsupported. This option verifies
-  first-party protocols against the explicit model, not the operating system.
+  Seeking preserves the extracted Start(u64), End(i64) and Current(i64) enum,
+  computes signed offsets without wrapping, permits bounded positions beyond EOF,
+  and leaves contents unchanged. Seek errors preserve position under the same
+  explicit std/OS boundary. `NativeFile.crashImage` permits additional modeled
+  persistence at power loss; `restart` admits that image in a fresh environment.
+  Restart is a host/file-opening boundary, not verification of `File::open`.
+  Only nonappend files with independent descriptions are supported. Native opening,
+  closing, truncation, descriptor cloning, directory durability, concurrent I/O and
+  general crash injection remain unsupported. This option verifies first-party
+  protocols against the explicit model, not the operating system.
 
   `:futures` defaults to `:reject`. Selecting `:immediate` extracts actual async
   constructors and compiler-generated poll bodies, including completed-state panic
