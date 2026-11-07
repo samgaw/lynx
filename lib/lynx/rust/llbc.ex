@@ -539,12 +539,14 @@ defmodule Lynx.Rust.LLBC do
   def type_references!(document), do: references(document, %{})
 
   defp references(%{"Value" => [id, value]}, refs)
-       when is_integer(id) and is_map(value) and
-              (is_map_key(value, "Scalar") or is_map_key(value, "Adt") or
-                 is_map_key(value, "TypeVar") or is_map_key(value, "Ref") or
-                 is_map_key(value, "Slice") or is_map_key(value, "Array") or
-                 is_map_key(value, "RawPtr") or is_map_key(value, "FnPtr") or
-                 is_map_key(value, "FnDef") or is_map_key(value, "PtrMetadata")) do
+       when is_integer(id) and
+              (value == "Never" or
+                 (is_map(value) and
+                    (is_map_key(value, "Scalar") or is_map_key(value, "Adt") or
+                       is_map_key(value, "TypeVar") or is_map_key(value, "Ref") or
+                       is_map_key(value, "Slice") or is_map_key(value, "Array") or
+                       is_map_key(value, "RawPtr") or is_map_key(value, "FnPtr") or
+                       is_map_key(value, "FnDef") or is_map_key(value, "PtrMetadata")))) do
     case Map.fetch(refs, id) do
       {:ok, existing} when existing != value ->
         raise ArgumentError, "inconsistent LLBC shared type identity"
