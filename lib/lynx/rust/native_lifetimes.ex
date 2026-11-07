@@ -6,13 +6,15 @@ defmodule Lynx.Rust.NativeLifetimes do
   # owner requires supported cleanup; borrowed calls need checked nonpanicking
   # bodies. Whole single-field enum payloads may transfer their ownership.
   def audit!(functions, models, translated, refs) do
-    mutexes =
+    native_types =
       for type <- translated["type_decls"],
           type &&
             (MutexModels.type?(type) or LockModels.guard?(type, refs) or
                Lynx.Rust.ResourceModels.type?(type) or
                (Lynx.Rust.FileModels.file_type?(translated, type["def_id"]) and
-                  Enum.any?(models, fn {_, model} -> model[:native_file_drop] == true end))),
+                  Enum.any?(models, fn {_, model} -> model[:native_file_drop] == true end)) or
+               (Lynx.Rust.FileModels.error_type?(translated, type["def_id"]) and
+                  Enum.any?(models, fn {_, model} -> model[:native_io_error_drop] == true end))),
           do: type["def_id"]
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})
@@ -71,7 +73,7 @@ defmodule Lynx.Rust.NativeLifetimes do
         %{"Structured" => body} <- [function["body"]] do
       owners =
         for local <- body["locals"]["locals"],
-            contains_native?(CallModels.expand(local["ty"], refs), mutexes, types, refs, []),
+            contains_native?(CallModels.expand(local["ty"], refs), native_types, types, refs, []),
             into: MapSet.new(),
             do: local["index"]
 
@@ -102,7 +104,7 @@ defmodule Lynx.Rust.NativeLifetimes do
           owners: owners,
           borrowed: borrowed,
           frames: frames,
-          native: mutexes,
+          native: native_types,
           coroutines: coroutines,
           cutoff_undefined: get_in(translated, ["options", "cancelling_futures"]) == true,
           models: models,
@@ -406,12 +408,15 @@ defmodule Lynx.Rust.NativeLifetimes do
           unless Enum.all?(
                    rest,
                    &MapSet.equal?(
-                     MapSet.difference(&1.live, ctx.borrowed),
-                     MapSet.difference(first.live, ctx.borrowed)
+                     MapSet.difference(MapSet.delete(&1.live, 0), ctx.borrowed),
+                     MapSet.difference(MapSet.delete(first.live, 0), ctx.borrowed)
                    )
                  ),
                  do: reject!(ctx)
 
+          # Return variants may contain different native owners. Keep the union
+          # for subsequent failure checks; only Return may finally transfer slot 0.
+          # Every other local still requires identical ownership at the join.
           live = Enum.reduce(rest, first.live, &MapSet.union(&1.live, &2))
 
           known =
