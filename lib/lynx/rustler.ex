@@ -93,6 +93,12 @@ defmodule Lynx.Rustler do
       use the same owning dispatch as extracted Rust calls. VM pins survive
       temporary Rust owners; VM collection, custom destructor unwind and native
       binary/FFI correctness remain outside these proofs.
+    * `:futures` — forwarded to `Lynx.Rust`; defaults to `:reject`. Runtime
+      modes allow ordinary synchronous NIFs to construct and explicitly poll
+      supported first-party futures. Standard `Waker::noop` and
+      `Context::from_waker` have separately reported models. No-op wake requests
+      are discarded; Pending never implies completion. This does not generate
+      async Rustler exports or establish a general native executor.
     * `:unwind` — `:reject` by default; `:assertions` selects the existing bounded
       mutex assertion-cleanup adapter for destructor-free payloads with runtime
       execution. Guard unwind and general failing-callee cleanup remain unsupported.
@@ -122,6 +128,7 @@ defmodule Lynx.Rustler do
       :proof_modules,
       :required_properties,
       :execution,
+      :futures,
       :unwind,
       :owned_drops
     ]
@@ -242,6 +249,7 @@ defmodule Lynx.Rustler do
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         execution: execution,
+        futures: Keyword.get(opts, :futures, :reject),
         owned_drops: Keyword.get(opts, :owned_drops, false),
         unwind: Keyword.get(opts, :unwind, :reject),
         external_types: models,
