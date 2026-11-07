@@ -180,3 +180,47 @@ pub fn locked_append(mutex: &std::sync::Mutex<File>, value: u16) -> io::Result<b
     };
     append_record(&mut guard, value)
 }
+
+/// Appends a complete record or durably removes its short-write tail.
+///
+/// `Ok(false)` means a short write was truncated back to the original end and
+/// that truncation was synchronized. The offset may remain beyond the new end.
+/// Callers must serialize access and start from a complete record prefix.
+///
+/// # Errors
+/// Propagates seek, write, length-change and synchronization errors. An error
+/// does not promise rollback: callers must recover before a subsequent append.
+pub fn append_record_or_rollback(file: &mut File, value: u16) -> io::Result<bool> {
+    match io_core::seek_from(file, std::io::SeekFrom::End(0)) {
+        Err(error) => Err(error),
+        Ok(start) => {
+            let bytes = io_core::encode_record(value);
+            match io_core::write_once(file, &bytes) {
+                Err(error) => Err(error),
+                Ok(4) => match io_core::synchronize(file) {
+                    Err(error) => Err(error),
+                    Ok(()) => Ok(true),
+                },
+                Ok(_) => match resize_then_sync(file, start) {
+                    Err(error) => Err(error),
+                    Ok(()) => Ok(false),
+                },
+            }
+        }
+    }
+}
+
+/// Holds the shared file mutex through append and any required rollback.
+///
+/// # Errors
+/// Propagates the append or rollback error without releasing stale file state.
+///
+/// # Panics
+/// Recursive acquisition may panic or block. Callers must not hold this mutex.
+pub fn locked_append_or_rollback(mutex: &std::sync::Mutex<File>, value: u16) -> io::Result<bool> {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    append_record_or_rollback(&mut guard, value)
+}

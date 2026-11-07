@@ -158,3 +158,88 @@ fn locked_appends_serialize_shared_file_effects_and_release_after_errors() -> io
     assert!(readonly.try_lock().is_ok());
     Ok(())
 }
+
+#[cfg(all(
+    target_pointer_width = "64",
+    any(target_os = "linux", target_os = "macos")
+))]
+#[test]
+fn short_writes_are_rolled_back_before_another_append() -> io::Result<()> {
+    const CHILD: &str = "LYNX_SHORT_WRITE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "short_writes_are_rolled_back_before_another_append",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "short-write child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Limits {
+        current: u64,
+        maximum: u64,
+    }
+    unsafe extern "C" {
+        fn getrlimit(resource: std::ffi::c_int, limit: *mut Limits) -> std::ffi::c_int;
+        fn setrlimit(resource: std::ffi::c_int, limit: *const Limits) -> std::ffi::c_int;
+    }
+    // RLIMIT_FSIZE is 1 and rlim_t is u64 on these 64-bit targets. Run in an
+    // isolated child so the process-wide limit cannot affect parallel tests.
+    let mut old = std::mem::MaybeUninit::<Limits>::uninit();
+    // SAFETY: the output pointer is aligned and writable for one C rlimit.
+    if unsafe { getrlimit(1, old.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: getrlimit initialized both fields on its successful return.
+    let old = unsafe { old.assume_init() };
+    let restricted = Limits { current: 6, ..old };
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_nanos();
+    let path = Scratch(
+        std::env::temp_dir().join(format!("lynx-short-write-{}-{nonce}", std::process::id())),
+    );
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&path.0)?;
+    let prefix = io_core::encode_record(7);
+    file.write_all(&prefix)?;
+    file.sync_all()?;
+    let mutex = std::sync::Mutex::new(file);
+    // SAFETY: the limit pointer contains a valid initialized C rlimit. Only
+    // this child process is affected; raising the soft limit later stays at
+    // the original hard limit.
+    if unsafe { setrlimit(1, &restricted) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    assert!(!io_protocol::locked_append_or_rollback(&mutex, 9)?);
+    let mut guard = mutex
+        .lock()
+        .expect("short-write rollback must release its guard");
+    assert_eq!(guard.metadata()?.len(), 4);
+    assert_eq!(guard.stream_position()?, 6);
+    assert_eq!(fs::read(&path.0)?, prefix);
+    drop(guard);
+    // SAFETY: old is the original initialized limit for this same process.
+    if unsafe { setrlimit(1, &old) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    assert!(io_protocol::locked_append_or_rollback(&mutex, 11)?);
+    let mut guard = mutex.lock().expect("full append must release its guard");
+    assert_eq!(io_protocol::recover_log(&mut guard, 3)?, [7, 11]);
+    Ok(())
+}
