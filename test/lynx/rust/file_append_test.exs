@@ -40,7 +40,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"IntegrityProperties", []},
       {"CrashProperties", []},
       {"AppendProperties", []},
-      {"LogProperties", []}
+      {"LogProperties", []},
+      {"TailProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -93,6 +94,10 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(recover_encoded_log stable_log_recovery append_log_recovery),
             &("Record.LogProperties." <> &1)
+          ) ++
+          Enum.map(
+            ~w(recover_truncated_log restart_truncated_log retry_during_scan),
+            &("Record.TailProperties." <> &1)
           )
     ]
 
@@ -156,9 +161,16 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.LogProperties.append_log_recovery")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.TailProperties.retry_during_scan")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
+          "Record/TailProperties.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -200,9 +212,15 @@ defmodule Lynx.Rust.FileAppendTest do
     source = Path.join(workspace, "protocol/src/lib.rs")
     rust = File.read!(source)
 
-    for broken <- [
-          String.replace(rust, "std::io::SeekFrom::End(0)", "std::io::SeekFrom::Start(0)"),
-          String.replace(rust, "values.push(value)", "values.push(0)")
+    for {broken, proof} <- [
+          {String.replace(rust, "std::io::SeekFrom::End(0)", "std::io::SeekFrom::Start(0)"),
+           "AppendProperties"},
+          {String.replace(rust, "values.push(value)", "values.push(0)"), "AppendProperties"},
+          {String.replace(
+             rust,
+             "Ok(None) => return Ok(values),",
+             "Ok(None) => return Ok(Vec::new()),"
+           ), "TailProperties"}
         ] do
       refute broken == rust
       File.write!(source, broken)
@@ -212,7 +230,7 @@ defmodule Lynx.Rust.FileAppendTest do
           Lynx.Rust.verify!(workspace, "io-protocol", options)
         end
 
-      assert error.message =~ "Record/AppendProperties.lean:"
+      assert error.message =~ "Record/#{proof}.lean:"
       File.write!(source, rust)
     end
 
