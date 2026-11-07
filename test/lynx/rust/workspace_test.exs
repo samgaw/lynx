@@ -1,5 +1,5 @@
 defmodule Lynx.Rust.WorkspaceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case
 
   alias Lynx.Rust.Workspace
 
@@ -59,6 +59,23 @@ defmodule Lynx.Rust.WorkspaceTest do
     assert {:ok,
             %{crates: [%{name: "first", dependencies: []}, %{name: "second", dependencies: [_]}]}} =
              Workspace.discover(manifest)
+  end
+
+  test "successful Cargo diagnostics do not contaminate the metadata JSON" do
+    previous = System.get_env("CARGO_MAKEFLAGS")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("CARGO_MAKEFLAGS", previous),
+        else: System.delete_env("CARGO_MAKEFLAGS")
+    end)
+
+    System.put_env(
+      "CARGO_MAKEFLAGS",
+      "-j --jobserver-fds=9998,9999 --jobserver-auth=9998,9999"
+    )
+
+    assert {:ok, %{crates: [_ | _]}} = Workspace.discover(@manifest)
   end
 
   test "reports cargo metadata errors" do
