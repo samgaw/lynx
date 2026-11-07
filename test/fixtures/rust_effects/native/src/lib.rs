@@ -1086,6 +1086,34 @@ pub fn file_resource_nif_release(resource: rustler::ResourceArc<FileResource>) {
     file_resource_release(resource);
 }
 
+/// Synchronizes the shared file and consumes only this call's decoded owner.
+/// Returns false after releasing an OS error; the VM pin keeps the file alive.
+#[cfg(feature = "file-resource-sync")]
+#[rustler::nif(name = "file_sync", schedule = "DirtyIo")]
+pub fn file_resource_nif_sync(resource: rustler::ResourceArc<FileResource>) -> bool {
+    let outcome = file_resource_sync(&resource);
+    file_resource_release(resource);
+    match outcome {
+        Ok(()) => true,
+        Err(error) => {
+            drop(error);
+            false
+        }
+    }
+}
+
+/// Constructs a real file resource for native runtime calibration.
+///
+/// # Panics
+/// Panics if the fixture path already exists, cannot be created, or the resource
+/// type was not registered by the loader.
+#[cfg(feature = "file-resource-sync")]
+#[rustler::nif(name = "file_create", schedule = "DirtyIo")]
+pub fn file_resource_nif_create() -> rustler::ResourceArc<FileResource> {
+    let file = std::fs::File::create_new("resource").expect("cannot create fixture resource file");
+    file_resource_new(file)
+}
+
 /// A shared file whose access and lifetime are protected by an owned mutex.
 #[derive(Debug)]
 pub struct LockedFileResource {
