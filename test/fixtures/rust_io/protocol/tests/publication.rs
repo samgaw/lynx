@@ -23,6 +23,14 @@ fn publishes_in_the_current_directory() -> io::Result<()> {
         io_protocol::publish_file(file, "a", "b")?;
         assert!(!std::path::Path::new("a").exists());
         assert_eq!(fs::read("b")?, [7, 0]);
+        assert_eq!(io_protocol::recover_named_word("b")?, Some(7));
+        fs::write("empty", [])?;
+        fs::write("truncated", [7])?;
+        assert_eq!(io_protocol::recover_named_word("empty")?, None);
+        assert_eq!(io_protocol::recover_named_word("truncated")?, None);
+        assert!(io_protocol::recover_named_word("missing").is_err());
+        let write_only = fs::File::create("write-only")?;
+        assert!(io_protocol::read_and_close_word(write_only).is_err());
         return Ok(());
     }
 

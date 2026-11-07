@@ -317,3 +317,20 @@ pub fn publish_file(file: File, source: &str, target: &str) -> io::Result<()> {
     io_core::rename_file(source, target)?;
     sync_directory()
 }
+
+/// Parses the leading word and closes the owned file on success or I/O error.
+/// # Errors
+/// Propagates read errors; incomplete input returns no word.
+pub fn read_and_close_word(mut file: File) -> io::Result<Option<u16>> {
+    let reply = read_word(&mut file);
+    drop(file);
+    reply
+}
+
+/// Reopens a named published file, parses its leading word and closes the handle.
+/// # Errors
+/// Propagates opening and read errors; incomplete input returns no word.
+pub fn recover_named_word(path: &str) -> io::Result<Option<u16>> {
+    let file = io_core::open_readonly(path)?;
+    read_and_close_word(file)
+}
