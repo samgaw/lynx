@@ -642,12 +642,13 @@ private theorem exclusiveSteps_child {β : Type} {computation : Result Term} {va
 
 /-- Two finite, ready critical sections serialize under every finite scheduler
 choice list. Each owner excludes the peer's acquisition until release. Both
-possible acquisition orders retain their actual poll transitions. This theorem
+possible acquisition orders retain their actual poll transitions and may return
+different root results. This theorem
 assumes ready IO; it makes no claim about external progress or infinite fairness. -/
 theorem two_wait_serial_orders
     (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
     (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
-    (parentValue : β) (childValue : γ) (rootValue childResult : Term)
+    (parentValue : β) (childValue : γ) (rootFirst childFirst childSecond rootSecond : Term)
     (initial parentHeld parentReleased parentFinal childHeld childReleased childFinal :
       Nat × List (Nat × String × Term))
     (parentReady : ∀ env : Environment, env.currentPid = 1 → env.refCounter = initial.1 →
@@ -656,23 +657,23 @@ theorem two_wait_serial_orders
     (childReady : ∀ env : Environment, env.currentPid = 2 → env.refCounter = initial.1 →
       env.nativeHeap = initial.2 → childPoll env =
         some (childValue, {env with refCounter := childHeld.1, nativeHeap := childHeld.2}))
-    (parent : ExclusiveSteps 1 2 childPoll (parentNext parentValue) parentHeld rootValue parentReleased)
-    (childAfter : SharedSteps 2 (.wait childPoll childNext) parentReleased childResult parentFinal)
-    (child : ExclusiveSteps 2 1 parentPoll (childNext childValue) childHeld childResult childReleased)
-    (parentAfter : SharedSteps 1 (.wait parentPoll parentNext) childReleased rootValue childFinal)
+    (parent : ExclusiveSteps 1 2 childPoll (parentNext parentValue) parentHeld rootFirst parentReleased)
+    (childAfter : SharedSteps 2 (.wait childPoll childNext) parentReleased childSecond parentFinal)
+    (child : ExclusiveSteps 2 1 parentPoll (childNext childValue) childHeld childFirst childReleased)
+    (parentAfter : SharedSteps 1 (.wait parentPoll parentNext) childReleased rootSecond childFinal)
     (choices : List ScheduleChoice) :
     let observed :=
       (Result.schedule (.wait childPoll childNext) (fun _ => .wait parentPoll parentNext))
         {refCounter := initial.1, nativeHeap := initial.2, schedule := choices}
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok rootValue, parentFinal) ∨
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok rootValue, childFinal) := by
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok rootFirst, parentFinal) ∨
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok rootSecond, childFinal) := by
   let pool : Term.Runner.Pool Term := .parallel (.process 1 (.wait parentPoll parentNext) some)
     (.process 2 (.wait childPoll childNext) (fun _ => none))
   have serial (env : Environment) (preferred : ScheduleChoice)
       (current : env.currentPid = 1 ∨ env.currentPid = 2)
       (counter : env.refCounter = initial.1) (heap : env.nativeHeap = initial.2) :
-      sharedResult (Term.Runner.execute 1 env pool none preferred) = (.ok rootValue, parentFinal) ∨
-      sharedResult (Term.Runner.execute 1 env pool none preferred) = (.ok rootValue, childFinal) := by
+      sharedResult (Term.Runner.execute 1 env pool none preferred) = (.ok rootFirst, parentFinal) ∨
+      sharedResult (Term.Runner.execute 1 env pool none preferred) = (.ok rootSecond, childFinal) := by
     have parentPollReady := parentReady (Term.Runner.activate env 1) rfl counter heap
     have childPollReady := childReady (Term.Runner.activate env 2) rfl counter heap
     have selected := choose_pair_ready pool env preferred current
@@ -699,8 +700,8 @@ theorem two_wait_serial_orders
           Term.Runner.save, Term.Runner.activate, history]
         apply exclusiveSteps_child parentPoll parentNext child parentAfter <;>
           first | exact Or.inr rfl | rfl
-  change sharedResult (Term.Runner.run _ _) = (.ok rootValue, parentFinal) ∨
-    sharedResult (Term.Runner.run _ _) = (.ok rootValue, childFinal)
+  change sharedResult (Term.Runner.run _ _) = (.ok rootFirst, parentFinal) ∨
+    sharedResult (Term.Runner.run _ _) = (.ok rootSecond, childFinal)
   cases choices <;>
     rw [Term.Runner.run, Term.Runner.execute]
   all_goals
