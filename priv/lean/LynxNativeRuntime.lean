@@ -2563,6 +2563,58 @@ Old capabilities and all previous process/resource/lock state are discarded. -/
       refCounter := file.id
       nativeHeap := [(file.id, typeName, encode ⟨image.bytes, image.bytes, 0, script⟩)] })
 
+/-- A bounded flat filesystem image. Capabilities, offsets, scripts, resource
+owners and locks are volatile and are deliberately absent. -/
+structure FilesystemImage where
+  names : Names
+  inodes : List (Nat × ByteArray)
+  highWater : Nat
+
+@[expose] def namedInode (names : Names) (path : ByteArray) : Option Nat :=
+  (names.find? (fun entry => entry.1.data == path.data)).map (·.2)
+
+/-- Unsynchronized path entries may persist independently, including partial
+rename persistence. This overapproximates recorded metadata versions, rather than
+assuming a filesystem persists an ordered prefix of directory operations. -/
+@[expose] def namespaceCrashAllowed (state : NamespaceSnapshot) (chosen : Names) : Bool :=
+  let versions := state.committed :: state.pending
+  let known := versions.flatMap (fun names => names.map (·.1))
+  chosen.all (fun entry => known.any (fun path => path.data == entry.1.data)) &&
+    known.all (fun path => versions.any (fun names => namedInode names path == namedInode chosen path))
+
+/-- Host crash admission chooses each inode's permitted byte image and each
+pathname's recorded persistent version. Unknown names/inodes, duplicate choices,
+unbounded images and malformed state are rejected. Filesystem metadata/data and
+native descriptor correspondence remain explicit external model boundaries. -/
+@[expose] def filesystemCrashImage (chosen : Names) (masks : List (Nat × ByteArray))
+    (env : Environment) : Option FilesystemImage := do
+  let state ← namespaceSnapshot env
+  let names ← namespaceTable (encodeNames chosen)
+  if !namespaceCrashAllowed state names then none else do
+    let nodes := env.nativeHeap.filter (fun cell => cell.2.1 == inodeTypeName)
+    if nodes.length > 1024 || masks.map (·.1) != nodes.map (·.1) then none else do
+      let images ← nodes.mapM fun cell => do
+        let before ← inode cell.1 env
+        let [(_,mask)] := masks.filter (fun choice => choice.1 == cell.1) | none
+        let bytes ← persist before.durable before.visible mask
+        some (cell.1,bytes)
+      if names.any (fun entry => !(images.any (fun image => image.1 == entry.2))) then none
+      else some ⟨names,images,env.refCounter⟩
+
+/-- Restart preserves only admitted persistent names and bytes. Every old file,
+directory, resource and lock capability is discarded; the high-water mark is
+freshness bookkeeping and is not application disk data. -/
+@[expose] def restartFilesystem (image : FilesystemImage) (script : Term) : Option Environment := do
+  let names ← namespaceTable (encodeNames image.names)
+  if image.inodes.length > 1024 ||
+      (image.inodes.map (·.1)).eraseDups.length != image.inodes.length ||
+      image.inodes.any (fun node => node.1 == 0 || node.1 > image.highWater || node.2.size > limit) ||
+      names.any (fun entry => !(image.inodes.any (fun node => node.1 == entry.2))) then none
+  else some {
+    refCounter := image.highWater
+    nativeHeap := (0,namespaceTypeName,encodeNamespace ⟨names,names,[],script⟩) ::
+      image.inodes.map (fun (id,bytes) => (id,inodeTypeName,encode ⟨bytes,bytes,0,.nil⟩)) }
+
 end NativeFile
 
 instance : NativeDrop NativeFile where
