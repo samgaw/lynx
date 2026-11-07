@@ -111,6 +111,35 @@ defmodule Lynx.Rust.LLBCJsonTest do
     end
   end
 
+  test "shared array dimensions retain constant identity across type-table expansion" do
+    usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+    literal = [%{"Integer" => %{"Unsigned" => ["Usize", "1"]}}, %{"Value" => [9, usize]}]
+    element = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+    array = %{"Array" => [element, %{"Deduplicated" => 7}, nil]}
+
+    document = %{
+      "constant" => %{"Const" => %{"Value" => [7, literal]}},
+      "variable" => %{"ty" => %{"Value" => [7, %{"TypeVar" => %{"Bound" => [0, 0]}}]}},
+      "array" => %{"ty" => %{"Value" => [12, array]}},
+      "place" => %{"ty" => %{"Deduplicated" => 12}}
+    }
+
+    refs = Lynx.Rust.LLBC.type_references!(document)
+
+    assert %{
+             "Array" => [^element, [%{"Integer" => %{"Unsigned" => ["Usize", "1"]}}, ^usize], nil]
+           } =
+             Lynx.Rust.CallModels.expand(%{"Deduplicated" => 12}, refs)
+
+    assert %{"TypeVar" => %{"Bound" => [0, 0]}} = refs[7]
+
+    missing = Map.delete(document, "constant")
+
+    assert_raise ArgumentError, ~r/missing LLBC constant reference 7/, fn ->
+      Lynx.Rust.LLBC.type_references!(missing)
+    end
+  end
+
   test "keeps compiler drop evidence in the audit while removing only the backend type field" do
     nested = %{"needs_drop" => "ordinary source data"}
     type = %{"def_id" => 7, "kind" => %{"Struct" => []}, "needs_drop" => false}

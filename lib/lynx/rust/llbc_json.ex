@@ -57,6 +57,9 @@ defmodule Lynx.Rust.LLBCJson do
   # Cleanup pruning can remove the first serialized type or constant value.
   # Rehydrate explicit positions using separate tables for each ID family.
   def restore_type_references!(document, original) do
+    document = restore_constant_references!(document, original)
+    original = restore_constant_references!(original, original)
+
     refs =
       merge_references!(
         Lynx.Rust.LLBC.type_references!(original),
@@ -64,7 +67,7 @@ defmodule Lynx.Rust.LLBCJson do
         "type"
       )
 
-    document |> restore_constant_references!(original) |> restore_types(refs)
+    restore_types(document, refs)
   end
 
   # Rehydrate constants before another cleanup analysis, without expanding type
@@ -133,6 +136,14 @@ defmodule Lynx.Rust.LLBCJson do
     Map.new(map, fn
       {"Const", value} ->
         {"Const", restore_constant(value, refs)}
+
+      {"Array", [element, length, sized]} ->
+        {"Array",
+         [
+           restore_constants(element, refs),
+           restore_constant(length, refs),
+           restore_constants(sized, refs)
+         ]}
 
       {"const_generics", values} ->
         {"const_generics", Enum.map(values, &restore_constant(&1, refs))}
