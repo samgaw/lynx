@@ -1910,6 +1910,38 @@ both cases independently of the read. -/
     else none
   else some (.Err ⟨value⟩, {state with durable := durable, script := rest}, buffer)
 
+/-- The constructor conversion is generated from the actual extracted SeekFrom
+schema; integer widths are retained in the runtime argument. -/
+inductive SeekFrom where
+  | start : U64 → SeekFrom
+  | end_ : I64 → SeekFrom
+  | current : I64 → SeekFrom
+
+@[expose] def seekTarget (state : State) : SeekFrom → Int
+  | .start offset => offset.val
+  | .end_ offset => (state.visible.size : Int) + offset.val
+  | .current offset => (state.position : Int) + offset.val
+
+/-- Seeking changes no visible bytes or length, including beyond EOF. Negative
+successes and positions beyond the configured bound are invalid model choices.
+Failure preserves the previous offset under the explicit std/OS model. -/
+@[expose] def seekStep (state : State) (origin : SeekFrom) :
+    Option (core.result.Result U64 NativeIoError × State) := do
+  let (success, value, mask, rest) ← action "seek" state.script
+  let durable ← persist state.durable state.visible mask
+  if success then
+    let target := seekTarget state origin
+    if outside : target < 0 ∨ target.toNat > limit ∨ value != 0 then none else
+      let offset := U64.ofNatCore target.toNat (by
+        have : target.toNat ≤ limit := by omega
+        simp only [limit] at this
+        scalar_tac)
+      some (.Ok offset, { state with
+        position := target.toNat
+        durable := durable
+        script := rest })
+  else some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+
 @[expose] def syncStep (state : State) :
     Option (core.result.Result Unit NativeIoError × State) := do
   let (success, value, mask, rest) ← action "sync_all" state.script
@@ -1968,6 +2000,22 @@ Write completion does not assert persistence. Invalid capabilities/choices cut o
     | .ok value => .ok value
     | .error exception => .error exception
 
+@[expose] def pollSeek (file : NativeFile) (origin : SeekFrom) (env : Environment) :
+    Option (Except Exception (core.result.Result U64 NativeIoError × NativeFile) × Environment) :=
+  match lookup file env with
+  | none => some (.error .exhausted, env)
+  | some state =>
+    if blocked state then none else
+    match seekStep state origin with
+    | none => some (.error .exhausted, env)
+    | some (reply, updated) => some (.ok (reply, file), store file updated env)
+
+@[expose] def seek (file : NativeFile) (origin : SeekFrom) :
+    NativeM (core.result.Result U64 NativeIoError × NativeFile) :=
+  .wait (pollSeek file origin) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
 /-- Synchronization errors may still persist a torn image; only success guarantees
 all visible file contents and length. Directory/device correspondence is assumed. -/
 @[expose] def pollSync (file : NativeFile) (env : Environment) :
@@ -1984,6 +2032,30 @@ all visible file contents and length. Directory/device correspondence is assumed
   .wait (pollSync file) fun reply => match reply with
     | .ok value => .ok value
     | .error exception => .error exception
+
+/-- A single independent file's possible persistent image after power loss.
+The high-water mark is ghost freshness bookkeeping, not on-disk application data.
+Native opening and namespace correspondence are separate trusted boundaries. -/
+structure Image where
+  bytes : ByteArray
+  highWater : Nat
+
+/-- Permit any additional persistence allowed by the file model before power
+loss, including torn unsynchronized writes. No volatile process state is saved. -/
+@[expose] def crashImage (file : NativeFile) (mask : ByteArray) (env : Environment) : Option Image := do
+  let state ← lookup file env
+  let durable ← persist state.durable state.visible mask
+  some ⟨durable, env.refCounter⟩
+
+/-- Admit one newly opened, independent file into a fresh machine. This is an
+explicit host/OS boundary, not a verified implementation of std::fs::File::open.
+Old capabilities and all previous process/resource/lock state are discarded. -/
+@[expose] def restart (image : Image) (script : Term) : Option (NativeFile × Environment) :=
+  if image.bytes.size > limit then none else
+    let file : NativeFile := ⟨image.highWater + 1⟩
+    some (file, {
+      refCounter := file.id
+      nativeHeap := [(file.id, typeName, encode ⟨image.bytes, image.bytes, 0, script⟩)] })
 
 end NativeFile
 end Lynx
