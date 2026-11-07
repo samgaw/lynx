@@ -322,10 +322,23 @@ defmodule Lynx.Rust.NativeLifetimes do
     {root, path} = resolve_place(parent, known)
 
     case {step, path, known[{:alias, root}]} do
-      {"Deref", [], {alias, prefix}} -> {alias, prefix}
-      {"Deref", _, _} -> {root, path ++ [:deref]}
-      {%{"Field" => [variant, index]}, _, _} -> {root, path ++ [{:field, variant, index}]}
-      _ -> {root, path ++ [:unsupported]}
+      {"Deref", [], {alias, prefix}} ->
+        {alias, prefix}
+
+      {"Deref", [{:field, nil, 0}], _} ->
+        case known[{:frame_borrow, root}] do
+          {owner, _id, prefix} -> {owner, prefix}
+          _ -> {root, path ++ [:deref]}
+        end
+
+      {"Deref", _, _} ->
+        {root, path ++ [:deref]}
+
+      {%{"Field" => [variant, index]}, _, _} ->
+        {root, path ++ [{:field, variant, index}]}
+
+      _ ->
+        {root, path ++ [:unsupported]}
     end
   end
 
@@ -532,7 +545,7 @@ defmodule Lynx.Rust.NativeLifetimes do
                    frame_info(pointee, ctx.types, ctx.refs, ctx.coroutines, [])
                  ) and
                  native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) == 1,
-               do: Map.put(Map.delete(known, local), {:frame_borrow, local}, {root, id}),
+               do: Map.put(Map.delete(known, local), {:frame_borrow, local}, {root, id, path}),
                else: Map.delete(known, local)
 
           _ ->
@@ -555,10 +568,10 @@ defmodule Lynx.Rust.NativeLifetimes do
       %{"Use" => [%{"Move" => %{"kind" => %{"Local" => source}}} = operand, _]} ->
         case {known[{:frame_borrow, source}],
               frame_info(ctx.locals[local], ctx.types, ctx.refs, ctx.coroutines, [])} do
-          {{root, id}, %{borrowed: true, id: id}} ->
+          {{root, id, path}, %{borrowed: true, id: id}} ->
             known
             |> Map.delete({:frame_borrow, source})
-            |> Map.put({:frame_borrow, local}, {root, id})
+            |> Map.put({:frame_borrow, local}, {root, id, path})
 
           _ ->
             known_boolean(local, boolean(operand, known, ctx), known)
@@ -579,6 +592,34 @@ defmodule Lynx.Rust.NativeLifetimes do
       |> Map.delete({:alias, local})
       |> Map.delete({:empty, local})
       |> Map.delete({:frame_borrow, local})
+
+  # A compiler poll mutates the frame, not the address held by another Pin
+  # reborrow. Retain only aliases of that same audited frame, never state tags
+  # or ownership-emptiness facts learned before the call.
+  defp known_after(
+         %{
+           "Call" => %{
+             "call" => %{
+               "func" => %{"Regular" => %{"kind" => %{"Fun" => callee}}},
+               "args" => [%{"Move" => %{"kind" => %{"Local" => pin}}}, _]
+             }
+           }
+         },
+         known,
+         ctx
+       ) do
+    frame = known[{:frame_borrow, pin}]
+
+    case {ctx.preserving_polls[callee], frame} do
+      {id, {_root, id, _path}} when is_integer(id) ->
+        Map.filter(known, fn {key, value} ->
+          match?({:alias, _}, key) or (match?({:frame_borrow, _}, key) and value == frame)
+        end)
+
+      _ ->
+        Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
+    end
+  end
 
   defp known_after(%{"Call" => _}, known, _),
     do: Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
@@ -744,7 +785,7 @@ defmodule Lynx.Rust.NativeLifetimes do
          ctx
        ) do
     case {ctx.preserving_polls[id], ctx.known[{:frame_borrow, pin}], MapSet.to_list(live)} do
-      {id, {root, id}, [root]} when is_integer(id) -> MapSet.equal?(live, remaining)
+      {id, {root, id, _path}, [root]} when is_integer(id) -> MapSet.equal?(live, remaining)
       _ -> false
     end
   end

@@ -98,7 +98,11 @@ defmodule Lynx.Rust do
   compiler cleanup body. Direct unsafe helper calls remain unsupported. A caller
   may retain only that same sole owned frame across the poll; panics with live
   native owners and additional caller-owned resources are rejected. Repeated
-  borrowed `Pin::as_mut` polling is not yet supported by this ownership rule.
+  borrowed `Pin::as_mut` polling is supported for standard mutable-reference
+  pointers after validating the complete standard helper body. Custom pointer
+  families remain excluded. Reborrows retain the same audited sole frame across
+  polls; previous state-tag and ownership-emptiness facts are discarded. Standard
+  mutable-reference DerefMut semantics and physical pinning remain trusted.
   Multiple simultaneously live native owners per frame, non-Unpin fields,
   native executor integration and async NIF composition remain unsupported.
   Native allocation, physical pinning, standard primitives and FFI retain their
