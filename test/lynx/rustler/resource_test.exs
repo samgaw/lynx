@@ -161,6 +161,15 @@ defmodule Lynx.Rustler.ResourceTest do
   end
 
   defp load_native(artifact, tmp) do
+    :code.purge(LynxEffectsFixture.Native)
+    :code.delete(LynxEffectsFixture.Native)
+    :code.purge(LynxEffectsFixture.Native)
+
+    on_exit(fn ->
+      :code.delete(LynxEffectsFixture.Native)
+      :code.purge(LynxEffectsFixture.Native)
+    end)
+
     library = Path.join(tmp, "resource-native")
     File.cp!(artifact, library <> ".so")
     source = Path.join(tmp, "native.ex")
@@ -177,7 +186,7 @@ defmodule Lynx.Rustler.ResourceTest do
     """)
 
     assert {:ok, [LynxEffectsFixture.Native], _} =
-             Kernel.ParallelCompiler.compile_to_path([source], tmp, return_diagnostics: true)
+             Lynx.Rustler.NifFixture.compile!(source, tmp, LynxEffectsFixture.Native)
   end
 
   defp laws do
