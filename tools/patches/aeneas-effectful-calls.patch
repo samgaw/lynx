@@ -1,0 +1,70 @@
+--- a/src/Config.ml
++++ b/src/Config.ml
+@@ -24,6 +24,12 @@
+ (** Optional result monad for effectful Lean models. The target module provides
+     [ok], [fail], [massert] and [lift]; standard RustM calls require a MonadLift. *)
+ let lean_result_monad : string option ref = ref None
++
++(** Stateful result monads cannot share or discard effectful computations. *)
++let preserve_effectful_calls = ref false
++
++let effectful_result_monad () =
++  !preserve_effectful_calls || Option.is_some !lean_result_monad
+ 
+ let set_lean_result_monad (name : string) : unit =
+   let identifier part =
+--- a/src/Main.ml
++++ b/src/Main.ml
+@@ -100,6 +100,9 @@
+       ( "-assertion-unwind-input",
+         Arg.Set assertion_unwind_input,
+         "Accept explicit Aeneas-compatible flags with assertion resugaring disabled" );
++      ( "-preserve-effectful-calls",
++        Arg.Set preserve_effectful_calls,
++        " Preserve repeated and unused monadic computations for stateful models" );
+       ( "-lean-result-monad",
+         Arg.String set_lean_result_monad,
+         " Select the result monad namespace for the Lean backend" );
+--- a/src/pure/PureMicroPasses.ml
++++ b/src/pure/PureMicroPasses.ml
+@@ -56,7 +56,9 @@
+     (* Simplify some traits like [Clone::clone] for type [Box] *)
+     (None, "simplify_trait_calls", simplify_trait_calls);
+     (* Remove the duplicated function calls *)
+-    (None, "simplify_duplicate_calls", simplify_duplicate_calls);
++    ( Some (fun _ -> not (Config.effectful_result_monad ())),
++      "simplify_duplicate_calls",
++      simplify_duplicate_calls );
+     (* Merge let bindings which bind an expression then decompose a tuple *)
+     ( Some (fun _ -> !Config.merge_let_app_decompose_tuple),
+       "merge_let_app_then_decompose_tuple",
+--- a/src/pure/PureMicroPassesGeneral.ml
++++ b/src/pure/PureMicroPassesGeneral.ml
+@@ -1205,6 +1205,9 @@
+               if not monadic then
+                 (* Not a monadic let-binding: simple case *)
+                 (e.e, used)
++              else if Config.effectful_result_monad () then
++                (* Success and subsumed failure do not erase state changes. *)
++                dont_filter ()
+               else if texpr_cannot_fail re then
+                 (* Monadic let-binding that always succeeds: safe to remove *)
+                 (e.e, used)
+--- a/src/EmitJson.ml
++++ b/src/EmitJson.ml
+@@ -106,6 +106,7 @@
+ 
+ type envelope = {
+   result_monad : string;
++  effectful_calls_preserved : bool;
+   assertion_unwind_input : bool;
+   aeneas_version : string;
+   charon_version : string;
+@@ -387,6 +388,7 @@
+         charon_version = Charon.CharonVersion.supported_charon_version;
+         crate_name;
+         result_monad = Config.lean_result_name ();
++        effectful_calls_preserved = Config.effectful_result_monad ();
+         assertion_unwind_input = !Config.assertion_unwind_input;
+         functions = List.rev state.function_entries;
+         types = List.rev state.type_entries;

@@ -1151,3 +1151,16 @@ pub fn locked_file_resource_sync(
 pub fn locked_file_resource_nif_release(resource: rustler::ResourceArc<LockedFileResource>) {
     locked_file_resource_release(resource);
 }
+
+/// Identical constructor inputs still allocate two distinct mutexes.
+pub fn identical_mutexes(value: u64) -> (Mutex<u64>, Mutex<u64>) {
+    let first = Mutex::new(value);
+    let second = Mutex::new(value);
+    (first, second)
+}
+
+/// Discarding a result preserves the first critical section's state changes.
+pub fn discarded_update(mutex: &Mutex<effects_core::Counter>, amount: u64) -> bool {
+    let _ = effects_core::locked_increment(mutex, amount);
+    effects_core::locked_increment(mutex, amount)
+}
