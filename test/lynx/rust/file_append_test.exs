@@ -39,7 +39,8 @@ defmodule Lynx.Rust.FileAppendTest do
        ]},
       {"IntegrityProperties", []},
       {"CrashProperties", []},
-      {"AppendProperties", []}
+      {"AppendProperties", []},
+      {"LogProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -88,6 +89,10 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(recover_log_two append_ready append_success append_crash_prefix append_pair_recovery),
             &("Record.AppendProperties." <> &1)
+          ) ++
+          Enum.map(
+            ~w(recover_encoded_log stable_log_recovery append_log_recovery),
+            &("Record.LogProperties." <> &1)
           )
     ]
 
@@ -145,7 +150,17 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.AppendProperties.append_pair_recovery")
            )
 
-    for target <- ["Record/AppendProperties.lean", "Record/Extraction/VectorModel.lean"] do
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.LogProperties.append_log_recovery")
+           )
+
+    for target <- [
+          "Record/AppendProperties.lean",
+          "Record/LogProperties.lean",
+          "Record/Extraction/VectorModel.lean"
+        ] do
       path = Path.join(project, target)
       source = File.read!(path)
 
@@ -159,6 +174,28 @@ defmodule Lynx.Rust.FileAppendTest do
         File.write!(path, source)
       end
     end
+
+    property = Path.join(project, "Record/LogProperties.lean")
+    correct = File.read!(property)
+
+    wrong =
+      String.replace(
+        correct,
+        "(4 * values.length)) frame) := by",
+        "(4 * values.length + 1)) frame) := by",
+        global: false
+      )
+
+    refute wrong == correct
+    File.write!(property, wrong)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Project.build!(project, options[:proof_modules])
+      end
+
+    assert error.message =~ "Record/LogProperties.lean:"
+    File.write!(property, correct)
 
     source = Path.join(workspace, "protocol/src/lib.rs")
     rust = File.read!(source)
