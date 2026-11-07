@@ -41,7 +41,7 @@ defmodule Lynx.Rust do
   `Native.Extraction`. Also accepts `:tools` (or `LYNX_AENEAS_DIR`), `:build_dir`
   and `:cargo` options as in `Lynx.Rustler.prepare!/3`.
 
-  `files: :regular, execution: :runtime` admits checked standard `File::write`
+  `files: :regular, execution: :runtime` admits checked standard `File::read`, `File::write`
   and `File::sync_all` calls over registered borrowed regular-file capabilities.
   The default `:reject` admits neither. The bounded model (1 MiB) distinguishes
   visible bytes, persistent bytes, offsets, partial writes, blocking and I/O errors.
@@ -51,7 +51,10 @@ defmodule Lynx.Rust do
   corruption. These filesystem/device guarantees and native descriptor
   correspondence are external assumptions, reported with the verification result.
   Error identities are opaque; payloads and error inspection are unsupported.
-  Only nonappend files with independent descriptions are supported: reads, opening,
+  Read counts select a visible prefix; unread buffer bytes survive. Read errors
+  preserve the buffer and offset in this bounded external model; these are explicit
+  std/OS correspondence assumptions rather than verified native guarantees.
+  Only nonappend files with independent descriptions are supported: opening,
   closing, seeking, truncation, descriptor cloning, directory durability, concurrent
   I/O, crash and recovery operations remain unsupported. This option verifies
   first-party protocols against the explicit model, not the operating system.

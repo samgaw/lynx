@@ -1872,6 +1872,44 @@ This assumes bytewise old/new tearing, with no device corruption or namespace lo
     let durable ← persist state.durable state.visible mask
     some (.Err ⟨value⟩, {state with durable := durable, script := rest})
 
+/-- Replace only the returned prefix of a mutable byte slice. Its remaining
+initialized bytes survive a short read. -/
+@[expose] def readBuffer (state : State) (buffer : Slice U8) (count : Nat)
+    (bounded : count ≤ buffer.val.length)
+    (available : count ≤ state.visible.size - state.position) : Slice U8 :=
+  .from ((state.visible.data.toList.drop state.position |>.take count |>.map
+      fun byte => U8.ofNatCore byte.toNat (by have := byte.toNat_lt; scalar_tac)) ++
+    buffer.val.drop count) (by
+      have length : (state.visible.data.toList.drop state.position |>.take count).length = count := by
+        simp only [List.length_take, List.length_drop, Array.length_toList]
+        simp only [← ByteArray.size_data] at available
+        omega
+      have valid := buffer.property
+      simp only [List.length_append, List.length_map, List.length_drop, length]
+      omega)
+
+/-- A regular-file read may return a short prefix or EOF. Explicit error choices
+leave the initialized buffer and offset unchanged. Persistence may advance in
+both cases independently of the read. -/
+@[expose] def readStep (state : State) (buffer : Slice U8) :
+    Option (core.result.Result Usize NativeIoError × State × Slice U8) := do
+  if buffer.val.length > limit then none else do
+  let (success, value, mask, rest) ← action "read" state.script
+  let durable ← persist state.durable state.visible mask
+  if success then
+    if bounded : value ≤ buffer.val.length then
+      if available : value ≤ state.visible.size - state.position then
+        if value = 0 ∧ buffer.val.length > 0 ∧ state.position < state.visible.size then none
+        else do
+          let count := Usize.ofNatCore value (by have := buffer.property; scalar_tac)
+          some (.Ok count, { state with
+            position := state.position + value
+            durable := durable
+            script := rest }, readBuffer state buffer value bounded available)
+      else none
+    else none
+  else some (.Err ⟨value⟩, {state with durable := durable, script := rest}, buffer)
+
 @[expose] def syncStep (state : State) :
     Option (core.result.Result Unit NativeIoError × State) := do
   let (success, value, mask, rest) ← action "sync_all" state.script
@@ -1911,6 +1949,22 @@ Write completion does not assert persistence. Invalid capabilities/choices cut o
 @[expose] def write (file : NativeFile) (data : Slice U8) :
     NativeM (core.result.Result Usize NativeIoError × NativeFile) :=
   .wait (pollWrite file data) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
+@[expose] def pollRead (file : NativeFile) (buffer : Slice U8) (env : Environment) :
+    Option (Except Exception (core.result.Result Usize NativeIoError × NativeFile × Slice U8) × Environment) :=
+  match lookup file env with
+  | none => some (.error .exhausted, env)
+  | some state =>
+    if blocked state then none else
+    match readStep state buffer with
+    | none => some (.error .exhausted, env)
+    | some (reply, updated, buffer) => some (.ok (reply, file, buffer), store file updated env)
+
+@[expose] def read (file : NativeFile) (buffer : Slice U8) :
+    NativeM (core.result.Result Usize NativeIoError × NativeFile × Slice U8) :=
+  .wait (pollRead file buffer) fun reply => match reply with
     | .ok value => .ok value
     | .error exception => .error exception
 
