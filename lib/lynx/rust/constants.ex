@@ -60,11 +60,20 @@ defmodule Lynx.Rust.Constants do
   end
 
   def link!(declarations, translation) do
-    for {id, global} <- declarations, initializer_id(global) != nil, into: %{} do
+    for {id, global} <- declarations,
+        initializer_id(global) != nil or global["lynx_scalar_model"],
+        into: %{} do
       matches = Enum.filter(Map.get(translation, "globals", []), &(&1["def_id"] == id))
 
-      case {global["global_kind"], matches} do
-        {"AnonConst", []} ->
+      case {global["lynx_scalar_model"], global["global_kind"], matches} do
+        {%{} = model, "NamedConst", []} ->
+          {id,
+           model
+           |> Map.put("def_id", id)
+           |> Map.put("modelled", true)
+           |> Map.put("declaration", global)}
+
+        {nil, "AnonConst", []} ->
           # Pinned Aeneas replaces promoted reads with calls and inlines the
           # checked initializer (anon_consts_to_calls / inline_anon_const_initializers).
           # There is deliberately no invented Lean declaration for that initializer.
@@ -84,7 +93,7 @@ defmodule Lynx.Rust.Constants do
              "declaration" => global
            }}
 
-        {_, [%{"lean_name" => name, "lean_file" => file, "can_fail" => can_fail} = model]}
+        {nil, _, [%{"lean_name" => name, "lean_file" => file, "can_fail" => can_fail} = model]}
         when is_binary(name) and is_binary(file) and is_boolean(can_fail) ->
           {id, Map.put(model, "declaration", global)}
 
@@ -93,6 +102,8 @@ defmodule Lynx.Rust.Constants do
       end
     end
   end
+
+  def initializer_id(%{"lynx_scalar_model" => _}), do: nil
 
   def initializer_id(global) do
     case constant_value(global["value"]) do

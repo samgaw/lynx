@@ -103,7 +103,9 @@ defmodule Lynx.Rust.LLBC do
     globals =
       Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
 
-    constants = Lynx.Rust.Constants.audit!(globals, initializers, refs, translated["type_decls"])
+    constants =
+      Lynx.Rust.Constants.audit!(globals, initializers, refs, translated["type_decls"])
+      |> Map.merge(Lynx.Rust.ScalarGlobals.models(translated, refs))
 
     available_models =
       Lynx.Rust.CallModels.resolve(
