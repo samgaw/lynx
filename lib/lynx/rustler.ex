@@ -80,6 +80,9 @@ defmodule Lynx.Rustler do
       `[calculate: 1]`. Defaults to every export. Unselected NIF calls are rejected
       by Lynx; unsupported signatures outside this selection need no adapter.
     * `:proof_modules` — additional Lean property modules to build and audit.
+    * `:proof_roots` — additional qualified first-party Rust function paths to extract
+      alongside selected NIFs. These internal functions need not be NIF exports;
+      their actual implementations and dependencies undergo the same checks.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
@@ -145,6 +148,7 @@ defmodule Lynx.Rustler do
       :cargo,
       :only,
       :proof_modules,
+      :proof_roots,
       :required_properties,
       :execution,
       :futures,
@@ -156,6 +160,14 @@ defmodule Lynx.Rustler do
     for key <- Keyword.keys(opts),
         key not in allowed,
         do: raise(ArgumentError, "unknown Rustler verification option: #{key}")
+
+    proof_roots = Keyword.get(opts, :proof_roots, [])
+
+    unless is_list(proof_roots) and
+             Enum.all?(proof_roots, fn root ->
+               is_binary(root) and Regex.match?(~r/^[A-Za-z_][A-Za-z_0-9]*::.+$/, root)
+             end),
+           do: raise(ArgumentError, "proof_roots must be a list of qualified Rust function paths")
 
     execution = Keyword.get(opts, :execution, :pure)
 
@@ -216,6 +228,8 @@ defmodule Lynx.Rustler do
           "::"
         )
       end
+
+    roots = Enum.uniq(roots ++ Keyword.get(opts, :proof_roots, []))
 
     binary? =
       Enum.any?(
