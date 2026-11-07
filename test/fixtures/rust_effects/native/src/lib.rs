@@ -1089,6 +1089,17 @@ pub fn file_resource_write(
     effects_core::write_shared_file(&resource.file, bytes)
 }
 
+/// Reopens a persisted file and parses it through the first-party library.
+/// The fresh descriptor is closed on successful, incomplete and failed reads.
+/// # Errors
+/// Propagates opening and read errors without returning an accepted word.
+pub fn recover_file_word(path: &str) -> std::io::Result<Option<u16>> {
+    let mut file = std::fs::File::open(path)?;
+    let reply = effects_core::read_file_word(&mut file);
+    drop(file);
+    reply
+}
+
 /// Synchronizes file contents before committing the directory's current names.
 /// # Errors
 /// Propagates file, directory-open and directory-sync errors.
