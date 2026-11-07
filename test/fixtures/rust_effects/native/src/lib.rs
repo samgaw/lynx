@@ -949,3 +949,36 @@ pub fn locked_resource_read(resource: rustler::ResourceArc<CounterResource>) -> 
 
 #[cfg(feature = "nif")]
 rustler::init!("Elixir.LynxEffectsFixture.Native");
+
+/// Completes the actual compiler future with a standard no-op task context.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+#[cfg(feature = "future-resource-handles")]
+#[rustler::nif(name = "counter_poll_add", schedule = "DirtyCpu")]
+pub fn locked_resource_poll_add(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match poll_ready_resource(resource, amount, &mut context) {
+        std::task::Poll::Ready(changed) => changed,
+        std::task::Poll::Pending => false,
+    }
+}
+
+/// Cancels a Pending resource future using its actual compiler destructor.
+///
+/// This discards notifications and never waits for or promises async progress.
+#[cfg(feature = "future-resource-handles")]
+#[rustler::nif(name = "counter_poll_cancel", schedule = "DirtyCpu")]
+pub fn locked_resource_poll_cancel(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    matches!(
+        poll_cancel_resource(resource, amount, &mut context),
+        std::task::Poll::Pending
+    )
+}
