@@ -334,3 +334,27 @@ pub fn recover_named_word(path: &str) -> io::Result<Option<u16>> {
     let file = io_core::open_readonly(path)?;
     read_and_close_word(file)
 }
+
+/// Exclusively creates, writes and publishes a word in the admitted directory.
+/// A short write closes the temporary file and returns false without publishing.
+/// # Errors
+/// Propagates creation, write and publication errors. Unacknowledged temporary
+/// names may remain; an error does not promise rollback of filesystem effects.
+pub fn commit_word(source: &str, target: &str, value: u16) -> io::Result<bool> {
+    let mut file = io_core::create_new_file(source)?;
+    let written = io_core::write_once(&mut file, &value.to_le_bytes());
+    match written {
+        Err(error) => {
+            drop(file);
+            Err(error)
+        }
+        Ok(2) => {
+            publish_file(file, source, target)?;
+            Ok(true)
+        }
+        Ok(_) => {
+            drop(file);
+            Ok(false)
+        }
+    }
+}
