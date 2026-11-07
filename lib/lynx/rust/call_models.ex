@@ -18,6 +18,7 @@ defmodule Lynx.Rust.CallModels do
                 if(:native_files in enabled,
                   do:
                     Lynx.Rust.FileModels.resolve(function, translated, refs) ||
+                      Lynx.Rust.FileOpenModels.resolve(function, translated, refs) ||
                       Lynx.Rust.FileDrops.resolve(function, translated, refs)
                 ) ||
                 Lynx.Rust.MutexModels.resolve(function, translated, refs) ||

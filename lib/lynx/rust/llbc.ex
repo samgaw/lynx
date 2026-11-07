@@ -138,6 +138,15 @@ defmodule Lynx.Rust.LLBC do
         {:error, function, message} -> failure!(function, translated, message)
       end
 
+    path_dependencies =
+      case Lynx.Rust.FileOpenModels.audit(functions, available_models, translated, refs) do
+        {:ok, dependencies} -> dependencies
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
+    trait_dependencies =
+      Map.merge(trait_dependencies, path_dependencies, fn _, a, b -> Enum.uniq(a ++ b) end)
+
     try_dependencies =
       case Lynx.Rust.TryModels.audit(functions, available_models, translated, refs) do
         {:ok, dependencies} -> dependencies
@@ -557,7 +566,7 @@ defmodule Lynx.Rust.LLBC do
                        is_map_key(value, "Slice") or is_map_key(value, "Array") or
                        is_map_key(value, "RawPtr") or is_map_key(value, "FnPtr") or
                        is_map_key(value, "FnDef") or is_map_key(value, "PtrMetadata") or
-                        is_map_key(value, "TraitType")))) do
+                       is_map_key(value, "TraitType")))) do
     case Map.fetch(refs, id) do
       {:ok, existing} when existing != value ->
         raise ArgumentError, "inconsistent LLBC shared type identity"

@@ -223,7 +223,8 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.MutexModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.LockModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.ResourceModels.type_models(audit.external_calls, module) ++
-        Lynx.Rust.FileModels.type_models(audit.external_calls, module)
+        Lynx.Rust.FileModels.type_models(audit.external_calls, module) ++
+        Lynx.Rust.FileOpenModels.type_models(audit.external_calls, module)
 
     if Enum.any?(audit.external_calls, fn {_, m} -> m[:native_resource_type] end) do
       unless File.read!(Path.join(tools, "lynx-toolchain")) =~ "global-names-v1",
