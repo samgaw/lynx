@@ -277,3 +277,10 @@ pub fn open_pair(path: &str) -> io::Result<(File, File)> {
         }
     }
 }
+
+/// Forwards exclusive creation across the workspace boundary.
+/// # Errors
+/// Propagates the operating system's exclusive-creation error.
+pub fn create_fresh(path: &str) -> io::Result<File> {
+    io_core::create_new_file(path)
+}

@@ -23,8 +23,9 @@ defmodule Lynx.Rust.FileOpenModels do
          true <- params?(p, 0, 1, 1) and p["outlives"] == [],
          [clause] <- p["trait_clauses"],
          true <- clause?(clause, trait["def_id"], [variable(0), adt(path["def_id"])], refs),
-         [a, b, %{"Impl" => %{"Ty" => parent}}, %{"Ident" => ["open", 0]}] <-
+         [a, b, %{"Impl" => %{"Ty" => parent}}, %{"Ident" => [operation, 0]}] <-
            f["item_meta"]["name"],
+         true <- operation in ["open", "create_new"],
          true <- [a, b] == name(~w(std fs)),
          true <- parent["kind"] == "InherentImplBlock" and params?(parent["params"], 0, 0, 0),
          true <- CallModels.expand(parent["skip_binder"], refs) == adt(file),
@@ -34,8 +35,9 @@ defmodule Lynx.Rust.FileOpenModels do
          true <- out == args([adt(file), adt(error["def_id"])]),
          true <- LLBC.result_type?(result, %{translated: t, references: refs}) do
       %{
-        rust_name: "std::fs::{std::fs::File}::open",
-        lean: "Lynx.NativeFile.openReadOnly",
+        rust_name: "std::fs::{std::fs::File}::" <> operation,
+        lean:
+          "Lynx.NativeFile." <> if(operation == "open", do: "openReadOnly", else: "createNew"),
         builtin: false,
         can_fail: true,
         lift: true,
@@ -45,7 +47,7 @@ defmodule Lynx.Rust.FileOpenModels do
         native_file_types: {file, error["def_id"]},
         native_cutoff_only: true,
         label:
-          "Bounded File::open<&str> model: concrete standard AsRef<Path> dictionaries validated before erasure; shared inode contents and independent read-only handle offsets; explicit namespace and OS outcomes; std/path/OS/FFI correspondence unverified; custom AsRef, symlinks and unsupported path forms rejected"
+          "Bounded File::#{operation}<&str> model (1024 names and pending namespace snapshots): concrete standard AsRef<Path> dictionaries validated before erasure; shared inode contents and independent handle offsets; open grants read-only access; exclusive creation grants read/write access to a fresh empty inode and records a pending, unsynchronized namespace change; failed exclusive creation leaves namespace/inode contents unchanged (std/OS model assumption); explicit namespace and OS outcomes; std/path/OS/FFI correspondence unverified; custom AsRef, symlinks and unsupported path forms rejected"
       }
     else
       _ -> nil
@@ -94,7 +96,7 @@ defmodule Lynx.Rust.FileOpenModels do
 
           _ ->
             raise ArgumentError,
-                  "File::open requires the concrete standard &str AsRef<Path> implementation; custom or unresolved path conversions are unsupported"
+                  "File opening/creation requires the concrete standard &str AsRef<Path> implementation; custom or unresolved path conversions are unsupported"
         end
 
       _ ->
