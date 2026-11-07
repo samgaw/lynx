@@ -125,7 +125,8 @@ defmodule Lynx.Rust.FileAppendTest do
           ) ++
           [
             "Record.LockedConcurrent.appends_interleave",
-            "Record.LockedConcurrent.appends_all_schedules"
+            "Record.LockedConcurrent.appends_all_schedules",
+            "Record.LockedConcurrent.error_then_append_all_schedules"
           ]
     ]
 
@@ -234,6 +235,12 @@ defmodule Lynx.Rust.FileAppendTest do
              result.verification.guarantees,
              &(&1.kind == :cross_crate_contract &&
                  &1.theorem == "Record.LockedConcurrent.appends_all_schedules")
+           )
+
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.LockedConcurrent.error_then_append_all_schedules")
            )
 
     for target <- [
@@ -346,10 +353,42 @@ defmodule Lynx.Rust.FileAppendTest do
     assert error.message =~ "Record/LockedConcurrent.lean:"
     File.write!(property, correct)
 
+    hidden_error =
+      String.replace(
+        correct,
+        "(.ok (errorTerm errorId), shared 4 free (appended next second rest))",
+        "(.ok Term.true, shared 4 free (appended next second rest))",
+        global: false
+      )
+
+    refute hidden_error == correct
+    File.write!(property, hidden_error)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Project.build!(project, options[:proof_modules])
+      end
+
+    assert error.message =~ "Record/LockedConcurrent.lean:"
+    File.write!(property, correct)
+
     source = Path.join(workspace, "protocol/src/lib.rs")
     rust = File.read!(source)
 
     for {broken, proof} <- [
+          {String.replace(
+             rust,
+             ~r/pub fn write_then_sync\(.*?\n\}/s,
+             """
+             pub fn write_then_sync(file: &mut File, bytes: &[u8]) -> io::Result<usize> {
+                 match io_core::synchronize(file) {
+                     Err(error) => Err(error),
+                     Ok(()) => io_core::write_once(file, bytes),
+                 }
+             }
+             """,
+             global: false
+           ), "Properties"},
           {String.replace(rust, "append_record(&mut guard, value)", "Ok(true)"),
            "LockedProperties"},
           {String.replace(rust, "std::io::SeekFrom::End(0)", "std::io::SeekFrom::Start(0)"),
