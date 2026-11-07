@@ -52,3 +52,43 @@ pub fn recover_word(file: &mut File) -> io::Result<Option<u16>> {
         Ok(_) => read_word(file),
     }
 }
+
+/// Acknowledges a fresh four-byte record only after all bytes are synchronized.
+///
+/// # Errors
+/// Propagates write and synchronization errors. A short write is not acknowledged.
+pub fn write_record(file: &mut File, value: u16) -> io::Result<bool> {
+    let encoded = io_core::encode_record(value);
+    match write_then_sync(file, &encoded) {
+        Err(error) => Err(error),
+        Ok(4) => Ok(true),
+        Ok(_) => Ok(false),
+    }
+}
+
+/// Reads a fresh record, rejecting truncation and a failed complement check.
+///
+/// # Errors
+/// Propagates read errors without returning an accepted record.
+pub fn read_record(file: &mut File) -> io::Result<Option<u16>> {
+    match read_word(file) {
+        Err(error) => Err(error),
+        Ok(None) => Ok(None),
+        Ok(Some(value)) => match read_word(file) {
+            Err(error) => Err(error),
+            Ok(None) => Ok(None),
+            Ok(Some(inverse)) => Ok(io_core::decode_record(value, inverse)),
+        },
+    }
+}
+
+/// Recovers the first fresh record regardless of the incoming file position.
+///
+/// # Errors
+/// Propagates seek and read errors. Incomplete or invalid records return no value.
+pub fn recover_record(file: &mut File) -> io::Result<Option<u16>> {
+    match io_core::seek_to(file, 0) {
+        Err(error) => Err(error),
+        Ok(_) => read_record(file),
+    }
+}
