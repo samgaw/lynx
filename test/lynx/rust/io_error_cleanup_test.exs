@@ -68,7 +68,7 @@ defmodule Lynx.Rust.IoErrorCleanupTest do
 
     properties =
       properties ++
-        ~w(Publish.Commit.Framed.commit_shared Publish.Commit.Framed.acknowledged_prefix)
+        ~w(Publish.Commit.Framed.commit_shared Publish.Commit.Framed.acknowledged_prefix Publish.Commit.Framed.rejected_prefix)
 
     options = [
       roots: [

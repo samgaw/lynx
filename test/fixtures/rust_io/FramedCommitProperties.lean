@@ -158,4 +158,35 @@ theorem acknowledged_prefix (value : U16) (env : Environment)
   have trace := (commit_shared env.currentPid value).readyPrefix env rfl counter heap
   exact trace.bind _
 
+
+
+/-- A rejected creation preserves the caller frame and returns its admitted error. -/
+theorem creation_error_poll (env : Environment)
+    (counter : env.refCounter = Publish.IoErrors.rejected.refCounter)
+    (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
+    pollCreateNew source env = some (.ok (.Err ⟨1⟩),
+      {env with refCounter := Publish.IoErrors.returned.refCounter, nativeHeap := Publish.IoErrors.returned.nativeHeap}) := by
+  simp [pollCreateNew,source_bytes,valid_a,Publish.IoErrors.rejected,Publish.IoErrors.returned,
+    counter,heap,pathChoice,namespaceSnapshot,namespaceTable,namespaceHistory,tablesEqual,
+    encodeNamespace,encodeNames,namespaceTypeName,replaceNamespaceScript]
+
+/-- Actual Rust error cleanup is an execution prefix, preserving arbitrary continuations. -/
+theorem rejected_prefix (value : U16) (env : Environment)
+    (counter : env.refCounter = Publish.IoErrors.rejected.refCounter)
+    (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
+    Result.ReadyPrefix (commit_ack value) env (.ok false)
+      {env with nativeHeap := Publish.IoErrors.disposed.nativeHeap} := by
+  simp only [commit_ack,Publish.IoErrors.source_literal,Publish.IoErrors.target_literal,
+    commit_word,io_core.create_new_file,monadLift_self,createNew,Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ _ _ _ _ _ (creation_error_poll env counter heap)
+  simp [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,
+    core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual,
+    core.convert.FromSame.from,NativeM.monadLift_eq,NativeM.fromRust_ok]
+  simp only [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,
+    Result.consumeNativeCapability,monadLift_self,Result.get_bind]
+  apply Result.ReadyPrefix.get
+  simp [Publish.IoErrors.returned,Publish.IoErrors.disposed,counter,Publish.IoErrors.rejected,
+    namespaceTypeName,NativeIoError.typeName,Result.set_bind,Result.ok_bind,NativeM.ok]
+  exact Result.ReadyPrefix.set _ _ _ _ _ (.refl _ _)
+
 end Publish.Commit.Framed
