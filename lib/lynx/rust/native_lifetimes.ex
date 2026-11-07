@@ -10,7 +10,9 @@ defmodule Lynx.Rust.NativeLifetimes do
       for type <- translated["type_decls"],
           type &&
             (MutexModels.type?(type) or LockModels.guard?(type, refs) or
-               Lynx.Rust.ResourceModels.type?(type)),
+               Lynx.Rust.ResourceModels.type?(type) or
+               (Lynx.Rust.FileModels.file_type?(translated, type["def_id"]) and
+                  Enum.any?(models, fn {_, model} -> model[:native_file_drop] == true end))),
           do: type["def_id"]
 
     types = Map.new(Enum.reject(translated["type_decls"], &is_nil/1), &{&1["def_id"], &1})

@@ -63,6 +63,7 @@ defmodule Lynx.Rust.NativeCodecs do
        %{"types" => [type], "regions" => [], "const_generics" => [], "trait_refs" => [_]}} ->
         case CallModels.expand(type, refs) do
           %{"Adt" => %{"generics" => %{"types" => [payload]}}} -> [payload]
+          %{"Adt" => %{"generics" => %{"types" => []}}} -> [type]
           _ -> raise ArgumentError, "unsupported native consuming codec input"
         end
 
@@ -308,8 +309,8 @@ defmodule Lynx.Rust.NativeCodecs do
     end
   end
 
-  # FileModels emits this identity only after validating the actual standard
-  # type and an admitted file operation. Other opaque types remain rejected.
+  # FileModels/FileDrops emit this identity only after validating the standard
+  # type and an admitted file operation/destruction. Other opaque types remain rejected.
   defp file_capability?(id, audit) do
     Lynx.Rust.FileModels.file_type?(audit.translated, id) and
       Enum.any?(audit.external_calls, fn

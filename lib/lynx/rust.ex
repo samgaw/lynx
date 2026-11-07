@@ -42,7 +42,11 @@ defmodule Lynx.Rust do
   and `:cargo` options as in `Lynx.Rustler.prepare!/3`.
 
   `files: :regular, execution: :runtime` admits checked standard `File::read`, `File::write`,
-  `File::sync_all` and `Seek<File>::seek` calls over registered borrowed regular-file capabilities.
+  `File::sync_all`, `File::set_len` and `Seek<File>::seek` calls over registered regular-file capabilities.
+  Explicit and compiler-inserted destruction of an owned `File` is admitted after
+  validating the compiler destructor dictionary. A `close` outcome consumes the
+  capability on success or error and retains its disk state for crash reasoning.
+  Close does not imply synchronization; Rust ignores its native close error.
   The default `:reject` admits none of these calls. The bounded model (1 MiB) distinguishes
   visible bytes, persistent bytes, offsets, partial writes, blocking and I/O errors.
   Explicit outcome scripts describe external choices; malformed choices exhaust
@@ -61,8 +65,9 @@ defmodule Lynx.Rust do
   persistence at power loss; `restart` admits that image in a fresh environment.
   Restart is a host/file-opening boundary, not verification of `File::open`.
   Only nonappend files with independent descriptions are supported. Native opening,
-  closing, truncation, descriptor cloning, directory durability, concurrent I/O and
-  general crash injection remain unsupported. This option verifies first-party
+  physical close/descriptor reclamation, descriptor cloning, directory durability,
+  unrestricted concurrent I/O and general crash injection remain unsupported. Nested owning file destruction
+  and panic cleanup of live files are rejected. This option verifies first-party
   protocols against the explicit model, not the operating system.
 
   `:futures` defaults to `:reject`. Selecting `:immediate` extracts actual async

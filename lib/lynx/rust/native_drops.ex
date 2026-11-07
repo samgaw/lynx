@@ -3,26 +3,7 @@ defmodule Lynx.Rust.NativeDrops do
   alias Lynx.Rust.{CallModels, MutexModels, LockModels, GuardDrops, ResourceModels, ResourceDrops}
 
   def resolve(function, translated, refs) do
-    with %{
-           "body" => "Opaque",
-           "src" => "Normal",
-           "generics" => params,
-           "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false} = sig,
-           "item_meta" => %{"name" => name}
-         } <- function,
-         true <- name == path(~w(core mem drop)),
-         true <- parameters?(params),
-         true <- CallModels.expand(sig["inputs"], refs) == [variable()],
-         true <- unit?(CallModels.expand(sig["output"], refs)),
-         [clause] <- params["trait_clauses"],
-         true <- clause["clause_id"] == 0,
-         %{
-           "regions" => [],
-           "outlives" => [],
-           "skip_binder" => %{"id" => trait, "generics" => args}
-         } <- clause["trait_"],
-         true <- CallModels.expand(args, refs) == arguments([variable()]),
-         true <- destruct?(trait, translated, refs),
+    with true <- consuming_function?(function, translated, refs),
          mutex = Enum.find(translated["type_decls"], &(&1 && MutexModels.type?(&1))),
          guard = Enum.find(translated["type_decls"], &LockModels.guard?(&1, refs)),
          resource = Enum.find(translated["type_decls"], &ResourceModels.type?/1),
@@ -62,6 +43,33 @@ defmodule Lynx.Rust.NativeDrops do
     end
   end
 
+  def consuming_function?(function, translated, refs) do
+    with %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "generics" => params,
+           "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false} = sig,
+           "item_meta" => %{"name" => name}
+         } <- function,
+         true <- name == path(~w(core mem drop)),
+         true <- parameters?(params),
+         true <- CallModels.expand(sig["inputs"], refs) == [variable()],
+         true <- unit?(CallModels.expand(sig["output"], refs)),
+         [clause] <- params["trait_clauses"],
+         true <- clause["clause_id"] == 0,
+         %{
+           "regions" => [],
+           "outlives" => [],
+           "skip_binder" => %{"id" => trait, "generics" => args}
+         } <- clause["trait_"],
+         true <- CallModels.expand(args, refs) == arguments([variable()]),
+         true <- destruct?(trait, translated, refs) do
+      true
+    else
+      _ -> false
+    end
+  end
+
   def needs_lowering?(document) do
     translated = document["translated"]
     refs = Lynx.Rust.LLBC.type_references!(document)
@@ -74,7 +82,8 @@ defmodule Lynx.Rust.NativeDrops do
         Enum.any?(
           translated["type_decls"],
           &(&1 && &1["def_id"] == id &&
-              (MutexModels.type?(&1) or LockModels.guard?(&1, refs) or ResourceModels.type?(&1)))
+              (MutexModels.type?(&1) or LockModels.guard?(&1, refs) or ResourceModels.type?(&1) or
+                 Lynx.Rust.FileModels.file_type?(translated, id)))
         )
 
       _ ->
@@ -147,6 +156,11 @@ defmodule Lynx.Rust.NativeDrops do
             nil
         end
 
+      %{"Adt" => %{"id" => id}} ->
+        if Lynx.Rust.FileModels.file_type?(translated, id),
+          do: Lynx.Rust.FileDrops.site(drop, translated, refs),
+          else: nil
+
       _ ->
         nil
     end
@@ -154,6 +168,13 @@ defmodule Lynx.Rust.NativeDrops do
 
   def audit(functions, models, translated, refs) do
     drops = for {id, model} <- models, model[:native_dispose], into: MapSet.new(), do: id
+
+    translated =
+      Map.put(
+        translated,
+        :native_file_drop,
+        Enum.any?(models, fn {_, model} -> model[:native_file_drop] == true end)
+      )
 
     if MapSet.size(drops) == 0 do
       :ok
@@ -184,7 +205,9 @@ defmodule Lynx.Rust.NativeDrops do
         do: raise(ArgumentError, "native consuming calls during unwind are not yet translated")
 
       if not GuardDrops.call?(generics, translated, refs, traits) and
-           not ResourceDrops.call?(generics, translated, refs, traits) do
+           not ResourceDrops.call?(generics, translated, refs, traits) and
+           not (translated[:native_file_drop] &&
+                  Lynx.Rust.FileDrops.call?(generics, translated, refs, traits)) do
         with %{
                "types" => [type],
                "regions" => [],
@@ -216,7 +239,7 @@ defmodule Lynx.Rust.NativeDrops do
         else
           _ ->
             raise ArgumentError,
-                  "native destruction requires an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload where consumed; custom payload destructors are unsupported"
+                  "native destruction requires an explicitly admitted File or an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload where consumed; custom payload destructors are unsupported"
         end
       end
     end
