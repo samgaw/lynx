@@ -319,7 +319,7 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
   end
 
-  defp calibrate_calls(artifact, tmp) do
+  defp calibrate_calls(artifact, tmp, write \\ false) do
     directory = Path.join(tmp, "live-file-calls")
     File.mkdir_p!(directory)
     library = Path.join(directory, "native")
@@ -334,10 +334,27 @@ defmodule Lynx.Rustler.FileResourceTest do
       def released(_,_), do: :erlang.nif_error(:not_loaded)
       def file_create, do: :erlang.nif_error(:not_loaded)
       def file_sync(_), do: :erlang.nif_error(:not_loaded)
+      def file_write(_, _), do: :erlang.nif_error(:not_loaded)
       def file_release(_), do: :erlang.nif_error(:not_loaded)
     end
     file = LynxFileResourceFixture.Native.file_create()
     true = is_reference(file)
+    #{if write do
+      """
+      for invalid <- [-1, 4294967296] do
+        try do
+          LynxFileResourceFixture.Native.file_write(file, invalid)
+          raise "invalid integer was accepted"
+        rescue
+          ArgumentError -> :ok
+        end
+      end
+      true = LynxFileResourceFixture.Native.file_write(file, 4660)
+      <<52, 18>> = File.read!("resource")
+      true = LynxFileResourceFixture.Native.file_write(file, 65536)
+      <<52, 18, 0, 0>> = File.read!("resource")
+      """
+    end}
     true = LynxFileResourceFixture.Native.file_sync(file)
     {} = LynxFileResourceFixture.Native.file_release(file)
     true = :erlang.garbage_collect()
@@ -618,6 +635,181 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
   end
 
+  @tag :tmp_dir
+  test "ordinary Elixir writes and synchronizes its created file resource", %{tmp_dir: tmp} do
+    workspace = Path.join(tmp, "workspace")
+    File.mkdir_p!(workspace)
+
+    for path <- ~w(Cargo.toml Cargo.lock core native),
+        do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
+
+    project = Path.join(tmp, "proofs")
+    File.mkdir_p!(Path.join(project, "FileResource"))
+    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
+
+    if File.dir?(packages) do
+      File.mkdir_p!(Path.join(project, ".lake"))
+      File.ln_s!(packages, Path.join(project, ".lake/packages"))
+    end
+
+    base = [
+      workspace: workspace,
+      package: "effects-native",
+      tools: @tools,
+      lean_project: project,
+      build_dir: Path.join(tmp, "build"),
+      module_prefix: "FileResource.Extraction",
+      cargo: [features: ["file-resource-write"]],
+      only: [file_create: 0, file_release: 1, file_sync: 1, file_write: 2],
+      execution: :runtime,
+      files: :regular,
+      owned_drops: true
+    ]
+
+    prepared = Lynx.Rustler.prepare!(base)
+
+    assert [
+             %{"name" => "file_release", "flags" => 2},
+             %{"name" => "file_sync", "flags" => 2},
+             %{"name" => "file_create", "flags" => 2},
+             %{"name" => "file_write", "arity" => 2, "flags" => 2}
+           ] = prepared.bindings.bindings
+
+    for {fixture, module} <- [
+          {"NativeFileResourceCreation", "Creation"},
+          {"NativeFileResourceCreatedCalls", "CreatedCalls"},
+          {"NativeFileResourceWrite", "Write"}
+        ] do
+      source =
+        Enum.reduce(
+          prepared.bindings.bindings,
+          File.read!(Path.join(@fixture, fixture <> ".lean")),
+          fn binding, source ->
+            key =
+              case binding["name"] do
+                "file_create" -> "__CREATE__"
+                "file_release" -> "__RELEASE__"
+                "file_sync" -> "__SYNC__"
+                "file_write" -> "__WRITE__"
+              end
+
+            String.replace(source, key, binding["lean_name"])
+          end
+        )
+
+      File.write!(Path.join(project, "FileResource/#{module}.lean"), source)
+    end
+
+    property = Path.join(project, "FileResource/Write.lean")
+    source = File.read!(property)
+
+    options =
+      base ++
+        [
+          proof_modules: [
+            "FileResource.Creation",
+            "FileResource.CreatedCalls",
+            "FileResource.Write"
+          ],
+          required_properties:
+            ~w(FileResource.Creation.constructor_prefix FileResource.Creation.create_next
+        FileResource.Write.write_next FileResource.Write.create_write_sync FileResource.Write.short_not_acknowledged)
+        ]
+
+    checked = Lynx.Rustler.prepare!(options)
+    assert Enum.all?(checked.reports, &(&1.status == :ok))
+    calibrate_calls(prepared.library, tmp, true)
+    load_native(prepared.library, tmp)
+    path = Path.join(tmp, "creation.ex")
+    File.cp!(Path.join(@fixture, "file_resource_write.ex"), path)
+    [{_, beam}] = Code.compile_file(path)
+
+    reports =
+      Lynx.Laws.verify([beam],
+        native: {Lynx.Rustler, options},
+        initial_environment: "FileResource.Write.seed"
+      )
+
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+    guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
+    laws = for %{kind: :elixir_law, status: :verified, theorem: name} <- guarantees, do: name
+    assert Enum.sort(laws) == ["write_then_sync/1"]
+    assert Enum.any?(guarantees, &match?(%{kind: :rust_implementation, status: :verified}, &1))
+    assert Enum.any?(reports, &(&1[:initial_environments] == ["FileResource.Write.seed"]))
+    warm = Lynx.Rustler.prepare!(options)
+    assert Enum.all?(warm.reports, &(&1.status == :ok and &1.cached))
+    export = Path.join(tmp, "creation.export")
+
+    assert Enum.all?(
+             Lynx.Laws.verify([beam],
+               native: {Lynx.Rustler, options},
+               initial_environment: "FileResource.Write.seed",
+               export: export
+             ),
+             &(&1.status == :ok)
+           )
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    for extra <- [
+          "private axiom unfinished : False",
+          "private theorem incomplete : True := by sorry"
+        ] do
+      File.write!(property, source <> "\n" <> extra <> "\n")
+
+      assert_raise RuntimeError, ~r/native adapter or proof audit failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    end
+
+    File.write!(
+      property,
+      String.replace(
+        source,
+        "(synced value).durable = content value",
+        "(synced value).durable = ByteArray.empty"
+      )
+    )
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(property, source)
+    native = Path.join(workspace, "core/src/lib.rs")
+    original = File.read!(native)
+
+    changed =
+      String.replace(
+        original,
+        "pub fn synchronize_file(file: &std::fs::File) -> std::io::Result<()> {\n    file.sync_all()\n}",
+        "pub fn synchronize_file(_file: &std::fs::File) -> std::io::Result<()> {\n    Ok(())\n}"
+      )
+
+    assert changed != original
+    File.write!(native, changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(native, original)
+    facade = Path.join(workspace, "native/src/lib.rs")
+    rust = File.read!(facade)
+
+    incorrect =
+      String.replace(rust, "Ok(written) => written == bytes.len()", "Ok(_written) => true")
+
+    assert incorrect != rust
+    File.write!(facade, incorrect)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+  end
+
   defp load_native(artifact, tmp) do
     :code.purge(LynxFileResourceFixture.Native)
     :code.delete(LynxFileResourceFixture.Native)
@@ -641,6 +833,7 @@ defmodule Lynx.Rustler.FileResourceTest do
       def released(_, _), do: :erlang.nif_error(:not_loaded)
       def file_release(_), do: :erlang.nif_error(:not_loaded)
       def file_sync(_), do: :erlang.nif_error(:not_loaded)
+      def file_write(_, _), do: :erlang.nif_error(:not_loaded)
       def file_create, do: :erlang.nif_error(:not_loaded)
     end
     """)

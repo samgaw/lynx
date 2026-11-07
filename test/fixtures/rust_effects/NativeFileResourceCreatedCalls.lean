@@ -79,6 +79,32 @@ private theorem retained_release {α β : Type} (env : Environment) (state : Sta
   congr 1
   simp [decodedEnv,pinnedEnv,NativeResourceArc.vmCells,frame,List.filter,List.map,n0,n1,n2,n4,n5]
 
+/-- Transport a ready native effect through decoding, shared dereference and owned release. -/
+theorem retained_effect_next {α β γ : Type} (env : Environment) (before after : State)
+    (counter : Nat) (bounded : 6 ≤ counter) (body : effects_native.FileResource → NativeM α)
+    (reply : α) (finish : α → NativeM β) (handler : Exception → NativeM β)
+    (next : β → NativeM γ)
+    (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes)
+    (trace : Result.ReadyPrefix (body payload) (decodedEnv env before counter)
+      (.ok reply) (decodedEnv env after counter)) :
+    (do
+      let owner ← NativeResourceArc.decode (.reference 6)
+      let result ← Result.handle (do
+        let resource ← NativeResourceArc.deref owner
+        let value ← body resource
+        NativeResourceArc.releaseOwned owner
+        finish value) handler
+      next result) (pinnedEnv env before counter) =
+    ((Result.handle (finish reply) handler) >>= next) (pinnedEnv env after (counter + 1)) := by
+  rw [decode_next env before counter bounded _ registered]
+  obtain ⟨token,stored,owners⟩ := decoded_views env before counter bounded
+  rw [NativeResourceArc.deref_retained_handled_next _ payload _ _ _ _ token stored owners]
+  rw [(((trace.bind (fun value => do
+    NativeResourceArc.releaseOwned (⟨3,counter + 1⟩ : NativeResourceArc effects_native.FileResource)
+    finish value)).handle handler).bind next).apply]
+  simp only [Result.ok_bind]
+  exact retained_release env after counter bounded (finish reply) handler next
+
 /-- Releasing a decoded owner retains the newly created resource's VM pin and inode. -/
 theorem release_next {α : Type} (env : Environment) (state : State) (counter : Nat)
     (bounded : 6 ≤ counter) (next : Term → Result α)
@@ -122,6 +148,19 @@ private theorem store_decoded (env : Environment) (before after : State) (counte
   simp [nonzero,nonnegative,store,decodedEnv,frame,decodeHandle,encodeHandle,sharedStore,
     not_lt.mpr position,b1,writableHandleTypeName,typeName]
   omega
+
+/-- A shared writable handle follows the same bounded write transition as the inode model. -/
+theorem write_poll (env : Environment) (before after : State) (counter : Nat)
+    (bounded : 6 ≤ counter) (valid : Valid before) (data : Slice U8)
+    (ready : blocked before = false) (reply : core.result.Result Usize NativeIoError)
+    (step : writeStep before data = some (reply,after)) :
+    pollWrite ⟨2⟩ data (decodedEnv env before counter) =
+      some (.ok (reply,⟨2⟩),decodedEnv env after counter) := by
+  have not_read : getHandle ⟨2⟩ handleTypeName (decodedEnv env before counter) = none := by
+    have b1 : (counter == 1) = false := by simp; omega
+    simp [getHandle,decodedEnv,frame,b1,handleTypeName,writableHandleTypeName]
+  simp only [pollWrite,lookup_decoded env before counter bounded valid,ready,
+    Bool.false_eq_true,↓reduceIte,step,not_read,store_decoded env before after counter bounded valid]
 
 /-- Sync acts on the newly created handle and shared inode while its decoded owner is live. -/
 theorem sync_next {α : Type} (env : Environment) (before after : State) (counter : Nat)
