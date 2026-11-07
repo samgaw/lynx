@@ -130,3 +130,38 @@ pub fn recover_log(file: &mut File, max_records: usize) -> io::Result<Vec<u16>> 
         }
     }
 }
+
+/// Changes file length and acknowledges it only after successful synchronization.
+///
+/// # Errors
+/// Propagates length-change and synchronization errors.
+pub fn resize_then_sync(file: &File, length: u64) -> io::Result<()> {
+    match io_core::resize_to(file, length) {
+        Err(error) => Err(error),
+        Ok(()) => io_core::synchronize(file),
+    }
+}
+
+/// Removes an invalid or incomplete suffix after recovering the complete prefix.
+///
+/// Reaching the record limit returns `None` without changing the file length:
+/// the unexamined suffix may contain valid records. Callers must serialize access.
+/// A successful `Some` result acknowledges the repaired length after synchronization.
+///
+/// # Errors
+/// Propagates recovery, length-change and synchronization errors.
+pub fn repair_log(file: &mut File, max_records: usize) -> io::Result<Option<Vec<u16>>> {
+    match recover_log(file, max_records) {
+        Err(error) => Err(error),
+        Ok(values) => {
+            if values.len() == max_records {
+                return Ok(None);
+            }
+            let valid_bytes = (values.len() as u64) * 4;
+            match resize_then_sync(file, valid_bytes) {
+                Err(error) => Err(error),
+                Ok(()) => Ok(Some(values)),
+            }
+        }
+    }
+}

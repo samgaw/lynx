@@ -57,3 +57,11 @@ pub fn decode_record(value: u16, inverse: u16) -> Option<u16> {
         None
     }
 }
+
+/// Sets the visible file length without acknowledging persistence.
+///
+/// # Errors
+/// Returns the operating system's length-change error.
+pub fn resize_to(file: &File, length: u64) -> io::Result<()> {
+    file.set_len(length)
+}
