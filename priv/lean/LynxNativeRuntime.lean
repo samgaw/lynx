@@ -37,6 +37,21 @@ namespace NativeM
 @[expose] def massert (condition : Prop) [Decidable condition] : NativeM Unit :=
   if condition then Result.ok () else fail .panic
 
+/-- A bounded interpreter for extracted loop bodies. Continuation state and
+all effects survive each iteration; a cutoff is verification exhaustion. -/
+@[expose] def loopFuel {α β : Type} (body : α → NativeM (Aeneas.Std.ControlFlow α β)) :
+    Nat → α → NativeM β
+  | 0, _ => Result.error .exhausted
+  | fuel + 1, state => do
+    match ← body state with
+    | .cont next => loopFuel body fuel next
+    | .done value => NativeM.ok value
+
+/-- One iteration per possible four-byte file record plus the terminating test.
+This is a verification bound, not a Rust runtime limit or a liveness claim. -/
+@[expose] def loop {α β : Type} (body : α → NativeM (Aeneas.Std.ControlFlow α β)) (state : α) : NativeM β :=
+  loopFuel body 262145 state
+
 /-- Lift a standard Aeneas primitive without replacing its implementation. -/
 @[expose] def fromRust {α : Type} (computation : RustM α) : NativeM α :=
   match computation.match with

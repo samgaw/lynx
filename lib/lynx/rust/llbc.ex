@@ -8,12 +8,14 @@ defmodule Lynx.Rust.LLBC do
   @future_backend @global_backend <> "+immediate-futures-v1"
   @workspace_backend @future_backend <> "+workspace-roots-v1"
   @undefined_backend @workspace_backend <> "+undefined-behavior-v1"
+  @loop_backend @undefined_backend <> "+native-loops-v1"
   @unwind_backends [
     @unwind_backend,
     @global_backend,
     @future_backend,
     @workspace_backend,
-    @undefined_backend
+    @undefined_backend,
+    @loop_backend
   ]
   @runtime_backends ["nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1" | @unwind_backends]
 
@@ -189,6 +191,11 @@ defmodule Lynx.Rust.LLBC do
       check_calls!(function["body"], allowed, function, translated)
     end
 
+    case Lynx.Rust.CollectionModels.audit(functions, modelled, translated, refs) do
+      :ok -> :ok
+      {:error, function, message} -> failure!(function, translated, message)
+    end
+
     # Preserve direct-call diagnostics before examining cleanup reached by those
     # calls. No extraction can proceed until the separate drop audit succeeds.
     drops =
@@ -262,7 +269,8 @@ defmodule Lynx.Rust.LLBC do
                @global_backend,
                @future_backend,
                @workspace_backend,
-               @undefined_backend
+               @undefined_backend,
+               @loop_backend
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
@@ -285,11 +293,19 @@ defmodule Lynx.Rust.LLBC do
 
     linked =
       for function <- audit.functions, into: %{} do
-        matches = Enum.filter(translation["functions"], &(&1["def_id"] == function["def_id"]))
+        rows = Enum.filter(translation["functions"], &(&1["def_id"] == function["def_id"]))
+        {helpers, matches} = Enum.split_with(rows, &Map.has_key?(&1, "loop"))
 
         case matches do
           [%{"is_opaque" => false, "lean_name" => name} = mapping] when is_binary(name) ->
-            {function["def_id"], Map.put(mapping, "declaration", function)}
+            validate_loops!(helpers, mapping)
+
+            if expected_monad == "Lynx.NativeM" and helpers != [] and
+                 translation["aeneas_version"] != @loop_backend,
+               do: raise(ArgumentError, "native loops require the native-loops-v1 Aeneas backend")
+
+            {function["def_id"],
+             mapping |> Map.put("declaration", function) |> Map.put("loop_helpers", helpers)}
 
           _ ->
             failure!(
@@ -306,6 +322,34 @@ defmodule Lynx.Rust.LLBC do
       do: raise(ArgumentError, "different Rust bodies map to the same Lean implementation")
 
     linked
+  end
+
+  defp validate_loops!(helpers, parent) do
+    for helper <- helpers do
+      unless match?(
+               %{"id" => id, "pos" => [_ | _], "is_body" => body}
+               when is_integer(id) and id >= 0 and is_boolean(body),
+               helper["loop"]
+             ) and
+               helper["is_opaque"] == false and is_binary(helper["lean_name"]) and
+               helper["lean_name"] != parent["lean_name"] and
+               helper["parent_lean_name"] == parent["lean_name"] and
+               helper["rust_name"] == parent["rust_name"] and
+               helper["lean_file"] == parent["lean_file"] and
+               Enum.all?(helper["loop"]["pos"], &(is_integer(&1) and &1 >= 0)),
+             do: raise(ArgumentError, "inconsistent Aeneas loop implementation identity")
+    end
+
+    names = Enum.map(helpers, & &1["lean_name"])
+
+    if length(names) != length(Enum.uniq(names)),
+      do: raise(ArgumentError, "duplicate Aeneas loop implementation identity")
+
+    for {_id, group} <- Enum.group_by(helpers, & &1["loop"]["id"]) do
+      unless Enum.sort(Enum.map(group, & &1["loop"]["is_body"])) == [false, true] and
+               length(Enum.uniq(Enum.map(group, & &1["loop"]["pos"]))) == 1,
+             do: raise(ArgumentError, "missing or inconsistent Aeneas loop body dependency")
+    end
   end
 
   def dependencies(audit) do

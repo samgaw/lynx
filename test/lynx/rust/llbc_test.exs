@@ -400,4 +400,53 @@ defmodule Lynx.Rust.LLBCTest do
     error = assert_raise CompileError, fn -> LLBC.audit!(doc, ["first_party"]) end
     assert %{file: "src/lib.rs", line: 12} = error
   end
+
+  test "links loop bodies to one Rust entrypoint and rejects inconsistent helper dependencies" do
+    audit = LLBC.audit!(document([function()]), ["first_party"])
+    [parent] = translation()["functions"]
+    parent = Map.put(parent, "lean_file", "Example/Funs.lean")
+
+    body =
+      parent
+      |> Map.put("lean_name", "first_party.compute_loop.body")
+      |> Map.put("parent_lean_name", parent["lean_name"])
+      |> Map.put("loop", %{"id" => 0, "pos" => [0], "is_body" => true})
+
+    loop =
+      body
+      |> Map.put("lean_name", "first_party.compute_loop")
+      |> put_in(["loop", "is_body"], false)
+
+    translated = Map.put(translation(), "functions", [body, loop, parent])
+
+    assert %{0 => %{"lean_name" => "first_party.compute", "loop_helpers" => [^body, ^loop]}} =
+             LLBC.link!(audit, translated)
+
+    old_native =
+      translated
+      |> Map.put("result_monad", "Lynx.NativeM")
+      |> Map.put(
+        "aeneas_version",
+        "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1"
+      )
+
+    assert_raise ArgumentError, ~r/native loops require the native-loops-v1/, fn ->
+      LLBC.link!(audit, old_native, result_monad: "Lynx.NativeM")
+    end
+
+    for invalid <- [
+          [body, parent],
+          [body, body, parent],
+          [Map.put(body, "is_opaque", true), loop, parent],
+          [Map.put(body, "parent_lean_name", "another.function"), loop, parent],
+          [Map.put(body, "rust_name", "another::function"), loop, parent],
+          [Map.put(body, "lean_file", "Other.lean"), loop, parent],
+          [put_in(body, ["loop", "id"], -1), loop, parent],
+          [put_in(body, ["loop", "pos"], [1]), loop, parent]
+        ] do
+      assert_raise ArgumentError, ~r/Aeneas loop/, fn ->
+        LLBC.link!(audit, Map.put(translated, "functions", invalid))
+      end
+    end
+  end
 end
