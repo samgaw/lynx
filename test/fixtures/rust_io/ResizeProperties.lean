@@ -50,7 +50,8 @@ theorem resize_next (file : NativeFile) (length : U64) (env : Environment)
       next reply (fileEnv env file after frame) := by
   have readyPoll : pollSetLen file length (fileEnv env file before frame) =
       some (.ok reply, fileEnv env file after frame) := by
-    simp [pollSetLen, lookup_admitted env file before frame separate valid, ready,
+    simp [-getHandle, pollSetLen, no_shared_handle_at env file before frame separate,
+      lookup_admitted env file before frame separate valid, ready,
       step, store_at env file before after frame separate]
   simp only [io_core.resize_to, setLen, monadLift_self, Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ readyPoll]
@@ -353,7 +354,8 @@ theorem resize_outside (file : NativeFile) (env : Environment)
       (.error .exhausted, fileEnv env file before frame) := by
   have poll : pollSetLen file 1048577#u64 (fileEnv env file before frame) =
       some (.error .exhausted, fileEnv env file before frame) := by
-    simp [pollSetLen, lookup_admitted env file before frame separate valid, ready, setLenStep, limit]
+    simp [-getHandle, pollSetLen, no_shared_handle_at env file before frame separate,
+      lookup_admitted env file before frame separate valid, ready, setLenStep, limit]
   simp only [io_core.resize_to, setLen, monadLift_self]
   rw [Result.wait_ready_apply _ _ _ _ _ poll]
   simp
