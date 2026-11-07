@@ -44,7 +44,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"TailProperties", []},
       {"ResizeProperties", []},
       {"RepairCrashProperties", []},
-      {"MalformedProperties", []}
+      {"MalformedProperties", []},
+      {"LockedProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -67,6 +68,7 @@ defmodule Lynx.Rust.FileAppendTest do
 
     options = [
       roots: [
+        "io_protocol::locked_append",
         "io_protocol::resize_then_sync",
         "io_protocol::repair_log",
         "io_protocol::append_record",
@@ -115,6 +117,10 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(malformed_at recover_malformed_next recover_malformed repair_malformed repair_malformed_default repair_malformed_crash),
             &("Record.MalformedProperties." <> &1)
+          ) ++
+          Enum.map(
+            ~w(critical_contract append_contract locked_ready locked_success critical_error_steps contention_waits),
+            &("Record.LockedProperties." <> &1)
           )
     ]
 
@@ -207,6 +213,12 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.MalformedProperties.repair_malformed_crash")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.LockedProperties.locked_success")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
@@ -214,6 +226,7 @@ defmodule Lynx.Rust.FileAppendTest do
           "Record/ResizeProperties.lean",
           "Record/RepairCrashProperties.lean",
           "Record/MalformedProperties.lean",
+          "Record/LockedProperties.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -278,6 +291,8 @@ defmodule Lynx.Rust.FileAppendTest do
     rust = File.read!(source)
 
     for {broken, proof} <- [
+          {String.replace(rust, "append_record(&mut guard, value)", "Ok(true)"),
+           "LockedProperties"},
           {String.replace(rust, "std::io::SeekFrom::End(0)", "std::io::SeekFrom::Start(0)"),
            "AppendProperties"},
           {String.replace(rust, "values.push(value)", "values.push(0)"), "AppendProperties"},
@@ -330,5 +345,43 @@ defmodule Lynx.Rust.FileAppendTest do
     File.write!(core, original)
 
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
+  end
+
+  @tag :tmp_dir
+  test "rejects consuming a file mutex when native file destruction is unmodeled", %{tmp_dir: tmp} do
+    workspace = Path.join(tmp, "workspace")
+    File.mkdir_p!(workspace)
+
+    for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol),
+        do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
+
+    source = Path.join(workspace, "protocol/src/lib.rs")
+
+    File.write!(
+      source,
+      File.read!(source) <>
+        "\npub fn consume_file_mutex(mutex: std::sync::Mutex<File>) { drop(mutex); }\n"
+    )
+
+    project = Path.join(tmp, "proofs")
+    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
+
+    if File.dir?(packages) do
+      File.mkdir_p!(Path.join(project, ".lake"))
+      File.ln_s!(packages, Path.join(project, ".lake/packages"))
+    end
+
+    assert_raise CompileError,
+                 ~r/unsupported native drop payload|native destruction requires|structural drop erasure rejected/,
+                 fn ->
+                   Lynx.Rust.verify!(workspace, "io-protocol",
+                     roots: ["io_protocol::locked_append", "io_protocol::consume_file_mutex"],
+                     execution: :runtime,
+                     files: :regular,
+                     tools: @tools,
+                     lean_project: project,
+                     build_dir: Path.join(tmp, "build")
+                   )
+                 end
   end
 end

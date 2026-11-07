@@ -127,6 +127,9 @@ defmodule Lynx.Rust.NativeCodecs do
         }
       } ->
         cond do
+          file_capability?(id, audit) ->
+            found
+
           Enum.any?(found, &(&1["def_id"] == id)) ->
             found
 
@@ -299,8 +302,20 @@ defmodule Lynx.Rust.NativeCodecs do
         ["std::sync::Mutex", schema_type!(payload, audit, types)]
 
       %{"Adt" => %{"id" => id}} ->
-        schema!(Map.fetch!(types, id), audit, types)
+        if file_capability?(id, audit),
+          do: "std::fs::File:borrowed-capability-v1",
+          else: schema!(Map.fetch!(types, id), audit, types)
     end
+  end
+
+  # FileModels emits this identity only after validating the actual standard
+  # type and an admitted file operation. Other opaque types remain rejected.
+  defp file_capability?(id, audit) do
+    Lynx.Rust.FileModels.file_type?(audit.translated, id) and
+      Enum.any?(audit.external_calls, fn
+        {_, %{native_file_types: {^id, _}}} -> true
+        _ -> false
+      end)
   end
 
   defp nominal!(type) do

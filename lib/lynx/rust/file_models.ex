@@ -100,6 +100,13 @@ defmodule Lynx.Rust.FileModels do
     end
   end
 
+  def file_type?(translated, id) do
+    case type(translated, @file_path) do
+      %{"def_id" => ^id} -> true
+      _ -> false
+    end
+  end
+
   def scope(audit, prefix) do
     calls =
       Map.new(audit.external_calls, fn {id, model} ->
