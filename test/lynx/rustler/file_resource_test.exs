@@ -813,7 +813,9 @@ defmodule Lynx.Rustler.FileResourceTest do
   end
 
   @tag :tmp_dir
-  test "ordinary Elixir commits resource contents and the directory entry", %{tmp_dir: tmp} do
+  test "ordinary Elixir commits recoverable resource contents and the directory entry", %{
+    tmp_dir: tmp
+  } do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -838,6 +840,7 @@ defmodule Lynx.Rustler.FileResourceTest do
       module_prefix: "FileResource.Extraction",
       cargo: [features: ["file-resource-commit"]],
       only: [file_create: 0, file_release: 1, file_sync: 1, file_write: 2, file_commit: 1],
+      proof_roots: ["effects_native::recover_file_word"],
       execution: :runtime,
       files: :regular,
       owned_drops: true
@@ -852,6 +855,12 @@ defmodule Lynx.Rustler.FileResourceTest do
              %{"name" => "file_write", "arity" => 2, "flags" => 2},
              %{"name" => "file_commit", "arity" => 1, "flags" => 2}
            ] = prepared.bindings.bindings
+
+    assert Enum.any?(prepared.extraction.implementations, fn {_, function} ->
+             function["rust_name"] == "effects_native::recover_file_word"
+           end)
+
+    refute Enum.any?(prepared.bindings.bindings, &(&1["name"] == "recover_file_word"))
 
     commit = Enum.find(prepared.bindings.bindings, &(&1["name"] == "file_commit"))
 
@@ -875,7 +884,8 @@ defmodule Lynx.Rustler.FileResourceTest do
           {"NativeFileResourceCreation", "Creation"},
           {"NativeFileResourceCreatedCalls", "CreatedCalls"},
           {"NativeFileResourceWrite", "Write"},
-          {"NativeFileResourcePublish", "Publish"}
+          {"NativeFileResourcePublish", "Publish"},
+          {"NativeFileResourceRecovery", "Recovery"}
         ] do
       source =
         Enum.reduce(
@@ -908,12 +918,15 @@ defmodule Lynx.Rustler.FileResourceTest do
             "FileResource.Creation",
             "FileResource.CreatedCalls",
             "FileResource.Write",
-            "FileResource.Publish"
+            "FileResource.Publish",
+            "FileResource.Recovery"
           ],
           required_properties:
             ~w(FileResource.Creation.constructor_prefix FileResource.Creation.create_next
         FileResource.Write.write_next FileResource.Publish.directory_prefix
-        FileResource.Publish.commit_next FileResource.Publish.acknowledged_crash)
+        FileResource.Publish.commit_next FileResource.Publish.acknowledged_crash
+        FileResource.Recovery.recover_admitted FileResource.Recovery.commit_recovery
+        FileResource.Recovery.read_error_cleanup)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -978,6 +991,17 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(property, source)
+    recovery_property = Path.join(project, "FileResource/Recovery.lean")
+    recovery_source = File.read!(recovery_property)
+    false_recovery = String.replace(recovery_source, "(.ok (.Ok (some value))", "(.ok (.Ok none)")
+    assert false_recovery != recovery_source
+    File.write!(recovery_property, false_recovery)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(recovery_property, recovery_source)
     native = Path.join(workspace, "core/src/lib.rs")
     original = File.read!(native)
 
@@ -990,6 +1014,22 @@ defmodule Lynx.Rustler.FileResourceTest do
 
     assert changed != original
     File.write!(native, changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(native, original)
+
+    incorrect_parser =
+      String.replace(
+        original,
+        "u16::from_le_bytes([low, high])",
+        "u16::from_be_bytes([low, high])"
+      )
+
+    assert incorrect_parser != original
+    File.write!(native, incorrect_parser)
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rustler.prepare!(options)
