@@ -1,0 +1,295 @@
+--- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -430,6 +430,212 @@
+                 ),
+             )));
+             block.statements.push(inlined);
++            terminator.kind = mir::TerminatorKind::Goto { target: *target };
++        }
++    }
++
++    /// Reborrow only standard Pin<&mut T>; custom DerefMut pointers are excluded.
++    /// Check the complete standard helper before replacing its reference plumbing.
++    fn normalize_pin_as_mut(&self, body: &mut mir::Body<'tcx>) {
++        if !self.options.immediate_futures {
++            return;
++        }
++        let tcx = self.tcx;
++        let pin_id = tcx.lang_items().pin_type().unwrap();
++        let Some(deref_mut) = tcx.get_diagnostic_item(Symbol::intern("deref_mut_method")) else {
++            return;
++        };
++        for block in body.basic_blocks.as_mut() {
++            let terminator = block.terminator.as_mut().unwrap();
++            let mir::TerminatorKind::Call {
++                func,
++                args,
++                destination,
++                target: Some(target),
++                ..
++            } = &terminator.kind
++            else {
++                continue;
++            };
++            let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
++                continue;
++            };
++            if tcx.item_name(*id).as_str() != "as_mut"
++                || args.len() != 1
++                || tcx.fn_sig(*id).skip_binder().safety().is_unsafe()
++            {
++                continue;
++            }
++            let Some(parent) = tcx.impl_of_assoc(*id) else {
++                continue;
++            };
++            let ty::Adt(parent_ty, _) = tcx
++                .type_of(parent)
++                .instantiate_identity()
++                .skip_normalization()
++                .kind()
++            else {
++                continue;
++            };
++            if parent_ty.did() != pin_id {
++                continue;
++            }
++            let input = args[0].node.ty(&body.local_decls, tcx);
++            let ty::Ref(_, pinned, rustc_hir::Mutability::Mut) = input.kind() else {
++                continue;
++            };
++            let ty::Adt(pin, pin_args) = pinned.kind() else {
++                continue;
++            };
++            if pin.did() != pin_id
++                || pin.variants().len() != 1
++                || pin.non_enum_variant().fields.len() != 1
++            {
++                continue;
++            }
++            let pointer = pin_args.type_at(0);
++            let ty::Ref(_, pointee, rustc_hir::Mutability::Mut) = pointer.kind() else {
++                continue;
++            };
++            let ty::Adt(output, output_args) = destination.ty(&body.local_decls, tcx).ty.kind()
++            else {
++                continue;
++            };
++            if output.did() != pin_id {
++                continue;
++            }
++            let output_pointer = output_args.type_at(0);
++            let ty::Ref(region, output_pointee, rustc_hir::Mutability::Mut) = output_pointer.kind()
++            else {
++                continue;
++            };
++            if pointee != output_pointee {
++                continue;
++            }
++            let implementation = tcx.optimized_mir(*id);
++            if implementation.arg_count != 1 || implementation.basic_blocks.len() != 2 {
++                continue;
++            }
++            let start = &implementation.basic_blocks[mir::START_BLOCK];
++            let executable = |block: &mir::BasicBlockData<'tcx>| {
++                block
++                    .statements
++                    .iter()
++                    .filter(|s| {
++                        !matches!(
++                            s.kind,
++                            mir::StatementKind::StorageLive(_)
++                                | mir::StatementKind::StorageDead(_)
++                                | mir::StatementKind::Nop
++                        )
++                    })
++                    .cloned()
++                    .collect::<Vec<_>>()
++            };
++            let first = executable(start);
++            let [borrow] = first.as_slice() else {
++                continue;
++            };
++            let mir::StatementKind::Assign((
++                borrow_dest,
++                mir::Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, source),
++            )) = &borrow.kind
++            else {
++                continue;
++            };
++            if !borrow_dest.projection.is_empty()
++                || borrow_dest.local.as_usize() <= 1
++                || source.local.as_usize() != 1
++                || !matches!(source.projection.as_ref(), [mir::ProjectionElem::Deref, mir::ProjectionElem::Field(field, _)] if field.as_usize() == 0)
++            {
++                continue;
++            }
++            let mir::TerminatorKind::Call {
++                func: called,
++                args: called_args,
++                destination: borrowed,
++                target: Some(end),
++                ..
++            } = &start.terminator().kind
++            else {
++                continue;
++            };
++            if !matches!(called.ty(&implementation.local_decls, tcx).kind(), ty::FnDef(id, _) if *id == deref_mut)
++                || called_args.len() != 1
++                || !borrowed.projection.is_empty()
++                || borrowed.local.as_usize() <= 1
++                || borrowed.local == borrow_dest.local
++                || !matches!(&called_args[0].node, mir::Operand::Move(place) | mir::Operand::Copy(place) if place == borrow_dest)
++            {
++                continue;
++            }
++            let last = &implementation.basic_blocks[*end];
++            if !matches!(last.terminator().kind, mir::TerminatorKind::Return) {
++                continue;
++            }
++            let second = executable(last);
++            let [construct] = second.as_slice() else {
++                continue;
++            };
++            let mir::StatementKind::Assign((result, mir::Rvalue::Aggregate(kind, values))) =
++                &construct.kind
++            else {
++                continue;
++            };
++            if result.local != mir::RETURN_PLACE
++                || !result.projection.is_empty()
++                || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _) if *id == pin_id && args.type_at(0) == implementation.local_decls[borrowed.local].ty)
++                || values.len() != 1
++                || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)], mir::Operand::Move(place) | mir::Operand::Copy(place) if place == borrowed)
++            {
++                continue;
++            }
++            let place = match &args[0].node {
++                mir::Operand::Move(place) | mir::Operand::Copy(place) => *place,
++                _ => continue,
++            };
++            let projected = place.project_deeper(
++                &[
++                    mir::ProjectionElem::Deref,
++                    mir::ProjectionElem::Field(rustc_abi::FieldIdx::from_usize(0), pointer),
++                    mir::ProjectionElem::Deref,
++                ],
++                tcx,
++            );
++            let fresh = body.local_decls.push(mir::LocalDecl::new(
++                output_pointer,
++                terminator.source_info.span,
++            ));
++            let mut reborrow = borrow.clone();
++            reborrow.source_info = terminator.source_info;
++            reborrow.kind = mir::StatementKind::Assign(Box::new((
++                mir::Place::from(fresh),
++                mir::Rvalue::Ref(
++                    *region,
++                    mir::BorrowKind::Mut {
++                        kind: mir::MutBorrowKind::Default,
++                    },
++                    projected,
++                ),
++            )));
++            let mut aggregate = construct.clone();
++            aggregate.source_info = terminator.source_info;
++            aggregate.kind = mir::StatementKind::Assign(Box::new((
++                *destination,
++                mir::Rvalue::Aggregate(
++                    Box::new(mir::AggregateKind::Adt(
++                        pin_id,
++                        rustc_abi::VariantIdx::from_usize(0),
++                        output_args,
++                        None,
++                        None,
++                    )),
++                    rustc_index::IndexVec::from_raw(vec![mir::Operand::Move(mir::Place::from(
++                        fresh,
++                    ))]),
++                ),
++            )));
++            block.statements.extend([reborrow, aggregate]);
+             terminator.kind = mir::TerminatorKind::Goto { target: *target };
+         }
+     }
+@@ -1077,6 +1283,7 @@
+         if let Some(mut body) = self.get_mir(def.this(), span)? {
+             self.normalize_pin_get_mut(def, &mut body);
+             self.normalize_safe_pin_calls(&mut body);
++            self.normalize_pin_as_mut(&mut body);
+             self.normalize_pin_macro_calls(&mut body);
+             self.normalize_pin_macro_drops(&mut body);
+             self.normalize_coroutine_context(def, &mut body)?;
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1583,3 +1583,69 @@
+     );
+     Ok(())
+ }
++
++#[test]
++fn pin_as_mut_reborrows_only_standard_mutable_references() -> anyhow::Result<()> {
++    let data = translate(
++        r#"//@ charon-args=--preset=aeneas --cancelling-futures --suspending-futures --immediate-futures --owned-drops --mir=optimized --sysroot=default --start-from=crate::drive --start-from=crate::custom --start-from=crate::shadow --opaque=core --opaque=std --include=core::pin --include=core::task::poll::Poll --include=core::option::Option --monomorphize-mut=all
++//@ rustc-args=--edition=2024 -Zmir-strip-debuginfo=all-locals -Zmir-enable-passes=+DeadStoreElimination-final,+SimplifyLocals-final
++pub async fn make(mutex: std::sync::Mutex<u64>) { drop(mutex); }
++pub fn drive(mutex: std::sync::Mutex<u64>, context: &mut std::task::Context<'_>) -> std::task::Poll<()> {
++    use std::future::Future;
++    let mut future = std::pin::pin!(make(mutex));
++    future.as_mut().poll(context)
++}
++pub struct Custom<'a>(&'a mut u64);
++impl std::ops::Deref for Custom<'_> { type Target=u64; fn deref(&self)->&u64 { self.0 } }
++impl std::ops::DerefMut for Custom<'_> { fn deref_mut(&mut self)->&mut u64 { self.0 } }
++pub fn custom(mut pointer: std::pin::Pin<Custom<'_>>) { let _ = pointer.as_mut(); }
++pub struct Shadow;
++impl Shadow { pub fn as_mut(&mut self) -> bool { false } }
++pub fn shadow(value: &mut Shadow)->bool { value.as_mut() }
++fn main() {}
++"#,
++    )?;
++    let calls = |name: &str| {
++        let function = data
++            .fun_decls
++            .iter()
++            .find(|f| f.item_meta.name.debug_repr(&data) == name)
++            .unwrap();
++        function
++            .body
++            .as_structured()
++            .unwrap()
++            .body
++            .statements
++            .iter()
++            .filter_map(|statement| {
++                let StatementKind::Call { call, .. } = &statement.kind else {
++                    return None;
++                };
++                let FnOperand::Regular(pointer) = &call.func else {
++                    return None;
++                };
++                let FnPtrKind::Fun(id) = pointer.kind.as_ref() else {
++                    return None;
++                };
++                Some(data.fun_decls[*id].item_meta.name.debug_repr(&data))
++            })
++            .collect::<Vec<_>>()
++    };
++    assert!(
++        !calls("test_crate::drive")
++            .iter()
++            .any(|name| name.contains("as_mut"))
++    );
++    assert!(
++        calls("test_crate::custom")
++            .iter()
++            .any(|name| name.contains("as_mut"))
++    );
++    assert!(
++        calls("test_crate::shadow")
++            .iter()
++            .any(|name| name.ends_with("::as_mut"))
++    );
++    Ok(())
++}
