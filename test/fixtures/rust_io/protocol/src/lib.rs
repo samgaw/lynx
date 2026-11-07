@@ -92,3 +92,41 @@ pub fn recover_record(file: &mut File) -> io::Result<Option<u16>> {
         Ok(_) => read_record(file),
     }
 }
+
+/// Appends one record at the current visible end and synchronizes its bytes.
+///
+/// Callers must serialize appenders and start from a complete record prefix.
+/// A short write is not acknowledged and must be recovered before another append.
+///
+/// # Errors
+/// Propagates seek, write and synchronization errors.
+pub fn append_record(file: &mut File, value: u16) -> io::Result<bool> {
+    match io_core::seek_from(file, std::io::SeekFrom::End(0)) {
+        Err(error) => Err(error),
+        Ok(_) => write_record(file, value),
+    }
+}
+
+/// Recovers the valid leading records, stopping on incomplete or invalid input.
+///
+/// The record limit is explicit: reaching it returns the recovered prefix without
+/// inspecting later records. File errors propagate rather than becoming EOF.
+///
+/// # Errors
+/// Propagates seek and read errors.
+pub fn recover_log(file: &mut File, max_records: usize) -> io::Result<Vec<u16>> {
+    match io_core::seek_to(file, 0) {
+        Err(error) => Err(error),
+        Ok(_) => {
+            let mut values = Vec::new();
+            while values.len() < max_records {
+                match read_record(file) {
+                    Err(error) => return Err(error),
+                    Ok(None) => return Ok(values),
+                    Ok(Some(value)) => values.push(value),
+                }
+            }
+            Ok(values)
+        }
+    }
+}
