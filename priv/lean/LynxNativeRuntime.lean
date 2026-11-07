@@ -1783,3 +1783,153 @@ is a verification cutoff, never successful completion or implicit destruction. -
 
 end NativeTask
 end Lynx
+
+namespace Lynx
+
+/-- Registered regular-file description; its position and bytes live in the shared heap.
+Separate descriptors of the same physical file are outside this initial model. -/
+structure NativeFile where
+  id : Nat
+
+/-- Opaque I/O error identity. No error payload, kind or destructor is modeled. -/
+structure NativeIoError where
+  identity : Nat
+
+namespace NativeFile
+
+@[expose] def typeName : String := "rust:regular-file"
+@[expose] def limit : Nat := 1048576
+
+/-- The script is an explicit choice of OS outcomes, not a verified OS implementation.
+Visible writes may persist in any bytewise old/new combination before sync. -/
+structure State where
+  visible : ByteArray
+  durable : ByteArray
+  position : Nat
+  script : Term
+
+@[expose] def encode (state : State) : Term :=
+  .tuple #[.bitstring state.visible 0, .bitstring state.durable 0,
+    .integer state.position, state.script]
+
+@[expose] def decode : Term → Option State
+  | .tuple fields => do
+    if size : fields.size = 4 then do
+      let .bitstring visible bits _ := fields[0]'(by omega) | none
+      let .bitstring durable durableBits _ := fields[1]'(by omega) | none
+      let .integer position := fields[2]'(by omega) | none
+      if bits != 0 || durableBits != 0 || position < 0 || visible.size > limit ||
+          durable.size > visible.size || position.toNat > limit then none
+      else some ⟨visible, durable, position.toNat, fields[3]'(by omega)⟩
+    else none
+  | _ => none
+
+/-- A mask selects each byte from the previous persistent image or current visible
+image. Length may advance but cannot shrink without a modeled truncate operation.
+This assumes bytewise old/new tearing, with no device corruption or namespace loss. -/
+@[expose] def persist (old visible mask : ByteArray) : Option ByteArray :=
+  if old.size ≤ mask.size ∧ mask.size ≤ visible.size ∧
+      mask.data.toList.all (fun byte => byte == 0 || byte == 1) then
+    some ⟨mask.data.mapIdx fun index choice =>
+      if choice == 1 then visible[index]! else old[index]!⟩
+  else none
+
+@[expose] def bytes (data : Slice U8) : ByteArray :=
+  ⟨data.val.toArray.map fun byte => UInt8.ofNat byte.val⟩
+
+/-- Extend gaps with zeroes and overwrite exactly the accepted input prefix. -/
+@[expose] def overwrite (old : ByteArray) (position : Nat) (data : ByteArray) (count : Nat) : ByteArray :=
+  if count = 0 then old else
+  ⟨(old.data.toList.take position ++ List.replicate (position - old.size) 0 ++
+    data.data.toList.take count ++ old.data.toList.drop (position + count)).toArray⟩
+
+/-- Parse one operation outcome; malformed or absent choices exhaust verification. -/
+@[expose] def action (operation : String) : Term → Option (Bool × Nat × ByteArray × Term)
+  | .cons (.tuple fields) rest => do
+    if size : fields.size = 4 then do
+      let .atom kind := fields[0]'(by omega) | none
+      let .atom status := fields[1]'(by omega) | none
+      let .integer value := fields[2]'(by omega) | none
+      let .bitstring mask bits _ := fields[3]'(by omega) | none
+      if kind != operation || (status != "ok" && status != "error") || value < 0 || bits != 0 then none
+      else some (status == "ok", value.toNat, mask, rest)
+    else none
+  | _ => none
+
+@[expose] def writeStep (state : State) (data : Slice U8) :
+    Option (core.result.Result Usize NativeIoError × State) := do
+  if data.val.length > limit then none else do
+  let (success, value, mask, rest) ← action "write" state.script
+  if success then
+    if bounded : value ≤ data.val.length then do
+      if data.val.length > limit || state.position + value > limit then none else do
+      let visible := overwrite state.visible state.position (bytes data) value
+      let durable ← persist state.durable visible mask
+      let count := Usize.ofNatCore value (by have := data.property; scalar_tac)
+      some (.Ok count, ⟨visible, durable, state.position + value, rest⟩)
+    else none
+  else do
+    let durable ← persist state.durable state.visible mask
+    some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+
+@[expose] def syncStep (state : State) :
+    Option (core.result.Result Unit NativeIoError × State) := do
+  let (success, value, mask, rest) ← action "sync_all" state.script
+  if success then
+    if value != 0 then none
+    else some (.Ok (), {state with durable := state.visible, script := rest})
+  else do
+    let durable ← persist state.durable state.visible mask
+    some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+
+@[expose] def lookup (file : NativeFile) (env : Environment) : Option State :=
+  if file.id ≤ env.refCounter then
+    match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
+    | [(_, tag, contents)] => if tag == typeName then decode contents else none
+    | _ => none
+  else none
+
+@[expose] def store (file : NativeFile) (state : State) (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == file.id then (file.id, typeName, encode state) else cell}
+
+@[expose] def blocked (state : State) : Bool :=
+  match state.script with | .cons (.atom "blocked") _ => true | _ => false
+
+/-- One atomic regular-file write, including partial results, errors and blocking.
+Write completion does not assert persistence. Invalid capabilities/choices cut off. -/
+@[expose] def pollWrite (file : NativeFile) (data : Slice U8) (env : Environment) :
+    Option (Except Exception (core.result.Result Usize NativeIoError × NativeFile) × Environment) :=
+  match lookup file env with
+  | none => some (.error .exhausted, env)
+  | some state =>
+    if blocked state then none else
+    match writeStep state data with
+    | none => some (.error .exhausted, env)
+    | some (reply, updated) => some (.ok (reply, file), store file updated env)
+
+@[expose] def write (file : NativeFile) (data : Slice U8) :
+    NativeM (core.result.Result Usize NativeIoError × NativeFile) :=
+  .wait (pollWrite file data) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
+/-- Synchronization errors may still persist a torn image; only success guarantees
+all visible file contents and length. Directory/device correspondence is assumed. -/
+@[expose] def pollSync (file : NativeFile) (env : Environment) :
+    Option (Except Exception (core.result.Result Unit NativeIoError) × Environment) :=
+  match lookup file env with
+  | none => some (.error .exhausted, env)
+  | some state =>
+    if blocked state then none else
+    match syncStep state with
+    | none => some (.error .exhausted, env)
+    | some (reply, updated) => some (.ok reply, store file updated env)
+
+@[expose] def syncAll (file : NativeFile) : NativeM (core.result.Result Unit NativeIoError) :=
+  .wait (pollSync file) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
+end NativeFile
+end Lynx

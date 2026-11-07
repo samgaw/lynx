@@ -178,6 +178,7 @@ defmodule Lynx.Rust.Report do
       native_guard_storage: Map.get(extraction, :native_guard_storage, []),
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
       unwind: Map.get(extraction, :unwind, :reject),
+      files: Map.get(extraction, :files, :reject),
       futures: Map.get(extraction, :futures, :reject),
       owned_drops: Map.get(extraction, :owned_drops, false),
       resource_cleanup: Map.get(extraction, :resource_cleanup, []),

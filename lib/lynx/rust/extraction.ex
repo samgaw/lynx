@@ -12,6 +12,7 @@ defmodule Lynx.Rust.Extraction do
           :execution,
           :unwind,
           :futures,
+          :files,
           :owned_drops
         ],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
@@ -27,6 +28,12 @@ defmodule Lynx.Rust.Extraction do
     if Keyword.get(opts, :owned_drops, false) == true and
          Keyword.get(opts, :execution, :pure) != :runtime,
        do: raise(ArgumentError, "owned destruction requires runtime execution")
+
+    file_models =
+      Lynx.Rust.FileModels.enabled!(
+        Keyword.get(opts, :files, :reject),
+        Keyword.get(opts, :execution, :pure)
+      )
 
     unwind = Keyword.get(opts, :unwind, :reject)
     Lynx.Rust.NativeUnwind.charon_arguments(unwind)
@@ -106,6 +113,7 @@ defmodule Lynx.Rust.Extraction do
             document,
             first_party,
             Keyword.get(opts, :external_calls, []) ++
+              file_models ++
               if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
                 do: [:native_wakers],
                 else: []
@@ -179,6 +187,7 @@ defmodule Lynx.Rust.Extraction do
 
     requested_calls =
       Keyword.get(opts, :external_calls, []) ++
+        file_models ++
         if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
           do: [:native_wakers],
           else: []
@@ -213,7 +222,8 @@ defmodule Lynx.Rust.Extraction do
       models ++
         Lynx.Rust.MutexModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.LockModels.type_models(audit.external_calls, module) ++
-        Lynx.Rust.ResourceModels.type_models(audit.external_calls, module)
+        Lynx.Rust.ResourceModels.type_models(audit.external_calls, module) ++
+        Lynx.Rust.FileModels.type_models(audit.external_calls, module)
 
     if Enum.any?(audit.external_calls, fn {_, m} -> m[:native_resource_type] end) do
       unless File.read!(Path.join(tools, "lynx-toolchain")) =~ "global-names-v1",
@@ -374,6 +384,7 @@ defmodule Lynx.Rust.Extraction do
         ),
       native_drops: native_drops,
       native_unwind: native_unwind,
+      files: Keyword.get(opts, :files, :reject),
       futures: Keyword.get(opts, :futures, :reject),
       unwind: unwind,
       execution: execution,
