@@ -132,7 +132,10 @@ defmodule Lynx.Rust.FileAppendTest do
             "Record.LockedConcurrent.error_then_append_all_schedules",
             "Record.RollbackProperties.append_contract",
             "Record.RollbackProperties.critical_contract",
-            "Record.RollbackProperties.rollback_then_append_all_schedules"
+            "Record.RollbackProperties.rollback_then_append_all_schedules",
+            "Record.RollbackProperties.rollback_resize_failure",
+            "Record.RollbackProperties.rollback_sync_failure",
+            "Record.RollbackProperties.rollback_failure_effects"
           ]
     ]
 
@@ -384,6 +387,33 @@ defmodule Lynx.Rust.FileAppendTest do
 
     assert error.message =~ "Record/LockedConcurrent.lean:"
     File.write!(property, correct)
+
+    property = Path.join(project, "Record/RollbackProperties.lean")
+    correct = File.read!(property)
+
+    for broken <- [
+          String.replace(
+            correct,
+            "⟨if syncFailure then ByteArray.empty else ⟨#[1, 0]⟩, ⟨#[1, 0]⟩, 2, rest⟩",
+            "⟨if syncFailure then ByteArray.empty else ⟨#[1, 0]⟩, ByteArray.empty, 2, rest⟩"
+          ),
+          String.replace(
+            correct,
+            "(.ok (errorTerm errorId), shared 3 free after)",
+            "(.ok Term.false, shared 3 free after)"
+          )
+        ] do
+      refute broken == correct
+      File.write!(property, broken)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Project.build!(project, options[:proof_modules])
+        end
+
+      assert error.message =~ "Record/RollbackProperties.lean:"
+      File.write!(property, correct)
+    end
 
     source = Path.join(workspace, "protocol/src/lib.rs")
     rust = File.read!(source)
