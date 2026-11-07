@@ -10,7 +10,7 @@ open NativeFile Record.Properties Record.ReadProperties Record.RecoveryPropertie
   Record.LockedProperties Record.LockedConcurrent Record.RepairCrashProperties
 open Record.RollbackProperties (postAcquire afterWrite worker_wait set_len_poll)
 
-private theorem blocked_prefix (pid peer token counter : Nat) (different : pid ≠ peer)
+theorem blocked_prefix (pid peer token counter : Nat) (different : pid ≠ peer)
     (before sought written : State) (value : U16) (position : U64) (amount : Usize)
     (final : Nat × List (Nat × String × Term)) (fresh : 2 ≤ counter)
     (valid0 : Valid before) (valid1 : Valid sought)
@@ -50,10 +50,10 @@ private theorem blocked_prefix (pid peer token counter : Nat) (different : pid �
     (outcome "write" true amount (zeroMask data)
       (outcome "set_len" true 0 (zeroMask data) (.cons (.atom "blocked") rest)))⟩
 
-private theorem short_stopped (pid peer token counter : Nat) (different : pid ≠ peer)
+theorem short_stopped (pid peer token counter : Nat) (different : pid ≠ peer)
     (written resized : State) (position : U64) (amount : Usize)
     (short : amount.val ≠ 4) (fresh : 2 ≤ counter) (valid0 : Valid written)
-    (valid1 : Valid resized) (ready : blocked written = false)
+    (valid1 : Admitted resized) (ready : blocked written = false)
     (truncate : setLenStep written position = some (.Ok (), resized))
     (blockedSync : blocked resized = true) :
     Result.ExclusiveBlocked pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
@@ -71,7 +71,7 @@ private theorem short_stopped (pid peer token counter : Nat) (different : pid �
     refine .blocked _ _ _ ?_ ?_
     · intro env owner count heap
       have found : lookup (⟨2⟩ : NativeFile) env = some resized := by
-        simp [lookup, count, heap, shared, decode_encode resized valid1]
+        simp [lookup, count, heap, shared, decode_admitted resized valid1]
         omega
       simp [pollSync, found, blockedSync]
     · intro env owner _ heap
@@ -110,7 +110,8 @@ private theorem interrupted_trace (pid peer token counter : Nat) (different : pi
       bounded (by simp [payload, layout, limit]) positionBound (action_outcome _ _ _ _ _) accepted
   · refine short_stopped pid peer token counter different afterWrite (stopped data amount rest) size amountValue
       (by simp only [amountValue, count, Usize.ofNatCore, UScalar.ofNatCore_val_eq]; omega)
-      fresh valid2 valid3 (by simp [afterWrite, written, resizeRest, blocked, outcome]) ?_
+      fresh valid2 ⟨valid3.1, Nat.le_trans valid3.2.1 valid3.1, valid3.2.2⟩
+      (by simp [afterWrite, written, resizeRest, blocked, outcome]) ?_
       (by simp [stopped, blocked])
     simp [setLenStep, size, U64.ofNatCore, afterWrite, written, afterSeek, sought, resizeRest,
       action_outcome, before, interruptInput, Record.RollbackProperties.truncate_append, stopped,

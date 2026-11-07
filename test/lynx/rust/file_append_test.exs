@@ -48,7 +48,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"LockedProperties", []},
       {"LockedConcurrent", []},
       {"RollbackProperties", []},
-      {"InterruptedProperties", []}
+      {"InterruptedProperties", []},
+      {"TornConcurrent", []}
     ]
 
     for {module, replacements} <- sources do
@@ -139,7 +140,10 @@ defmodule Lynx.Rust.FileAppendTest do
             "Record.RollbackProperties.rollback_failure_effects",
             "Record.InterruptedProperties.concurrent_rollback_stalls",
             "Record.InterruptedProperties.concurrent_crash_image",
-            "Record.InterruptedProperties.concurrent_crash_repair"
+            "Record.InterruptedProperties.concurrent_crash_repair",
+            "Record.TornConcurrent.torn_rollback_stalls",
+            "Record.TornConcurrent.torn_crash_repair",
+            "Record.TornConcurrent.persisted_tail_images"
           ]
     ]
 
@@ -268,6 +272,12 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.InterruptedProperties.concurrent_crash_repair")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.TornConcurrent.torn_crash_repair")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
@@ -279,6 +289,7 @@ defmodule Lynx.Rust.FileAppendTest do
           "Record/LockedConcurrent.lean",
           "Record/RollbackProperties.lean",
           "Record/InterruptedProperties.lean",
+          "Record/TornConcurrent.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -454,6 +465,37 @@ defmodule Lynx.Rust.FileAppendTest do
         end
 
       assert error.message =~ "Record/InterruptedProperties.lean:"
+      File.write!(property, correct)
+    end
+
+    property = Path.join(project, "Record/TornConcurrent.lean")
+    correct = File.read!(property)
+
+    for broken <- [
+          correct
+          |> String.replace(
+            "some (⟨crop (encoded first) 2, 3⟩ : Image)",
+            "some (⟨ByteArray.empty, 3⟩ : Image)"
+          )
+          |> String.replace(
+            "some (⟨crop (encoded second) 2, 3⟩ : Image)",
+            "some (⟨ByteArray.empty, 3⟩ : Image)"
+          ),
+          String.replace(
+            correct,
+            "some (alloc.vec.Vec.from values (by scalar_tac))",
+            "some (alloc.vec.Vec.from [] (by scalar_tac))"
+          )
+        ] do
+      refute broken == correct
+      File.write!(property, broken)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Project.build!(project, options[:proof_modules])
+        end
+
+      assert error.message =~ "Record/TornConcurrent.lean:"
       File.write!(property, correct)
     end
 
