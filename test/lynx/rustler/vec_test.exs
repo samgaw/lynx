@@ -254,7 +254,7 @@ defmodule Lynx.Rustler.VecTest do
     File.write!(path, Macro.to_string(ast))
 
     assert {:ok, [^native], _} =
-             Kernel.ParallelCompiler.compile_to_path([path], tmp, return_diagnostics: true)
+             Lynx.Rustler.NifFixture.compile!(path, tmp, native)
   end
 
   defp laws(native, suffix) do

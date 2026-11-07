@@ -209,7 +209,7 @@ defmodule Lynx.Rustler.RuntimeTest do
     """)
 
     assert {:ok, [LynxEffectsFixture.Native], _} =
-             Kernel.ParallelCompiler.compile_to_path([path], tmp, return_diagnostics: true)
+             Lynx.Rustler.NifFixture.compile!(path, tmp, LynxEffectsFixture.Native)
   end
 
   defp laws do

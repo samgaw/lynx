@@ -275,6 +275,6 @@ defmodule Lynx.Rustler.FutureResourceTest do
     """)
 
     assert {:ok, [LynxEffectsFixture.Native], _} =
-             Kernel.ParallelCompiler.compile_to_path([source], tmp, return_diagnostics: true)
+             Lynx.Rustler.NifFixture.compile!(source, tmp, LynxEffectsFixture.Native)
   end
 end
