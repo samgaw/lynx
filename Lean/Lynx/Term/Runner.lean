@@ -268,6 +268,23 @@ inductive SharedSteps (pid : PID) : Result α →
       (rest : SharedSteps pid (next reply) after value final) :
       SharedSteps pid (.wait poll next) before value final
 
+/-- Execute a finite ready trace in its owning context, retaining every
+non-shared environment field. This does not schedule another process. -/
+theorem SharedSteps.apply {pid : PID} {computation : Result α} {value : α}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps pid computation before value after) (env : Environment)
+    (owner : env.currentPid = pid) (counter : env.refCounter = before.1)
+    (heap : env.nativeHeap = before.2) :
+    computation env = (.ok value, {env with refCounter := after.1, nativeHeap := after.2}) := by
+  induction trace generalizing env with
+  | done value shared =>
+      simp only [Result.ok_apply]
+      congr 1
+      simp only [← counter, ← heap]
+  | wait poll next reply before middle final value ready rest ih =>
+      rw [wait_ready_apply poll next env _ reply (ready env owner counter heap)]
+      simpa only using ih {env with refCounter := middle.1, nativeHeap := middle.2} owner rfl rfl
+
 private def traceEnv (pid : PID) (saved : List (PID × ProcessState))
     (shared : Nat × List (Nat × String × Term)) : Environment :=
   { currentPid := pid, pidCounter := 2, processes := saved,
