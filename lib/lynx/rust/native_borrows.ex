@@ -246,10 +246,41 @@ defmodule Lynx.Rust.NativeBorrows do
     end
   end
 
-  defp block?(%{"statements" => statements}, functions, models, seen),
-    do: Enum.all?(statements, &statement?(&1["kind"], functions, models, seen))
+  defp block?(block, functions, models, seen),
+    do: block_flow(block, functions, models, seen) != :unsafe
 
-  defp block?(_, _, _, _), do: false
+  defp block_flow(%{"statements" => statements}, functions, models, seen),
+    do: statements_flow(statements, functions, models, seen)
+
+  defp block_flow(_, _, _, _), do: :unsafe
+  defp statements_flow([], _, _, _), do: :continue
+  defp statements_flow([%{"kind" => "Return"} | _], _, _, _), do: :return
+
+  # Structured branches can return from the function. Charon may retain an
+  # unreachable marker after an exhaustive returning match; never inspect it
+  # as a reachable operation or infer termination from an empty branch list.
+  defp statements_flow(
+         [%{"kind" => %{"Switch" => %{"branches" => branches}}} | rest],
+         functions,
+         models,
+         seen
+       )
+       when is_list(branches) and branches != [] do
+    flows = Enum.map(branches, &block_flow(&1, functions, models, seen))
+
+    cond do
+      :unsafe in flows -> :unsafe
+      Enum.all?(flows, &(&1 == :return)) -> :return
+      true -> statements_flow(rest, functions, models, seen)
+    end
+  end
+
+  defp statements_flow([%{"kind" => kind} | rest], functions, models, seen) do
+    if statement?(kind, functions, models, seen),
+      do: statements_flow(rest, functions, models, seen),
+      else: :unsafe
+  end
+
   defp statement?("Return", _, _, _), do: true
   defp statement?(%{"StorageLive" => _}, _, _, _), do: true
   defp statement?(%{"StorageDead" => _}, _, _, _), do: true
@@ -263,9 +294,6 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp statement?(%{"Assign" => [_, value]}, _, _, _),
     do: Enum.any?(~w(Use Ref Aggregate Discriminant Len), &Map.has_key?(value, &1))
-
-  defp statement?(%{"Switch" => %{"branches" => branches}}, functions, models, seen),
-    do: Enum.all?(branches, &block?(&1, functions, models, seen))
 
   defp statement?(%{"Call" => %{"call" => call}}, functions, models, seen) do
     case get_in(call, ["func", "Regular", "kind"]) do

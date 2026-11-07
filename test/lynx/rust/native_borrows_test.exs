@@ -83,6 +83,33 @@ defmodule Lynx.Rust.NativeBorrowsTest do
     end
   end
 
+  test "ignores only unreachable tails after returns on every structured branch" do
+    returned = %{"statements" => [%{"kind" => "Return"}]}
+    fallthrough = %{"statements" => [%{"kind" => %{"StorageDead" => 0}}]}
+    unsafe = %{"kind" => "UndefinedBehavior"}
+    branch = fn blocks -> %{"kind" => %{"Switch" => %{"branches" => blocks}}} end
+
+    for {statements, expected} <- [
+          {[%{"kind" => "Return"}, unsafe], true},
+          {[branch.([returned, returned]), unsafe], true},
+          {[branch.([returned, %{"statements" => [branch.([returned, returned])]}]), unsafe],
+           true},
+          {[branch.([returned, fallthrough]), unsafe], false},
+          {[branch.([]), unsafe], false},
+          {[unsafe, %{"kind" => "Return"}], false},
+          {[%{"kind" => %{"Panic" => %{}}}, %{"kind" => "Return"}], false},
+          {[branch.([returned, %{"statements" => [unsafe, %{"kind" => "Return"}]}]), unsafe],
+           false}
+        ] do
+      function = %{
+        "def_id" => 1,
+        "body" => %{"Structured" => %{"body" => %{"statements" => statements}}}
+      }
+
+      assert MapSet.member?(NativeBorrows.nonpanicking_calls([function], %{}), 1) == expected
+    end
+  end
+
   test "retains other owners only across a nonpanicking consuming implementation" do
     args = fn types ->
       %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
