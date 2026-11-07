@@ -34,6 +34,20 @@ namespace NativeM
 
 @[expose] def lift {α : Type} (value : α) : NativeM α := Result.ok value
 
+/-- A successful standard `Result::expect` transfers the actual Ok payload.
+The error path cannot establish a Rust outcome: Debug formatting, error
+destruction and unwind require separate models before that path is supported. -/
+@[expose] def expectOk {T E : Type} (value : core.result.Result T E) (_message : Str) : NativeM T :=
+  match value with
+  | .Ok value => .ok value
+  | .Err _ => .error .exhausted
+
+@[simp] theorem expectOk_ok {T E : Type} (value : T) (message : Str) :
+    expectOk (.Ok value : core.result.Result T E) message = .ok value := rfl
+
+@[simp] theorem expectOk_error {T E : Type} (error : E) (message : Str) :
+    expectOk (.Err error : core.result.Result T E) message = .error .exhausted := rfl
+
 @[expose] def massert (condition : Prop) [Decidable condition] : NativeM Unit :=
   if condition then Result.ok () else fail .panic
 
@@ -1845,6 +1859,11 @@ instance : NativeCodec NativeIoError where
   decode_encode error := by cases error; rfl
 
 namespace NativeIoError
+
+/-- Elaboration support for an unused standard Debug dictionary. The Rust audit
+rejects every actual call to this method; no formatting outcome is established. -/
+@[expose] def debugUnavailable (_ : NativeIoError) (_ : core.fmt.Formatter) :
+    RustM (core.result.Result Unit core.fmt.Error × core.fmt.Formatter) := .fail .undef
 
 /-- Host admission asserts that this error contains no user destructor callback.
 Native payload reclamation and allocator behavior remain trusted boundaries. -/

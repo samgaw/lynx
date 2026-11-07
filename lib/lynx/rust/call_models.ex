@@ -12,12 +12,14 @@ defmodule Lynx.Rust.CallModels do
         model =
           if(execution == :runtime,
             do:
-              if(:native_wakers in enabled,
-                do: Lynx.Rust.FutureModels.resolve(function, translated, refs)
-              ) ||
+              Lynx.Rust.ResultModels.resolve_native_expect(function, translated, refs) ||
+                if(:native_wakers in enabled,
+                  do: Lynx.Rust.FutureModels.resolve(function, translated, refs)
+                ) ||
                 if(:native_files in enabled,
                   do:
-                    Lynx.Rust.FileModels.resolve(function, translated, refs) ||
+                    Lynx.Rust.ResultModels.resolve_unused_io_debug(function, translated, refs) ||
+                      Lynx.Rust.FileModels.resolve(function, translated, refs) ||
                       Lynx.Rust.FileOpenModels.resolve(function, translated, refs) ||
                       Lynx.Rust.FileDrops.resolve(function, translated, refs)
                 ) ||

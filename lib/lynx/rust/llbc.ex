@@ -123,7 +123,11 @@ defmodule Lynx.Rust.LLBC do
       |> Map.merge(cache_models)
 
     direct_calls = Enum.flat_map(functions, &calls(&1["body"]))
-    modelled = Map.take(available_models, direct_calls)
+
+    modelled =
+      available_models
+      |> Map.take(direct_calls)
+      |> Map.reject(fn {_, model} -> model[:elaboration_only] end)
 
     callback_dependencies =
       case Lynx.Rust.ResultModels.audit(functions, modelled, translated, refs) do
@@ -169,10 +173,9 @@ defmodule Lynx.Rust.LLBC do
       end)
 
     modelled =
-      Map.take(
-        available_models,
-        direct_calls ++ (trait_dependencies |> Map.values() |> List.flatten())
-      )
+      available_models
+      |> Map.take(direct_calls ++ (trait_dependencies |> Map.values() |> List.flatten()))
+      |> Map.reject(fn {_, model} -> model[:elaboration_only] end)
 
     case Lynx.Rust.ResourceAudit.audit(functions, modelled, translated, refs) do
       :ok -> :ok
