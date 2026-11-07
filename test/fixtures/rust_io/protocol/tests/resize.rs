@@ -114,3 +114,47 @@ fn repair_stops_at_an_invalid_record_before_later_valid_records() -> io::Result<
     assert_eq!(io_protocol::recover_log(&mut file, 10)?, [7, 9, 42]);
     Ok(())
 }
+
+#[test]
+fn locked_appends_serialize_shared_file_effects_and_release_after_errors() -> io::Result<()> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_nanos();
+    let path = Scratch(
+        std::env::temp_dir().join(format!("lynx-locked-file-{}-{nonce}", std::process::id())),
+    );
+    let file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&path.0)?;
+    let mutex = std::sync::Mutex::new(file);
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| -> io::Result<()> {
+            for value in [1, 3] {
+                assert!(io_protocol::locked_append(&mutex, value)?);
+            }
+            Ok(())
+        });
+        let second = scope.spawn(|| -> io::Result<()> {
+            for value in [2, 4] {
+                assert!(io_protocol::locked_append(&mutex, value)?);
+            }
+            Ok(())
+        });
+        first.join().expect("first file writer must not panic")?;
+        second.join().expect("second file writer must not panic")?;
+        Ok::<(), io::Error>(())
+    })?;
+    let mut guard = mutex.lock().expect("file mutex must remain unpoisoned");
+    let mut values = io_protocol::recover_log(&mut guard, 5)?;
+    values.sort_unstable();
+    assert_eq!(values, [1, 2, 3, 4]);
+    assert_eq!(guard.metadata()?.len(), 16);
+    drop(guard);
+    let readonly = std::sync::Mutex::new(OpenOptions::new().read(true).open(&path.0)?);
+    assert!(io_protocol::locked_append(&readonly, 5).is_err());
+    assert!(readonly.try_lock().is_ok());
+    Ok(())
+}
