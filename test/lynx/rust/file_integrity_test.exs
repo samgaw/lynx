@@ -37,7 +37,8 @@ defmodule Lynx.Rust.FileIntegrityTest do
          {"Recovery.Extraction", "Record.Extraction"},
          {"Recovery.RecoveryProperties", "Record.RecoveryProperties"}
        ]},
-      {"IntegrityProperties", []}
+      {"IntegrityProperties", []},
+      {"CrashProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -62,6 +63,7 @@ defmodule Lynx.Rust.FileIntegrityTest do
       roots: [
         "io_protocol::recover_record",
         "io_protocol::write_record",
+        "io_protocol::write_then_sync",
         "io_protocol::recover_word"
       ],
       execution: :runtime,
@@ -75,7 +77,11 @@ defmodule Lynx.Rust.FileIntegrityTest do
         Enum.map(
           ~w(encode_spec decode_spec decode_layout write_record_ready torn_decode record_ready record_torn four_reads recover_four recover_torn_default),
           &("Record.IntegrityProperties." <> &1)
-        )
+        ) ++
+          Enum.map(
+            ~w(truncated_reads truncated_data recover_truncated recover_prefix recover_fresh crash_recovery write_record_success recover_encoded write_record_crash write_once_crash),
+            &("Record.CrashProperties." <> &1)
+          )
     ]
 
     result = Lynx.Rust.verify!(workspace, "io-protocol", options)
@@ -98,6 +104,12 @@ defmodule Lynx.Rust.FileIntegrityTest do
              result.verification.guarantees,
              &(&1.kind == :cross_crate_contract &&
                  &1.theorem == "Record.IntegrityProperties.recover_torn_default")
+           )
+
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.CrashProperties.write_once_crash")
            )
 
     assert [%{status: :ok, cached: true}] =
@@ -127,6 +139,19 @@ defmodule Lynx.Rust.FileIntegrityTest do
       File.write!(property, original)
     end
 
+    crash_property = Path.join(project, "Record/CrashProperties.lean")
+    crash_source = File.read!(crash_property)
+
+    for extra <- [
+          "private axiom crashTrust : False",
+          "private theorem unfinishedCrash : True := by sorry"
+        ] do
+      File.write!(crash_property, crash_source <> "\n" <> extra <> "\n")
+      Project.build!(project, options[:proof_modules])
+      assert [%{status: :error}] = Lynx.Commands.verify!(project, [file])
+      File.write!(crash_property, crash_source)
+    end
+
     source = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(source)
 
@@ -144,6 +169,30 @@ defmodule Lynx.Rust.FileIntegrityTest do
 
       assert error.message =~ "Record/IntegrityProperties.lean:"
       File.write!(source, rust)
+    end
+
+    protocol = Path.join(workspace, "protocol/src/lib.rs")
+    protocol_rust = File.read!(protocol)
+
+    for {broken, proof_module} <- [
+          {String.replace(protocol_rust, "Ok(None) => Ok(None)", "Ok(None) => Ok(Some(0))"),
+           "Record/CrashProperties.lean:"},
+          {String.replace(
+             protocol_rust,
+             "match write_then_sync(file, &encoded)",
+             "match io_core::write_once(file, &encoded)"
+           ), "Record/IntegrityProperties.lean:"}
+        ] do
+      refute broken == protocol_rust
+      File.write!(protocol, broken)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rust.verify!(workspace, "io-protocol", options)
+        end
+
+      assert error.message =~ proof_module
+      File.write!(protocol, protocol_rust)
     end
 
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
