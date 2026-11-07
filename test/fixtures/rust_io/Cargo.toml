@@ -1,3 +1,4 @@
 [workspace]
-members = ["core", "protocol"]
+members = ["core", "protocol", "native"]
+default-members = ["core", "protocol"]
 resolver = "2"
