@@ -5,7 +5,7 @@ defmodule Lynx.Rust.CallModels do
   # models, never proofs of foreign function implementations.
   def resolve(functions, translated, refs, enabled, execution \\ :pure) do
     for key <- enabled,
-        key not in [:rustler_binary_as_slice, :rustler_encoders, :native_wakers],
+        key not in [:rustler_binary_as_slice, :rustler_encoders, :native_wakers, :native_files],
         do: raise(ArgumentError, "unknown external Rust call model: #{inspect(key)}")
 
     for function <- functions,
@@ -15,6 +15,9 @@ defmodule Lynx.Rust.CallModels do
               if(:native_wakers in enabled,
                 do: Lynx.Rust.FutureModels.resolve(function, translated, refs)
               ) ||
+                if(:native_files in enabled,
+                  do: Lynx.Rust.FileModels.resolve(function, translated, refs)
+                ) ||
                 Lynx.Rust.MutexModels.resolve(function, translated, refs) ||
                 Lynx.Rust.ResourceModels.resolve(function, translated, refs) ||
                 Lynx.Rust.LockModels.resolve(function, translated, refs) ||

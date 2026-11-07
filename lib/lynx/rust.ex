@@ -41,6 +41,21 @@ defmodule Lynx.Rust do
   `Native.Extraction`. Also accepts `:tools` (or `LYNX_AENEAS_DIR`), `:build_dir`
   and `:cargo` options as in `Lynx.Rustler.prepare!/3`.
 
+  `files: :regular, execution: :runtime` admits checked standard `File::write`
+  and `File::sync_all` calls over registered borrowed regular-file capabilities.
+  The default `:reject` admits neither. The bounded model (1 MiB) distinguishes
+  visible bytes, persistent bytes, offsets, partial writes, blocking and I/O errors.
+  Explicit outcome scripts describe external choices; malformed choices exhaust
+  verification. A successful sync persists visible contents and length. Earlier
+  persistence may tear bytewise between old and visible images, without device
+  corruption. These filesystem/device guarantees and native descriptor
+  correspondence are external assumptions, reported with the verification result.
+  Error identities are opaque; payloads and error inspection are unsupported.
+  Only nonappend files with independent descriptions are supported: reads, opening,
+  closing, seeking, truncation, descriptor cloning, directory durability, concurrent
+  I/O, crash and recovery operations remain unsupported. This option verifies
+  first-party protocols against the explicit model, not the operating system.
+
   `:futures` defaults to `:reject`. Selecting `:immediate` extracts actual async
   constructors and compiler-generated poll bodies, including completed-state panic
   checks and first-party callees. It requires the pinned immediate-futures backend
@@ -242,6 +257,7 @@ defmodule Lynx.Rust do
       :execution,
       :unwind,
       :futures,
+      :files,
       :owned_drops
     ]
 
@@ -268,6 +284,7 @@ defmodule Lynx.Rust do
         execution: Keyword.get(opts, :execution, :pure),
         unwind: Keyword.get(opts, :unwind, :reject),
         futures: Keyword.get(opts, :futures, :reject),
+        files: Keyword.get(opts, :files, :reject),
         owned_drops: Keyword.get(opts, :owned_drops, false)
       )
 

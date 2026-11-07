@@ -1,0 +1,205 @@
+defmodule Lynx.Rust.FileModels do
+  @moduledoc false
+  alias Lynx.Rust.{CallModels, LLBC}
+  @file_path ~w(std fs File)
+  @error ~w(core io error Error)
+
+  def enabled!(:reject, _execution), do: []
+  def enabled!(:regular, :runtime), do: [:native_files]
+
+  def enabled!(:regular, _),
+    do: raise(ArgumentError, "regular-file models require runtime execution")
+
+  def enabled!(other, _),
+    do: raise(ArgumentError, "unsupported Rust file model: #{inspect(other)}")
+
+  def resolve(function, translated, refs) do
+    with %{
+           "body" => "Opaque",
+           "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+           "generics" => params
+         } <- function,
+         file when not is_nil(file) <- type(translated, @file_path),
+         error when not is_nil(error) <- type(translated, @error),
+         regions when is_list(regions) <- params["regions"],
+         true <- plain?(params, length(regions)) do
+      f = adt(file["def_id"])
+      e = adt(error["def_id"])
+      input = CallModels.expand(sig["inputs"], refs)
+      output = CallModels.expand(sig["output"], refs)
+
+      selected =
+        cond do
+          length(params["regions"]) == 2 and
+            input == [
+              reference(0, f, "Mut"),
+              reference(1, %{"Slice" => [scalar("U8"), nil]}, "Shared")
+            ] and
+            result?(output, scalar("Usize"), e, translated, refs) and
+              write?(function, f, translated, refs) ->
+            {"std::fs::{core::io::write::Write<std::fs::File>}::write", "write"}
+
+          length(params["regions"]) == 1 and input == [reference(0, f, "Shared")] and
+            result?(
+              output,
+              %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args([])}},
+              e,
+              translated,
+              refs
+            ) and
+              sync?(function, f, refs) ->
+            {"std::fs::{std::fs::File}::sync_all", "syncAll"}
+
+          true ->
+            nil
+        end
+
+      if selected do
+        {rust, lean} = selected
+
+        %{
+          rust_name: rust,
+          lean: "Lynx.NativeFile." <> lean,
+          builtin: false,
+          can_fail: true,
+          lift: true,
+          native_cutoff_only: true,
+          native_file_types: {file["def_id"], error["def_id"]},
+          label:
+            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes and bytewise old/new torn persistence; sync_all success persists visible contents and length; std, OS, filesystem/device, namespace and native descriptor correspondence unverified; read/open/close/seek/append modes and concurrent file access unsupported"
+        }
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  def type_models(calls, prefix) do
+    if Enum.any?(calls, fn {_, model} -> model[:native_file_types] != nil end) do
+      for {rust, lean} <- [{@file_path, "Lynx.NativeFile"}, {@error, "Lynx.NativeIoError"}] do
+        %{
+          rust: Enum.join(rust, "::"),
+          lean: lean,
+          import: (prefix |> String.split(".") |> hd()) <> ".NativeRuntime",
+          label:
+            "Registered regular-file capability or opaque I/O error identity; physical descriptors, error payloads and OS correspondence unverified"
+        }
+      end
+    else
+      []
+    end
+  end
+
+  defp type(translated, path) do
+    case Enum.filter(translated["type_decls"], &(&1 && &1["item_meta"]["name"] == name(path))) do
+      [%{"src" => "Normal", "kind" => "Opaque", "generics" => params} = type] ->
+        if plain?(params, 0), do: type
+
+      _ ->
+        nil
+    end
+  end
+
+  defp write?(
+         %{
+           "def_id" => id,
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["std", 0]},
+               %{"Ident" => ["fs", 0]},
+               %{"Impl" => %{"Trait" => impl}},
+               %{"Ident" => ["write", 0]}
+             ]
+           },
+           "src" => %{
+             "TraitImpl" => %{
+               "impl_ref" => %{"id" => impl},
+               "trait_ref" => %{"id" => trait},
+               "item_id" => 0,
+               "reuses_default" => false
+             }
+           }
+         },
+         file,
+         translated,
+         refs
+       ) do
+    with %{
+           "src" => "Normal",
+           "is_negative" => false,
+           "is_unsafe" => false,
+           "generics" => params,
+           "impl_trait" => %{"id" => ^trait, "generics" => generics},
+           "methods" => methods
+         } <- Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl)),
+         true <- plain?(params, 0),
+         true <- CallModels.expand(generics, refs) == args([file]),
+         %{"item_meta" => %{"name" => trait_name}} <-
+           Enum.find(translated["trait_decls"], &(&1 && &1["def_id"] == trait)) do
+      trait_name == name(~w(core io write Write)) and
+        Enum.any?(methods, fn
+          %{"kind" => %{"TraitMethod" => [^trait, 0]}, "skip_binder" => %{"id" => ^id}} -> true
+          _ -> false
+        end)
+    else
+      _ -> false
+    end
+  end
+
+  defp write?(_, _, _, _), do: false
+
+  defp sync?(
+         %{
+           "src" => "Normal",
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["std", 0]},
+               %{"Ident" => ["fs", 0]},
+               %{
+                 "Impl" => %{
+                   "Ty" => %{
+                     "kind" => "InherentImplBlock",
+                     "params" => params,
+                     "skip_binder" => parent
+                   }
+                 }
+               },
+               %{"Ident" => ["sync_all", 0]}
+             ]
+           }
+         },
+         file,
+         refs
+       ),
+       do: plain?(params, 0) and CallModels.expand(parent, refs) == file
+
+  defp sync?(_, _, _), do: false
+
+  defp result?(
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => generics}},
+         ok,
+         error,
+         translated,
+         refs
+       ),
+       do:
+         generics == args([ok, error]) and
+           LLBC.result_type?(id, %{translated: translated, references: refs})
+
+  defp result?(_, _, _, _, _), do: false
+
+  defp plain?(p, regions),
+    do:
+      p["types"] == [] and p["const_generics"] == [] and p["trait_clauses"] == [] and
+        p["trait_type_constraints"] == [] and p["outlives"] == [] and
+        is_list(p["regions"]) and length(p["regions"]) == regions
+
+  defp name(parts), do: Enum.map(parts, &%{"Ident" => [&1, 0]})
+
+  defp args(types),
+    do: %{"types" => types, "regions" => [], "const_generics" => [], "trait_refs" => []}
+
+  defp adt(id), do: %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args([])}}
+  defp scalar(type), do: %{"Scalar" => %{"Integer" => %{"Unsigned" => type}}}
+  defp reference(index, type, kind), do: %{"Ref" => [%{"Var" => %{"Free" => index}}, type, kind]}
+end
