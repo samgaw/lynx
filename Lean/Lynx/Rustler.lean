@@ -70,16 +70,7 @@ theorem executeNative_readyPrefix {α : Type} {computation residual : Result α}
     {before after : Environment} (trace : Result.ReadyPrefix computation before residual after)
     (encode : α → Term) :
     Result.ReadyPrefix (executeNative computation encode) before (executeNative residual encode) after := by
-  induction trace with
-  | refl => exact .refl _ _
-  | get next before residual after rest ih =>
-      change Result.ReadyPrefix (.get fun env => executeNative (next env) encode) _ _ _
-      exact .get _ _ _ _ ih
-  | set middle next before residual after rest ih =>
-      change Result.ReadyPrefix (.set middle (executeNative next encode)) _ _ _
-      exact .set _ _ _ _ _ ih
-  | wait poll next reply before middle residual after ready rest ih =>
-      rw [executeNative_wait]
-      exact .wait _ _ _ _ _ _ _ ready ih
+  unfold executeNative
+  exact (trace.bind _).handle _
 
 end Lynx.Rustler

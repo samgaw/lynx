@@ -319,6 +319,33 @@ theorem ReadyPrefix.bind {computation residual : Result α} {before after : Envi
       exact .wait poll (fun reply => continuation reply >>= next) reply before middle
         (residual >>= next) after ready ih
 
+/-- Exception handling retains the actual state transitions of a ready prefix.
+Verification exhaustion is still governed by `Result.handle` and is never caught. -/
+theorem ReadyPrefix.handle {computation residual : Result α} {before after : Environment}
+    (trace : ReadyPrefix computation before residual after) (handler : Exception → Result α) :
+    ReadyPrefix (Result.handle computation handler) before (Result.handle residual handler) after := by
+  induction trace with
+  | refl => exact .refl _ _
+  | get continuation before residual after rest ih =>
+      rw [handle_get]
+      exact .get _ _ _ _ ih
+  | set middle continuation before residual after rest ih =>
+      rw [handle_set]
+      exact .set _ _ _ _ _ ih
+  | wait poll continuation reply before middle residual after ready rest ih =>
+      change ReadyPrefix (.wait poll fun value => Result.handle (continuation value) handler) _ _ _
+      exact .wait _ _ _ _ _ _ _ ready ih
+
+/-- A protected computation's prefix composes through its real success and
+exception continuations, preserving the boundary of the protected computation. -/
+theorem ReadyPrefix.tryWith {computation residual : Result α} {before after : Environment}
+    (trace : ReadyPrefix computation before residual after) (next : α → Result β)
+    (handler : Exception → Result β) :
+    ReadyPrefix (Result.tryWith computation next handler) before
+      (Result.tryWith residual next handler) after := by
+  unfold Result.tryWith
+  exact ((trace.bind _).handle _).bind _
+
 /-- A finite sequence of ready polls in one native execution context. Polls
 change only the shared counter and heap; all process and scheduler fields are
 framed. This describes the existing wait nodes rather than combining their IO. -/
