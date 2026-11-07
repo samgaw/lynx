@@ -58,6 +58,16 @@ defmodule Lynx.Rust.MutexTest do
     result = Lynx.Rust.verify!(workspace, "effects-native", options)
     assert [%{status: :ok}] = result.reports
 
+    # Discovery retained a drop helper from pruned cleanup. Its validated mapping
+    # suppresses an unused axiom template, but it is not a proof dependency.
+    {drop_id, _} =
+      Enum.find(result.extraction.audit.available_external_calls, fn {_, model} ->
+        model.rust_name == "core::mem::drop"
+      end)
+
+    refute Map.has_key?(result.extraction.audit.external_calls, drop_id)
+    refute File.exists?(Path.join(project, "Runtime/Mutex/FunsExternal_Template.lean"))
+
     assert [%{status: :ok, cached: true}] =
              Lynx.Rust.verify!(workspace, "effects-native", options).reports
 

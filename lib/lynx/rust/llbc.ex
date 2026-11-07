@@ -232,6 +232,7 @@ defmodule Lynx.Rust.LLBC do
       constants: constants,
       external_functions: external,
       external_calls: modelled,
+      available_external_calls: available_models,
       crate: translated["crate_name"],
       first_party: first_party,
       references: refs,
