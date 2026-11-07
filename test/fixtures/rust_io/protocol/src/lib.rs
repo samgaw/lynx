@@ -358,3 +358,18 @@ pub fn commit_word(source: &str, target: &str, value: u16) -> io::Result<bool> {
         }
     }
 }
+
+/// Report publication success after consuming any returned I/O error.
+///
+/// # Panics
+/// A custom I/O error payload's destructor may panic. The verification model
+/// admits only registered callback-free operating-system errors.
+pub fn commit_ack(value: u16) -> bool {
+    match commit_word("a", "b", value) {
+        Ok(complete) => complete,
+        Err(error) => {
+            io_core::discard_io_error(error);
+            false
+        }
+    }
+}

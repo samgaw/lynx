@@ -83,7 +83,8 @@ defmodule Lynx.Rust.NativeDrops do
           translated["type_decls"],
           &(&1 && &1["def_id"] == id &&
               (MutexModels.type?(&1) or LockModels.guard?(&1, refs) or ResourceModels.type?(&1) or
-                 Lynx.Rust.FileModels.file_type?(translated, id)))
+                 (Lynx.Rust.FileModels.file_type?(translated, id) or
+                    Lynx.Rust.FileModels.error_type?(translated, id))))
         )
 
       _ ->
@@ -158,9 +159,10 @@ defmodule Lynx.Rust.NativeDrops do
         end
 
       %{"Adt" => %{"id" => id}} ->
-        if Lynx.Rust.FileModels.file_type?(translated, id),
-          do: Lynx.Rust.FileDrops.site(drop, translated, refs),
-          else: nil
+        if Lynx.Rust.FileModels.file_type?(translated, id) or
+             Lynx.Rust.FileModels.error_type?(translated, id),
+           do: Lynx.Rust.FileDrops.site(drop, translated, refs),
+           else: nil
 
       _ ->
         nil

@@ -4,7 +4,11 @@ defmodule Lynx.Rust.FileDrops do
 
   def resolve(function, t, refs) do
     with true <- NativeDrops.consuming_function?(function, t, refs),
-         %{"def_id" => id, "needs_drop" => true} <- FileModels.declaration(t) do
+         file = FileModels.declaration(t),
+         error = FileModels.error_declaration(t),
+         error =
+           if(error && error_cleanup?(t, refs, function["def_id"], error["def_id"]), do: error),
+         true <- dropful?(file) or dropful?(error) do
       base =
         NativeDrops.resolve(function, t, refs) ||
           %{
@@ -24,10 +28,12 @@ defmodule Lynx.Rust.FileDrops do
 
       Map.merge(base, %{
         native_file_drop: true,
-        native_file_types: {id, nil},
+        native_io_error_drop: dropful?(error),
+        native_file_types:
+          {if(dropful?(file), do: file["def_id"]), if(dropful?(error), do: error["def_id"])},
         label:
           Map.get(base, :label, "") <>
-            " Standard File destruction model: consuming a registered file retires its Rust capability while retaining visible/durable disk state; ignored native close errors do not restore ownership or acknowledge durability; admitted close persistence is explicit; physical descriptor reclamation, debug-validity checks, std, allocation, OS and FFI correspondence unverified; owned Mutex<File> cleanup requires the validated standard mutex destructor and owned_drops; live-file panic cleanup unsupported"
+            " Standard File destruction model: consuming a registered file retires its Rust capability while retaining visible/durable disk state; ignored native close errors do not restore ownership or acknowledge durability; admitted close persistence is explicit; physical descriptor reclamation, debug-validity checks, std, allocation, OS and FFI correspondence unverified; owned Mutex<File> cleanup requires the validated standard mutex destructor and owned_drops; live-file panic cleanup unsupported; consuming an admitted OS I/O error requires a unique live rust:os-io-error capability, consumes that capability and assumes nonpanicking callback-free std/allocator cleanup; physical error payload reclamation unverified; custom I/O error payload destruction unsupported"
       })
     else
       _ -> nil
@@ -43,7 +49,7 @@ defmodule Lynx.Rust.FileDrops do
          } <- args,
          %{"Adt" => %{"id" => file, "builtin" => nil, "generics" => actual}} = self <-
            CallModels.expand(annotation, refs),
-         true <- actual == ResourceModels.args([]) and FileModels.file_type?(t, file),
+         true <- actual == ResourceModels.args([]) and native_type?(t, file),
          %{
            "kind" => %{"TraitImpl" => %{"id" => impl, "generics" => impl_args}},
            "trait_decl_ref" => decl
@@ -66,7 +72,7 @@ defmodule Lynx.Rust.FileDrops do
          } <- drop,
          %{"Adt" => %{"id" => file, "builtin" => nil, "generics" => actual}} <-
            CallModels.expand(annotation, refs),
-         true <- actual == ResourceModels.args([]) and FileModels.file_type?(t, file),
+         true <- actual == ResourceModels.args([]) and native_type?(t, file),
          true <-
            CallModels.expand(args, refs) ==
              Map.put(ResourceModels.args([]), "regions", [%{"Body" => body_region(args)}]),
@@ -85,7 +91,7 @@ defmodule Lynx.Rust.FileDrops do
       {:ok,
        %{
          function: fid,
-         native_kind: :file,
+         native_kind: if(FileModels.error_type?(t, file), do: :io_error, else: :file),
          impl: source["impl_ref"]["id"],
          trait: source["trait_ref"]["id"],
          payload: annotation,
@@ -93,7 +99,7 @@ defmodule Lynx.Rust.FileDrops do
          impl_arguments: ResourceModels.args([])
        }}
     else
-      _ -> {:error, "unsupported File destructor or inconsistent compiler close identity"}
+      _ -> {:error, "unsupported file or I/O error destructor or inconsistent compiler identity"}
     end
   end
 
@@ -109,10 +115,10 @@ defmodule Lynx.Rust.FileDrops do
            "implied_trait_refs" => [],
            "methods" => [method]
          } <- impl,
-         true <- FileModels.file_type?(t, file),
-         %{"needs_drop" => true} <- FileModels.declaration(t),
+         true <- native_type?(t, file),
+         %{"needs_drop" => true} = declaration <- native_declaration(t, file),
          true <- plain?(impl["generics"], 0),
-         name = path(~w(std fs File)) ++ [%{"Impl" => %{"Trait" => impl["def_id"]}}],
+         name = declaration["item_meta"]["name"] ++ [%{"Impl" => %{"Trait" => impl["def_id"]}}],
          true <- impl["item_meta"]["name"] == name,
          true <-
            CallModels.expand(impl["impl_trait"], refs) == %{
@@ -149,6 +155,65 @@ defmodule Lynx.Rust.FileDrops do
     end
   end
 
+  # core::mem::drop is generic. Its presence for File/Mutex does not admit
+  # consuming every other opaque type mentioned by an unrelated signature.
+  defp error_cleanup?(t, refs, function, type) do
+    Enum.any?(t["fun_decls"], fn f ->
+      f && error_cleanup_site?(f["body"], refs, function, type)
+    end)
+  end
+
+  defp error_cleanup_site?(
+         %{"Regular" => %{"kind" => %{"Fun" => function}, "generics" => args}} = node,
+         refs,
+         function,
+         type
+       ) do
+    case CallModels.expand(args["types"], refs) do
+      [%{"Adt" => %{"id" => ^type, "builtin" => nil, "generics" => actual}}] ->
+        actual == ResourceModels.args([])
+
+      _ ->
+        Enum.any?(Map.values(node), &error_cleanup_site?(&1, refs, function, type))
+    end
+  end
+
+  defp error_cleanup_site?(
+         %{"Drop" => %{"place" => %{"ty" => annotation}}} = node,
+         refs,
+         function,
+         type
+       ) do
+    case CallModels.expand(annotation, refs) do
+      %{"Adt" => %{"id" => ^type, "builtin" => nil, "generics" => actual}} ->
+        actual == ResourceModels.args([])
+
+      _ ->
+        Enum.any?(Map.values(node), &error_cleanup_site?(&1, refs, function, type))
+    end
+  end
+
+  defp error_cleanup_site?(map, refs, function, type) when is_map(map),
+    do: Enum.any?(Map.values(map), &error_cleanup_site?(&1, refs, function, type))
+
+  defp error_cleanup_site?(list, refs, function, type) when is_list(list),
+    do: Enum.any?(list, &error_cleanup_site?(&1, refs, function, type))
+
+  defp error_cleanup_site?(_, _, _, _), do: false
+
+  defp dropful?(%{"needs_drop" => true}), do: true
+  defp dropful?(_), do: false
+
+  defp native_type?(t, id),
+    do: FileModels.file_type?(t, id) or FileModels.error_type?(t, id)
+
+  defp native_declaration(t, id) do
+    Enum.find(
+      [FileModels.declaration(t), FileModels.error_declaration(t)],
+      &(&1 && &1["def_id"] == id)
+    )
+  end
+
   defp plain?(p, regions),
     do:
       is_map(p) and p["types"] == [] and p["const_generics"] == [] and
@@ -160,6 +225,5 @@ defmodule Lynx.Rust.FileDrops do
 
   defp body_region(%{"regions" => [%{"Body" => region}]}), do: region
   defp body_region(_), do: nil
-  defp path(parts), do: Enum.map(parts, &%{"Ident" => [&1, 0]})
   defp find(items, id), do: Enum.find(items, &(&1 && &1["def_id"] == id))
 end

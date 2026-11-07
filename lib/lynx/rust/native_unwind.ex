@@ -56,7 +56,7 @@ defmodule Lynx.Rust.NativeUnwind do
     {put_in(document, ["translated", "fun_decls"], functions), Enum.reverse(records)}
   end
 
-  # The closed mutex/normal-guard/File destruction models update the cell or
+  # The closed mutex/normal-guard/File and admitted OS-error destruction models update the cell or
   # exhaust verification; they cannot raise a Rust panic. Compiler cleanup behind
   # that call is unreachable in this model. Validate every concrete dictionary
   # before omitting its unwind-only block, including calls introduced by lowering.

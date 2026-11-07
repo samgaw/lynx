@@ -98,9 +98,14 @@ defmodule Lynx.Rustler do
     * `:files` — `:reject` by default. `:regular` with runtime execution forwards
       the bounded regular-file model to Rust extraction. With `owned_drops: true`,
       structural resource cleanup may close directly owned File fields through
-      their checked compiler destructors. OS/FFI correspondence remains explicit;
-      opening, descriptor cloning, nested Mutex<File> destruction and live-file
-      panic cleanup remain unsupported.
+      their checked compiler destructors, including supported Mutex<File> cleanup.
+      Checked opening, exclusive creation, rename and synchronization operations
+      retain the same explicit namespace/OS/device model as standalone Rust proofs.
+      Consuming an I/O error additionally requires an admitted callback-free OS-error
+      capability; unknown or custom payload destructors exhaust verification.
+      Native payload reclamation, std/allocator cleanup and OS/FFI correspondence
+      remain explicit boundaries. Descriptor cloning and live-file panic cleanup
+      remain unsupported.
     * `:futures` — forwarded to `Lynx.Rust`; defaults to `:reject`. Runtime
       modes allow ordinary synchronous NIFs to construct and explicitly poll
       supported first-party futures. Standard `Waker::noop` and

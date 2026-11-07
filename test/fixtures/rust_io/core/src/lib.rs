@@ -91,3 +91,22 @@ pub fn create_new_file(path: &str) -> io::Result<File> {
 pub fn rename_file(from: &str, to: &str) -> io::Result<()> {
     std::fs::rename(from, to)
 }
+
+/// Consume an I/O error after a caller has handled its failure.
+///
+/// Verification admits only registered callback-free operating-system errors.
+/// Application-created custom error payloads may execute arbitrary destruction.
+///
+/// # Panics
+/// A custom error payload's destructor may panic.
+pub fn discard_io_error(error: io::Error) {
+    drop(error);
+}
+
+/// Consume an I/O error through the compiler-generated scope cleanup.
+///
+/// Verification has the same admission requirements as [`discard_io_error`].
+///
+/// # Panics
+/// A custom error payload's destructor may panic.
+pub fn discard_io_error_implicit(_error: io::Error) {}
