@@ -45,7 +45,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"ResizeProperties", []},
       {"RepairCrashProperties", []},
       {"MalformedProperties", []},
-      {"LockedProperties", []}
+      {"LockedProperties", []},
+      {"LockedConcurrent", []}
     ]
 
     for {module, replacements} <- sources do
@@ -121,7 +122,7 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(critical_contract append_contract locked_ready locked_success critical_error_steps contention_waits),
             &("Record.LockedProperties." <> &1)
-          )
+          ) ++ ["Record.LockedConcurrent.appends_interleave"]
     ]
 
     result = Lynx.Rust.verify!(workspace, "io-protocol", options)
@@ -219,6 +220,12 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.LockedProperties.locked_success")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.LockedConcurrent.appends_interleave")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
@@ -227,6 +234,7 @@ defmodule Lynx.Rust.FileAppendTest do
           "Record/RepairCrashProperties.lean",
           "Record/MalformedProperties.lean",
           "Record/LockedProperties.lean",
+          "Record/LockedConcurrent.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -285,6 +293,28 @@ defmodule Lynx.Rust.FileAppendTest do
       end
 
     assert error.message =~ "Record/RepairCrashProperties.lean:"
+    File.write!(property, correct)
+
+    property = Path.join(project, "Record/LockedConcurrent.lean")
+    correct = File.read!(property)
+
+    lost =
+      String.replace(
+        correct,
+        "data.data.toList ++ (encoded first).data.toList ++ (encoded second).data.toList",
+        "data.data.toList ++ (encoded second).data.toList",
+        global: false
+      )
+
+    refute lost == correct
+    File.write!(property, lost)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Project.build!(project, options[:proof_modules])
+      end
+
+    assert error.message =~ "Record/LockedConcurrent.lean:"
     File.write!(property, correct)
 
     source = Path.join(workspace, "protocol/src/lib.rs")
