@@ -102,6 +102,15 @@ defmodule Lynx.Rust.FileModels do
 
   def declaration(translated), do: type(translated, @file_path)
 
+  def error_declaration(translated), do: type(translated, @error)
+
+  def error_type?(translated, id) do
+    case error_declaration(translated) do
+      %{"def_id" => ^id} -> true
+      _ -> false
+    end
+  end
+
   def file_type?(translated, id) do
     case type(translated, @file_path) do
       %{"def_id" => ^id} -> true
@@ -225,7 +234,7 @@ defmodule Lynx.Rust.FileModels do
           lean: lean,
           import: (prefix |> String.split(".") |> hd()) <> ".NativeRuntime",
           label:
-            "Registered regular-file capability or opaque I/O error identity; physical descriptors, error payloads and OS correspondence unverified"
+            "Registered regular-file capability or opaque I/O error identity; optional error destruction requires a separate unique live callback-free OS-error capability; physical descriptors, error payload reclamation, std/allocator cleanup and OS correspondence unverified"
         }
       end
     else
