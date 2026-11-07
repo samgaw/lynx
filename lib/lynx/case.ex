@@ -490,7 +490,7 @@ defmodule Lynx.Case do
         postludes: Enum.reverse(Module.get_attribute(module, :lynx_postludes))
       ]
 
-      {name, group_laws, translation, Keyword.take(opts, [:options, :native, :lean_project, :externals])}
+      {name, group_laws, translation, Keyword.take(opts, [:options, :native, :lean_project, :externals, :initial_environment])}
     after
       Module.delete_attribute(module, :lynx_laws)
       Module.delete_attribute(module, :lynx_termination_suffixes)
