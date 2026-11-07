@@ -144,8 +144,17 @@ defmodule Lynx.Rust.Report do
         |> Map.values()
         |> Enum.map(fn model ->
           model
-          |> Map.take(~w(def_id rust_name lean_name lean_file can_fail source initializer_id))
-          |> Map.put("status", if(model["inlined"], do: :inlined, else: :extracted))
+          |> Map.take(
+            ~w(def_id rust_name lean_name lean_file can_fail source initializer_id implementation_verified)
+          )
+          |> Map.put(
+            "status",
+            cond do
+              model["modelled"] -> :modelled
+              model["inlined"] -> :inlined
+              true -> :extracted
+            end
+          )
         end)
         |> Enum.sort_by(& &1["rust_name"]),
       guarantees: verified ++ composed,
@@ -222,6 +231,7 @@ defmodule Lynx.Rust.Report do
             else: []
           ) ++
           Enum.map(Map.get(extraction, :external_types, []), & &1.label) ++
+          (constants |> Map.values() |> Enum.filter(& &1["modelled"]) |> Enum.map(& &1["label"])) ++
           Enum.map(Map.values(external), & &1.label) ++
           Enum.map(Lynx.Rust.DropModels.report(extraction.audit.drops), & &1.label) ++
           if(
