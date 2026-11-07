@@ -64,7 +64,14 @@ defmodule Lynx.Rust.MutexModelsTest do
   test "admits only the exact safe standard mutex constructor and nominal type" do
     {function, translated} = fixture()
 
-    assert %{can_fail: true, lift: true, native_mutex_type: 7} =
+    assert %{
+             can_fail: true,
+             lift: true,
+             native_mutex_type: 7,
+             native_constructor: true,
+             native_transfer: true,
+             native_cutoff_only: true
+           } =
              MutexModels.resolve(function, translated, %{})
 
     for invalid <- [

@@ -242,3 +242,17 @@ pub fn synchronize_then_close(file: File) -> io::Result<()> {
     drop(file);
     reply
 }
+
+/// Transfers the complete file owner to the first-party cleanup implementation.
+pub fn consume_file_mutex(mutex: std::sync::Mutex<File>) {
+    io_core::consume_file_mutex(mutex);
+}
+
+/// Scope exit destroys both the mutex and its owned file.
+pub fn implicit_file_mutex(_mutex: std::sync::Mutex<File>) {}
+
+/// Creates an owned mutex and transfers it across the crate boundary for cleanup.
+pub fn file_mutex_cycle(file: File) {
+    let mutex = std::sync::Mutex::new(file);
+    consume_file_mutex(mutex);
+}

@@ -115,7 +115,8 @@ defmodule Lynx.Rust.NativeDrops do
 
           type && MutexModels.type?(type) ->
             with true <-
-                   destructor_free?(payload, translated, refs) and args == arguments([payload]),
+                   (destructor_free?(payload, translated, refs) or
+                      file_payload?(payload, translated, refs)) and args == arguments([payload]),
                  "Precise" <- drop["kind"],
                  %{"kind" => %{"Fun" => fid}, "generics" => call_args} <- drop["fn_ptr"],
                  %{
@@ -149,7 +150,7 @@ defmodule Lynx.Rust.NativeDrops do
             else
               _ ->
                 {:error,
-                 "unsupported native drop payload or inconsistent compiler destructor; only scalars or compiler-certified destructor-free native structs are supported"}
+                 "unsupported native drop payload or inconsistent compiler destructor; only compiler-certified destructor-free payloads or explicitly admitted owned File payloads are supported"}
             end
 
           true ->
@@ -223,7 +224,10 @@ defmodule Lynx.Rust.NativeDrops do
                ),
              %{"types" => [payload], "regions" => [], "const_generics" => [], "trait_refs" => []} <-
                args,
-             true <- destructor_free?(payload, translated, refs),
+             true <-
+               destructor_free?(payload, translated, refs) or
+                 (translated[:native_file_drop] == true and
+                    file_payload?(payload, translated, refs)),
              %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <- dictionary,
              %{
                "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => impl_args}},
@@ -239,7 +243,7 @@ defmodule Lynx.Rust.NativeDrops do
         else
           _ ->
             raise ArgumentError,
-                  "native destruction requires an explicitly admitted File or an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload where consumed; custom payload destructors are unsupported"
+                  "native destruction requires an explicitly admitted File or an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload or explicitly admitted owned Mutex<File>; other custom payload destructors are unsupported"
         end
       end
     end
@@ -335,6 +339,20 @@ defmodule Lynx.Rust.NativeDrops do
 
   defp destruct?(id, translated, refs),
     do: Lynx.Rust.DropModels.destruct_trait?(id, translated, refs)
+
+  # The specialized owning model closes a canonical standard File payload.
+  # File/OS correspondence is explicit; arbitrary payload destructors are not inferred.
+  defp file_payload?(payload, translated, refs) do
+    with true <- get_in(translated, ["options", "owned_drops"]) == true,
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
+           CallModels.expand(payload, refs),
+         true <- args == arguments([]),
+         %{"def_id" => ^id, "needs_drop" => true} <- Lynx.Rust.FileModels.declaration(translated) do
+      true
+    else
+      _ -> false
+    end
+  end
 
   # Fields alone cannot establish the absence of a user Drop implementation.
   # Missing or unknown compiler evidence is deliberately not interpreted as false.
