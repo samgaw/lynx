@@ -78,7 +78,7 @@ defmodule Lynx.Rust.DropModels do
 
   # Charon preserves both the element and allocator parameters on Vec's
   # generated drop even though it removes the allocator from the Vec type.
-  # Erasure is restricted to bytes and Global: neither has an element/custom
+  # Erasure is restricted to primitive scalars and Global: neither has an element/custom
   # allocator destructor. Native deallocation remains an explicit heap model.
   defp site!(
          %{
@@ -98,12 +98,12 @@ defmodule Lynx.Rust.DropModels do
          _seen
        )
        when is_integer(region) do
-    u8 = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+    scalar = expand(element, ctx)
     t = %{"TypeVar" => %{"Free" => 0}}
     a = %{"TypeVar" => %{"Free" => 1}}
     vector_name = path(~w(alloc vec Vec))
 
-    with ^u8 <- expand(element, ctx),
+    with true <- primitive_scalar?(scalar),
          %{"Adt" => %{"id" => allocator_id, "builtin" => nil, "generics" => allocator_args}} <-
            expand(allocator, ctx),
          true <- Constants.empty_arguments?(allocator_args),
@@ -113,7 +113,7 @@ defmodule Lynx.Rust.DropModels do
            allocator_name == path(~w(alloc alloc Global)) and parameters?(allocator_params, 0, 0),
          %{"Adt" => %{"id" => vector_id, "builtin" => nil, "generics" => actual_args}} = self <-
            expand(annotation, ctx),
-         true <- actual_args == arguments([u8]),
+         true <- actual_args == arguments([scalar]),
          %{
            "item_meta" => %{"name" => ^vector_name},
            "generics" => vector_params,
@@ -185,14 +185,14 @@ defmodule Lynx.Rust.DropModels do
          id => %{
            definition_id: id,
            rust_name: render_name(function["item_meta"]["name"]),
-           type: "alloc::vec::Vec<u8>",
+           type: "alloc::vec::Vec<#{scalar_name(scalar)}>",
            self: self,
            first_party: false,
            status: :modelled,
            implementation_verified: false,
            dependencies: [],
            label:
-             "Logical heap Vec<u8>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
+             "Logical heap Vec<#{scalar_name(scalar)}>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
          }
        }}
     else
@@ -216,6 +216,21 @@ defmodule Lynx.Rust.DropModels do
       _ -> reject!("unsupported or inconsistent Rust drop site")
     end
   end
+
+  @doc false
+  def primitive_scalar?(%{"Scalar" => "Bool"}), do: true
+
+  def primitive_scalar?(%{"Scalar" => %{"Integer" => %{"Unsigned" => width}}}),
+    do: width in ~w(U8 U16 U32 U64 U128 Usize)
+
+  def primitive_scalar?(%{"Scalar" => %{"Integer" => %{"Signed" => width}}}),
+    do: width in ~w(I8 I16 I32 I64 I128 Isize)
+
+  def primitive_scalar?(_), do: false
+  defp scalar_name(%{"Scalar" => "Bool"}), do: "bool"
+
+  defp scalar_name(%{"Scalar" => %{"Integer" => integer}}),
+    do: integer |> Map.values() |> hd() |> String.downcase()
 
   defp vector_outlives?(outlives, t, a),
     do:
@@ -529,6 +544,10 @@ defmodule Lynx.Rust.DropModels do
 
   @doc false
   def destruct_trait?(id, translated, refs),
+    do: destruct_trait?(id, %{traits: declarations(translated["trait_decls"]), refs: refs})
+
+  @doc false
+  def standard_destruct_trait?(id, translated, refs),
     do: destruct_trait?(id, %{traits: declarations(translated["trait_decls"]), refs: refs})
 
   defp destruct_trait?(id, ctx) do

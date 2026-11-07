@@ -139,6 +139,13 @@ defmodule Lynx.Rust.Report do
       report_module: List.last(reports).module,
       execution: Map.get(extraction, :execution, :pure),
       implementations: implementations,
+      verification_bounds:
+        if(
+          Map.get(extraction, :execution, :pure) == :runtime and
+            Enum.any?(Map.values(models), &(&1["loop_helpers"] not in [nil, []])),
+          do: [%{kind: :native_loop, iterations: 262_145, exhausted: :verification_cutoff}],
+          else: []
+        ),
       constants:
         constants
         |> Map.values()

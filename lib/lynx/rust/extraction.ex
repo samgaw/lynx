@@ -240,6 +240,7 @@ defmodule Lynx.Rust.Extraction do
     audit = Map.put(audit, :external_types, models)
     audit = Lynx.Rust.BytesModels.scope(audit, module)
     audit = Lynx.Rust.FileModels.scope(audit, module)
+    audit = Lynx.Rust.CollectionModels.scope(audit, module)
     codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
@@ -354,11 +355,15 @@ defmodule Lynx.Rust.Extraction do
 
     Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)
     Lynx.Rust.BytesModels.install!(audit, translation, output, module)
-    file_modules = Lynx.Rust.FileModels.install!(audit, translation, output, module)
+
+    operation_modules =
+      Lynx.Rust.FileModels.install!(audit, translation, output, module) ++
+        Lynx.Rust.CollectionModels.install!(audit, translation, output, module)
+
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
 
     codec_hashes =
-      Enum.map([module <> ".Funs" | codec_modules ++ file_modules], fn name ->
+      Enum.map([module <> ".Funs" | codec_modules ++ operation_modules], fn name ->
         {name,
          Lynx.Rust.Fingerprint.file!(Path.join(output, String.replace(name, ".", "/") <> ".lean"))}
       end)
@@ -420,7 +425,7 @@ defmodule Lynx.Rust.Extraction do
       module: module,
       model_modules:
         runtime_modules ++
-          codec_modules ++ file_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
+          codec_modules ++ operation_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
     }
   end
 

@@ -23,7 +23,8 @@ defmodule Lynx.Rust.Runtime do
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, @marker <> @contents)
 
-    {"Lynx.NativeM", ["-lean-result-monad", "Lynx.NativeM", "-extra-includes", module], [module]}
+    {"Lynx.NativeM",
+     ["-lean-result-monad", "Lynx.NativeM", "-loops-no-rec", "-extra-includes", module], [module]}
   end
 
   def configuration!(other, _output, _prefix),

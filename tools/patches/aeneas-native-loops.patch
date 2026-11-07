@@ -1,0 +1,14 @@
+--- a/src/extract/Extract.ml
++++ b/src/extract/Extract.ml
+@@ -1020,7 +1020,10 @@
+           (* Open parentheses *)
+           if inside then F.pp_print_string fmt "(";
+           (* The loop operator *)
+-          F.pp_print_string fmt "loop";
++          F.pp_print_string fmt
++            (match (backend (), !Config.lean_result_monad) with
++            | Lean, Some namespace -> namespace ^ ".loop"
++            | _ -> "loop");
+           (* The arguments *)
+           List.iter
+             (fun ve ->
