@@ -65,7 +65,7 @@ theorem closed_capability (file : NativeFile) (state : State) :
     lookup file (closed file state) = none ∧
     pollClose file (closed file state) = some (.error .exhausted, closed file state) ∧
     pollSync file (closed file state) = some (.error .exhausted, closed file state) := by
-  simp [lookup, closed, typeName, closedTypeName, handleTypeName, pollClose, pollSync]
+  simp [lookup, closed, typeName, closedTypeName, handleTypeName, writableHandleTypeName, pollClose, pollSync]
 
 /-- Every admitted ordinary I/O operation rejects a retired capability. -/
 theorem closed_io (file : NativeFile) (state : State) (data : Slice U8)

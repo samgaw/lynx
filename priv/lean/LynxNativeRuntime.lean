@@ -2018,6 +2018,7 @@ The descriptor offset is unchanged. Durability still requires synchronization. -
 pre-admitted independent file remains an explicitly disjoint host capability. -/
 @[expose] def inodeTypeName : String := "rust:file-inode"
 @[expose] def handleTypeName : String := "rust:file-handle:read"
+@[expose] def writableHandleTypeName : String := "rust:file-handle:read-write"
 @[expose] def closedHandleTypeName : String := "rust:file-handle:closed"
 @[expose] def namespaceTypeName : String := "rust:file-namespace"
 
@@ -2064,7 +2065,7 @@ structure Handle where
     (env : Environment) : Environment :=
   {env with nativeHeap := env.nativeHeap.map fun cell =>
     if cell.1 == file.id then
-      (file.id, handleTypeName, encodeHandle {handle with position := state.position, script := state.script})
+      (file.id, cell.2.1, encodeHandle {handle with position := state.position, script := state.script})
     else if cell.1 == handle.inode then
       (handle.inode, inodeTypeName, encode {state with position := 0, script := .nil})
     else cell}
@@ -2087,43 +2088,133 @@ outside this closed namespace model and exhaust verification. -/
     else none
   | _ => none
 
-/-- The id-zero namespace contains a finite table of regular-file names and an
-explicit script of host open outcomes. Duplicate names are rejected. Host
-initialization, pathname/OS correspondence and permissions remain assumptions. -/
-@[expose] def namespaceState (env : Environment) : Option (List (ByteArray × Nat) × Term) := do
+/-- Names are bounded independently of file size. The synchronized checkpoint
+and pending snapshots are separate from the currently visible directory table. -/
+abbrev Names := List (ByteArray × Nat)
+
+structure NamespaceSnapshot where
+  names : Names
+  committed : Names
+  pending : List Names
+  script : Term
+
+@[expose] def encodeNames (names : Names) : Term :=
+  .tuple (names.map (fun (path,id) => .tuple #[.bitstring path 0, .reference id])).toArray
+
+@[expose] def namespaceTable : Term → Option Names
+  | .tuple entries => do
+    if entries.size > 1024 then none else do
+      let names ← entries.toList.mapM namespaceEntry
+      if (names.map (fun entry => entry.1.data)).eraseDups.length != names.length then none
+      else some names
+  | _ => none
+
+@[expose] def namespaceHistory : Term → Option (List Names)
+  | .nil => some []
+  | .cons head tail => do
+    let names ← namespaceTable head
+    let rest ← namespaceHistory tail
+    if rest.length ≥ 1024 then none else some (names :: rest)
+  | _ => none
+
+@[expose] def tablesEqual (left right : Names) : Bool :=
+  (left.map (fun entry => (entry.1.data,entry.2))) ==
+    (right.map (fun entry => (entry.1.data,entry.2)))
+
+@[expose] def encodeNamespace (state : NamespaceSnapshot) : Term :=
+  .tuple #[encodeNames state.names, encodeNames state.committed,
+    state.pending.foldr (fun names tail => .cons (encodeNames names) tail) .nil, state.script]
+
+/-- The committed table is the last synchronized checkpoint. Pending snapshots
+record unsynchronized namespace versions that may also reach disk; the checkpoint
+is not a claim that later versions remain physically volatile. Reads and opens
+do not establish a new synchronization checkpoint. Host admission and filesystem
+persistence correspondence remain external boundaries. -/
+@[expose] def namespaceSnapshot (env : Environment) : Option NamespaceSnapshot := do
   match env.nativeHeap.filter (fun cell => cell.1 == 0) with
   | [(_, tag, .tuple fields)] =>
     if tag == namespaceTypeName then
-      if size : fields.size = 2 then
-        let .tuple entries := fields[0]'(by omega) | none
-        let names ← entries.toList.mapM namespaceEntry
-        if (names.map (fun entry => entry.1.data)).eraseDups.length != names.length then none
-        else some (names, fields[1]'(by omega))
+      if size : fields.size = 4 then do
+        let names ← namespaceTable (fields[0]'(by omega))
+        let committed ← namespaceTable (fields[1]'(by omega))
+        let pending ← namespaceHistory (fields[2]'(by omega))
+        let latest := pending.getLast?.getD committed
+        if !tablesEqual latest names then none
+        else some ⟨names, committed, pending, fields[3]'(by omega)⟩
       else none
     else none
   | _ => none
 
+@[expose] def namespaceState (env : Environment) : Option (Names × Term) := do
+  let state ← namespaceSnapshot env
+  some (state.names,state.script)
+
+@[expose] def storeNamespace (state : NamespaceSnapshot) (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == 0 then (0, namespaceTypeName, encodeNamespace state) else cell}
+
 @[expose] def replaceNamespaceScript (script : Term) (env : Environment) : Environment :=
   {env with nativeHeap := env.nativeHeap.map fun cell =>
     if cell.1 == 0 then match cell.2.2 with
-      | .tuple fields => (0, namespaceTypeName, .tuple (fields.set! 1 script))
+      | .tuple fields => (0, namespaceTypeName, .tuple (fields.set! 3 script))
       | _ => cell
     else cell}
 
 /-- Each outcome names the actual requested path and gives an independent
 script for the new handle: (open, path, ok|error, error-identity, handle-script). -/
-@[expose] def openChoice (path : ByteArray) : Term → Option (Bool × Nat × Term × Term)
+@[expose] def pathChoice (expected : String) (path : ByteArray) : Term → Option (Bool × Nat × Term × Term)
   | .cons (.tuple fields) rest => do
     if size : fields.size = 5 then
       let .atom operation := fields[0]'(by omega) | none
       let .bitstring requested bits _ := fields[1]'(by omega) | none
       let .atom status := fields[2]'(by omega) | none
       let .integer error := fields[3]'(by omega) | none
-      if operation != "open" || bits != 0 || requested.data != path.data || error < 0 ||
+      if operation != expected || bits != 0 || requested.data != path.data || error < 0 ||
           (status != "ok" && status != "error") then none
       else some (status == "ok", error.toNat, fields[4]'(by omega), rest)
     else none
   | _ => none
+
+@[expose] def openChoice (path : ByteArray) : Term → Option (Bool × Nat × Term × Term) :=
+  pathChoice "open" path
+
+/-- Exclusive creation allocates a new inode and read/write handle. The name is
+visible but is only a pending namespace snapshot; successful creation is not a
+persistence guarantee. A reported success for an existing name is rejected. -/
+@[expose] def pollCreateNew (path : Str) (env : Environment) :
+    Option (Except Exception (core.result.Result NativeFile NativeIoError) × Environment) :=
+  let invalid := some (.error .exhausted, env)
+  let path := bytes path
+  if !supportedPath path then invalid else
+  match namespaceSnapshot env with
+  | none => invalid
+  | some state =>
+    if state.script matches .cons (.atom "blocked") _ then none else
+    match pathChoice "create_new" path state.script with
+    | none => invalid
+    | some (success, error, ioScript, rest) =>
+      if !success then some (.ok (.Err ⟨error⟩), replaceNamespaceScript rest env)
+      else if error != 0 || state.names.any (fun entry => entry.1.data == path.data) ||
+          state.names.length ≥ 1024 || state.pending.length ≥ 1024 then invalid
+      else
+        let node := env.refCounter + 1
+        let handle := node + 1
+        if env.nativeHeap.any (fun cell => cell.1 == node || cell.1 == handle) then invalid
+        else
+          let names := state.names ++ [(path,node)]
+          let changed := storeNamespace {state with
+            names := names
+            pending := state.pending ++ [names]
+            script := rest} env
+          some (.ok (.Ok ⟨handle⟩), {changed with
+            refCounter := handle
+            nativeHeap := (handle, writableHandleTypeName, encodeHandle ⟨node,0,ioScript⟩) ::
+              (node, inodeTypeName, encode ⟨ByteArray.empty,ByteArray.empty,0,.nil⟩) :: changed.nativeHeap})
+
+@[expose] def createNew (path : Str) : NativeM (core.result.Result NativeFile NativeIoError) :=
+  .wait (pollCreateNew path) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
 
 @[expose] def pollOpenReadOnly (path : Str) (env : Environment) :
     Option (Except Exception (core.result.Result NativeFile NativeIoError) × Environment) :=
@@ -2162,7 +2253,7 @@ script for the new handle: (open, path, ok|error, error-identity, handle-script)
   if file.id ≤ env.refCounter then
     match env.nativeHeap.filter (fun cell => cell.1 == file.id) with
     | [(_, tag, contents)] => if tag == typeName then decode contents
-      else if tag == handleTypeName then sharedLookup file handleTypeName env else none
+      else if tag == handleTypeName || tag == writableHandleTypeName then sharedLookup file tag env else none
     | _ => none
   else none
 
@@ -2172,7 +2263,7 @@ script for the new handle: (open, path, ok|error, error-identity, handle-script)
     if tag == typeName then
       {env with nativeHeap := env.nativeHeap.map fun cell =>
         if cell.1 == file.id then (file.id, typeName, encode state) else cell}
-    else if tag == handleTypeName then
+    else if tag == handleTypeName || tag == writableHandleTypeName then
       match decodeHandle contents with
       | some handle => sharedStore file handle state env
       | none => env
@@ -2296,7 +2387,7 @@ remain explicit trusted boundaries. -/
     if tag == typeName then
       {env with nativeHeap := env.nativeHeap.map fun cell =>
         if cell.1 == file.id then (file.id, closedTypeName, encode state) else cell}
-    else if tag == handleTypeName then
+    else if tag == handleTypeName || tag == writableHandleTypeName then
       match decodeHandle contents with
       | none => env
       | some handle =>

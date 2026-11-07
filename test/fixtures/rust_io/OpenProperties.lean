@@ -11,7 +11,7 @@ open NativeFile
   .cons (.tuple #[.atom "open", .bitstring nameBytes 0,
     .atom (if success then "ok" else "error"), .integer error, script]) rest
 @[expose] def namespaceCell (script : Term) : Nat × String × Term :=
-  (0, namespaceTypeName, .tuple #[.tuple #[.tuple #[.bitstring nameBytes 0, .reference 1]], script])
+  (0, namespaceTypeName, encodeNamespace ⟨[(nameBytes,1)], [(nameBytes,1)], [], script⟩)
 @[expose] def nodeCell (state : State) : Nat × String × Term :=
   (1, inodeTypeName, encode {state with position := 0, script := .nil})
 @[expose] def initial (state : State) (script : Term) : Environment :=
@@ -34,7 +34,8 @@ theorem core_open_next {α : Type} (state : State) (script rest : Term)
   have poll : pollOpenReadOnly path (initial state (choice true 0 script rest)) =
       some (.ok (.Ok ⟨2⟩), opened state script rest) := by
     simp [pollOpenReadOnly, path_bytes, valid_name, initial, namespaceCell, nodeCell,
-      namespaceState, namespaceEntry, List.eraseDups_cons, choice, openChoice, inode, decode, encode,
+      namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
+      encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice, inode, decode, encode,
       not_lt.mpr visible, not_lt.mpr durable, replaceNamespaceScript, opened,
       handleTypeName, namespaceTypeName, encodeHandle]
   simp only [io_core.open_readonly, monadLift_self,
@@ -58,7 +59,8 @@ theorem core_open_again_next {α : Type} (state : State) (firstScript secondScri
       (opened state firstScript (choice true 0 secondScript rest)) =
       some (.ok (.Ok ⟨3⟩), openedPair state firstScript secondScript rest) := by
     simp [pollOpenReadOnly, path_bytes, valid_name, opened, namespaceCell, nodeCell,
-      namespaceState, namespaceEntry, List.eraseDups_cons, choice, openChoice, inode, decode, encode,
+      namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
+      encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice, inode, decode, encode,
       not_lt.mpr visible, not_lt.mpr durable, replaceNamespaceScript, openedPair,
       handleTypeName, namespaceTypeName, inodeTypeName, encodeHandle]
   simp only [io_core.open_readonly, monadLift_self, openReadOnly, Result.wait_bind]
@@ -88,7 +90,8 @@ theorem core_open_error_next {α : Type} (state : State) (error : Nat) (rest : T
       some (.ok (.Err ⟨error⟩), initial state rest) := by
     have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
     simp [pollOpenReadOnly, path_bytes, valid_name, initial, namespaceCell, nodeCell,
-      namespaceState, namespaceEntry, List.eraseDups_cons, choice, openChoice,
+      namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
+      encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice,
       replaceNamespaceScript, namespaceTypeName, nonnegative]
   simp only [io_core.open_readonly, monadLift_self, openReadOnly, Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ poll]
@@ -154,7 +157,8 @@ theorem core_open_again_error_next {α : Type} (state : State) (firstScript : Te
       some (.ok (.Err ⟨error⟩), opened state firstScript rest) := by
     have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
     simp [pollOpenReadOnly, path_bytes, valid_name, opened, namespaceCell, nodeCell,
-      namespaceState, namespaceEntry, List.eraseDups_cons, choice, openChoice,
+      namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
+      encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice,
       replaceNamespaceScript, namespaceTypeName, handleTypeName, nonnegative]
   simp only [io_core.open_readonly, monadLift_self, openReadOnly, Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ poll]

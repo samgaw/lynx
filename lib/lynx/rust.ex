@@ -74,8 +74,16 @@ defmodule Lynx.Rust do
   namespace state and inconsistent outcomes exhaust verification. This verifies
   extracted opening/cleanup protocols against the model, not native pathname
   resolution or physical descriptor allocation.
+  `File::create_new<&str>` grants a fresh empty inode and read/write handle only
+  for an absent name. It preserves existing contents on admitted errors and rejects
+  a contradictory success outcome for an existing name. Namespace admission
+  separately encodes visible names, the last synchronized checkpoint and pending
+  snapshots, with at most 1024 names and 1024 pending snapshots. Creating the name
+  records a pending snapshot without advancing the checkpoint; pending snapshots
+  may also reach disk. Directory synchronization and recovery of these snapshots
+  remain unsupported.
   Physical close/descriptor reclamation, descriptor cloning, directory durability,
-  namespace mutation, unrestricted concurrent I/O and general crash injection
+  rename/unlink, unrestricted concurrent I/O and general crash injection
   remain unsupported. Compiler-checked resource payloads may own File and
   Mutex<File> fields with `owned_drops: true`; panic cleanup of live files remains
   rejected. This option verifies first-party protocols against the explicit model,

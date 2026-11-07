@@ -77,3 +77,10 @@ pub fn consume_file_mutex(mutex: std::sync::Mutex<File>) {
 pub fn open_readonly(path: &str) -> io::Result<File> {
     File::open(path)
 }
+
+/// Creates a fresh readable and writable file without replacing an existing name.
+/// # Errors
+/// Propagates the operating system's exclusive-creation error.
+pub fn create_new_file(path: &str) -> io::Result<File> {
+    File::create_new(path)
+}
