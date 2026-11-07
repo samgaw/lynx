@@ -61,5 +61,34 @@ theorem adapter_preserves_state_transition (env : Environment) :
       (Rustler.executeNative program (fun n => .integer n)) {env with refCounter := env.refCounter + 1} :=
   Rustler.executeNative_readyPrefix (state_transition env) _
 
+private def failing (exception : Exception) : Result Nat := .get fun env =>
+  .set {env with refCounter := env.refCounter + 1}
+    (.wait (advance 2) fun _ => .error exception)
+
+private theorem failure_prefix (exception : Exception) (env : Environment) :
+    Result.ReadyPrefix (failing exception) env (.error exception)
+      {env with refCounter := env.refCounter + 1 + 2} := by
+  exact .get _ _ _ _ (.set _ _ _ _ _ (.wait _ _ _ _ _ _ _ rfl (.refl _ _)))
+
+private def observe (_ : Exception) : Result Nat := .get fun env => .ok env.refCounter
+
+theorem handler_observes_updated_state (env : Environment) :
+    Result.handle (failing (.error (.atom "failed"))) observe env =
+      (.ok (env.refCounter + 1 + 2), {env with refCounter := env.refCounter + 1 + 2}) := by
+  rw [((failure_prefix _ env).handle observe).apply]
+  simp [Result.handle,observe]
+
+theorem try_observes_updated_state (env : Environment) :
+    Result.tryWith (failing (.error (.atom "failed"))) (fun n => .ok (n + 1)) observe env =
+      (.ok (env.refCounter + 1 + 2), {env with refCounter := env.refCounter + 1 + 2}) := by
+  rw [((failure_prefix _ env).tryWith _ observe).apply]
+  simp [observe]
+
+theorem exhaustion_is_not_caught (env : Environment) :
+    Result.tryWith (failing .exhausted) (fun n => .ok (n + 1)) observe env =
+      (.error .exhausted, {env with refCounter := env.refCounter + 1 + 2}) := by
+  rw [((failure_prefix _ env).tryWith _ observe).apply]
+  simp only [Result.tryWith_exhausted,Result.error_apply]
+
 end LynxTest.Term.ReadyPrefix
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Term.ReadyPrefix
