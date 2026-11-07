@@ -518,7 +518,8 @@ theorem write_once_crash (file : NativeFile) (value : U16)
   have ready : pollWrite file (payload value) (fileEnv env file before frame) =
       some (.ok (.Ok (count (payload value) amount inputBound), file),
         fileEnv env file (written before (payload value) amount durable writeRest) frame) := by
-    simp [pollWrite, lookup_at env file before frame separate valid, blocked, script, outcome,
+    simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
+      lookup_at env file before frame separate valid, blocked, script, outcome,
       step, store_at env file before _ frame separate]
   constructor
   · simp only [io_core.write_once, monadLift_self, NativeFile.write]

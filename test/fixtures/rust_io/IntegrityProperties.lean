@@ -265,7 +265,8 @@ theorem protocol_next (file : NativeFile) (data : Slice U8)
       next (.Ok amount, file) (fileEnv env file after frame) := by
   have first : pollWrite file data (fileEnv env file before frame) =
       some (.ok (.Ok amount, file), fileEnv env file middle frame) := by
-    simp [pollWrite, lookup_at env file before frame separate initial, notBlocked,
+    simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
+      lookup_at env file before frame separate initial, notBlocked,
       writeReady, store_at env file before middle frame separate]
   have second : pollSync file (fileEnv env file middle frame) =
       some (.ok (.Ok ()), fileEnv env file after frame) := by

@@ -42,6 +42,15 @@ theorem lookup_at (env : Environment) (file : NativeFile) (state : State)
     simpa using separate cell member
   simp [lookup, fileEnv, List.filter, filtered, decode_encode state valid]
 
+theorem no_shared_handle_at (env : Environment) (file : NativeFile) (state : State)
+    (frame : List (Nat × String × Term)) (separate : Separate file frame) :
+    getHandle file handleTypeName (fileEnv env file state frame) = none := by
+  have filtered : frame.filter (fun cell => cell.1 == file.id) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro cell member
+    simpa using separate cell member
+  simp [getHandle, fileEnv, filtered, typeName, handleTypeName]
+
 theorem store_at (env : Environment) (file : NativeFile) (before after : State)
     (frame : List (Nat × String × Term)) (separate : Separate file frame) :
     store file after (fileEnv env file before frame) = fileEnv env file after frame := by
@@ -51,7 +60,11 @@ theorem store_at (env : Environment) (file : NativeFile) (before after : State)
     apply List.map_congr_left
     intro cell member
     simp [separate cell member]
-  simp [store, fileEnv, unchanged]
+  have filtered : frame.filter (fun cell => cell.1 == file.id) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro cell member
+    simpa using separate cell member
+  simp [store, fileEnv, filtered, unchanged]
 
 theorem bytes_size (data : Slice U8) : (bytes data).size = data.val.length := by
   simp [bytes, ← ByteArray.size_data]
@@ -160,7 +173,8 @@ theorem protocol_ready (file : NativeFile) (data : Slice U8)
       (.ok (.Ok amount, file), fileEnv env file after frame) := by
   have first : pollWrite file data (fileEnv env file before frame) =
       some (.ok (.Ok amount, file), fileEnv env file middle frame) := by
-    simp [pollWrite, lookup_at env file before frame separate initial, notBlocked,
+    simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
+      lookup_at env file before frame separate initial, notBlocked,
       writeReady, store_at env file before middle frame separate]
   have second : pollSync file (fileEnv env file middle frame) =
       some (.ok (.Ok ()), fileEnv env file after frame) := by
@@ -218,7 +232,8 @@ theorem protocol_write_error (file : NativeFile) (data : Slice U8)
   have ready : pollWrite file data (fileEnv env file before frame) =
       some (.ok (.Err ⟨error⟩, file), fileEnv env file
         { before with durable := durable, script := rest } frame) := by
-    simp [pollWrite, lookup_at env file before frame separate valid,
+    simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
+      lookup_at env file before frame separate valid,
       blocked, script, outcome, writeStep, action, not_lt.mpr (Int.natCast_nonneg error),
       not_lt.mpr buffer, accepted,
       store_at env file before _ frame separate]
@@ -240,7 +255,8 @@ theorem protocol_sync_error (file : NativeFile) (data : Slice U8)
       (.ok (.Err error, file), fileEnv env file after frame) := by
   have first : pollWrite file data (fileEnv env file before frame) =
       some (.ok (.Ok amount, file), fileEnv env file middle frame) := by
-    simp [pollWrite, lookup_at env file before frame separate initial, notBlocked,
+    simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
+      lookup_at env file before frame separate initial, notBlocked,
       writeReady, store_at env file before middle frame separate]
   have second : pollSync file (fileEnv env file middle frame) =
       some (.ok (.Err error), fileEnv env file after frame) := by
@@ -266,7 +282,8 @@ theorem write_alone (file : NativeFile) (data : Slice U8)
       (.ok (.Ok amount, file), fileEnv env file after frame) := by
   have poll : pollWrite file data (fileEnv env file before frame) =
       some (.ok (.Ok amount, file), fileEnv env file after frame) := by
-    simp [pollWrite, lookup_at env file before frame separate valid, notBlocked,
+    simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
+      lookup_at env file before frame separate valid, notBlocked,
       ready, store_at env file before after frame separate]
   unfold io_core.write_once NativeFile.write
   simp only [monadLift_self]
