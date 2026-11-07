@@ -354,4 +354,231 @@ theorem rollback_then_append_all_schedules (data : ByteArray) (first second : U1
     rootTrace childAfter childTrace rootAfter choices
   simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared, before, next] using result
 
+private theorem unit_poll (before after : State) (counter : Nat) (contents : Term)
+    (step : State → Option (core.result.Result Unit NativeIoError × State))
+    (poll : NativeFile → Environment → Option (Except Exception (core.result.Result Unit NativeIoError) × Environment))
+    (equation : ∀ file env, poll file env = (
+      match lookup file env with
+      | none => some (.error .exhausted, env)
+      | some state => if blocked state then none else
+        match step state with
+        | none => some (.error .exhausted, env)
+        | some (reply, updated) => some (.ok reply, store file updated env)))
+    (reply : core.result.Result Unit NativeIoError)
+    (valid : Admitted before) (ready : blocked before = false)
+    (transition : step before = some (reply, after)) (fresh : 2 ≤ counter)
+    (env : Environment) (count : env.refCounter = counter)
+    (heap : env.nativeHeap = (shared counter contents before).2) :
+    poll ⟨2⟩ env = some (.ok reply,
+      {env with refCounter := counter, nativeHeap := (shared counter contents after).2}) := by
+  have found : lookup (⟨2⟩ : NativeFile) env = some before := by
+    simp [lookup, heap, shared, decode_admitted before valid]
+    omega
+  rw [equation]
+  simp [found, ready, transition, store, heap, shared, ← count]
+
+private theorem truncate_error_suffix (pid peer token counter : Nat) (different : pid ≠ peer)
+    (written failed : State) (position : U64) (amount : Usize) (error : NativeIoError)
+    (short : amount.val ≠ 4) (fresh : 2 ≤ counter) (valid : Admitted written)
+    (ready : blocked written = false)
+    (truncate : setLenStep written position = some (.Err error, failed)) :
+    Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
+      (afterWrite ⟨⟨1⟩, token, pid, ⟨2⟩⟩ position amount)
+      (shared counter (owned pid token) written) (errorTerm error.identity)
+      (shared counter free failed) := by
+  simp only [afterWrite]
+  simp only [resize_then_sync, io_core.resize_to, monadLift_self, bind_assoc,
+    NativeFile.setLen, Result.wait_bind]
+  refine .wait _ _ (.ok (.Err error)) _ (shared counter (owned pid token) failed) _ _ ?_ ?_ ?_
+  · intro env _ count heap
+    exact unit_poll written failed counter _ (fun state => setLenStep state position)
+      (fun file => pollSetLen file position) (by intros; rfl) (.Err error)
+      valid ready truncate fresh env count heap
+  · intro env owner _ heap
+    exact held_blocked pid peer token counter written different env owner heap
+  · simpa [NativeM.ok, finish, bind_assoc, terminal_bind] using
+      release_trace pid peer token counter failed (errorTerm error.identity) different
+
+private theorem sync_error_suffix (pid peer token counter : Nat) (different : pid ≠ peer)
+    (written resized failed : State) (position : U64) (amount : Usize) (error : NativeIoError)
+    (short : amount.val ≠ 4) (fresh : 2 ≤ counter)
+    (valid0 : Admitted written) (valid1 : Admitted resized)
+    (ready0 : blocked written = false) (ready1 : blocked resized = false)
+    (truncate : setLenStep written position = some (.Ok (), resized))
+    (sync : syncStep resized = some (.Err error, failed)) :
+    Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
+      (afterWrite ⟨⟨1⟩, token, pid, ⟨2⟩⟩ position amount)
+      (shared counter (owned pid token) written) (errorTerm error.identity)
+      (shared counter free failed) := by
+  simp only [afterWrite]
+  simp only [resize_then_sync, io_core.resize_to, io_core.synchronize, monadLift_self,
+    bind_assoc, NativeFile.setLen, Result.wait_bind]
+  refine .wait _ _ (.ok (.Ok ())) _ (shared counter (owned pid token) resized) _ _ ?_ ?_ ?_
+  · intro env _ count heap
+    exact unit_poll written resized counter _ (fun state => setLenStep state position)
+      (fun file => pollSetLen file position) (by intros; rfl) (.Ok ())
+      valid0 ready0 truncate fresh env count heap
+  · intro env owner _ heap
+    exact held_blocked pid peer token counter written different env owner heap
+  · simp only [Result.ok_bind, NativeFile.syncAll, Result.wait_bind]
+    refine .wait _ _ (.ok (.Err error)) _ (shared counter (owned pid token) failed) _ _ ?_ ?_ ?_
+    · intro env _ count heap
+      exact unit_poll resized failed counter _ syncStep pollSync (by intros; rfl)
+        (.Err error) valid1 ready1 sync fresh env count heap
+    · intro env owner _ heap
+      exact held_blocked pid peer token counter resized different env owner heap
+    · simpa [NativeM.ok, finish, bind_assoc, terminal_bind] using
+        release_trace pid peer token counter failed (errorTerm error.identity) different
+
+private theorem acquire_trace (pid peer counter : Nat)
+    (before after : State) (value : U16) (reply : Term) (fresh : 2 ≤ counter)
+    (trace : Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
+      (postAcquire value (.ok (.Ok ⟨⟨1⟩, counter + 1, pid, ⟨2⟩⟩)))
+      (shared (counter + 1) (owned pid (counter + 1)) before) reply
+      (shared (counter + 1) free after)) :
+    Result.SharedSteps pid (do
+      let result ← locked_append_or_rollback ⟨1⟩ value
+      finish result : Result Term)
+      (shared counter free before) reply (shared (counter + 1) free after) := by
+  rw [worker_wait]
+  refine .wait _ _ (.ok (.Ok ⟨⟨1⟩, counter + 1, pid, ⟨2⟩⟩)) _
+    (shared (counter + 1) (owned pid (counter + 1)) before) _ _ ?_ trace.ready
+  intro env owner count heap
+  exact lock_poll pid counter before fresh env owner count heap
+
+/-- Failed truncation propagates its error and releases the actual changed file
+state. All background persistence admitted by the executable transition is retained. -/
+theorem rollback_resize_failure (pid counter : Nat) (before sought written failed : State)
+    (value : U16) (position : U64) (amount : Usize) (error : NativeIoError)
+    (short : amount.val ≠ 4) (fresh : 2 ≤ counter)
+    (valid0 : Valid before) (valid1 : Valid sought) (valid2 : Admitted written)
+    (ready0 : blocked before = false) (ready1 : blocked sought = false)
+    (ready2 : blocked written = false)
+    (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
+    (write : writeStep sought (payload value) = some (.Ok amount, written))
+    (truncate : setLenStep written position = some (.Err error, failed)) :
+    Result.SharedSteps pid (do
+      let result ← locked_append_or_rollback ⟨1⟩ value
+      finish result : Result Term)
+      (shared counter free before) (errorTerm error.identity) (shared (counter + 1) free failed) := by
+  apply acquire_trace pid (pid + 1) counter before failed value _ fresh
+  exact prefix_trace pid (pid + 1) (counter + 1) (counter + 1) (by omega)
+    before sought written value position amount _ _ (by omega) valid0 valid1 ready0 ready1 seek write
+    (truncate_error_suffix pid (pid + 1) (counter + 1) (counter + 1) (by omega)
+      written failed position amount error short (by omega) valid2 ready2 truncate)
+
+/-- A failed sync after successful truncation preserves the truncated visible
+length, potentially longer durable image, cursor and error through guard release. -/
+theorem rollback_sync_failure (pid counter : Nat) (before sought written resized failed : State)
+    (value : U16) (position : U64) (amount : Usize) (error : NativeIoError)
+    (short : amount.val ≠ 4) (fresh : 2 ≤ counter)
+    (valid0 : Valid before) (valid1 : Valid sought)
+    (valid2 : Admitted written) (valid3 : Admitted resized)
+    (ready0 : blocked before = false) (ready1 : blocked sought = false)
+    (ready2 : blocked written = false) (ready3 : blocked resized = false)
+    (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
+    (write : writeStep sought (payload value) = some (.Ok amount, written))
+    (truncate : setLenStep written position = some (.Ok (), resized))
+    (sync : syncStep resized = some (.Err error, failed)) :
+    Result.SharedSteps pid (do
+      let result ← locked_append_or_rollback ⟨1⟩ value
+      finish result : Result Term)
+      (shared counter free before) (errorTerm error.identity) (shared (counter + 1) free failed) := by
+  apply acquire_trace pid (pid + 1) counter before failed value _ fresh
+  exact prefix_trace pid (pid + 1) (counter + 1) (counter + 1) (by omega)
+    before sought written value position amount _ _ (by omega) valid0 valid1 ready0 ready1 seek write
+    (sync_error_suffix pid (pid + 1) (counter + 1) (counter + 1) (by omega)
+      written resized failed position amount error short (by omega) valid2 valid3 ready2 ready3 truncate sync)
+
+/-- A real short-write trace witnesses both error paths without assumed poll
+results. The short tail persists before the attempted rollback. -/
+@[expose] def rollbackErrorStart (syncFailure : Bool) (errorId : Nat) (rest : Term) : State :=
+  let tail : ByteArray := ⟨#[1, 0]⟩
+  let sync := outcome "sync_all" false errorId (zeroMask tail) rest
+  let rollback := if syncFailure then outcome "set_len" true 0 (zeroMask tail) sync
+    else outcome "set_len" false errorId (zeroMask tail) rest
+  ⟨ByteArray.empty, ByteArray.empty, 0, outcome "seek" true 0 ByteArray.empty
+    (outcome "write" true 2 ⟨#[1, 1]⟩ rollback)⟩
+
+@[expose] def rollbackErrorEnd (syncFailure : Bool) (rest : Term) : State :=
+  ⟨if syncFailure then ByteArray.empty else ⟨#[1, 0]⟩, ⟨#[1, 0]⟩, 2, rest⟩
+
+/-- Both actual Rust error paths retain the durable short tail and release the
+mutex. On sync failure the visible file is empty but durable bytes remain. -/
+theorem rollback_failure_effects (syncFailure : Bool) (errorId : Nat) (rest : Term) :
+    let before := rollbackErrorStart syncFailure errorId rest
+    let after := rollbackErrorEnd syncFailure rest
+    let observed := (do
+      let result ← locked_append_or_rollback ⟨1⟩ 1#u16
+      finish result : Result Term)
+      {currentPid := 1, refCounter := 2, nativeHeap := (shared 2 free before).2}
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
+      (.ok (errorTerm errorId), shared 3 free after) := by
+  let tail : ByteArray := ⟨#[1, 0]⟩
+  let before := rollbackErrorStart syncFailure errorId rest
+  let seeked := {before with position := 0, script := (
+    outcome "write" true 2 ⟨#[1, 1]⟩
+      (if syncFailure then outcome "set_len" true 0 (zeroMask tail)
+        (outcome "sync_all" false errorId (zeroMask tail) rest)
+      else outcome "set_len" false errorId (zeroMask tail) rest))}
+  let written : State := ⟨tail, tail, 2,
+    if syncFailure then outcome "set_len" true 0 (zeroMask tail)
+      (outcome "sync_all" false errorId (zeroMask tail) rest)
+    else outcome "set_len" false errorId (zeroMask tail) rest⟩
+  let resized : State := ⟨ByteArray.empty, tail, 2,
+    outcome "sync_all" false errorId (zeroMask tail) rest⟩
+  have seek : seekStep before (.end_ 0#i64) = some (.Ok 0#u64, seeked) := by
+    simp [before, rollbackErrorStart, seeked, seekStep, seekTarget, action_outcome, tail,
+      zeroMask, persist, ← ByteArray.size_data]
+    constructor
+    · scalar_tac
+    · rfl
+  have payloadBytes : bytes (payload 1#u16) = (⟨#[1, 0, 254, 255]⟩ : ByteArray) := by
+    have inverse : (~~~(1#u16)) = 65534#u16 := by
+      simp
+      rfl
+    rw [payload_bytes]
+    simp only [encoded, inverse]
+    simp [fourBytes, rawByte, low, high]
+    decide
+  have write : writeStep seeked (payload 1#u16) = some (.Ok 2#usize, written) := by
+    simp only [writeStep, payloadBytes]
+    simp [seeked, before, rollbackErrorStart, action_outcome, written, tail,
+      payload, layout, overwrite, persist, limit, ← ByteArray.size_data]
+    rfl
+  have initial : Valid before := by simp [before, rollbackErrorStart, Valid, limit]
+  have soughtValid : Valid seeked := by simp [seeked, before, rollbackErrorStart, Valid, limit]
+  have writtenValid : Admitted written := by simp [written, tail, Admitted, limit, ← ByteArray.size_data]
+  have ready0 : blocked before = false := by simp [before, rollbackErrorStart, blocked, outcome]
+  have ready1 : blocked seeked = false := by simp [seeked, blocked, outcome]
+  have ready2 : blocked written = false := by cases syncFailure <;> simp [written, blocked, outcome]
+  have trace : Result.SharedSteps 1 (do
+      let result ← locked_append_or_rollback ⟨1⟩ 1#u16
+      finish result : Result Term)
+      (shared 2 free before) (errorTerm errorId)
+      (shared 3 free (rollbackErrorEnd syncFailure rest)) := by
+    cases selected : syncFailure with
+    | false =>
+      apply rollback_resize_failure 1 2 before seeked written (rollbackErrorEnd false rest)
+        1#u16 0#u64 2#usize ⟨errorId⟩ (by decide) (by decide)
+        initial soughtValid writtenValid ready0 ready1 ready2 seek write
+      simp [written, selected, rollbackErrorEnd, setLenStep, action_outcome, tail, zeroMask,
+        persist, limit, ← ByteArray.size_data]
+      decide
+    | true =>
+      apply rollback_sync_failure 1 2 before seeked written resized (rollbackErrorEnd true rest)
+        1#u16 0#u64 2#usize ⟨errorId⟩ (by decide) (by decide)
+        initial soughtValid writtenValid (by simp [resized, tail, Admitted, limit, ← ByteArray.size_data])
+        ready0 ready1 ready2 (by simp [resized, blocked, outcome]) seek write
+      · simp [written, selected, resized, setLenStep, action_outcome, tail, zeroMask,
+          resize, persist, limit, ← ByteArray.size_data]
+        decide
+      · simp [resized, rollbackErrorEnd, syncStep, action_outcome, tail, zeroMask,
+          persist, ← ByteArray.size_data]
+        decide
+  let env : Environment := {currentPid := 1, refCounter := 2, nativeHeap := (shared 2 free before).2}
+  have ran := trace.apply env rfl rfl rfl
+  dsimp only
+  rw [ran]
+
 end Record.RollbackProperties
