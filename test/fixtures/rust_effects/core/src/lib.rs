@@ -175,6 +175,14 @@ pub fn write_shared_file(file: &std::fs::File, bytes: &[u8]) -> std::io::Result<
     borrowed.write(bytes)
 }
 
+/// Synchronizes the current directory and closes its owned descriptor on every return.
+/// # Errors
+/// Propagates errors from opening or synchronizing the directory.
+pub fn synchronize_directory() -> std::io::Result<()> {
+    let directory = std::fs::File::open(".")?;
+    directory.sync_all()
+}
+
 #[cfg(test)]
 mod shared_file_tests {
     #[test]

@@ -1089,6 +1089,14 @@ pub fn file_resource_write(
     effects_core::write_shared_file(&resource.file, bytes)
 }
 
+/// Synchronizes file contents before committing the directory's current names.
+/// # Errors
+/// Propagates file, directory-open and directory-sync errors.
+pub fn file_resource_commit(resource: &rustler::ResourceArc<FileResource>) -> std::io::Result<()> {
+    file_resource_sync(resource)?;
+    effects_core::synchronize_directory()
+}
+
 /// Releases the decoded Rust owner while the originating VM term remains live.
 #[cfg(feature = "file-resource-handles")]
 #[rustler::nif(name = "file_release", schedule = "DirtyIo")]
@@ -1134,6 +1142,21 @@ pub fn file_resource_nif_write(resource: rustler::ResourceArc<FileResource>, val
     file_resource_release(resource);
     match outcome {
         Ok(written) => written == bytes.len(),
+        Err(error) => {
+            drop(error);
+            false
+        }
+    }
+}
+
+/// Commits file contents and their current directory entry before acknowledging.
+#[cfg(feature = "file-resource-commit")]
+#[rustler::nif(name = "file_commit", schedule = "DirtyIo")]
+pub fn file_resource_nif_commit(resource: rustler::ResourceArc<FileResource>) -> bool {
+    let outcome = file_resource_commit(&resource);
+    file_resource_release(resource);
+    match outcome {
+        Ok(()) => true,
         Err(error) => {
             drop(error);
             false
