@@ -63,6 +63,26 @@ defmodule Lynx.Rust.NativeBorrowsTest do
     end
   end
 
+  test "primitive not is nonpanicking but negation is not assumed safe" do
+    for op <- ["Not", "Neg"] do
+      function = %{
+        "def_id" => 1,
+        "body" => %{
+          "Structured" => %{
+            "body" => %{
+              "statements" => [
+                %{"kind" => %{"Assign" => [%{}, %{"UnaryOp" => [op, %{}]}]}},
+                %{"kind" => "Return"}
+              ]
+            }
+          }
+        }
+      }
+
+      assert MapSet.member?(NativeBorrows.nonpanicking_calls([function], %{}), 1) == (op == "Not")
+    end
+  end
+
   test "retains other owners only across a nonpanicking consuming implementation" do
     args = fn types ->
       %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
