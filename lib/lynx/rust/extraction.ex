@@ -259,8 +259,19 @@ defmodule Lynx.Rust.Extraction do
         Keyword.get(opts, :futures, :reject)
       )
 
+    # Aeneas also visits unused opaque declarations retained by discovery (for
+    # example the drop helper requested before unreachable cleanup is pruned).
+    # Supply their validated primitive names to prevent unnecessary axiom
+    # templates. Only actual call dependencies belong in the verification report;
+    # their scoped mappings take precedence over the unreferenced candidates.
+    backend_calls = Map.merge(audit.available_external_calls, audit.external_calls)
+
+    {backend_document, native_expect_aliases} =
+      Lynx.Rust.ResultModels.lower_native_names!(backend_document, backend_calls)
+
     backend_llbc =
-      if compiler_drop_queries == [] and native_guard_storage == [] do
+      if compiler_drop_queries == [] and native_guard_storage == [] and
+           native_expect_aliases == [] do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -268,13 +279,6 @@ defmodule Lynx.Rust.Extraction do
         File.write!(path, Lynx.Rust.LLBCJson.encode_like!(backend_document, llbc))
         path
       end
-
-    # Aeneas also visits unused opaque declarations retained by discovery (for
-    # example the drop helper requested before unreachable cleanup is pruned).
-    # Supply their validated primitive names to prevent unnecessary axiom
-    # templates. Only actual call dependencies belong in the verification report;
-    # their scoped mappings take precedence over the unreferenced candidates.
-    backend_calls = Map.merge(audit.available_external_calls, audit.external_calls)
 
     model_args =
       if models == [] and map_size(backend_calls) == 0 do
@@ -301,7 +305,10 @@ defmodule Lynx.Rust.Extraction do
                     &Map.merge(
                       %{
                         "rust_pattern" =>
-                          Lynx.Rust.NativeGuardStorage.pattern(&1.rust_name, native_guard_storage),
+                          Lynx.Rust.NativeGuardStorage.pattern(
+                            &1[:backend_rust_name] || &1.rust_name,
+                            native_guard_storage
+                          ),
                         "extract_name" => &1.lean,
                         "can_fail" => &1.can_fail,
                         "lift" => &1.lift
@@ -385,6 +392,7 @@ defmodule Lynx.Rust.Extraction do
     %{
       audit: audit,
       compiler_drop_queries: compiler_drop_queries,
+      native_expect_aliases: native_expect_aliases,
       native_guard_storage: native_guard_storage,
       owned_drops: Keyword.get(opts, :owned_drops, false),
       resource_cleanup:

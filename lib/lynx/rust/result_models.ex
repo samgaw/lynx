@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.ResultModels do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, Constants, LLBC}
+  alias Lynx.Rust.{CallModels, Constants, LLBC, FileModels, FormatModels}
 
   # Aeneas's map_err model invokes the actual FnOnce implementation, but does
   # not drop an unused callback on Ok. Admit only capture-free compiler closures
@@ -62,6 +62,214 @@ defmodule Lynx.Rust.ResultModels do
   end
 
   def resolve(_, _, _), do: nil
+
+  # A successful expect does not call Debug or drop an error. The Err path is
+  # deliberately exhausted: formatting, destructors and unwind are not erased
+  # into an apparently verified panic. This adapter is runtime-only.
+  def resolve_native_expect(
+        %{
+          "body" => "Opaque",
+          "src" => "Normal",
+          "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["result", 0]},
+              %{
+                "Impl" => %{
+                  "Ty" => %{
+                    "kind" => "InherentImplBlock",
+                    "skip_binder" => parent,
+                    "params" => parent_params
+                  }
+                }
+              },
+              %{"Ident" => ["expect", 0]}
+            ]
+          },
+          "generics" => %{"regions" => [%{"index" => 0}], "trait_clauses" => [debug]} = params
+        },
+        translated,
+        refs
+      ) do
+    expand = &CallModels.expand(&1, refs)
+
+    with [
+           input,
+           %{
+             "Ref" => [
+               %{"Var" => %{"Free" => 0}},
+               %{"Adt" => %{"builtin" => "Str", "generics" => str_args}},
+               "Shared"
+             ]
+           }
+         ] <- expand.(sig["inputs"]),
+         true <- str_args == arguments([]),
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- input,
+         true <- LLBC.result_type?(id, %{translated: translated, references: refs}),
+         true <- args == arguments([variable(0), variable(1)]),
+         true <- free_parent(expand.(parent)) == input and parameters?(parent_params, 2),
+         true <- parameters?(%{params | "regions" => [], "trait_clauses" => []}, 2),
+         true <- expand.(sig["output"]) == variable(0),
+         {0, debug_id, [error]} <- clause(debug, refs),
+         true <- error == variable(1) and trait?(translated, debug_id, ~w(core fmt Debug), 1) do
+      %{
+        rust_name: "core::result::{core::result::Result<@T, @E>}::expect",
+        lean: "Lynx.NativeM.expectOk",
+        backend_rust_name: "lynx_native::result_expect_ok",
+        native_expect_ok: true,
+        builtin: false,
+        can_fail: true,
+        lift: true,
+        keep_trait_clauses: [false],
+        native_transfer: true,
+        native_cutoff_only: true,
+        label:
+          "Native Result::expect successful-Ok model with exact Result, signature and Debug-bound validation; Debug is unused on Ok; Err formatting, destruction and unwind exhaust verification; Rust core implementation not verified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  def resolve_native_expect(_, _, _), do: nil
+
+  # The erased Debug dictionary may still be emitted by Aeneas. Give its exact
+  # standard I/O-error method a nonreturning definition for elaboration only.
+  # LLBC excludes these entries from callable models: no Rust implementation may
+  # rely on this unsupported formatter, directly or through an indirect call.
+  def resolve_unused_io_debug(function, translated, refs) do
+    with %{
+           "body" => "Opaque",
+           "src" => %{"TraitImpl" => source},
+           "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+           "generics" => params
+         } <- function,
+         %{"def_id" => error} <- FileModels.error_declaration(translated),
+         %{"def_id" => formatter} <- named(translated["type_decls"], ~w(core fmt Formatter)),
+         %{"def_id" => fmt_error} <- named(translated["type_decls"], ~w(core fmt Error)),
+         %{"def_id" => debug} <- named(translated["trait_decls"], ~w(core fmt Debug)),
+         true <- trait?(translated, debug, ~w(core fmt Debug), 1),
+         impl when not is_nil(impl) <-
+           declaration(translated["trait_impls"], source["impl_ref"]["id"]),
+         true <-
+           impl["src"] == "Normal" and impl["is_unsafe"] == false and impl["is_negative"] == false,
+         true <- parameters?(impl["generics"], 0),
+         true <-
+           Enum.take(impl["item_meta"]["name"], 3) ==
+             Enum.map(~w(core io error), &%{"Ident" => [&1, 0]}),
+         true <-
+           function["item_meta"]["name"] ==
+             impl["item_meta"]["name"] ++ [%{"Ident" => ["fmt", 0]}],
+         true <-
+           CallModels.expand(impl["impl_trait"], refs) == %{
+             "id" => debug,
+             "generics" => arguments([adt(error)])
+           },
+         true <-
+           FormatModels.method_identity?(function, impl, debug, %{
+             translated: translated,
+             refs: refs
+           }),
+         regions when is_list(regions) <- params["regions"],
+         true <- Enum.map(regions, & &1["index"]) == [0, 1, 2],
+         true <- parameters?(%{params | "regions" => [], "outlives" => []}, 0),
+         true <-
+           params["outlives"] == [
+             %{"regions" => [], "outlives" => [], "skip_binder" => [region(2), region(1)]}
+           ],
+         true <-
+           CallModels.expand(sig["inputs"], refs) == [
+             %{"Ref" => [region(0), adt(error), "Shared"]},
+             %{
+               "Ref" => [
+                 region(1),
+                 put_in(adt(formatter), ["Adt", "generics", "regions"], [region(2)]),
+                 "Mut"
+               ]
+             }
+           ],
+         %{"Adt" => %{"id" => result, "builtin" => nil, "generics" => args}} <-
+           CallModels.expand(sig["output"], refs),
+         true <- LLBC.result_type?(result, %{translated: translated, references: refs}),
+         true <-
+           match?([_, _], args["types"]),
+         [unit, result_error] <- args["types"],
+         true <-
+           tuple?(unit, []) and result_error == adt(fmt_error) and
+             args == arguments([unit, result_error]) do
+      %{
+        rust_name: "core::io::error::{core::fmt::Debug<core::io::error::Error>}::fmt",
+        lean: "Lynx.NativeIoError.debugUnavailable",
+        builtin: false,
+        can_fail: true,
+        lift: false,
+        elaboration_only: true,
+        native_cutoff_only: true,
+        label:
+          "Unused standard I/O-error Debug dictionary elaboration only; formatter calls are unsupported and rejected; no formatting behavior verified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp named(values, path),
+    do:
+      Enum.find(
+        values || [],
+        &(&1 && &1["item_meta"]["name"] == Enum.map(path, fn part -> %{"Ident" => [part, 0]} end))
+      )
+
+  defp region(index), do: %{"Var" => %{"Free" => index}}
+  defp adt(id), do: %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([])}}
+
+  # Aeneas already reserves the standard expect pattern. Alias only the opaque
+  # declaration admitted above, after auditing the original compiler document.
+  # Calls retain their definition IDs, signatures, arguments and source spans;
+  # reports retain the original Rust name. No first-party body is replaced.
+  def lower_native_names!(document, models) do
+    selected = Map.filter(models, fn {_, model} -> model[:native_expect_ok] == true end)
+
+    {functions, found} =
+      Enum.map_reduce(document["translated"]["fun_decls"], [], fn function, found ->
+        case function && selected[function["def_id"]] do
+          nil ->
+            {function, found}
+
+          model ->
+            unless function["body"] == "Opaque" and function["src"] == "Normal" and
+                     function["item_meta"]["name"] == model.function["item_meta"]["name"],
+                   do:
+                     raise(
+                       ArgumentError,
+                       "native expect alias requires its original audited opaque declaration"
+                     )
+
+            parts = String.split(model.backend_rust_name, "::")
+
+            collision =
+              Enum.any?(document["translated"]["fun_decls"], fn other ->
+                other && other["def_id"] != function["def_id"] &&
+                  Enum.map(other["item_meta"]["name"], fn
+                    %{"Ident" => [name, _]} -> name
+                    _ -> :complex
+                  end) == parts
+              end)
+
+            if collision,
+              do: raise(ArgumentError, "native expect alias collides with another declaration")
+
+            name = Enum.map(parts, &%{"Ident" => [&1, 0]})
+            {put_in(function, ["item_meta", "name"], name), [function["def_id"] | found]}
+        end
+      end)
+
+    unless Enum.sort(found) == Enum.sort(Map.keys(selected)),
+      do: raise(ArgumentError, "missing audited native expect declaration")
+
+    {put_in(document, ["translated", "fun_decls"], functions), Enum.sort(found)}
+  end
 
   def audit(functions, models, translated, refs) do
     context = %{
