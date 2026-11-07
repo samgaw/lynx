@@ -147,6 +147,35 @@ theorem contending_multi_wait_all_choices (choices : List ScheduleChoice) :
     (update_exclusive 2 1 0) (update_full 1 3) choices
   exact result.elim id id
 
+private def stalled : Result Term :=
+  .wait tick fun _ => .wait (fun _ => (none : Option (Unit × Environment))) fun _ => .ok .nil
+
+private theorem stalled_trace (pid peer : PID) (value : Nat) :
+    Result.ExclusiveBlocked pid peer acquire stalled (value, [(1, "owner", .pid pid)])
+      (value + 1, [(1, "owner", .pid pid)]) := by
+  refine .wait _ _ () _ (value + 1, [(1, "owner", .pid pid)]) _ ?_ ?_ ?_
+  · intro env owner counter heap
+    simp [tick, counter, heap]
+  · intro env owner counter heap
+    simp [acquire, heap]
+  · exact .blocked _ _ _ (by intros; rfl) (by intro env owner counter heap; simp [acquire, heap])
+
+/-- Blocked owners retain their updates and never turn into successful returns,
+even when finite choices request the competitor or an ineligible timeout. -/
+theorem contending_stall_all_choices (choices : List ScheduleChoice) :
+    let observed := (Result.schedule (.wait acquire fun _ => stalled)
+      (fun _ => .wait acquire fun _ => stalled)) {schedule := choices}
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
+        (.deadlock, 1, [(1, "owner", .pid 1)]) ∨
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
+        (.deadlock, 1, [(1, "owner", .pid 2)]) := by
+  exact Result.two_wait_blocked_orders acquire (fun _ => stalled) acquire (fun _ => stalled) 0 0
+    (0, []) (0, [(1, "owner", .pid 1)]) (1, [(1, "owner", .pid 1)])
+    (0, [(1, "owner", .pid 2)]) (1, [(1, "owner", .pid 2)])
+    (by intro env owner counter heap; simp [acquire, heap, counter, owner])
+    (by intro env owner counter heap; simp [acquire, heap, counter, owner])
+    (stalled_trace 1 2 0) (stalled_trace 2 1 0) choices
+
 /-- Poll readiness alone never makes the wait read-only or pure. -/
 theorem wait_is_effectful (poll : Environment → Option (β × Environment)) (next : β → Result α) :
     ¬ Result.IsPure (.wait poll next) ∧ ¬ Result.IsReadOnly (.wait poll next) := by
