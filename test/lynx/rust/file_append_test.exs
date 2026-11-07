@@ -47,7 +47,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"MalformedProperties", []},
       {"LockedProperties", []},
       {"LockedConcurrent", []},
-      {"RollbackProperties", []}
+      {"RollbackProperties", []},
+      {"InterruptedProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -135,7 +136,10 @@ defmodule Lynx.Rust.FileAppendTest do
             "Record.RollbackProperties.rollback_then_append_all_schedules",
             "Record.RollbackProperties.rollback_resize_failure",
             "Record.RollbackProperties.rollback_sync_failure",
-            "Record.RollbackProperties.rollback_failure_effects"
+            "Record.RollbackProperties.rollback_failure_effects",
+            "Record.InterruptedProperties.concurrent_rollback_stalls",
+            "Record.InterruptedProperties.concurrent_crash_image",
+            "Record.InterruptedProperties.concurrent_crash_repair"
           ]
     ]
 
@@ -258,6 +262,12 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.RollbackProperties.rollback_then_append_all_schedules")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.InterruptedProperties.concurrent_crash_repair")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
@@ -268,6 +278,7 @@ defmodule Lynx.Rust.FileAppendTest do
           "Record/LockedProperties.lean",
           "Record/LockedConcurrent.lean",
           "Record/RollbackProperties.lean",
+          "Record/InterruptedProperties.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -412,6 +423,37 @@ defmodule Lynx.Rust.FileAppendTest do
         end
 
       assert error.message =~ "Record/RollbackProperties.lean:"
+      File.write!(property, correct)
+    end
+
+    property = Path.join(project, "Record/InterruptedProperties.lean")
+    correct = File.read!(property)
+
+    for broken <- [
+          correct
+          |> String.replace(
+            "(.deadlock, shared 3 (owned 1 3) (stopped data amount rest))",
+            "(.deadlock, shared 3 free (stopped data amount rest))"
+          )
+          |> String.replace(
+            "(.deadlock, shared 3 (owned 2 3) (stopped data amount rest))",
+            "(.deadlock, shared 3 free (stopped data amount rest))"
+          ),
+          String.replace(
+            correct,
+            "some (alloc.vec.Vec.from values (by scalar_tac))",
+            "some (alloc.vec.Vec.from [] (by scalar_tac))"
+          )
+        ] do
+      refute broken == correct
+      File.write!(property, broken)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Project.build!(project, options[:proof_modules])
+        end
+
+      assert error.message =~ "Record/InterruptedProperties.lean:"
       File.write!(property, correct)
     end
 
