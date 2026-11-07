@@ -41,3 +41,14 @@ pub fn read_word(file: &mut File) -> io::Result<Option<u16>> {
         }
     }
 }
+
+/// Recovers the leading word regardless of the incoming file position.
+///
+/// # Errors
+/// Propagates seek and read errors; incomplete input returns no word.
+pub fn recover_word(file: &mut File) -> io::Result<Option<u16>> {
+    match io_core::seek_to(file, 0) {
+        Err(error) => Err(error),
+        Ok(_) => read_word(file),
+    }
+}
