@@ -166,7 +166,7 @@ theorem set_len_poll (before after : State) (length : U64) (counter : Nat) (cont
   have found : lookup (⟨2⟩ : NativeFile) env = some before := by
     simp [lookup, heap, shared, decode_encode before valid]
     omega
-  simp only [pollSetLen, found]
+  simp only [pollSetLen,found,shared_not_read_only before counter contents env heap]
   simp [ready, step, store, heap, shared, ← count]
 
 private theorem complete_suffix (pid peer token counter : Nat) (different : pid ≠ peer)
@@ -357,10 +357,9 @@ theorem rollback_then_append_all_schedules (data : ByteArray) (first second : U1
 private theorem unit_poll (before after : State) (counter : Nat) (contents : Term)
     (step : State → Option (core.result.Result Unit NativeIoError × State))
     (poll : NativeFile → Environment → Option (Except Exception (core.result.Result Unit NativeIoError) × Environment))
-    (equation : ∀ file env, poll file env = (
-      match lookup file env with
-      | none => some (.error .exhausted, env)
-      | some state => if blocked state then none else
+    (equation : ∀ file env state, lookup file env = some state →
+      getHandle file handleTypeName env = none → poll file env = (
+      if blocked state then none else
         match step state with
         | none => some (.error .exhausted, env)
         | some (reply, updated) => some (.ok reply, store file updated env)))
@@ -374,8 +373,8 @@ private theorem unit_poll (before after : State) (counter : Nat) (contents : Ter
   have found : lookup (⟨2⟩ : NativeFile) env = some before := by
     simp [lookup, heap, shared, decode_admitted before valid]
     omega
-  rw [equation]
-  simp [found, ready, transition, store, heap, shared, ← count]
+  rw [equation _ _ _ found (shared_not_read_only before counter contents env heap)]
+  simp [ready,transition,store,heap,shared,← count]
 
 private theorem truncate_error_suffix (pid peer token counter : Nat) (different : pid ≠ peer)
     (written failed : State) (position : U64) (amount : Usize) (error : NativeIoError)
@@ -392,7 +391,8 @@ private theorem truncate_error_suffix (pid peer token counter : Nat) (different 
   refine .wait _ _ (.ok (.Err error)) _ (shared counter (owned pid token) failed) _ _ ?_ ?_ ?_
   · intro env _ count heap
     exact unit_poll written failed counter _ (fun state => setLenStep state position)
-      (fun file => pollSetLen file position) (by intros; rfl) (.Err error)
+      (fun file => pollSetLen file position)
+      (by intro file env state found writable; simp [-getHandle,pollSetLen,found,writable]; rfl) (.Err error)
       valid ready truncate fresh env count heap
   · intro env owner _ heap
     exact held_blocked pid peer token counter written different env owner heap
@@ -416,14 +416,15 @@ private theorem sync_error_suffix (pid peer token counter : Nat) (different : pi
   refine .wait _ _ (.ok (.Ok ())) _ (shared counter (owned pid token) resized) _ _ ?_ ?_ ?_
   · intro env _ count heap
     exact unit_poll written resized counter _ (fun state => setLenStep state position)
-      (fun file => pollSetLen file position) (by intros; rfl) (.Ok ())
+      (fun file => pollSetLen file position)
+      (by intro file env state found writable; simp [-getHandle,pollSetLen,found,writable]; rfl) (.Ok ())
       valid0 ready0 truncate fresh env count heap
   · intro env owner _ heap
     exact held_blocked pid peer token counter written different env owner heap
   · simp only [Result.ok_bind, NativeFile.syncAll, Result.wait_bind]
     refine .wait _ _ (.ok (.Err error)) _ (shared counter (owned pid token) failed) _ _ ?_ ?_ ?_
     · intro env _ count heap
-      exact unit_poll resized failed counter _ syncStep pollSync (by intros; rfl)
+      exact unit_poll resized failed counter _ syncStep pollSync (by intro file env state found _; simp [pollSync,found]; rfl)
         (.Err error) valid1 ready1 sync fresh env count heap
     · intro env owner _ heap
       exact held_blocked pid peer token counter resized different env owner heap

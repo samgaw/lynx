@@ -40,6 +40,11 @@ private theorem worker_wait (value : U16) :
     Nat × List (Nat × String × Term) :=
   (counter, [(2, NativeFile.typeName, encode state), (1, NativeMutex.typeName NativeFile, contents)])
 
+theorem shared_not_read_only (state : State) (counter : Nat) (contents : Term)
+    (env : Environment) (heap : env.nativeHeap = (shared counter contents state).2) :
+    getHandle (⟨2⟩ : NativeFile) handleTypeName env = none := by
+  simp [getHandle,heap,shared,NativeFile.typeName,handleTypeName]
+
 @[expose] def free : Term :=
   .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (⟨2⟩ : NativeFile)]
 
@@ -72,7 +77,7 @@ theorem write_result_poll (before after : State) (value : U16)
   have found : lookup (⟨2⟩ : NativeFile) env = some before := by
     simp [lookup, heap, shared, decode_encode before valid]
     omega
-  simp only [pollWrite, found]
+  simp only [pollWrite,found,shared_not_read_only before counter contents env heap]
   simp [ready, step, store, heap, shared, ← count]
 
 private theorem write_poll (before after : State) (value : U16) (counter : Nat) (contents : Term)
@@ -86,7 +91,7 @@ private theorem write_poll (before after : State) (value : U16) (counter : Nat) 
   have found : lookup (⟨2⟩ : NativeFile) env = some before := by
     simp [lookup, heap, shared, decode_encode before valid]
     omega
-  simp only [pollWrite, found]
+  simp only [pollWrite,found,shared_not_read_only before counter contents env heap]
   simp [ready, step, store, heap, shared, ← count]
 
 theorem sync_poll (before after : State) (counter : Nat) (contents : Term)
@@ -337,7 +342,7 @@ private theorem write_failure_poll (before after : State) (value : U16) (error :
   have found : lookup (⟨2⟩ : NativeFile) env = some before := by
     simp [lookup, heap, shared, decode_encode before valid]
     omega
-  simp only [pollWrite, found]
+  simp only [pollWrite,found,shared_not_read_only before counter contents env heap]
   simp [ready, step, store, heap, shared, ← count]
 
 private theorem critical_error_exclusive (pid peer token counter : Nat) (different : pid ≠ peer)

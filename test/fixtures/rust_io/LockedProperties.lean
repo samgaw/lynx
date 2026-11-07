@@ -149,6 +149,12 @@ theorem held_lookup (base : Environment) (state : State) (poisoned : Bool) (vali
     [(1, NativeMutex.typeName NativeFile, NativeMutex.lockedContents base.currentPid 3 poisoned (⟨2⟩ : NativeFile))]
     (by simp [Separate]) valid
 
+theorem held_not_read_only (base : Environment) (state : State) (poisoned : Bool) :
+    getHandle (⟨2⟩ : NativeFile) handleTypeName (held base state poisoned) = none := by
+  exact no_shared_handle_at {base with refCounter := 3} ⟨2⟩ state
+    [(1,NativeMutex.typeName NativeFile,NativeMutex.lockedContents base.currentPid 3 poisoned (⟨2⟩ : NativeFile))]
+    (by simp [Separate])
+
 theorem held_store (base : Environment) (before after : State) (poisoned : Bool) :
     store (⟨2⟩ : NativeFile) after (held base before poisoned) = held base after poisoned := by
   exact store_at {base with refCounter := 3} ⟨2⟩ before after
@@ -181,7 +187,7 @@ theorem locked_ready (base : Environment) (before sought written committed : Sta
       some (.ok (.Ok 4#usize, ⟨2⟩), held base written poisoned) := by
     simp only [pollWrite]
     rw [held_lookup base sought poisoned valid1]
-    simp [ready1, write, held_store]
+    simp [-getHandle,ready1,write,held_store,held_not_read_only]
   have syncReady : pollSync (⟨2⟩ : NativeFile) (held base written poisoned) =
       some (.ok (.Ok ()), held base committed poisoned) := by
     simp only [pollSync]
