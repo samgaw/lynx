@@ -29,6 +29,12 @@ fn publishes_in_the_current_directory() -> io::Result<()> {
         assert_eq!(io_protocol::recover_named_word("empty")?, None);
         assert_eq!(io_protocol::recover_named_word("truncated")?, None);
         assert!(io_protocol::recover_named_word("missing").is_err());
+        assert!(io_protocol::commit_word("c", "d", u16::MAX)?);
+        assert_eq!(io_protocol::recover_named_word("d")?, Some(u16::MAX));
+        fs::write("busy", [1])?;
+        assert!(io_protocol::commit_word("busy", "unused", 0).is_err());
+        assert_eq!(fs::read("busy")?, [1]);
+        assert!(!std::path::Path::new("unused").exists());
         let write_only = fs::File::create("write-only")?;
         assert!(io_protocol::read_and_close_word(write_only).is_err());
         return Ok(());
