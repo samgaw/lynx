@@ -42,7 +42,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"AppendProperties", []},
       {"LogProperties", []},
       {"TailProperties", []},
-      {"ResizeProperties", []}
+      {"ResizeProperties", []},
+      {"RepairCrashProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -105,6 +106,10 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(resize_success_next resize_failure resize_sync_failure resize_outside repair_success repair_limit repair_crash unsynced_shrink repair_default),
             &("Record.ResizeProperties." <> &1)
+          ) ++
+          Enum.map(
+            ~w(repair_prepare repair_at_sync crash_retry restart_repair repair_interrupt),
+            &("Record.RepairCrashProperties." <> &1)
           )
     ]
 
@@ -185,11 +190,18 @@ defmodule Lynx.Rust.FileAppendTest do
              &String.contains?(&1, "successful set_len does not guarantee persistence")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.RepairCrashProperties.repair_interrupt")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
           "Record/TailProperties.lean",
           "Record/ResizeProperties.lean",
+          "Record/RepairCrashProperties.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -226,6 +238,28 @@ defmodule Lynx.Rust.FileAppendTest do
       end
 
     assert error.message =~ "Record/LogProperties.lean:"
+    File.write!(property, correct)
+
+    property = Path.join(project, "Record/RepairCrashProperties.lean")
+    correct = File.read!(property)
+
+    premature =
+      String.replace(
+        correct,
+        "⟨disk (logBytes values), durable,",
+        "⟨disk (logBytes values), disk (logBytes values),",
+        global: false
+      )
+
+    refute premature == correct
+    File.write!(property, premature)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Project.build!(project, options[:proof_modules])
+      end
+
+    assert error.message =~ "Record/RepairCrashProperties.lean:"
     File.write!(property, correct)
 
     source = Path.join(workspace, "protocol/src/lib.rs")
