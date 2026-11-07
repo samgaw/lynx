@@ -85,6 +85,19 @@ defmodule Lynx.Rust.LLBCJson do
     restore_constants(document, constants)
   end
 
+  # Global values use the constant-value table too. A repeated literal can be
+  # serialized once and referenced by a different global declaration; never
+  # resolve that reference through the independently numbered type table.
+  def restore_global_constant_values!(globals, document) do
+    document = restore_trait_references!(document, document)
+    constants = constant_values(document, %{})
+
+    Enum.map(
+      globals,
+      &Map.update!(&1, "value", fn value -> restore_constant(value, constants) end)
+    )
+  end
+
   defp merge_references!(left, right, kind) do
     Map.merge(left, right, fn id, previous, value ->
       if previous != value, do: raise(ArgumentError, "inconsistent LLBC #{kind} reference #{id}")

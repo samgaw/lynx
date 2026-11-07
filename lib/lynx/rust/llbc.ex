@@ -106,6 +106,7 @@ defmodule Lynx.Rust.LLBC do
 
     globals =
       Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
+      |> Lynx.Rust.LLBCJson.restore_global_constant_values!(document)
 
     constants =
       Lynx.Rust.Constants.audit!(globals, initializers, refs, translated["type_decls"])
