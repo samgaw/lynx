@@ -2,6 +2,17 @@ defmodule Lynx.Rust.NeverTypeTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.{CallModels, LLBC}
 
+  test "rehydrates associated type metadata from its own type table" do
+    associated = %{"TraitType" => ["Self", 0, %{"regions" => [], "types" => []}]}
+    original = [%{"Value" => [73, associated]}, %{"Value" => [73, %{"data" => "span"}]}]
+    removed = %{"ty" => %{"Deduplicated" => 73}}
+
+    assert %{73 => ^associated} = LLBC.type_references!(original)
+
+    assert %{"ty" => %{"Value" => [73, ^associated]}} =
+             Lynx.Rust.LLBCJson.restore_type_references!(removed, original)
+  end
+
   test "retains the uninhabited type without mixing independent hash-cons families" do
     document = [
       %{"Value" => [31, %{"Constant" => "unrelated"}]},
