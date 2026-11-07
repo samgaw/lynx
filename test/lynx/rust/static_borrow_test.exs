@@ -43,11 +43,17 @@ defmodule Lynx.Rust.StaticBorrowTest do
     assert result.verification.unverified_external_calls == []
     assert map_size(result.extraction.implementations) == 3
 
-    assert result.extraction.translation["aeneas_version"] in [
-             "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1",
-             "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1",
-             "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1"
-           ]
+    expected =
+      @tools
+      |> Path.join("lynx-toolchain")
+      |> File.read!()
+      |> String.split("\n")
+      |> Enum.find_value(fn
+        "aeneas=" <> version -> version
+        _ -> nil
+      end)
+
+    assert result.extraction.translation["aeneas_version"] == expected
 
     export = Path.join(tmp, "static-borrow.export")
     file = Lynx.Rust.Proofs.file!(result.extraction, ["Nested.Properties"])

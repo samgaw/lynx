@@ -16,6 +16,14 @@ cargo clean --package experiment-analysis
   --opaque core --opaque alloc --opaque std --include experiment_core \
   --include core::ops::control_flow::ControlFlow --include core::option::Option \
   --dest-file "$output_dir/workspace.llbc"
+# Use the same checked schema normalization as the normal extraction workflow.
+cd "$repo_dir"
+LYNX_EXPERIMENT_LLBC="$output_dir/workspace.llbc" mix run -e '
+  path = System.fetch_env!("LYNX_EXPERIMENT_LLBC")
+  document = path |> File.read!() |> JSON.decode!()
+  {document, _queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
+  File.write!(Path.rootname(path) <> ".aeneas.llbc", Lynx.Rust.LLBCJson.encode_like!(document, path))
+'
 "$AENEAS" -backend lean -split-files -abort-on-error -warnings-as-errors \
-  -dest "$output_dir" -subdir RustWorkspace/Extraction "$output_dir/workspace.llbc"
+  -dest "$output_dir" -subdir RustWorkspace/Extraction "$output_dir/workspace.aeneas.llbc"
 cp "$repo_dir/lean-toolchain" "$output_dir/lean-toolchain"
