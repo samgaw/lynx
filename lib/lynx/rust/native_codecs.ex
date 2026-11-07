@@ -128,7 +128,7 @@ defmodule Lynx.Rust.NativeCodecs do
         }
       } ->
         cond do
-          file_capability?(id, audit) ->
+          file_capability?(id, audit) or error_capability?(id, audit) ->
             found
 
           Enum.any?(found, &(&1["def_id"] == id)) ->
@@ -303,9 +303,11 @@ defmodule Lynx.Rust.NativeCodecs do
         ["std::sync::Mutex", schema_type!(payload, audit, types)]
 
       %{"Adt" => %{"id" => id}} ->
-        if file_capability?(id, audit),
-          do: "std::fs::File:borrowed-capability-v1",
-          else: schema!(Map.fetch!(types, id), audit, types)
+        cond do
+          file_capability?(id, audit) -> "std::fs::File:borrowed-capability-v1"
+          error_capability?(id, audit) -> "core::io::error::Error:os-capability-v1"
+          true -> schema!(Map.fetch!(types, id), audit, types)
+        end
     end
   end
 
@@ -315,6 +317,14 @@ defmodule Lynx.Rust.NativeCodecs do
     Lynx.Rust.FileModels.file_type?(audit.translated, id) and
       Enum.any?(audit.external_calls, fn
         {_, %{native_file_types: {^id, _}}} -> true
+        _ -> false
+      end)
+  end
+
+  defp error_capability?(id, audit) do
+    Lynx.Rust.FileModels.error_type?(audit.translated, id) and
+      Enum.any?(audit.external_calls, fn
+        {_, %{native_io_error_drop: true, native_file_types: {_, ^id}}} -> true
         _ -> false
       end)
   end

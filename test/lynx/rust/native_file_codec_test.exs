@@ -77,4 +77,38 @@ defmodule Lynx.Rust.NativeFileCodecTest do
       end
     end
   end
+
+  test "error cleanup needs its own admitted identity and cannot borrow file admission" do
+    audit = fixture()
+    error = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args([])}}
+
+    audit =
+      audit
+      |> put_in([:functions, Access.at(0), "body", "Regular", "generics"], %{
+        args([error])
+        | "trait_refs" => [%{}]
+      })
+      |> put_in([:external_calls, 10], %{native_codec_drop: true})
+      |> put_in([:external_calls, 20], %{
+        native_file_types: {nil, 1},
+        native_io_error_drop: true
+      })
+      |> put_in(
+        [:translated, "type_decls", Access.at(0), "item_meta", "name"],
+        Enum.map(~w(core io error Error), &%{"Ident" => [&1, 0]})
+      )
+
+    assert NativeCodecs.plan!(audit) == []
+
+    for altered <- [
+          put_in(audit, [:external_calls, 20, :native_io_error_drop], false),
+          put_in(audit, [:external_calls, 20, :native_file_types], {1, nil}),
+          %{audit | external_calls: Map.delete(audit.external_calls, 20)},
+          put_in(audit, [:translated, "type_decls", Access.at(0), "kind"], %{"Struct" => []})
+        ] do
+      assert_raise ArgumentError, ~r/unsupported native heap struct identity/, fn ->
+        NativeCodecs.plan!(altered)
+      end
+    end
+  end
 end

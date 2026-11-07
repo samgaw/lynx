@@ -55,6 +55,14 @@ defmodule Lynx.Rust do
   corruption. These filesystem/device guarantees and native descriptor
   correspondence are external assumptions, reported with the verification result.
   Error identities are opaque; payloads and error inspection are unsupported.
+  Explicit and compiler-inserted error destruction additionally require a unique
+  live `rust:os-io-error` cell at that identity, within the environment's allocated
+  reference range. Its `live` marker is host admission of a callback-free OS error
+  whose std/allocator cleanup does not panic or mutate observable application
+  state. Cleanup consumes the cell; stale, duplicate, wrong-type, custom-payload
+  and unadmitted errors exhaust verification. Error payload reclamation and native
+  correspondence remain reported assumptions. Application-created/custom error
+  constructors and their arbitrary destructors are not admitted by this model.
   Read counts select a visible prefix; unread buffer bytes survive. Read errors
   preserve the buffer and offset in this bounded external model; these are explicit
   std/OS correspondence assumptions rather than verified native guarantees.

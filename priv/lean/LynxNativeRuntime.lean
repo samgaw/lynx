@@ -1829,9 +1829,40 @@ instance : NativeCodec NativeFile where
     | _ => none
   decode_encode file := by cases file; rfl
 
-/-- Opaque I/O error identity. No error payload, kind or destructor is modeled. -/
+/-- Opaque I/O error identity. Payload and kind remain external. Only a separately
+admitted callback-free OS error capability has a consuming cleanup model. -/
 structure NativeIoError where
   identity : Nat
+
+/-- Internal identity representation only; this does not decode a Rustler argument
+or assert that an arbitrary error is safe to destroy. -/
+instance : NativeCodec NativeIoError where
+  typeName := "core::io::error::Error:os-capability-v1"
+  encode error := .reference error.identity
+  decode
+    | .reference identity => some ⟨identity⟩
+    | _ => none
+  decode_encode error := by cases error; rfl
+
+namespace NativeIoError
+
+/-- Host admission asserts that this error contains no user destructor callback.
+Native payload reclamation and allocator behavior remain trusted boundaries. -/
+@[expose] def typeName : String := "rust:os-io-error"
+
+/-- Consume one unique live admitted OS error. Missing, stale, wrong-type,
+ambiguous or custom-payload identities exhaust verification instead of erasing
+an unknown destructor. The admitted std/allocator cleanup is nonpanicking. -/
+@[expose] def dispose (error : NativeIoError) : NativeM Unit :=
+  Result.consumeNativeCapability typeName error.identity
+
+end NativeIoError
+
+instance : NativeDrop NativeIoError where
+  drop := NativeIoError.dispose
+
+instance : NativeOwnedDrop NativeIoError where
+  drop := NativeIoError.dispose
 
 namespace NativeFile
 
