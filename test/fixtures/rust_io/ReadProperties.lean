@@ -76,6 +76,7 @@ theorem read_valid (before : State) (value : Nat) (mask durable : ByteArray) (re
     (accepted : persist before.durable before.visible mask = some durable) :
     Valid (readState before value durable rest) := by
   have size := persist_size _ _ _ _ accepted
+  rw [max_eq_right valid.2.1] at size
   obtain ⟨visible, old, position⟩ := valid
   unfold Valid readState
   dsimp

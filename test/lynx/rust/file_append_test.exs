@@ -41,7 +41,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"CrashProperties", []},
       {"AppendProperties", []},
       {"LogProperties", []},
-      {"TailProperties", []}
+      {"TailProperties", []},
+      {"ResizeProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -64,6 +65,8 @@ defmodule Lynx.Rust.FileAppendTest do
 
     options = [
       roots: [
+        "io_protocol::resize_then_sync",
+        "io_protocol::repair_log",
         "io_protocol::append_record",
         "io_protocol::recover_log",
         "io_protocol::recover_record",
@@ -98,6 +101,10 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(recover_truncated_log restart_truncated_log retry_during_scan),
             &("Record.TailProperties." <> &1)
+          ) ++
+          Enum.map(
+            ~w(resize_success_next resize_failure resize_sync_failure resize_outside repair_success repair_limit repair_crash unsynced_shrink repair_default),
+            &("Record.ResizeProperties." <> &1)
           )
     ]
 
@@ -167,10 +174,22 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.TailProperties.retry_during_scan")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.ResizeProperties.repair_crash")
+           )
+
+    assert Enum.any?(
+             result.verification.external_models,
+             &String.contains?(&1, "successful set_len does not guarantee persistence")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
           "Record/TailProperties.lean",
+          "Record/ResizeProperties.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -220,7 +239,16 @@ defmodule Lynx.Rust.FileAppendTest do
              rust,
              "Ok(None) => return Ok(values),",
              "Ok(None) => return Ok(Vec::new()),"
-           ), "TailProperties"}
+           ), "TailProperties"},
+          {String.replace(rust, "Ok(()) => io_core::synchronize(file),", "Ok(()) => Ok(()),"),
+           "ResizeProperties"},
+          {String.replace(
+             rust,
+             "let valid_bytes = (values.len() as u64) * 4;",
+             "let valid_bytes = (values.len() as u64) * 5;"
+           ), "ResizeProperties"},
+          {String.replace(rust, "if values.len() == max_records {", "if false {"),
+           "ResizeProperties"}
         ] do
       refute broken == rust
       File.write!(source, broken)
