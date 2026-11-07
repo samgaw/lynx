@@ -114,6 +114,30 @@ theorem overwrite_log_image (values : List U16) (value : U16) (amount : Nat) (sh
   rw [layoutBytes, overwrite_append]
   exact log_image values ((layout value).val.take amount) (by simp only [List.length_take]; omega)
 
+/-- Capture any admitted partial-tail file state in the independently stored
+shared file cell. Both visible and durable images must retain the same prefix. -/
+theorem crash_shared_image (env : Environment) (pid : Nat) (values : List U16)
+    (state : State) (mask : ByteArray) (image : Image)
+    (fits : (disk (logBytes values)).size + 4 ≤ limit) (counter : env.refCounter = 3)
+    (heap : env.nativeHeap = (shared 3 (owned pid 3) state).2)
+    (offset : state.position ≤ limit) (visible : LogImage values state.visible)
+    (durable : LogImage values state.durable)
+    (captured : crashImage ⟨2⟩ mask env = some image) :
+    LogImage values image.bytes ∧ image.bytes.size ≤ limit := by
+  have visibleBound : state.visible.size ≤ limit := by have bound := visible.2; omega
+  have durableBound : state.durable.size ≤ limit := by have bound := durable.2; omega
+  have valid : Admitted state := ⟨visibleBound, durableBound, offset⟩
+  have found : lookup (⟨2⟩ : NativeFile) env = some state := by
+    simp [lookup, counter, heap, shared, decode_admitted state valid]
+  unfold crashImage at captured
+  rw [found] at captured
+  change (persist state.durable state.visible mask).bind
+    (fun bytes => some (⟨bytes, env.refCounter⟩ : Image)) = some image at captured
+  obtain ⟨bytes, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
+  cases Option.some.inj record
+  have shape := persist_log_image values state.durable state.visible mask bytes durable visible accepted
+  exact ⟨shape, by dsimp only; have bound := shape.2; omega⟩
+
 private theorem crash_pending (env : Environment) (pid : Nat) (values : List U16)
     (durable : ByteArray) (amount : Nat) (rest : Term) (mask : ByteArray) (image : Image)
     (fits : (disk (logBytes values)).size + 4 ≤ limit) (short : amount < 4)
@@ -121,23 +145,12 @@ private theorem crash_pending (env : Environment) (pid : Nat) (values : List U16
     (heap : env.nativeHeap = (shared 3 (owned pid 3) (pending (disk (logBytes values)) durable amount rest)).2)
     (captured : crashImage ⟨2⟩ mask env = some image) :
     LogImage values image.bytes ∧ image.bytes.size ≤ limit := by
-  let data := disk (logBytes values)
-  have capacity : data.size + 4 ≤ limit := fits
-  have durableBound : durable.size ≤ limit := by have bound := durableImage.2; dsimp [data] at *; omega
-  have valid : Admitted (pending data durable amount rest) := by
-    change data.size ≤ limit ∧ durable.size ≤ limit ∧ data.size + amount ≤ limit
-    exact ⟨by omega, durableBound, by omega⟩
-  have found : lookup (⟨2⟩ : NativeFile) env = some (pending data durable amount rest) := by
-    simp [lookup, counter, heap, shared]
-    exact decode_admitted _ valid
-  unfold crashImage at captured
-  rw [found] at captured
-  change (persist durable data mask).bind (fun bytes => some (⟨bytes, env.refCounter⟩ : Image)) = some image at captured
-  obtain ⟨bytes, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
-  cases Option.some.inj record
-  have original : LogImage values data := by simpa using log_image values [] (by decide)
-  have shape := persist_log_image values durable data mask bytes durableImage original accepted
-  exact ⟨shape, by have bound := shape.2; dsimp [data] at *; omega⟩
+  apply crash_shared_image env pid values _ mask image fits counter heap
+  · dsimp [pending]
+    omega
+  · simpa [pending] using log_image values [] (by decide)
+  · exact durableImage
+  · exact captured
 
 /-- Arbitrary admitted write, shrink and power-loss persistence choices may
 retain a torn tail. Fresh actual Rust repair still recovers exactly the complete
@@ -211,10 +224,10 @@ private theorem persist_keep_visible (old visible : ByteArray) :
     simp [fullMask, getElem!_pos, inside]
     rfl
 
-private theorem tail_size (value : U16) : (crop (encoded value) 2).size = 2 := by
+theorem tail_size (value : U16) : (crop (encoded value) 2).size = 2 := by
   simp [crop, encoded, fourBytes, ← ByteArray.size_data]
 
-private theorem tail_write (value : U16) :
+theorem tail_write (value : U16) :
     persist ByteArray.empty (overwrite ByteArray.empty 0 (bytes (payload value)) 2) ⟨#[1, 1]⟩ =
       some (crop (encoded value) 2) := by
   rw [payload_bytes, overwrite_empty]
