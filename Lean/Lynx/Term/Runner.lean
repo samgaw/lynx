@@ -322,6 +322,393 @@ private theorem sharedSteps_right {α : Type} {computation : Result Term} {value
           (eq_comm (a := 2) (b := previous))]
         exact ih 2
 
+private theorem choose_single_ready (pool : Term.Runner.Pool α) (pid : PID)
+    (env : Environment) (preferred : ScheduleChoice)
+    (ready : ∀ choices accept, Term.Runner.findReady {env with schedule := choices} accept pool =
+      if accept pid then some pid else none)
+    (noTimeout : ∀ choices accept, Term.Runner.findTimeout {env with schedule := choices} accept pool = none) :
+    ∃ choices, Term.Runner.choose pool env preferred =
+      ({env with schedule := choices}, some (pid, false)) := by
+  generalize history : env.schedule = choices
+  induction choices generalizing env preferred with
+  | nil =>
+      have here (accept) := ready [] accept
+      have no (accept) := noTimeout [] accept
+      simp only [← history] at here no
+      cases preferred with
+      | current =>
+        by_cases same : pid = env.currentPid
+        all_goals exact ⟨env.schedule, by cases env; simp_all [Term.Runner.choose]⟩
+      | swap requested =>
+        by_cases same : pid = env.currentPid <;> by_cases wanted : pid = requested
+        all_goals exact ⟨env.schedule, by cases env; simp_all [Term.Runner.choose]⟩
+      | timeout requested =>
+        by_cases same : pid = env.currentPid
+        all_goals exact ⟨env.schedule, by cases env; simp_all [Term.Runner.choose]⟩
+  | cons choice rest ih =>
+      have here (accept) := ready (choice :: rest) accept
+      have no (accept) := noTimeout (choice :: rest) accept
+      simp only [← history] at here no
+      cases preferred with
+      | current =>
+        by_cases same : pid = env.currentPid
+        · exact ⟨env.schedule, by cases env; simp_all [Term.Runner.choose]⟩
+        · obtain ⟨remaining, selected⟩ := ih {env with schedule := rest} choice
+            (by simpa using ready) (by simpa using noTimeout) rfl
+          exact ⟨remaining, by cases env; simp_all [Term.Runner.choose]⟩
+      | swap requested =>
+        by_cases same : pid = env.currentPid <;> by_cases wanted : pid = requested
+        all_goals exact ⟨env.schedule, by cases env; simp_all [Term.Runner.choose]⟩
+      | timeout requested =>
+        by_cases same : pid = env.currentPid
+        all_goals exact ⟨env.schedule, by cases env; simp_all [Term.Runner.choose]⟩
+
+private def sharedResult (observed : Outcome α × Environment) :
+    Outcome α × (Nat × List (Nat × String × Term)) :=
+  (observed.1, observed.2.refCounter, observed.2.nativeHeap)
+
+private theorem choose_empty_pair (env : Environment) (preferred : ScheduleChoice) :
+    Term.Runner.choose (.parallel .empty .empty : Term.Runner.Pool α) env preferred =
+      ({env with schedule := []}, none) := by
+  generalize history : env.schedule = choices
+  induction choices generalizing env preferred with
+  | nil => cases preferred <;> cases env <;>
+      simp_all [Term.Runner.choose, Term.Runner.findReady, Term.Runner.findTimeout]
+  | cons choice rest ih => cases preferred <;> cases env <;>
+      simp_all [Term.Runner.choose, Term.Runner.findReady, Term.Runner.findTimeout]
+
+private theorem execute_empty_pair (root : PID) (env : Environment) (preferred : ScheduleChoice)
+    (finished : Term.Runner.Finished α) (value : α)
+    (returned : finished.map Prod.fst = some (.ok value)) :
+    sharedResult (Term.Runner.execute root env (.parallel .empty .empty) finished preferred) =
+      (.ok value, env.refCounter, env.nativeHeap) := by
+  cases finished with
+  | none => simp at returned
+  | some result =>
+    rcases result with ⟨reply, process⟩
+    simp only [Option.map_some, Option.some.injEq] at returned
+    subst reply
+    rw [Term.Runner.execute, choose_empty_pair]
+    simp [Term.Runner.isEmpty, Term.Runner.restore, sharedResult]
+
+private def solePool (left : Bool) (pid : PID) (computation : Result β)
+    (finish : Except Exception β → Option (Except Exception α)) : Term.Runner.Pool α :=
+  if left then .parallel (.process pid computation finish) .empty
+  else .parallel .empty (.process pid computation finish)
+
+private theorem sharedSteps_sole {α β : Type} {pid : PID} {computation : Result β} {value : β}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps pid computation before value after)
+    (root : PID) (env : Environment) (preferred : ScheduleChoice) (left : Bool)
+    (finish : Except Exception β → Option (Except Exception α))
+    (finished : Term.Runner.Finished α) (rootValue : α)
+    (counter : env.refCounter = before.1) (heap : env.nativeHeap = before.2)
+    (returned : (finish (.ok value)).orElse (fun _ => finished.map Prod.fst) = some (.ok rootValue)) :
+    sharedResult (Term.Runner.execute root env (solePool left pid computation finish) finished preferred) =
+      (.ok rootValue, after) := by
+  induction trace generalizing env preferred with
+  | done value shared =>
+      obtain ⟨choices, selected⟩ := choose_single_ready (solePool left pid (.ok value) finish) pid env preferred
+        (by intro choices accept; cases left <;> cases accepted : accept pid <;> simp [solePool, Term.Runner.findReady, accepted])
+        (by intro choices accept; cases left <;> simp [solePool, Term.Runner.findTimeout])
+      rw [Term.Runner.execute, selected]
+      cases left <;>
+        simp [solePool, Term.Runner.step, Term.Runner.activate, Option.bind_some]
+      all_goals
+        change _ = (Outcome.ok rootValue, shared.1, shared.2)
+        rw [← counter, ← heap]
+        apply execute_empty_pair
+        cases completed : finish (.ok value) <;> simpa [completed] using returned
+  | wait poll next reply before middle final value ready rest ih =>
+      have polled (choices : List ScheduleChoice) :
+          poll (Term.Runner.activate {env with schedule := choices} pid) =
+            some (reply, {Term.Runner.activate {env with schedule := choices} pid with
+              refCounter := middle.1, nativeHeap := middle.2}) :=
+        ready _ rfl counter heap
+      simp only [Term.Runner.activate] at polled
+      obtain ⟨choices, selected⟩ := choose_single_ready (solePool left pid (.wait poll next) finish) pid env preferred
+        (by intro choices accept; cases left <;> cases accepted : accept pid <;> simp [solePool, Term.Runner.findReady, Term.Runner.activate, polled, accepted])
+        (by intro choices accept; cases left <;> simp [solePool, Term.Runner.findTimeout])
+      cases choices <;> rw [Term.Runner.execute, selected]
+      all_goals cases left <;>
+        simp [solePool, Term.Runner.step, polled, Term.Runner.schedule,
+          Term.Runner.save, Term.Runner.activate]
+      all_goals apply ih <;> first | rfl | exact returned
+
+private theorem choose_pair_ready (pool : Term.Runner.Pool α) (env : Environment)
+    (preferred : ScheduleChoice) (current : env.currentPid = 1 ∨ env.currentPid = 2)
+    (ready : ∀ accept, Term.Runner.findReady env accept pool =
+      if accept 1 then some 1 else if accept 2 then some 2 else none)
+    (noTimeout : ∀ accept, Term.Runner.findTimeout env accept pool = none) :
+    Term.Runner.choose pool env preferred = (env, some (1, false)) ∨
+    Term.Runner.choose pool env preferred = (env, some (2, false)) := by
+  rcases current with current | current
+  all_goals
+    cases preferred with
+    | current => simp [Term.Runner.choose, ready, current]
+    | timeout requested => simp [Term.Runner.choose, ready, noTimeout, current]
+    | swap requested =>
+        by_cases one : 1 = requested <;> by_cases two : 2 = requested
+        all_goals simp [Term.Runner.choose, ready, current, one, two]
+
+private theorem choose_done_pair {computation : Result Term} {value : Term}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps 2 computation before value after) (rootValue : Term)
+    (env : Environment) (preferred : ScheduleChoice)
+    (current : env.currentPid = 1 ∨ env.currentPid = 2)
+    (counter : env.refCounter = before.1) (heap : env.nativeHeap = before.2) :
+    let pool : Term.Runner.Pool Term := .parallel (.process 1 (.ok rootValue) some)
+      (.process 2 computation (fun _ => none))
+    Term.Runner.choose pool env preferred = (env, some (1, false)) ∨
+    Term.Runner.choose pool env preferred = (env, some (2, false)) := by
+  apply choose_pair_ready _ env preferred current
+  · intro accept
+    cases trace with
+    | done value shared => cases a : accept 1 <;> cases b : accept 2 <;>
+        simp [Term.Runner.findReady, a, b]
+    | wait poll next reply before middle final value ready rest =>
+        have polled := ready (Term.Runner.activate env 2) rfl counter heap
+        cases a : accept 1 <;> cases b : accept 2 <;> simp [Term.Runner.findReady, a, b, polled]
+  · intro accept
+    cases trace <;> simp [Term.Runner.findTimeout]
+
+private theorem sharedSteps_pendingRoot {computation : Result Term} {value : Term}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps 2 computation before value after) (rootValue : Term)
+    (env : Environment) (preferred : ScheduleChoice)
+    (current : env.currentPid = 1 ∨ env.currentPid = 2)
+    (counter : env.refCounter = before.1) (heap : env.nativeHeap = before.2) :
+    sharedResult (Term.Runner.execute 1 env
+      (.parallel (.process 1 (.ok rootValue) some) (.process 2 computation (fun _ => none))) none preferred) =
+      (.ok rootValue, after) := by
+  induction trace generalizing env preferred with
+  | done value shared =>
+      rcases choose_done_pair (.done value shared) rootValue env preferred current counter heap with selected | selected
+      all_goals rw [Term.Runner.execute, selected]
+      · simp [Term.Runner.step]
+        exact sharedSteps_sole (.done value shared) 1 _ .current false _ _ rootValue counter heap rfl
+      · simp [Term.Runner.step]
+        exact sharedSteps_sole (.done rootValue shared) 1 _ .current true _ _ rootValue counter heap rfl
+  | wait poll next reply before middle final value ready rest ih =>
+      have trace := SharedSteps.wait poll next reply before middle final value ready rest
+      rcases choose_done_pair trace rootValue env preferred current counter heap with selected | selected
+      all_goals rw [Term.Runner.execute, selected]
+      · simp [Term.Runner.step]
+        exact sharedSteps_sole trace 1 _ .current false _ _ rootValue counter heap rfl
+      · have polled := ready (Term.Runner.activate env 2) rfl counter heap
+        simp only [Term.Runner.activate] at polled
+        cases history : env.schedule
+        all_goals
+          simp only [history] at polled
+          simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save,
+            polled, Term.Runner.schedule, history]
+          apply ih <;> first | exact Or.inr rfl | rfl
+
+private theorem choose_root_pair {computation : Result Term} {value : Term}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps 1 computation before value after) (childValue : Term)
+    (env : Environment) (preferred : ScheduleChoice)
+    (current : env.currentPid = 1 ∨ env.currentPid = 2)
+    (counter : env.refCounter = before.1) (heap : env.nativeHeap = before.2) :
+    let pool : Term.Runner.Pool Term := .parallel (.process 1 computation some)
+      (.process 2 (.ok childValue) (fun _ => none))
+    Term.Runner.choose pool env preferred = (env, some (1, false)) ∨
+    Term.Runner.choose pool env preferred = (env, some (2, false)) := by
+  apply choose_pair_ready _ env preferred current
+  · intro accept
+    cases trace with
+    | done value shared => cases a : accept 1 <;> cases b : accept 2 <;>
+        simp [Term.Runner.findReady, a, b]
+    | wait poll next reply before middle final value ready rest =>
+        have polled := ready (Term.Runner.activate env 1) rfl counter heap
+        cases a : accept 1 <;> cases b : accept 2 <;> simp [Term.Runner.findReady, a, b, polled]
+  · intro accept
+    cases trace <;> simp [Term.Runner.findTimeout]
+
+private theorem sharedSteps_pendingChild {computation : Result Term} {value : Term}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps 1 computation before value after) (childValue : Term)
+    (env : Environment) (preferred : ScheduleChoice)
+    (current : env.currentPid = 1 ∨ env.currentPid = 2)
+    (counter : env.refCounter = before.1) (heap : env.nativeHeap = before.2) :
+    sharedResult (Term.Runner.execute 1 env
+      (.parallel (.process 1 computation some) (.process 2 (.ok childValue) (fun _ => none))) none preferred) =
+      (.ok value, after) := by
+  induction trace generalizing env preferred with
+  | done value shared =>
+      exact sharedSteps_pendingRoot (.done childValue shared) value env preferred current counter heap
+  | wait poll next reply before middle final value ready rest ih =>
+      have trace := SharedSteps.wait poll next reply before middle final value ready rest
+      rcases choose_root_pair trace childValue env preferred current counter heap with selected | selected
+      all_goals rw [Term.Runner.execute, selected]
+      · have polled := ready (Term.Runner.activate env 1) rfl counter heap
+        simp only [Term.Runner.activate] at polled
+        cases history : env.schedule
+        all_goals
+          simp only [history] at polled
+          simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save,
+            polled, Term.Runner.schedule, history]
+          apply ih <;> first | exact Or.inl rfl | rfl
+      · simp [Term.Runner.step]
+        exact sharedSteps_sole trace 1 _ .current true _ _ value counter heap rfl
+
+/-- Ready critical-section polls exclude a peer acquisition before each step.
+The final state may release the peer; completion itself performs no shared write.
+This evidence is used to reason over all finite scheduler choices. -/
+inductive ExclusiveSteps {γ : Type} (pid peer : PID) (peerPoll : Environment → Option (γ × Environment)) :
+    Result α → (Nat × List (Nat × String × Term)) → α →
+      (Nat × List (Nat × String × Term)) → Prop where
+  | done (value : α) (shared : Nat × List (Nat × String × Term)) :
+      ExclusiveSteps pid peer peerPoll (.ok value) shared value shared
+  | wait {β : Type} (poll : Environment → Option (β × Environment))
+      (next : β → Result α) (reply : β) (before after final : Nat × List (Nat × String × Term))
+      (value : α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.refCounter = before.1 →
+        env.nativeHeap = before.2 →
+        poll env = some (reply, {env with refCounter := after.1, nativeHeap := after.2}))
+      (blocked : ∀ env : Environment, env.currentPid = peer → env.refCounter = before.1 →
+        env.nativeHeap = before.2 → peerPoll env = none)
+      (rest : ExclusiveSteps pid peer peerPoll (next reply) after value final) :
+      ExclusiveSteps pid peer peerPoll (.wait poll next) before value final
+
+theorem ExclusiveSteps.ready {pid peer : PID} {peerPoll : Environment → Option (γ × Environment)}
+    {computation : Result α} {value : α} {before after : Nat × List (Nat × String × Term)}
+    (trace : ExclusiveSteps pid peer peerPoll computation before value after) :
+    SharedSteps pid computation before value after := by
+  induction trace with
+  | done value shared => exact .done value shared
+  | wait poll next reply before middle final value ready blocked rest ih =>
+      exact .wait poll next reply before middle final value ready ih
+
+private theorem exclusiveSteps_root {β : Type} {computation : Result Term} {value : Term}
+    {before middle after : Nat × List (Nat × String × Term)}
+    (peerPoll : Environment → Option (β × Environment)) (peerNext : β → Result Term)
+    (trace : ExclusiveSteps 1 2 peerPoll computation before value middle)
+    (peerTrace : SharedSteps 2 (.wait peerPoll peerNext) middle childValue after)
+    (env : Environment) (preferred : ScheduleChoice)
+    (current : env.currentPid = 1 ∨ env.currentPid = 2)
+    (counter : env.refCounter = before.1) (heap : env.nativeHeap = before.2) :
+    sharedResult (Term.Runner.execute 1 env
+      (.parallel (.process 1 computation some) (.process 2 (.wait peerPoll peerNext) (fun _ => none))) none preferred) =
+      (.ok value, after) := by
+  induction trace generalizing env preferred with
+  | done value shared =>
+      exact sharedSteps_pendingRoot peerTrace value env preferred current counter heap
+  | wait poll next reply before middle final value ready blocked rest ih =>
+      have polled (choices : List ScheduleChoice) :=
+        ready (Term.Runner.activate {env with schedule := choices} 1) rfl counter heap
+      have excluded (choices : List ScheduleChoice) :=
+        blocked (Term.Runner.activate {env with schedule := choices} 2) rfl counter heap
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process 1 (.wait poll next) some) (.process 2 (.wait peerPoll peerNext) (fun _ => none))) 1 env preferred
+        (by intro choices accept; cases a : accept 1 <;> cases b : accept 2 <;>
+          simp [Term.Runner.findReady, a, b, polled, excluded])
+        (by intro choices accept; simp [Term.Runner.findTimeout])
+      simp only [Term.Runner.activate] at polled
+      cases choices <;> rw [Term.Runner.execute, selected]
+      all_goals
+        simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, polled, Term.Runner.schedule]
+        apply ih <;> first | exact peerTrace | exact Or.inl rfl | rfl
+
+private theorem exclusiveSteps_child {β : Type} {computation : Result Term} {value : Term}
+    {before middle after : Nat × List (Nat × String × Term)}
+    (peerPoll : Environment → Option (β × Environment)) (peerNext : β → Result Term)
+    (trace : ExclusiveSteps 2 1 peerPoll computation before value middle)
+    (peerTrace : SharedSteps 1 (.wait peerPoll peerNext) middle rootValue after)
+    (env : Environment) (preferred : ScheduleChoice)
+    (current : env.currentPid = 1 ∨ env.currentPid = 2)
+    (counter : env.refCounter = before.1) (heap : env.nativeHeap = before.2) :
+    sharedResult (Term.Runner.execute 1 env
+      (.parallel (.process 1 (.wait peerPoll peerNext) some) (.process 2 computation (fun _ => none))) none preferred) =
+      (.ok rootValue, after) := by
+  induction trace generalizing env preferred with
+  | done value shared =>
+      exact sharedSteps_pendingChild peerTrace value env preferred current counter heap
+  | wait poll next reply before middle final value ready blocked rest ih =>
+      have polled (choices : List ScheduleChoice) :=
+        ready (Term.Runner.activate {env with schedule := choices} 2) rfl counter heap
+      have excluded (choices : List ScheduleChoice) :=
+        blocked (Term.Runner.activate {env with schedule := choices} 1) rfl counter heap
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process 1 (.wait peerPoll peerNext) some) (.process 2 (.wait poll next) (fun _ => none))) 2 env preferred
+        (by intro choices accept; cases a : accept 1 <;> cases b : accept 2 <;>
+          simp [Term.Runner.findReady, a, b, polled, excluded])
+        (by intro choices accept; simp [Term.Runner.findTimeout])
+      simp only [Term.Runner.activate] at polled
+      cases choices <;> rw [Term.Runner.execute, selected]
+      all_goals
+        simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, polled, Term.Runner.schedule]
+        apply ih <;> first | exact peerTrace | exact Or.inr rfl | rfl
+
+/-- Two finite, ready critical sections serialize under every finite scheduler
+choice list. Each owner excludes the peer's acquisition until release. Both
+possible acquisition orders retain their actual poll transitions. This theorem
+assumes ready IO; it makes no claim about external progress or infinite fairness. -/
+theorem two_wait_serial_orders
+    (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
+    (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
+    (parentValue : β) (childValue : γ) (rootValue childResult : Term)
+    (initial parentHeld parentReleased parentFinal childHeld childReleased childFinal :
+      Nat × List (Nat × String × Term))
+    (parentReady : ∀ env : Environment, env.currentPid = 1 → env.refCounter = initial.1 →
+      env.nativeHeap = initial.2 → parentPoll env =
+        some (parentValue, {env with refCounter := parentHeld.1, nativeHeap := parentHeld.2}))
+    (childReady : ∀ env : Environment, env.currentPid = 2 → env.refCounter = initial.1 →
+      env.nativeHeap = initial.2 → childPoll env =
+        some (childValue, {env with refCounter := childHeld.1, nativeHeap := childHeld.2}))
+    (parent : ExclusiveSteps 1 2 childPoll (parentNext parentValue) parentHeld rootValue parentReleased)
+    (childAfter : SharedSteps 2 (.wait childPoll childNext) parentReleased childResult parentFinal)
+    (child : ExclusiveSteps 2 1 parentPoll (childNext childValue) childHeld childResult childReleased)
+    (parentAfter : SharedSteps 1 (.wait parentPoll parentNext) childReleased rootValue childFinal)
+    (choices : List ScheduleChoice) :
+    let observed :=
+      (Result.schedule (.wait childPoll childNext) (fun _ => .wait parentPoll parentNext))
+        {refCounter := initial.1, nativeHeap := initial.2, schedule := choices}
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok rootValue, parentFinal) ∨
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok rootValue, childFinal) := by
+  let pool : Term.Runner.Pool Term := .parallel (.process 1 (.wait parentPoll parentNext) some)
+    (.process 2 (.wait childPoll childNext) (fun _ => none))
+  have serial (env : Environment) (preferred : ScheduleChoice)
+      (current : env.currentPid = 1 ∨ env.currentPid = 2)
+      (counter : env.refCounter = initial.1) (heap : env.nativeHeap = initial.2) :
+      sharedResult (Term.Runner.execute 1 env pool none preferred) = (.ok rootValue, parentFinal) ∨
+      sharedResult (Term.Runner.execute 1 env pool none preferred) = (.ok rootValue, childFinal) := by
+    have parentPollReady := parentReady (Term.Runner.activate env 1) rfl counter heap
+    have childPollReady := childReady (Term.Runner.activate env 2) rfl counter heap
+    have selected := choose_pair_ready pool env preferred current
+      (by intro accept; cases a : accept 1 <;> cases b : accept 2 <;>
+        simp [pool, Term.Runner.findReady, a, b, parentPollReady, childPollReady])
+      (by intro accept; simp [pool, Term.Runner.findTimeout])
+    simp only [Term.Runner.activate] at parentPollReady childPollReady
+    rcases selected with selected | selected
+    · left
+      rw [Term.Runner.execute, selected]
+      cases history : env.schedule
+      all_goals
+        simp only [history] at parentPollReady
+        simp [pool, Term.Runner.step, parentPollReady, Term.Runner.schedule,
+          Term.Runner.save, Term.Runner.activate, history]
+        apply exclusiveSteps_root childPoll childNext parent childAfter <;>
+          first | exact Or.inl rfl | rfl
+    · right
+      rw [Term.Runner.execute, selected]
+      cases history : env.schedule
+      all_goals
+        simp only [history] at childPollReady
+        simp [pool, Term.Runner.step, childPollReady, Term.Runner.schedule,
+          Term.Runner.save, Term.Runner.activate, history]
+        apply exclusiveSteps_child parentPoll parentNext child parentAfter <;>
+          first | exact Or.inr rfl | rfl
+  change sharedResult (Term.Runner.run _ _) = (.ok rootValue, parentFinal) ∨
+    sharedResult (Term.Runner.run _ _) = (.ok rootValue, childFinal)
+  cases choices <;>
+    rw [Term.Runner.run, Term.Runner.execute]
+  all_goals
+    simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+      Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+      Term.Runner.removeProcess, Term.Runner.schedule]
+    apply serial <;> first | exact Or.inl rfl | rfl
+
 /-- Two contending workers retain every IO wait in their finite ready traces.
 The root acquires first, a child acquisition is attempted while held, then both
 traces execute. This is a concrete schedule theorem, not an arbitrary-schedule
