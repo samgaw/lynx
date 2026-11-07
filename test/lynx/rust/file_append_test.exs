@@ -46,7 +46,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"RepairCrashProperties", []},
       {"MalformedProperties", []},
       {"LockedProperties", []},
-      {"LockedConcurrent", []}
+      {"LockedConcurrent", []},
+      {"RollbackProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -69,6 +70,8 @@ defmodule Lynx.Rust.FileAppendTest do
 
     options = [
       roots: [
+        "io_protocol::locked_append_or_rollback",
+        "io_protocol::append_record_or_rollback",
         "io_protocol::locked_append",
         "io_protocol::resize_then_sync",
         "io_protocol::repair_log",
@@ -126,7 +129,10 @@ defmodule Lynx.Rust.FileAppendTest do
           [
             "Record.LockedConcurrent.appends_interleave",
             "Record.LockedConcurrent.appends_all_schedules",
-            "Record.LockedConcurrent.error_then_append_all_schedules"
+            "Record.LockedConcurrent.error_then_append_all_schedules",
+            "Record.RollbackProperties.append_contract",
+            "Record.RollbackProperties.critical_contract",
+            "Record.RollbackProperties.rollback_then_append_all_schedules"
           ]
     ]
 
@@ -243,6 +249,12 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.LockedConcurrent.error_then_append_all_schedules")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.RollbackProperties.rollback_then_append_all_schedules")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
@@ -252,6 +264,7 @@ defmodule Lynx.Rust.FileAppendTest do
           "Record/MalformedProperties.lean",
           "Record/LockedProperties.lean",
           "Record/LockedConcurrent.lean",
+          "Record/RollbackProperties.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -376,6 +389,13 @@ defmodule Lynx.Rust.FileAppendTest do
     rust = File.read!(source)
 
     for {broken, proof} <- [
+          {String.replace(rust, "resize_then_sync(file, start)", "resize_then_sync(file, 0)"),
+           "RollbackProperties"},
+          {String.replace(
+             rust,
+             "resize_then_sync(file, start)",
+             "io_core::resize_to(file, start)"
+           ), "RollbackProperties"},
           {String.replace(
              rust,
              ~r/pub fn write_then_sync\(.*?\n\}/s,
