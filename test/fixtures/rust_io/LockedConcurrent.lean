@@ -7,8 +7,14 @@ open NativeFile Record.Properties Record.ReadProperties Record.RecoveryPropertie
   Record.IntegrityProperties Record.CrashProperties Record.AppendProperties Record.LockedProperties
   Record.LogProperties Record.TailProperties Record.ResizeProperties
 
+@[expose] def errorTerm (identity : Nat) : Term :=
+  .tuple #[.atom "error", .integer identity]
+
 @[expose] def finish (reply : core.result.Result Bool NativeIoError) : Result Term :=
-  .ok (match reply with | .Ok true => Term.true | _ => Term.false)
+  .ok (match reply with
+    | .Ok true => Term.true
+    | .Ok false => Term.false
+    | .Err error => errorTerm error.identity)
 
 private def postAcquire (value : U16)
     (reply : Except Exception (core.result.Result (NativeGuard NativeFile)
@@ -304,5 +310,121 @@ theorem appends_all_schedules (data : ByteArray) (first second : U16) (position 
     childExclusive (by simpa only [childNext] using rootAfter) choices
   simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared,
     before, nextFirst, nextSecond] using result
+
+private theorem write_failure_poll (before after : State) (value : U16) (error : NativeIoError)
+    (counter : Nat) (contents : Term) (valid : Valid before) (ready : blocked before = false)
+    (step : writeStep before (payload value) = some (.Err error, after)) (fresh : 2 ≤ counter)
+    (env : Environment) (count : env.refCounter = counter)
+    (heap : env.nativeHeap = (shared counter contents before).2) :
+    pollWrite (⟨2⟩ : NativeFile) (payload value) env =
+      some (.ok (.Err error, ⟨2⟩),
+        {env with refCounter := counter, nativeHeap := (shared counter contents after).2}) := by
+  have found : lookup (⟨2⟩ : NativeFile) env = some before := by
+    simp [lookup, heap, shared, decode_encode before valid]
+    omega
+  simp only [pollWrite, found]
+  simp [ready, step, store, heap, shared, ← count]
+
+private theorem critical_error_exclusive (pid peer token counter : Nat) (different : pid ≠ peer)
+    (before sought failed : State) (value : U16) (position : U64) (error : NativeIoError)
+    (fresh : 2 ≤ counter) (valid0 : Valid before) (valid1 : Valid sought)
+    (ready0 : blocked before = false) (ready1 : blocked sought = false)
+    (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
+    (write : writeStep sought (payload value) = some (.Err error, failed)) :
+    Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
+      (postAcquire value (.ok (.Ok ⟨⟨1⟩, token, pid, ⟨2⟩⟩)))
+      (shared counter (owned pid token) before) (errorTerm error.identity) (shared counter free failed) := by
+  simp only [postAcquire, recoverGuard]
+  rw [append_contract]
+  simp only [bind_assoc, NativeFile.seek, Result.wait_bind]
+  refine .wait _ _ (.ok (.Ok position, (⟨2⟩ : NativeFile))) _
+    (shared counter (owned pid token) sought) _ _ ?_ ?_ ?_
+  · intro env _ count heap
+    exact seek_poll before sought position counter _ valid0 ready0 seek fresh env count heap
+  · intro env owner _ heap
+    exact held_blocked pid peer token counter before different env owner heap
+  · simp only [Result.ok_bind, NativeFile.write, Result.wait_bind]
+    refine .wait _ _ (.ok (.Err error, (⟨2⟩ : NativeFile))) _
+      (shared counter (owned pid token) failed) _ _ ?_ ?_ ?_
+    · intro env _ count heap
+      exact write_failure_poll sought failed value error counter _ valid1 ready1 write fresh env count heap
+    · intro env owner _ heap
+      exact held_blocked pid peer token counter sought different env owner heap
+    · simp only [Result.ok_bind, NativeM.ok, NativeGuard.release, Result.wait_bind]
+      refine .wait _ _ (.ok ()) _ (shared counter free failed) _ _ ?_ ?_ ?_
+      · intro env owner count heap
+        simp [NativeGuard.pollRelease, heap, shared, owned, free,
+          NativeMutex.lockedContents, NativeCodec.encode, NativeCodec.decode, owner, count]
+      · intro env owner _ heap
+        exact held_blocked pid peer token counter failed different env owner heap
+      · exact .done (errorTerm error.identity) _
+
+@[expose] def errorInput (data : ByteArray) (position errorId : Nat) (rest : Term) : State :=
+  ⟨data, data, position, outcome "seek" true 0 (zeroMask data)
+    (outcome "write" false errorId (zeroMask data) (appendInput data data.size rest).script)⟩
+
+private theorem append_error_exclusive (pid peer token counter : Nat) (different : pid ≠ peer)
+    (fresh : 2 ≤ counter) (data : ByteArray) (value : U16) (position errorId : Nat) (rest : Term)
+    (bound : data.size ≤ limit) (offset : position ≤ limit) :
+    Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := NativeFile) ⟨1⟩)
+      (postAcquire value (.ok (.Ok ⟨⟨1⟩, token, pid, ⟨2⟩⟩)))
+      (shared counter (owned pid token) (errorInput data position errorId rest)) (errorTerm errorId)
+      (shared counter free (appendInput data data.size rest)) := by
+  let before := errorInput data position errorId rest
+  let afterSeek := sought before data.size data
+    (outcome "write" false errorId (zeroMask data) (appendInput data data.size rest).script)
+  have valid0 : Valid before := ⟨bound, Nat.le_refl _, offset⟩
+  have valid1 : Valid afterSeek := ⟨bound, Nat.le_refl _, bound⟩
+  refine critical_error_exclusive pid peer token counter different before afterSeek
+    (appendInput data data.size rest) value
+    (U64.ofNatCore data.size (by simp only [limit] at bound; scalar_tac)) ⟨errorId⟩
+    fresh valid0 valid1 (by simp [before, errorInput, blocked, outcome])
+    (by simp [afterSeek, sought, blocked, outcome]) ?_ ?_
+  · simpa only [afterSeek, before, errorInput] using seek_end_step before valid0 (zeroMask data) data _
+      (action_outcome _ _ _ _ _) (persist_zero data)
+  · simp [writeStep, afterSeek, sought, before, errorInput, appendInput, action_outcome,
+      payload, layout, limit, persist_zero]
+
+/-- A first write failure is returned with its modeled identity and releases
+the mutex. Whichever caller acquires afterward appends and synchronizes its own
+record; the earlier error is never changed into a successful root result. -/
+theorem error_then_append_all_schedules (data : ByteArray) (first second : U16)
+    (position errorId : Nat) (rest : Term) (fits : data.size + 4 ≤ limit)
+    (offset : position ≤ limit) (choices : List ScheduleChoice) :
+    let before := errorInput data position errorId rest
+    let next := appendInput data data.size rest
+    let worker := fun value : U16 => (do
+      let reply ← locked_append ⟨1⟩ value
+      finish reply : Result Term)
+    let observed := (do
+      let _ ← Result.schedule (worker second) .ok
+      worker first : Result Term)
+      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
+        (.ok (errorTerm errorId), shared 4 free (appended next second rest)) ∨
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
+        (.ok Term.true, shared 4 free (appended next first rest)) := by
+  dsimp only
+  let before := errorInput data position errorId rest
+  let next := appendInput data data.size rest
+  have bound : data.size ≤ limit := by omega
+  have rootExclusive := append_error_exclusive 1 2 3 3 (by decide) (by decide)
+    data first position errorId rest bound offset
+  have childExclusive := append_error_exclusive 2 1 3 3 (by decide) (by decide)
+    data second position errorId rest bound offset
+  have childAfter := full_append_trace 2 data second data.size rest fits bound
+  have rootAfter := full_append_trace 1 data first data.size rest fits bound
+  have result := Result.two_wait_serial_orders
+    (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
+    (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
+    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩))
+    (errorTerm errorId) (errorTerm errorId) Term.true Term.true
+    (shared 2 free before) (shared 3 (owned 1 3) before) (shared 3 free next)
+    (shared 4 free (appended next second rest))
+    (shared 3 (owned 2 3) before) (shared 3 free next)
+    (shared 4 free (appended next first rest))
+    (lock_poll 1 2 before (by decide)) (lock_poll 2 2 before (by decide))
+    rootExclusive childAfter childExclusive rootAfter choices
+  simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared, before, next] using result
 
 end Record.LockedConcurrent
