@@ -43,7 +43,8 @@ defmodule Lynx.Rust.FileAppendTest do
       {"LogProperties", []},
       {"TailProperties", []},
       {"ResizeProperties", []},
-      {"RepairCrashProperties", []}
+      {"RepairCrashProperties", []},
+      {"MalformedProperties", []}
     ]
 
     for {module, replacements} <- sources do
@@ -110,6 +111,10 @@ defmodule Lynx.Rust.FileAppendTest do
           Enum.map(
             ~w(repair_prepare repair_at_sync crash_retry restart_repair repair_interrupt),
             &("Record.RepairCrashProperties." <> &1)
+          ) ++
+          Enum.map(
+            ~w(malformed_at recover_malformed_next recover_malformed repair_malformed repair_malformed_default repair_malformed_crash),
+            &("Record.MalformedProperties." <> &1)
           )
     ]
 
@@ -196,12 +201,19 @@ defmodule Lynx.Rust.FileAppendTest do
                  &1.theorem == "Record.RepairCrashProperties.repair_interrupt")
            )
 
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract &&
+                 &1.theorem == "Record.MalformedProperties.repair_malformed_crash")
+           )
+
     for target <- [
           "Record/AppendProperties.lean",
           "Record/LogProperties.lean",
           "Record/TailProperties.lean",
           "Record/ResizeProperties.lean",
           "Record/RepairCrashProperties.lean",
+          "Record/MalformedProperties.lean",
           "Record/Extraction/VectorModel.lean"
         ] do
       path = Path.join(project, target)
@@ -295,6 +307,27 @@ defmodule Lynx.Rust.FileAppendTest do
       assert error.message =~ "Record/#{proof}.lean:"
       File.write!(source, rust)
     end
+
+    core = Path.join(workspace, "core/src/lib.rs")
+    original = File.read!(core)
+
+    broken =
+      String.replace(
+        original,
+        "if value ^ inverse == u16::MAX {",
+        "if value ^ inverse != u16::MAX {"
+      )
+
+    refute broken == original
+    File.write!(core, broken)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rust.verify!(workspace, "io-protocol", options)
+      end
+
+    assert error.message =~ "Record/IntegrityProperties.lean:"
+    File.write!(core, original)
 
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
   end
