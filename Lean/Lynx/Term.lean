@@ -24,12 +24,15 @@ function table, up to the given call depth. -/
 @[simp] public theorem apply_eq (definition : Dispatcher → α) (table : Term.FunTable) (depth : Nat) :
     apply definition table depth = definition (Dispatcher.ofTable table depth) := rfl
 
-/-- Run a computation from a fresh runtime. Computations that make no process
-requests have a single run; use `concurrent` to state what every run of the
-others ends with. An `ok` or `error` outcome means every spawned process has
-finished, except that an `Exception.exhausted` error means some process did not
-return, such as a dynamic call exceeding its dispatcher's depth; it is not an
-Erlang exception. -/
+/-- Run from an explicitly admitted model environment. This observation does
+not establish correspondence between the model and an external system. -/
+public def sequentialFrom (initial : Environment) (computation : Result α) : Outcome α :=
+  (computation.run initial []).1
+
+public theorem sequentialFrom_eq_run (initial : Environment) (computation : Result α) :
+    sequentialFrom initial computation = (computation.run initial []).1 := rfl
+
+/-- Run a computation from a fresh runtime. -/
 public def sequential (computation : Result α) : Outcome α :=
   (computation.run {} []).1
 
@@ -53,6 +56,14 @@ and every step of their timers. -/
 public def concurrent (computation : Result α) (outcome : Outcome α) : Prop :=
   ∀ elapsed events last result,
     Concurrent.Run (.start {} computation elapsed) events last →
+      Concurrent.Terminal last result → result = outcome
+
+/-- Every run from the explicitly admitted native model environment must end
+with the stated outcome. -/
+public def concurrentFrom (initial : Environment) (computation : Result α)
+    (outcome : Outcome α) : Prop :=
+  ∀ elapsed events last result,
+    Concurrent.Run (.start initial computation elapsed) events last →
       Concurrent.Terminal last result → result = outcome
 
 /-- Whether an outcome is `ok true`, the outcome laws expect. -/

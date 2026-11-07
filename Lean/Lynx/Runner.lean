@@ -157,6 +157,7 @@ private structure DecodeState where
   theorems : Array (Name × Span) := #[]
   /-- The source of each theorem's proof, rendered verbatim. -/
   proofSources : Array (Name × String) := #[]
+  initialModules : Array String := #[]
   patternExtractions : Array PatternExtraction := #[]
   nextBitstringPattern : Nat := 0
   /-- Names of the pooled literals already defined in this module. -/
@@ -1536,7 +1537,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
   | "theorem" => do
     fields j ["kind", "name", "params", "requires", "ensures", "proof", "span",
       "table", "requires_purity", "requires_dispatches", "ensures_purity",
-      "ensures_dispatches"]
+      "ensures_dispatches", "initial_environment"]
     let params ← (← arr j "params").mapM fun p => do
       pure (mkIdent (Name.mkSimple (← p.getStr?)))
     let arity := params.size
@@ -1574,7 +1575,21 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     let ok := mkIdent ``Lynx.Outcome.ok
     let run := mkIdent ``Lynx.sequential
     let everyRun := mkIdent ``Lynx.concurrent
-    let trueTerm := mkIdent ``Lynx.Term.true
+    let initial ← match field j "initial_environment" with
+      | .error _ => pure none
+      | .ok value => do
+        let initial ← identifier (← value.getStr?)
+        let env ← read
+        let some (.defnInfo definition) := env.find? initial.getId |
+          throw s!"initial_environment must name an imported public definition: {initial.getId}"
+        unless definition.type.isConstOf ``Lynx.Environment && definition.safety == .safe do
+          throw s!"initial_environment must be a safe definition of Lynx.Environment: {initial.getId}"
+        let some index := env.getModuleIdxFor? initial.getId |
+          throw s!"initial_environment has no imported module: {initial.getId}"
+        let moduleName := env.header.moduleNames[index.toNat]!.toString
+        modify fun state => {state with initialModules := state.initialModules.push moduleName}
+        pure (some initial)
+>>>>>>> conflict 1 of 3 ends    let trueTerm := mkIdent ``Lynx.Term.true
     let hypothesis := mkIdent `requires
     -- Each helper is stated as strongly as its purity allows: directly when it
     -- returns `Except`, through `Lynx.sequential` when it needs an environment,
@@ -1590,9 +1605,17 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
     let direct (computation : TSyntax `term) : TSyntax `term :=
       Unhygienic.run `($computation = $exceptOk $trueTerm)
     let runs (computation : TSyntax `term) : TSyntax `term :=
-      Unhygienic.run `($run $computation = $ok $trueTerm)
+      match initial with
+      | none => Unhygienic.run `($run $computation = $ok $trueTerm)
+      | some initial =>
+        let run := mkIdent ``Lynx.sequentialFrom
+        Unhygienic.run `($run $initial $computation = $ok $trueTerm)
     let everyRunEnds (computation : TSyntax `term) : TSyntax `term :=
-      Unhygienic.run `($everyRun $computation ($ok $trueTerm))
+      match initial with
+      | none => Unhygienic.run `($everyRun $computation ($ok $trueTerm))
+      | some initial =>
+        let run := mkIdent ``Lynx.concurrentFrom
+        Unhygienic.run `($run $initial $computation ($ok $trueTerm))
     -- A precondition is assumed directly only when it makes no runtime requests:
     -- it then returns `Except`, so the statement is equivalent to running it.
     let binders := match requirement with
@@ -1784,11 +1807,16 @@ private def comparisonDescription (type : Expr) : MetaM (Option String) := do
   let (actual, expected) ← if type.isAppOfArity ``Lynx.concurrent 3 then
       let args := type.getAppArgs
       pure (← normalizeComputation args[1]!, ← reduceOutcome args[2]!)
+    else if type.isAppOfArity ``Lynx.concurrentFrom 4 then
+      let args := type.getAppArgs
+      pure (← normalizeComputation args[2]!, ← reduceOutcome args[3]!)
     else
       unless type.isAppOfArity ``Eq 3 do return none
       let args := type.getAppArgs
       if args[1]!.isAppOfArity ``Lynx.sequential 2 then
         pure (← normalizeComputation args[1]!.getAppArgs[1]!, ← reduceOutcome args[2]!)
+      else if args[1]!.isAppOfArity ``Lynx.sequentialFrom 3 then
+        pure (← normalizeComputation args[1]!.getAppArgs[2]!, ← reduceOutcome args[2]!)
       else
         let resultType ← Meta.whnf args[0]!
         unless resultType.isAppOfArity ``Lynx.Result 1 do return none
@@ -2055,7 +2083,9 @@ private def decodeFile (files : Array Json) (entry : Json) (env : Lean.Environme
     let commands := commands.map fun command => ⟨eraseScopes command.raw⟩
     return ⟨file, moduleName, imports, map, commands, key,
       state.spans, state.diagnostics, state.theorems, state.proofSources,
-      reexportImports, preludes, auditModules⟩
+      reexportImports, preludes,
+      (auditModules ++ state.initialModules).foldl (fun names name =>
+        if names.contains name then names else names.push name) #[]⟩
   catch err => throw (IO.userError s!"{file}: {err}")
 
 private def parsingDiagnostics (file : DecodedFile) : Array Json :=

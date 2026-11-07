@@ -116,7 +116,46 @@ defmodule Lynx.CaseTest do
     assert output =~ "└─ test/lynx/case_test.exs:"
   end
 
-  test "verifies termination suffixes within their laws group" do
+  test "laws groups forward their explicit initial model" do
+    defmodule InitialEnvironment do
+      use ExUnit.Case, register: false
+      use Lynx.Case
+
+      laws "seeded", initial_environment: "CaseModel.initial" do
+        prelude ~LEAN"""
+        module
+        public import Lynx
+        public section
+        namespace CaseModel
+        @[expose] def initial : Lynx.Environment :=
+          ({} : Lynx.Environment).setPdict [(.atom "seed",.integer 7)]
+        end CaseModel
+        """
+
+        law seeded,
+          expects: :erlang.get(:seed) == 7,
+          proof: ~LEAN"""
+          simp [Lynx.sequentialFrom_eq_run,Lynx.apply_eq,«seeded:ensures/0»,
+            Erlang.erlang.«get/1»,Erlang.erlang.«==/2»,CaseModel.initial,
+            Lynx.Result.monadGet_eq,Lynx.Environment.pdict,Lynx.Environment.setPdict]
+          """
+      end
+    end
+
+    output =
+      capture_io(fn ->
+        assert ExUnit.run([InitialEnvironment]) == %{
+                 failures: 0,
+                 skipped: 0,
+                 total: 1,
+                 excluded: 0
+               }
+      end)
+
+    refute output =~ "failed"
+  end
+
+>>>>>>> conflict 1 of 1 ends  test "verifies termination suffixes within their laws group" do
     defmodule TerminationSuffix do
       use ExUnit.Case, register: false
       use Lynx.Case

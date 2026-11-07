@@ -27,6 +27,8 @@ private theorem publicReferenceComparison : True := by
 -- Effectful clients normalize catches through public monadic equations.
 private theorem publicExceptionEquations : True := by
   have _ := @Lynx.Result.consumeNativeCapability
+  have _ := @Lynx.Result.monadGet_eq
+  have _ := @Lynx.Result.monadSet_eq
   have _ := @Lynx.Result.handle_get
   have _ := @Lynx.Result.handle_set
   have _ := @Lynx.Result.handle_error
@@ -35,6 +37,8 @@ private theorem publicExceptionEquations : True := by
 
 -- State waits can be reasoned about without importing scheduler internals.
 private theorem publicWaitTraces : True := by
+  have _ := @Lynx.concurrentFrom_eq_run
+  have _ := @Lynx.sequentialFrom_eq_run
   have _ := @Lynx.concurrent_eq_run
   have _ := @Lynx.Result.two_wait_interleave
   have _ := @Lynx.Result.two_wait_interleave_child_first
@@ -860,6 +864,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.tuple",
   "Lynx.apply",
   "Lynx.concurrent",
+  "Lynx.concurrentFrom",
   "Lynx.instBEqTerm",
   "Lynx.instCoeFunResultForallEnvironmentProdOutcome",
   "Lynx.instDispatchExceptException",
@@ -878,6 +883,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instReprSpawnOptions",
   "Lynx.instReprTerm",
   "Lynx.sequential",
+  "Lynx.sequentialFrom",
   "main"
 ]
 

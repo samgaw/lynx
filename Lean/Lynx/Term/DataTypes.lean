@@ -136,7 +136,7 @@ deriving Repr, Inhabited
 namespace Environment
 
 /-- Replace the process dictionary while preserving the native state admission. -/
-def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
+@[expose] def setPdict (env : Environment) (pdict : List (Term × Term)) : Environment :=
   {env with pdict}
 
 @[simp] theorem pdict_setPdict (env : Environment) (pdict : List (Term × Term)) :

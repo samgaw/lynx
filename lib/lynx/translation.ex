@@ -1,7 +1,8 @@
 defmodule Lynx.Translation do
   @moduledoc false
 
-  defstruct preludes: [],
+  defstruct initial_environment: nil,
+            preludes: [],
             postludes: [],
             termination_suffixes: %{},
             cutoffs: MapSet.new(),
@@ -74,6 +75,11 @@ defmodule Lynx.Translation do
       raise ArgumentError,
             "cannot cut off #{Exception.format_mfa(module, function, arity)}, which is built into Lean"
     end
+
+    initial = Keyword.get(opts, :initial_environment)
+
+    unless is_nil(initial) or (is_binary(initial) and String.trim(initial) != ""),
+      do: raise(ArgumentError, "initial_environment must name a Lean environment definition")
 
     externals = Keyword.get(opts, :externals, [])
 
@@ -217,6 +223,7 @@ defmodule Lynx.Translation do
     end
 
     %__MODULE__{
+      initial_environment: initial,
       external_bindings: MapSet.new(bindings),
       external_purities: purities,
       external_modules: external_modules,
@@ -799,6 +806,7 @@ defmodule Lynx.Translation do
   """
   def assemble(
         %__MODULE__{
+          initial_environment: initial,
           modules: modules,
           preludes: preludes,
           postludes: postludes,
@@ -981,6 +989,11 @@ defmodule Lynx.Translation do
               module_name = :lynx_core_to_leanj.module_name(name)
 
               contents = assemble_laws(module, program != [])
+
+              contents =
+                if initial,
+                  do: Enum.map(contents, &Map.put(&1, "initial_environment", initial)),
+                  else: contents
 
               file = %{
                 "module" => module_name <> ".laws",

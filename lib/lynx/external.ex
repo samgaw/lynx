@@ -120,9 +120,9 @@ defmodule Lynx.External do
           else: []
 
       laws =
-        for %{"kind" => "theorem", "name" => name, "params" => params} <-
+        for %{"kind" => "theorem", "name" => name, "params" => params} = law <-
               by_module[report.module]["contents"] do
-          %{
+          row = %{
             kind: :elixir_law,
             label:
               if(report.status == :ok, do: "Elixir law verified", else: "Elixir law not verified"),
@@ -131,6 +131,10 @@ defmodule Lynx.External do
             theorem: "#{name}/#{length(params)}",
             file: report.file
           }
+
+          if law["initial_environment"],
+            do: Map.put(row, :initial_environment, law["initial_environment"]),
+            else: row
         end
 
       if guarantees == [] && laws == [],
@@ -138,7 +142,8 @@ defmodule Lynx.External do
         else:
           Map.merge(report, %{
             guarantees: guarantees ++ laws,
-            trusted_boundary: verification.trusted_boundary,
+            trusted_boundary:
+              Map.get(report, :trusted_boundary, []) ++ verification.trusted_boundary,
             external_models: verification.external_models,
             unverified_external_calls: verification.unverified_external_calls,
             unverified_nif_exports: Map.get(verification, :unverified_nif_exports, [])

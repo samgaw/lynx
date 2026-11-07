@@ -34,6 +34,7 @@ defmodule Lynx.Commands do
   Verification errors and skipped files are returned as updates. Runner failures raise.
   Reports and diagnostics have atom keys; statuses and severities are atoms.
   Module names, declarations, paths, and messages remain strings.
+  Law reports with an explicit model state list its names in `:initial_environments`.
   Uses the current Mix build directory for cached artifacts, falling back to `_build/dev`.
 
   ## Options
@@ -104,8 +105,36 @@ defmodule Lynx.Commands do
         do: Map.put(request, "check_source", true),
         else: request
 
+    contexts =
+      Map.new(files, fn
+        %{"module" => module, "contents" => contents} when is_list(contents) ->
+          names =
+            for %{"kind" => "theorem", "initial_environment" => name} <- contents,
+                is_binary(name),
+                do: name
+
+          {module, Enum.uniq(names)}
+
+        _ ->
+          {nil, []}
+      end)
+
     runner!(project_dir, request)
-    |> Enum.map(&decode_verify!/1)
+    |> Enum.map(fn response ->
+      report = decode_verify!(response)
+
+      case contexts[report.module] do
+        [_ | _] = names ->
+          report
+          |> Map.put(:initial_environments, names)
+          |> Map.put(:trusted_boundary, [
+            "Explicit initial model state admission (#{Enum.join(names, ", ")}); correspondence to a live external system is unverified"
+          ])
+
+        _ ->
+          report
+      end
+    end)
   end
 
   @spec decode_verify!(map()) :: Lynx.Laws.report()

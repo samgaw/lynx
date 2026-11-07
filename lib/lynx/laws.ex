@@ -73,6 +73,7 @@ defmodule Lynx.Laws do
   @typedoc "The verification result for a translated module."
   @type report :: %{
           optional(:guarantees) => [map()],
+          optional(:initial_environments) => [String.t()],
           optional(:trusted_boundary) => [String.t()],
           optional(:external_models) => [String.t()],
           status: :ok | :error | :skipped,
@@ -109,6 +110,17 @@ defmodule Lynx.Laws do
 
   `:theorems` lists each law's name (including its arity) and elaboration time in
   milliseconds. Cached and skipped modules have an empty list.
+
+  Pass `initial_environment: "Model.initial"` to run effectful helpers from a named,
+  imported public Lean definition of type `Lynx.Environment`. Define the model in
+  a prelude or an imported proof module. Its whole module is axiom-audited, including
+  private unused declarations. The definition must be safe and take no arguments.
+  Requires and expects each start from that state independently. Concurrent laws
+  still quantify over every scheduler choice; sequential laws use no supplied
+  choices. Pure helpers remain direct computations. Reports include
+  `:initial_environments` to identify this explicit scope. These are proofs relative
+  to a model state, not proofs that a live external system satisfies its admission
+  assumptions. Omitting the option retains the fresh-runtime semantics.
 
   Pass `termination_suffixes: %{{module, function, arity} => lean_source}` to attach
   a `Lynx.Lean` termination suffix to a translated function. The suffix does not
