@@ -26,6 +26,8 @@ theorem path_bytes : bytes path = nameBytes := by
 
 theorem valid_name : supportedPath nameBytes = true := by decide
 
+theorem not_directory : (nameBytes.data == #[46]) = false := by decide
+
 theorem core_open_next {α : Type} (state : State) (script rest : Term)
     (visible : state.visible.size ≤ limit) (durable : state.durable.size ≤ limit)
     (next : core.result.Result NativeFile NativeIoError → NativeM α) :
@@ -33,7 +35,7 @@ theorem core_open_next {α : Type} (state : State) (script rest : Term)
       next (.Ok ⟨2⟩) (opened state script rest) := by
   have poll : pollOpenReadOnly path (initial state (choice true 0 script rest)) =
       some (.ok (.Ok ⟨2⟩), opened state script rest) := by
-    simp [pollOpenReadOnly, path_bytes, valid_name, initial, namespaceCell, nodeCell,
+    simp [pollOpenReadOnly, supportedOpenPath, path_bytes, valid_name, not_directory, initial, namespaceCell, nodeCell,
       namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
       encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice, inode, decode, encode,
       not_lt.mpr visible, not_lt.mpr durable, replaceNamespaceScript, opened,
@@ -58,7 +60,7 @@ theorem core_open_again_next {α : Type} (state : State) (firstScript secondScri
   have poll : pollOpenReadOnly path
       (opened state firstScript (choice true 0 secondScript rest)) =
       some (.ok (.Ok ⟨3⟩), openedPair state firstScript secondScript rest) := by
-    simp [pollOpenReadOnly, path_bytes, valid_name, opened, namespaceCell, nodeCell,
+    simp [pollOpenReadOnly, supportedOpenPath, path_bytes, valid_name, not_directory, opened, namespaceCell, nodeCell,
       namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
       encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice, inode, decode, encode,
       not_lt.mpr visible, not_lt.mpr durable, replaceNamespaceScript, openedPair,
@@ -89,7 +91,7 @@ theorem core_open_error_next {α : Type} (state : State) (error : Nat) (rest : T
   have poll : pollOpenReadOnly path (initial state (choice false error .nil rest)) =
       some (.ok (.Err ⟨error⟩), initial state rest) := by
     have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
-    simp [pollOpenReadOnly, path_bytes, valid_name, initial, namespaceCell, nodeCell,
+    simp [pollOpenReadOnly, supportedOpenPath, path_bytes, valid_name, not_directory, initial, namespaceCell, nodeCell,
       namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
       encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice,
       replaceNamespaceScript, namespaceTypeName, nonnegative]
@@ -156,7 +158,7 @@ theorem core_open_again_error_next {α : Type} (state : State) (firstScript : Te
       (opened state firstScript (choice false error .nil rest)) =
       some (.ok (.Err ⟨error⟩), opened state firstScript rest) := by
     have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
-    simp [pollOpenReadOnly, path_bytes, valid_name, opened, namespaceCell, nodeCell,
+    simp [pollOpenReadOnly, supportedOpenPath, path_bytes, valid_name, not_directory, opened, namespaceCell, nodeCell,
       namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
       encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons, choice, openChoice, pathChoice,
       replaceNamespaceScript, namespaceTypeName, handleTypeName, nonnegative]
@@ -194,7 +196,7 @@ theorem pair_second_error (state after : State) (firstScript : Term) (error : Na
 /-- Unsupported path forms are verification exhaustion, never an invented OS
 error or successful Rust result. No environmental choice can bypass this bound. -/
 theorem unsupported_path (input : Str) (env : Environment)
-    (rejected : supportedPath (bytes input) = false) :
+    (rejected : supportedOpenPath (bytes input) = false) :
     open_readonly input env = (.error .exhausted, env) := by
   have poll : pollOpenReadOnly input env = some (.error .exhausted, env) := by
     simp [pollOpenReadOnly, rejected]

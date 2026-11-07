@@ -80,8 +80,13 @@ defmodule Lynx.Rust do
   separately encodes visible names, the last synchronized checkpoint and pending
   snapshots, with at most 1024 names and 1024 pending snapshots. Creating the name
   records a pending snapshot without advancing the checkpoint; pending snapshots
-  may also reach disk. Directory synchronization and recovery of these snapshots
-  remain unsupported.
+  may also reach disk. Opening the admitted current directory `"."` creates a
+  separate directory capability. Its successful `sync_all` advances the namespace
+  checkpoint and clears pending snapshots, under an explicit filesystem/device
+  assumption. An error preserves the last guaranteed checkpoint; closing consumes
+  the capability without synchronizing names. Directory synchronization preserves
+  every regular inode's byte images and cannot replace file synchronization.
+  Namespace crash-image selection and restart remain unsupported.
   `std::fs::rename<&str, &str>` uses an explicit single-directory Unix-style
   atomic metadata model. Both standard path-conversion dictionaries are checked.
   Replacement preserves inode contents and existing open capabilities, including
@@ -90,7 +95,7 @@ defmodule Lynx.Rust do
   assume rollback. Changed names are pending, and rename does not advance the
   synchronization checkpoint. Filesystem atomicity and OS/FFI correspondence
   remain assumptions rather than verified native guarantees.
-  Physical close/descriptor reclamation, descriptor cloning, directory durability,
+  Physical close/descriptor reclamation, descriptor cloning, physical durability,
   standalone unlink, unrestricted concurrent I/O and general crash injection
   remain unsupported. Compiler-checked resource payloads may own File and
   Mutex<File> fields with `owned_drops: true`; panic cleanup of live files remains

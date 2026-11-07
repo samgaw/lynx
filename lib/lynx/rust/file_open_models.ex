@@ -95,7 +95,7 @@ defmodule Lynx.Rust.FileOpenModels do
         native_file_types: {file, error["def_id"]},
         native_cutoff_only: true,
         label:
-          "Bounded File::#{operation}<&str> model (1024 names and pending namespace snapshots): concrete standard AsRef<Path> dictionaries validated before erasure; shared inode contents and independent handle offsets; open grants read-only access; exclusive creation grants read/write access to a fresh empty inode and records a pending, unsynchronized namespace change; failed exclusive creation leaves namespace/inode contents unchanged (std/OS model assumption); explicit namespace and OS outcomes; std/path/OS/FFI correspondence unverified; custom AsRef, symlinks and unsupported path forms rejected"
+          "Bounded File::#{operation}<&str> model (1024 names and pending namespace snapshots): concrete standard AsRef<Path> dictionaries validated before erasure; shared inode contents and independent handle offsets; open grants read-only access to regular files or a separate current-directory capability for the literal dot path; exclusive creation grants read/write access to a fresh empty inode and records a pending, unsynchronized namespace change; failed exclusive creation leaves namespace/inode contents unchanged (std/OS model assumption); explicit namespace and OS outcomes; std/path/OS/FFI correspondence unverified; custom AsRef, symlinks and unsupported path forms rejected"
       }
     else
       _ -> nil
