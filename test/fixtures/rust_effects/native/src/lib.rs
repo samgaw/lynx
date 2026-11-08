@@ -1100,6 +1100,27 @@ pub fn recover_file_word(path: &str) -> std::io::Result<Option<u16>> {
     reply
 }
 
+/// Reopens a checked record and closes the file on all ordinary returns.
+/// # Errors
+/// Propagates opening and read errors; torn or incomplete records return no value.
+pub fn recover_file_record(path: &str) -> std::io::Result<Option<u16>> {
+    let mut file = std::fs::File::open(path)?;
+    let reply = effects_core::read_file_record(&mut file);
+    drop(file);
+    reply
+}
+
+/// Writes a checked record once through the shared file capability.
+/// # Errors
+/// Propagates write errors; callers must check the returned length before committing.
+pub fn file_resource_write_record(
+    resource: &rustler::ResourceArc<FileResource>,
+    value: u16,
+) -> std::io::Result<usize> {
+    let bytes = effects_core::encode_record(value);
+    effects_core::write_shared_file(&resource.file, &bytes)
+}
+
 /// Synchronizes file contents before committing the directory's current names.
 /// # Errors
 /// Propagates file, directory-open and directory-sync errors.
@@ -1168,6 +1189,24 @@ pub fn file_resource_nif_commit(resource: rustler::ResourceArc<FileResource>) ->
     file_resource_release(resource);
     match outcome {
         Ok(()) => true,
+        Err(error) => {
+            drop(error);
+            false
+        }
+    }
+}
+
+/// Reports whether the whole checked record was written, retaining partial effects.
+#[cfg(feature = "file-resource-record")]
+#[rustler::nif(name = "file_write_record", schedule = "DirtyIo")]
+pub fn file_resource_nif_write_record(
+    resource: rustler::ResourceArc<FileResource>,
+    value: u16,
+) -> bool {
+    let outcome = file_resource_write_record(&resource, value);
+    file_resource_release(resource);
+    match outcome {
+        Ok(written) => written == 4,
         Err(error) => {
             drop(error);
             false

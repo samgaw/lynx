@@ -17,6 +17,7 @@ file-resource-handles = ["nif"]
 file-resource-sync = ["file-resource-handles"]
 file-resource-write = ["file-resource-sync"]
 file-resource-commit = ["file-resource-write"]
+file-resource-record = ["file-resource-commit"]
 locked-file-resource-handles = ["nif"]
 
 [dependencies]
