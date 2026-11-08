@@ -142,7 +142,15 @@ defmodule Lynx.TranslationTest do
 
     prelude = %Lynx.Lean{source: "", file: "prelude.lean", span: 1, indentation: 0}
 
-    assert [_, %{"module" => "Erlang.prelude", "imports" => ["Erlang.native_fixture"]}, _] =
+    assert [
+             _,
+             %{
+               "module" => "Erlang.prelude",
+               "imports" => ["Erlang.native_fixture"],
+               "audit_modules" => ["Erlang.prelude"]
+             },
+             _
+           ] =
              Translation.new(externals: [external], preludes: [prelude])
              |> Translation.add({"client.erl", core})
              |> Translation.translate(:client, [{:call, 1}])

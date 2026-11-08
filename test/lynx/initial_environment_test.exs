@@ -30,7 +30,15 @@ defmodule Lynx.InitialEnvironmentTest do
           """
       end
 
-    %{beam: beam}
+    {:module, _, plain_beam, _} =
+      defmodule Plain do
+        @compile :debug_info
+        use Lynx.Laws
+
+        law truth, expects: true, proof: ~LEAN"rfl"
+      end
+
+    %{beam: beam, plain_beam: plain_beam}
   end
 
   @tag :tmp_dir
@@ -102,6 +110,26 @@ defmodule Lynx.InitialEnvironmentTest do
         Lynx.Laws.verify([beam], preludes: [prelude], initial_environment: "InitialModel.seven")
 
       assert Enum.any?(reports, &(&1.status == :error)), inspect(reports, limit: :infinity)
+      assert List.last(reports).status == :skipped
+    end
+  end
+
+  test "private unused prelude declarations are audited without an initial environment", %{
+    plain_beam: beam
+  } do
+    assert Enum.all?(Lynx.Laws.verify([beam], preludes: [@prelude]), &(&1.status == :ok))
+
+    for extra <- [
+          "private axiom hiddenPreludeTrust : False",
+          "private theorem unfinishedPrelude : True := by sorry"
+        ] do
+      prelude = %{@prelude | source: @prelude.source <> "\n" <> extra <> "\n"}
+      reports = Lynx.Laws.verify([beam], preludes: [prelude])
+
+      assert Enum.any?(reports, &(&1.module == "Erlang.prelude" and &1.status == :error)),
+             inspect(reports, limit: :infinity)
+
+      assert List.last(reports).status == :skipped
     end
   end
 end

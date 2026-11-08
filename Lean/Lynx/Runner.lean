@@ -2556,20 +2556,27 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
       for declared in ← preludeImports entry do
         unless imports.any (·.module == declared.module) do
           imports := imports.push declared
-      -- Syntax extensions are available only after importing this file's declared
-      -- dependencies. Never decode all proofs against the bare runtime up front.
-      let env ← if missingImport then pure runtime.env else importFile runtime imports artifacts
-      let file ← decodeFile files entry env options
-      let source ← renderFile file env
-      let sourceModule ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
-      sources := sources.push (sourceModule.getId, source)
-      let mut fileFailed := !file.proofDiagnostics.isEmpty
-      diagnostics := diagnostics ++ parsingDiagnostics file
-      if checkSource && file.preludes.isEmpty then
-        if let some message ← checkRendered file source env then
-          fileFailed := true
-          diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error" message)
-      unless missingImport do
+      if missingImport then
+        -- Decoding needs the successful imports too, including initial-state
+        -- definitions and syntax extensions. Report the dependency failure first.
+        emit (Json.mkObj [
+          ("status", toJson "skipped"), ("file", toJson origin), ("module", toJson moduleString),
+          ("time_ms", toJson ((← IO.monoMsNow) - started)),
+          ("cached", toJson false), ("theorems", .arr #[]), ("diagnostics", .arr diagnostics)])
+      else
+        -- Syntax extensions are available only after importing this file's declared
+        -- dependencies. Never decode all proofs against the bare runtime up front.
+        let env ← importFile runtime imports artifacts
+        let file ← decodeFile files entry env options
+        let source ← renderFile file env
+        let sourceModule ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
+        sources := sources.push (sourceModule.getId, source)
+        let mut fileFailed := !file.proofDiagnostics.isEmpty
+        diagnostics := diagnostics ++ parsingDiagnostics file
+        if checkSource && file.preludes.isEmpty then
+          if let some message ← checkRendered file source env then
+            fileFailed := true
+            diagnostics := diagnostics.push (diagnostic file.fileName file.moduleName "error" message)
         let moduleName ← IO.ofExcept <| (identifier file.moduleName).run runtime.env |>.run' {}
         let mainModule := moduleName.getId
         let sourceKey := if file.imports.any uncached.contains then none else file.cacheKey
@@ -2624,14 +2631,14 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
           exported := exported.push mainModule
           verified := verified.insert file.moduleName
           if key.isNone then uncached := uncached.insert file.moduleName
-      let elapsed := (← IO.monoMsNow) - started
-      let status := if missingImport then "skipped" else if fileFailed then "error" else "ok"
-      emit (Json.mkObj [
-        ("status", toJson status),
-        ("file", toJson file.fileName), ("module", toJson file.moduleName),
-        ("time_ms", toJson elapsed),
-        ("cached", toJson cacheHit), ("theorems", .arr theorems),
-        ("diagnostics", .arr diagnostics)])
+        let elapsed := (← IO.monoMsNow) - started
+        let status := if fileFailed then "error" else "ok"
+        emit (Json.mkObj [
+          ("status", toJson status),
+          ("file", toJson file.fileName), ("module", toJson file.moduleName),
+          ("time_ms", toJson elapsed),
+          ("cached", toJson cacheHit), ("theorems", .arr theorems),
+          ("diagnostics", .arr diagnostics)])
     if let some path := export? then
       if exported.size == files.size then
         exportModules path exported artifacts temporary
