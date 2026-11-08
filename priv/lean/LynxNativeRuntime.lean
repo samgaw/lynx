@@ -787,6 +787,27 @@ theorem deref_live_prefix {α : Type} [NativeCodec α]
     positive, boundedInt]
   exact .refl _ _
 
+/-- A resource borrow remains a real read inside a scheduled native trace. -/
+theorem deref_live_sharedSteps {α β : Type} [NativeCodec α]
+    (pid : PID) (handle : NativeResourceArc α) (value : α) (count : Nat)
+    (before after : Nat × List (Nat × String × Term)) (finish : α → NativeM β) (answer : β)
+    (positive : 0 < count) (bounded : count ≤ referenceLimit)
+    (token : before.2.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : before.2.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (before.2.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = count)
+    (rest : Result.SharedSteps pid (finish value) before answer after) :
+    Result.SharedSteps pid (deref handle >>= finish) before answer after := by
+  unfold deref
+  rw [Result.get_bind]
+  refine .read _ (finish value) before after answer ?_ rest
+  intro env _ _ heap
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
+  simp [lookup, payload, heap, token, stored, owners, NativeCodec.roundtrip,
+    positive, boundInt]
+
 /-- A retained borrow is an actual state-read prefix and leaves ownership and
 payload intact. This interface retains operation boundaries for crash proofs. -/
 theorem deref_retained_prefix {α : Type} [NativeCodec α]
@@ -889,6 +910,40 @@ theorem releaseOwned_live_prefix {α : Type} [NativeCodec α] [NativeResourceCle
     different]
   apply Result.ReadyPrefix.set
   exact .refl _ _
+
+/-- Nonfinal owner release retains its actual reads and write in a scheduled
+trace. The continuation receives the heap after consuming exactly this token. -/
+theorem releaseOwned_live_sharedSteps {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (pid : PID) (handle : NativeResourceArc α) (value : α) (count : Nat)
+    (before after : Nat × List (Nat × String × Term)) (finish : Unit → NativeM β) (answer : β)
+    (nonfinal : 1 < count) (bounded : count ≤ referenceLimit)
+    (token : before.2.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : before.2.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (before.2.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = count)
+    (rest : Result.SharedSteps pid (finish ())
+      (before.1, (before.2.filter fun cell => cell.1 != handle.token).map fun cell =>
+        if cell.1 == handle.id then
+          (handle.id, typeName α, .tuple #[.integer (count - 1), NativeCodec.encode value]) else cell)
+      answer after) :
+    Result.SharedSteps pid (releaseOwned handle >>= finish) before answer after := by
+  have positive : 0 < count := by omega
+  have different : count ≠ 1 := by omega
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
+  unfold releaseOwned
+  rw [Result.get_bind]
+  refine .read _ (release handle >>= finish) before after answer ?_ ?_
+  · intro env _ _ heap
+    simp [lookup, payload, heap, token, stored, owners, NativeCodec.roundtrip,
+      positive, boundInt, different]
+  · unfold release
+    rw [Result.get_bind]
+    refine .update _ (finish ()) before _ after answer ?_ rest
+    intro env _ counter heap
+    simp [lookup, payload, counter, heap, token, stored, owners, NativeCodec.roundtrip,
+      positive, boundInt, different, Result.set_bind]
 
 /-- Consuming a retained Rust owner is a prefix that preserves its VM pin and
 payload. Final resource destruction is not bypassed when only one owner exists. -/

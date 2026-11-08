@@ -1,0 +1,274 @@
+module
+public import Record.OverlappingLogProperties
+public section
+open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol
+namespace Record.ScheduledLogProperties
+open NativeFile Record.Properties Record.CrashProperties Record.AppendProperties Record.RecoveryProperties
+  Record.LockedProperties Record.SharedLogProperties Record.FramedLogProperties
+  Record.NativeLogProperties Record.OverlappingLogProperties
+
+attribute [local simp] NativeCodec.typeName NativeCodec.encode NativeMutex.typeName
+  NativeFile.typeName NativeResourceArc.typeName NativeResourceArc.handleType NativeResourceArc.termType
+
+@[expose] def shared (counter : Nat) (frame : List (Nat × String × Term))
+    (contents : Term) (state : State) : Nat × List (Nat × String × Term) :=
+  (counter, frame ++ [(2, NativeFile.typeName, encode state), (1, NativeMutex.typeName NativeFile, contents)])
+
+private theorem framed_eq (env : Environment) (counter : Nat) (frame : List (Nat × String × Term))
+    (contents : Term) (state : State) (count : env.refCounter = counter)
+    (heap : env.nativeHeap = (shared counter frame contents state).2) :
+    framedEnv env counter frame contents state = env := by
+  cases env
+  simp_all [shared, framedEnv]
+
+private theorem seek_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+    (contents : Term) (before after : State) (position : U64)
+    (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
+    (ready : blocked before = false)
+    (step : seekStep before (.end_ 0#i64) = some (.Ok position, after))
+    (env : Environment) (_owner : env.currentPid = pid)
+    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    pollSeek ⟨2⟩ (.end_ 0#i64) env = some (.ok (.Ok position, ⟨2⟩),
+      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+  have found := seek_poll env counter frame contents before after position apart bound valid ready step
+  rw [framed_eq env counter frame contents before count heap] at found
+  exact found
+
+private theorem write_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+    (contents : Term) (before after : State) (value : U16)
+    (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
+    (ready : blocked before = false)
+    (step : writeStep before (payload value) = some (.Ok 4#usize, after))
+    (env : Environment) (_owner : env.currentPid = pid)
+    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    pollWrite ⟨2⟩ (payload value) env = some (.ok (.Ok 4#usize, ⟨2⟩),
+      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+  have found := write_poll env counter frame contents before after value apart bound valid ready step
+  rw [framed_eq env counter frame contents before count heap] at found
+  exact found
+
+private theorem sync_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+    (contents : Term) (before after : State)
+    (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
+    (ready : blocked before = false) (step : syncStep before = some (.Ok (), after))
+    (env : Environment) (_owner : env.currentPid = pid)
+    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    pollSync ⟨2⟩ env = some (.ok (.Ok ()),
+      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+  have found := sync_poll env counter frame contents before after apart bound valid ready step
+  rw [framed_eq env counter frame contents before count heap] at found
+  exact found
+
+@[expose] def counter (first : Bool) : Nat := if first then 9 else 10
+@[expose] def frame (first : Bool) := if first then overlappingFrame else afterFirstFrame
+@[expose] def afterFrame (first : Bool) := if first then afterFirstFrame else pinnedFrame
+@[expose] def owner (first : Bool) : NativeResourceArc shared_log.LogResource := ⟨3, if first then 7 else 9⟩
+@[expose] def count (first : Bool) : Nat := if first then 3 else 2
+
+private theorem drop_steps (pid : PID) (first : Bool) (state : State) :
+    Result.SharedSteps pid (do NativeOwnedDrop.drop (owner first); NativeM.ok true)
+      (shared (counter first + 1) (frame first) (Record.FramedLogProperties.free false) state) true
+      (shared (counter first + 1) (afterFrame first) (Record.FramedLogProperties.free false) state) := by
+  have released := NativeResourceArc.releaseOwned_live_sharedSteps pid (owner first) logPayload (count first)
+    (shared (counter first + 1) (frame first) (Record.FramedLogProperties.free false) state)
+    (shared (counter first + 1) (afterFrame first) (Record.FramedLogProperties.free false) state)
+    (fun _ => NativeM.ok true) true
+    (by cases first <;> decide) (by cases first <;> decide)
+    (by cases first <;> simp [owner, frame, shared, afterFirstFrame, overlappingFrame,
+      decodedFrame, pinnedFrame, NativeResourceArc.vmCells])
+    (by cases first <;> simp [owner, frame, count, shared, afterFirstFrame, overlappingFrame,
+      decodedFrame, pinnedFrame, NativeResourceArc.vmCells])
+    (by cases first <;> simp [owner, frame, count, shared, afterFirstFrame, overlappingFrame,
+      decodedFrame, pinnedFrame, NativeResourceArc.vmCells]) ?_
+  · simpa only [NativeOwnedDrop.drop] using released
+  · cases first with
+    | false =>
+      simpa [NativeM.ok, owner, frame, afterFrame, count, counter, shared, afterFirstFrame, overlappingFrame,
+        decodedFrame, pinnedFrame, NativeResourceArc.vmCells, List.filter] using
+          (Result.SharedSteps.done (pid := pid) true
+            (shared 11 pinnedFrame (Record.FramedLogProperties.free false) state))
+    | true =>
+      simpa [NativeM.ok, owner, frame, afterFrame, count, counter, shared, afterFirstFrame, overlappingFrame,
+        decodedFrame, pinnedFrame, NativeResourceArc.vmCells, List.filter] using
+          (Result.SharedSteps.done (pid := pid) true
+            (shared 10 afterFirstFrame (Record.FramedLogProperties.free false) state))
+
+private theorem body_steps (pid : PID) (first : Bool)
+    (before sought written committed : State) (value : U16) (position : U64)
+    (valid0 : Record.Properties.Valid before) (valid1 : Record.Properties.Valid sought)
+    (valid2 : Record.Properties.Valid written)
+    (ready0 : blocked before = false) (ready1 : blocked sought = false) (ready2 : blocked written = false)
+    (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
+    (write : writeStep sought (payload value) = some (.Ok 4#usize, written))
+    (sync : syncStep written = some (.Ok (), committed)) :
+    let guard : NativeGuard NativeFile := ⟨⟨1⟩, counter first + 1, pid, ⟨2⟩⟩
+    Result.SharedSteps pid (afterGuard (owner first) guard value)
+      (shared (counter first + 1) (frame first) (NativeMutex.lockedContents pid (counter first + 1) false
+        (⟨2⟩ : NativeFile)) before) true
+      (shared (counter first + 1) (afterFrame first) (Record.FramedLogProperties.free false) committed) := by
+  dsimp only
+  simp only [afterGuard, Record.RollbackProperties.append_contract, bind_assoc, NativeFile.seek,
+    Result.wait_bind]
+  have apart2 : Apart 2 (frame first) := by
+    cases first <;> simp [Apart, frame, afterFirstFrame, overlappingFrame, decodedFrame,
+      pinnedFrame, NativeResourceArc.vmCells]
+  have bound : 2 ≤ counter first + 1 := by cases first <;> decide
+  let locked := NativeMutex.lockedContents pid (counter first + 1) false (⟨2⟩ : NativeFile)
+  refine .wait _ _ (.ok (.Ok position, (⟨2⟩ : NativeFile))) _
+    (shared (counter first + 1) (frame first) locked sought) _ _
+    (seek_ready pid (counter first + 1) (frame first) locked before sought position apart2 bound valid0 ready0 seek) ?_
+  simp only [Result.ok_bind, NativeFile.write, Result.wait_bind]
+  refine .wait _ _ (.ok (.Ok 4#usize, (⟨2⟩ : NativeFile))) _
+    (shared (counter first + 1) (frame first) locked written) _ _
+    (write_ready pid (counter first + 1) (frame first) locked sought written value apart2 bound valid1 ready1 write) ?_
+  simp only [Result.ok_bind, NativeFile.syncAll, Result.wait_bind]
+  refine .wait _ _ (.ok (.Ok ())) _ (shared (counter first + 1) (frame first) locked committed) _ _
+    (sync_ready pid (counter first + 1) (frame first) locked written committed apart2 bound valid2 ready2 sync) ?_
+  simp only [Result.ok_bind, NativeGuard.release, Result.wait_bind]
+  refine .wait _ _ (.ok ()) _
+    (shared (counter first + 1) (frame first) (Record.FramedLogProperties.free false) committed) _ _ ?_ ?_
+  · intro env actor refs cells
+    have freed := release_framed env (counter first + 1) (counter first + 1) (frame first) false committed
+      (by cases first <;> simp [Apart, frame, afterFirstFrame, overlappingFrame, decodedFrame,
+        pinnedFrame, NativeResourceArc.vmCells])
+    rw [actor] at freed
+    rw [framed_eq env (counter first + 1) (frame first) locked committed refs cells] at freed
+    simpa [shared, framedEnv] using freed
+  · simpa only [Result.ok_bind] using drop_steps pid first committed
+
+/-- A complete extracted native caller retains resource reads, mutex/file
+waits and owner-release reads/writes as distinct scheduled steps. -/
+theorem call_steps (pid : PID) (first : Bool)
+    (before sought written committed : State) (value : U16) (position : U64)
+    (valid0 : Record.Properties.Valid before) (valid1 : Record.Properties.Valid sought)
+    (valid2 : Record.Properties.Valid written)
+    (ready0 : blocked before = false) (ready1 : blocked sought = false) (ready2 : blocked written = false)
+    (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
+    (write : writeStep sought (payload value) = some (.Ok 4#usize, written))
+    (sync : syncStep written = some (.Ok (), committed)) :
+    Result.SharedSteps pid (__APPEND__ (owner first) value)
+      (shared (counter first) (frame first) (Record.FramedLogProperties.free false) before) true
+      (shared (counter first + 1) (afterFrame first) (Record.FramedLogProperties.free false) committed) := by
+  rw [caller_contract]
+  apply NativeResourceArc.deref_live_sharedSteps pid (owner first) logPayload (count first)
+  · cases first <;> decide
+  · cases first <;> decide
+  · cases first <;> simp [owner, frame, shared, afterFirstFrame, overlappingFrame,
+      decodedFrame, pinnedFrame, NativeResourceArc.vmCells]
+  · cases first <;> simp [owner, frame, count, shared, afterFirstFrame, overlappingFrame,
+      decodedFrame, pinnedFrame, NativeResourceArc.vmCells]
+  · cases first <;> simp [owner, frame, count, shared, afterFirstFrame, overlappingFrame,
+      decodedFrame, pinnedFrame, NativeResourceArc.vmCells]
+  · simp only [logPayload, NativeMutex.lock, Result.wait_bind]
+    refine .wait _ _ (.ok (.Ok (⟨⟨1⟩, counter first + 1, pid, ⟨2⟩⟩ : NativeGuard NativeFile))) _
+      (shared (counter first + 1) (frame first)
+        (NativeMutex.lockedContents pid (counter first + 1) false (⟨2⟩ : NativeFile)) before) _ _ ?_ ?_
+    · intro env actor refs cells
+      have acquired := lock_poll env (counter first) (frame first) false before
+        (by cases first <;> decide)
+        (by cases first <;> simp [Apart, frame, afterFirstFrame, overlappingFrame, decodedFrame,
+          pinnedFrame, NativeResourceArc.vmCells])
+        (by cases first <;> simp [frame, counter, afterFirstFrame, overlappingFrame, decodedFrame,
+          pinnedFrame, NativeResourceArc.vmCells])
+      rw [framed_eq env (counter first) (frame first) (Record.FramedLogProperties.free false) before refs cells]
+        at acquired
+      simpa [shared, framedEnv, Record.FramedLogProperties.guard, Record.FramedLogProperties.held, actor] using acquired
+    · simpa [Result.ok_bind, recoverGuard] using body_steps pid first before sought written committed value position
+        valid0 valid1 valid2 ready0 ready1 ready2 seek write sync
+
+/-- The scheduler runs both actual computations from explicitly predecoded
+owners, using the empty choice list. This establishes that one schedule, not
+decoder scheduling, arbitrary interleavings or fairness. -/
+theorem scheduled_calls (before sought1 written1 committed1 sought2 written2 committed2 : State)
+    (first second : U16) (position1 position2 : U64)
+    (valid0 : Record.Properties.Valid before) (valid1 : Record.Properties.Valid sought1)
+    (valid2 : Record.Properties.Valid written1) (valid3 : Record.Properties.Valid committed1)
+    (valid4 : Record.Properties.Valid sought2) (valid5 : Record.Properties.Valid written2)
+    (ready0 : blocked before = false) (ready1 : blocked sought1 = false) (ready2 : blocked written1 = false)
+    (ready3 : blocked committed1 = false) (ready4 : blocked sought2 = false) (ready5 : blocked written2 = false)
+    (seek1 : seekStep before (.end_ 0#i64) = some (.Ok position1, sought1))
+    (write1 : writeStep sought1 (payload first) = some (.Ok 4#usize, written1))
+    (sync1 : syncStep written1 = some (.Ok (), committed1))
+    (seek2 : seekStep committed1 (.end_ 0#i64) = some (.Ok position2, sought2))
+    (write2 : writeStep sought2 (payload second) = some (.Ok 4#usize, written2))
+    (sync2 : syncStep written2 = some (.Ok (), committed2)) :
+    let parent := Rustler.executeNative (__APPEND__ (owner true) first) Rustler.encodeBool
+    let child := Rustler.executeNative (__APPEND__ (owner false) second) Rustler.encodeBool
+    (Result.schedule child (fun _ => parent))
+      {refCounter := 9, nativeHeap := (shared 9 overlappingFrame (Record.FramedLogProperties.free false) before).2} =
+      (.ok Term.true, {pidCounter := 2, refCounter := 11, nativeHeap := (shared 11 pinnedFrame (Record.FramedLogProperties.free false) committed2).2}) := by
+  dsimp only
+  have parent := call_steps 1 true before sought1 written1 committed1 first position1
+    valid0 valid1 valid2 ready0 ready1 ready2 seek1 write1 sync1
+  have child := call_steps 2 false committed1 sought2 written2 committed2 second position2
+    valid3 valid4 valid5 ready3 ready4 ready5 seek2 write2 sync2
+  have encodedParent := Rustler.executeNative_sharedSteps parent Rustler.encodeBool
+  have encodedChild := Rustler.executeNative_sharedSteps child Rustler.encodeBool
+  simpa [Rustler.encodeBool, counter, frame, afterFrame, shared] using
+    Result.two_shared_serial_steps _ _ _ _ _ _ _ encodedParent encodedChild
+
+@[expose] def firstBytes : ByteArray := overwrite ByteArray.empty 0 (bytes (payload 13#u16)) 4
+@[expose] def bothBytes : ByteArray := overwrite firstBytes 4 (bytes (payload 19#u16)) 4
+@[expose] def secondInput : State := appendInput firstBytes 4 .nil
+@[expose] def firstInput : State := appendInput ByteArray.empty 0 secondInput.script
+@[expose] def firstSeek : State := sought firstInput 0 ByteArray.empty
+  (outcome "write" true 4 ByteArray.empty (outcome "sync_all" true 0 ByteArray.empty secondInput.script))
+@[expose] def firstWrite : State := written firstSeek (payload 13#u16) 4 ByteArray.empty
+  (outcome "sync_all" true 0 ByteArray.empty secondInput.script)
+@[expose] def secondSeek : State := sought secondInput 4 firstBytes
+  (outcome "write" true 4 (zeroMask firstBytes) (outcome "sync_all" true 0 ByteArray.empty .nil))
+@[expose] def secondWrite : State := written secondSeek (payload 19#u16) 4 firstBytes
+  (outcome "sync_all" true 0 ByteArray.empty .nil)
+@[expose] def complete : State := ⟨bothBytes, bothBytes, 8, .nil⟩
+
+/-- A closed scheduler witness checks the actual encoders and both complete
+native calls, rather than relying on potentially inconsistent poll hypotheses. -/
+theorem scheduled_records :
+    let parent := Rustler.executeNative (__APPEND__ ⟨3,7⟩ 13#u16) Rustler.encodeBool
+    let child := Rustler.executeNative (__APPEND__ ⟨3,9⟩ 19#u16) Rustler.encodeBool
+    (Result.schedule child (fun _ => parent))
+      {refCounter := 9, nativeHeap := (shared 9 overlappingFrame (Record.FramedLogProperties.free false) firstInput).2} =
+      (.ok Term.true, {pidCounter := 2, refCounter := 11, nativeHeap := (shared 11 pinnedFrame (Record.FramedLogProperties.free false) complete).2}) := by
+  have bytes13 : (bytes (payload 13#u16)).size = 4 := by
+    simp [bytes_size, payload, Record.IntegrityProperties.layout]
+  have bytes19 : (bytes (payload 19#u16)).size = 4 := by
+    simp [bytes_size, payload, Record.IntegrityProperties.layout]
+  have firstSize : firstBytes.size = 4 := by
+    simp [firstBytes, overwrite_size _ _ _ _ (by omega : 4 ≤ (bytes (payload 13#u16)).size)]
+  have bothSize : bothBytes.size = 8 := by
+    simp [bothBytes, overwrite_size _ _ _ _ (by omega : 4 ≤ (bytes (payload 19#u16)).size), firstSize]
+  have validFirstWrite : Record.Properties.Valid firstWrite := by
+    change firstBytes.size ≤ limit ∧ 0 ≤ firstBytes.size ∧ 4 ≤ limit
+    simp [firstSize, limit]
+  have validSecondWrite : Record.Properties.Valid secondWrite := by
+    change bothBytes.size ≤ limit ∧ firstBytes.size ≤ bothBytes.size ∧ 8 ≤ limit
+    simp [firstSize, bothSize, limit]
+  simpa [owner] using scheduled_calls firstInput firstSeek firstWrite secondInput secondSeek secondWrite complete
+    13#u16 19#u16 0#u64 4#u64
+    (by unfold Record.Properties.Valid; decide) (by unfold Record.Properties.Valid; decide)
+    validFirstWrite (by simp [Record.Properties.Valid, secondInput, appendInput, firstSize, limit])
+    (by simp [Record.Properties.Valid, secondSeek, sought, secondInput, appendInput, firstSize, limit])
+    validSecondWrite
+    (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+    (by rfl) (by rfl) (by rfl)
+    (by
+      have valid : Record.Properties.Valid secondInput := by
+        simp [Record.Properties.Valid, secondInput, appendInput, firstSize, limit]
+      simpa [secondInput, appendInput, secondSeek, firstSize, U64.ofNatCore] using
+        seek_end_step secondInput valid (zeroMask firstBytes) firstBytes _
+          (action_outcome _ _ _ _ _) (persist_zero firstBytes))
+    (by
+      have kept : persist secondSeek.durable
+          (overwrite secondSeek.visible secondSeek.position (bytes (payload 19#u16)) 4)
+          (zeroMask firstBytes) = some firstBytes := by
+        simpa [secondSeek, sought, secondInput, appendInput] using
+          Record.ResizeProperties.persist_keep_old firstBytes
+            (overwrite firstBytes 4 (bytes (payload 19#u16)) 4)
+      simpa [secondWrite, Record.Properties.count, Usize.ofNatCore, UScalar.ofNat] using
+        write_step secondSeek (payload 19#u16) 4 (zeroMask firstBytes) firstBytes _
+          (by simp [payload, Record.IntegrityProperties.layout])
+          (by simp [payload, Record.IntegrityProperties.layout, limit])
+          (by simp [secondSeek, sought, limit]) (action_outcome _ _ _ _ _) kept)
+    (by rfl)
+
+end Record.ScheduledLogProperties
