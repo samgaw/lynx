@@ -84,4 +84,17 @@ theorem retained_release_prefix [NativeResourceCleanup Bool] (handle : NativeRes
         (List.filter (fun cell => cell.1 != handle.token) env.nativeHeap)}) := by
   exact NativeResourceArc.releaseOwned_retained_prefix handle value env token stored owners
 
+/-- Two Rust callers can borrow alongside a surviving VM pin. The public
+interface retains the read boundary and checks all three ownership tokens. -/
+theorem overlapping_borrow_prefix (handle : NativeResourceArc Bool) (value : Bool) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, NativeResourceArc.handleType Bool, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, NativeResourceArc.typeName Bool, .tuple #[.integer 3, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType Bool && cell.2.2 == .reference handle.id).length = 3) :
+    Result.ReadyPrefix (NativeResourceArc.deref handle) env (.ok value) env := by
+  exact NativeResourceArc.deref_live_prefix handle value 3 env (by decide) (by decide)
+    token stored owners
+
 end Resource.ModelProperties
