@@ -25,6 +25,24 @@ theorem registered_resource_type (types : List String) (env : Environment)
     name ∈ (env.nativeResourceTypes ++ types).eraseDups := by
   simp [member]
 
+/-- Registration is a local get/set prefix of the actual generated adapter.
+The following trace must hold for the resulting registry, rather than assuming
+that every resource type was already available. -/
+theorem withResourceTypes_registeredSteps {pid : PID} {computation : Result α}
+    {before after : Nat × List (Nat × String × Term)} {value : α}
+    (available types finalTypes : List String)
+    (trace : Result.RegisteredSteps pid computation before
+      (available ++ types).eraseDups value after finalTypes) :
+    Result.RegisteredSteps pid (withResourceTypes types computation)
+      before available value after finalTypes := by
+  unfold withResourceTypes
+  refine .update _ computation before before after available
+    (available ++ types).eraseDups finalTypes value ?_ trace
+  intro env _ refs heap registry
+  congr 1
+  cases env
+  simp_all
+
 /-- Rustler 0.38/0.39 accept only the atoms `true` and `false` as booleans. -/
 @[expose] def decodeBool : Term → Except Exception Bool
   | .atom "true" => .ok true
