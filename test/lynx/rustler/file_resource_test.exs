@@ -1144,7 +1144,8 @@ defmodule Lynx.Rustler.FileResourceTest do
              &match?(%{kind: :nonpanicking_borrow_call, caller: ^recovery, function: ^reader}, &1)
            )
 
-    modules = ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery)
+    modules =
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1187,7 +1188,10 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.ShortRecovery.missing_recovery FileResource.ShortRecovery.uncommitted_missing_recovery
         FileResource.ShortRecovery.named_image_recovery FileResource.ShortRecovery.all_image_recovery
         FileResource.ShortRecovery.create_partial FileResource.ShortRecovery.partial_write_recovery
-        FileResource.ShortRecovery.partial_missing_recovery)
+        FileResource.ShortRecovery.partial_missing_recovery
+        FileResource.RecordRetry.phase_prefix FileResource.RecordRetry.phase_retry
+        FileResource.RecordRetry.finite_retries FileResource.RecordRetry.nonempty_retry
+        FileResource.RecordRetry.committed_retries FileResource.RecordRetry.transaction_retries)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1287,6 +1291,20 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(short_property, short_source)
+    retry_property = Path.join(project, "FileResource/RecordRetry.lean")
+    retry_source = File.read!(retry_property)
+
+    wrong_retry =
+      String.replace(retry_source, "(.ok (.Ok (some value)),scan", "(.ok (.Ok none),scan")
+
+    assert wrong_retry != retry_source
+    File.write!(retry_property, wrong_retry)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(retry_property, retry_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
