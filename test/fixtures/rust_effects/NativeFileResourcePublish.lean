@@ -140,6 +140,34 @@ private theorem release_after_directory {α β : Type} (env : Environment) (stat
     List.filter,List.map,n0,n1,n2,n4,n5,p1]
 
 /-- The actual facade synchronizes data and namespace while retaining the same file resource. -/
+theorem commit_next_state {α : Type} (env : Environment) (before after : State) (counter : Nat)
+    (bounded : 6 ≤ counter) (valid : Valid before) (ready : blocked before = false)
+    (step : syncStep before = some (.Ok (),after)) (next : Term → Result α)
+    (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
+    (do
+      let owner ← NativeResourceArc.decode (.reference 6)
+      let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
+      next result) (pinnedEnv env before counter namespaceBefore) =
+      next Term.true (committedEnv env after counter) := by
+  simp only [__COMMIT__,file_resource_commit,file_resource_sync,monadLift_self,
+    Rustler.executeNative,bind_assoc]
+  rw [borrowed_next (ns := namespaceBefore) env before counter bounded _ _ _ registered]
+  simp only [payload,effects_core.synchronize_file,monadLift_self,syncAll,Result.wait_bind,Result.handle]
+  rw [Result.wait_ready_apply _ _ _ _ _ (file_sync_poll (ns := namespaceBefore) env
+    before after counter bounded valid
+    ready step)]
+  simp only [Result.ok_bind,NativeM.monadLift_eq,NativeM.fromRust_ok,
+    core.result.Result.Insts.CoreOpsTry.branch]
+  have trace := directory_prefix env after counter bounded
+  rw [(((trace.bind _).handle _).bind _).apply]
+  simp only [Result.ok_bind,file_resource_release,monadLift_self,NativeOwnedDrop.drop,NativeM.ok]
+  have released := release_after_directory env after counter bounded
+    (Result.ok Term.true) (fun error => match error with
+      | .error (.atom "rust_panicked") => Result.error (.error (.atom "nif_panicked"))
+      | _ => Result.error .exhausted) next
+  convert released using 1 <;> try simp [Result.handle,Rustler.encodeBool]
+  all_goals congr 1
+
 theorem commit_next {α : Type} (env : Environment) (value : U16) (counter : Nat)
     (bounded : 6 ≤ counter) (next : Term → Result α)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
@@ -148,26 +176,22 @@ theorem commit_next {α : Type} (env : Environment) (value : U16) (counter : Nat
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
       next result) (pinnedEnv env (Write.written value) counter namespaceBefore) =
       next Term.true (committedEnv env (Write.synced value) counter) := by
-  simp only [__COMMIT__,file_resource_commit,file_resource_sync,monadLift_self,
-    Rustler.executeNative,bind_assoc]
-  rw [borrowed_next (ns := namespaceBefore) env (Write.written value) counter bounded _ _ _ registered]
-  simp only [payload,effects_core.synchronize_file,monadLift_self,syncAll,Result.wait_bind,Result.handle]
-  rw [Result.wait_ready_apply _ _ _ _ _ (file_sync_poll (ns := namespaceBefore) env
-    (Write.written value) (Write.synced value) counter bounded (Write.written_valid value)
-    (Write.written_ready value) (Write.sync_step value))]
-  simp only [Result.ok_bind,NativeM.monadLift_eq,NativeM.fromRust_ok,
-    core.result.Result.Insts.CoreOpsTry.branch]
-  have trace := directory_prefix env (Write.synced value) counter bounded
-  rw [(((trace.bind _).handle _).bind _).apply]
-  simp only [Result.ok_bind,file_resource_release,monadLift_self,NativeOwnedDrop.drop,NativeM.ok]
-  have released := release_after_directory env (Write.synced value) counter bounded
-    (Result.ok Term.true) (fun error => match error with
-      | .error (.atom "rust_panicked") => Result.error (.error (.atom "nif_panicked"))
-      | _ => Result.error .exhausted) next
-  convert released using 1 <;> try simp [Result.handle,Rustler.encodeBool]
-  all_goals congr 1
+  exact commit_next_state env _ _ counter bounded (Write.written_valid value)
+    (Write.written_ready value) (Write.sync_step value) next registered
 
 /-- Use the commitment contract in the caller's current runtime environment. -/
+theorem commit_env_state {α : Type} (before after : State)
+    (valid : Valid before) (ready : blocked before = false)
+    (step : syncStep before = some (.Ok (),after)) (next : Term → Result α) (env : Environment)
+    (bounded : 6 ≤ env.refCounter)
+    (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before namespaceBefore)
+    (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
+    (do
+      let owner ← NativeResourceArc.decode (.reference 6)
+      let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
+      next result) env = next Term.true (committedEnv env after env.refCounter) := by
+  simpa only [pinnedEnv,← heap] using commit_next_state env before after env.refCounter bounded valid ready step next registered
+
 theorem commit_env {α : Type} (value : U16) (next : Term → Result α) (env : Environment)
     (bounded : 6 ≤ env.refCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame (Write.written value) namespaceBefore)
@@ -177,6 +201,18 @@ theorem commit_env {α : Type} (value : U16) (next : Term → Result α) (env : 
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
       next result) env = next Term.true (committedEnv env (Write.synced value) env.refCounter) := by
   simpa only [pinnedEnv,← heap] using commit_next env value env.refCounter bounded next registered
+
+theorem commit_run_state (before after : State) (valid : Valid before)
+    (ready : blocked before = false) (step : syncStep before = some (.Ok (),after))
+    (env : Environment) (bounded : 6 ≤ env.refCounter)
+    (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before namespaceBefore)
+    (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
+    (do
+      let owner ← NativeResourceArc.decode (.reference 6)
+      Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool) env =
+      (.ok Term.true,committedEnv env after env.refCounter) := by
+  simpa only [Result.bind_ok,Result.ok_apply] using
+    commit_env_state before after valid ready step Result.ok env bounded heap registered
 
 theorem commit_run (value : U16) (env : Environment) (bounded : 6 ≤ env.refCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame (Write.written value) namespaceBefore)
