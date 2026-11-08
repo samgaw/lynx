@@ -1150,7 +1150,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix CommitFailure DirectoryFailure)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix CommitFailure DirectoryFailure FailurePhases)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1224,7 +1224,12 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.DirectoryFailure.release_prefix FileResource.DirectoryFailure.facade_prefix
         FileResource.DirectoryFailure.call_prefix FileResource.DirectoryFailure.call_run
         FileResource.DirectoryFailure.failure_env FileResource.DirectoryFailure.failure_recovery
-        FileResource.DirectoryFailure.lost_name_witness)
+        FileResource.DirectoryFailure.lost_name_witness
+        FileResource.FailurePhases.open_prefix FileResource.FailurePhases.sync_prefix
+        FileResource.FailurePhases.close_prefix FileResource.FailurePhases.released_prefix
+        FileResource.FailurePhases.boundary_prefix FileResource.FailurePhases.boundary_recovery
+        FileResource.FailurePhases.post_sync_recovery FileResource.FailurePhases.boundary_witness
+        FileResource.FailurePhases.post_sync_attempts)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1528,6 +1533,33 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(directory_property, directory_source)
+    interruption_property = Path.join(project, "FileResource/FailurePhases.lean")
+    interruption_source = File.read!(interruption_property)
+
+    for wrong <- [
+          String.replace(
+            interruption_source,
+            ".beforeDecode | .beforeFileSync => true",
+            ".beforeDecode | .beforeFileSync => false"
+          ),
+          String.replace(
+            interruption_source,
+            "| .beforeClose => DirectoryFailure.directory env value false",
+            "| .beforeClose => DirectoryFailure.directory env value true"
+          )
+        ] do
+      assert wrong != interruption_source
+      File.write!(interruption_property, wrong)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
+
+      assert error.message =~ "FailurePhases.lean"
+    end
+
+    File.write!(interruption_property, interruption_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
