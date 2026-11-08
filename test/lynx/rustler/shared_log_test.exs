@@ -56,7 +56,8 @@ defmodule Lynx.Rustler.SharedLogTest do
     proof = Path.join(project, "Record/SharedLogProperties.lean")
     File.write!(proof, source)
 
-    for module <- ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties) do
+    for module <-
+          ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties ScheduledLogProperties) do
       text =
         File.read!(Path.join(@fixture, module <> ".lean"))
         |> String.replace("__APPEND__", append["lean_name"])
@@ -68,7 +69,7 @@ defmodule Lynx.Rustler.SharedLogTest do
       options ++
         [
           proof_modules:
-            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties),
+            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties Record.ScheduledLogProperties),
           required_properties:
             ~w(Record.SharedLogProperties.facade_contract Record.SharedLogProperties.critical_contract
               Record.SharedLogProperties.borrow_prefix Record.SharedLogProperties.aliasing_prefix
@@ -77,7 +78,8 @@ defmodule Lynx.Rustler.SharedLogTest do
               Record.NativeLogProperties.adapter_continuation Record.NativeLogProperties.initial_adapter
               Record.FramedLogProperties.guarded_prefix Record.OverlappingLogProperties.caller_contract
               Record.OverlappingLogProperties.acquired_prefix Record.OverlappingLogProperties.second_call
-              Record.OverlappingLogProperties.overlap_phases)
+              Record.OverlappingLogProperties.overlap_phases Record.ScheduledLogProperties.call_steps
+              Record.ScheduledLogProperties.scheduled_calls Record.ScheduledLogProperties.scheduled_records)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -112,6 +114,42 @@ defmodule Lynx.Rustler.SharedLogTest do
 
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    scheduler_export = Path.join(tmp, "native-scheduler.export")
+
+    scheduler_file = %{
+      "module" => "Record.SchedulerExport",
+      "file" => "Record.SchedulerExport.lean",
+      "imports" => ["Record.ScheduledLogProperties"],
+      "contents" => [],
+      "audit_modules" => [
+        "Record.ScheduledLogProperties",
+        "Record.NativeRuntime",
+        "Lynx.Term.Runner"
+      ],
+      "preludes" => [
+        %{
+          "source" => """
+          module
+          public import Record.ScheduledLogProperties
+          public def checkedSchedulerWitness := Record.ScheduledLogProperties.scheduled_records
+          """,
+          "file" => "Record.SchedulerExport.lean",
+          "span" => [1],
+          "indentation" => 0
+        }
+      ]
+    }
+
+    assert [%{status: :ok}] =
+             Lynx.Commands.verify!(project, [scheduler_file], export: scheduler_export)
+
+    assert File.read!(scheduler_export) =~ "scheduled_records"
+
+    {status, output} =
+      Lynx.Commands.lake(project, ["check", "--from-export", scheduler_export] ++ sandbox)
+
     assert status == 0, output
 
     wrong =
@@ -174,6 +212,30 @@ defmodule Lynx.Rustler.SharedLogTest do
     end
 
     File.write!(overlapping_proof, overlapping_source)
+
+    scheduled_proof = Path.join(project, "Record/ScheduledLogProperties.lean")
+    scheduled_source = File.read!(scheduled_proof)
+
+    for incorrect <- [
+          String.replace(scheduled_source, "refCounter := 11", "refCounter := 12"),
+          String.replace(
+            scheduled_source,
+            "overwrite ByteArray.empty 0 (bytes (payload 13#u16)) 4",
+            "overwrite ByteArray.empty 0 (bytes (payload 19#u16)) 4"
+          )
+        ] do
+      refute incorrect == scheduled_source
+      File.write!(scheduled_proof, incorrect)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
+
+      assert error.message =~ "Record/ScheduledLogProperties.lean:"
+    end
+
+    File.write!(scheduled_proof, scheduled_source)
 
     # A complete synchronized write cannot be reported as rejected.
     File.write!(proof, String.replace(source, "(.ok (.Ok true)) s5", "(.ok (.Ok false)) s5"))
