@@ -274,6 +274,20 @@ inductive ReadyPrefix : Result α → Environment → Result α → Environment 
       (rest : ReadyPrefix (next reply) middle residual after) :
       ReadyPrefix (.wait poll next) before residual after
 
+/-- Compose local prefixes at the same residual and environment. No assumption
+about completion or scheduling is introduced by concatenating their steps. -/
+theorem ReadyPrefix.trans {computation middle residual : Result α}
+    {before midway after : Environment}
+    (first : ReadyPrefix computation before middle midway)
+    (second : ReadyPrefix middle midway residual after) :
+    ReadyPrefix computation before residual after := by
+  induction first with
+  | refl => exact second
+  | get next before middle midway rest ih => exact .get _ _ _ _ (ih second)
+  | set updated next before middle midway rest ih => exact .set _ _ _ _ _ (ih second)
+  | wait poll next reply before updated middle midway ready rest ih =>
+    exact .wait _ _ _ _ _ _ _ ready (ih second)
+
 /-- A ready prefix agrees with the existing runner. Completion and its outcome
 remain the responsibility of the residual computation. -/
 theorem ReadyPrefix.apply {computation residual : Result α} {before after : Environment}

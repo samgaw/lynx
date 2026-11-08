@@ -47,6 +47,7 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.Result.ReadyPrefix.set
   have _ := @Lynx.Rustler.executeNative_readyPrefix
   have _ := @Lynx.Result.SharedSteps.readyPrefix
+  have _ := @Lynx.Result.ReadyPrefix.trans
   have _ := @Lynx.Result.ReadyPrefix.apply
   have _ := @Lynx.Result.ReadyPrefix.exists_wait
   have _ := @Lynx.Result.ReadyPrefix.bind
