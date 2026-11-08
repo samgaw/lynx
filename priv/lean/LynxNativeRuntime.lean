@@ -819,6 +819,29 @@ theorem releaseOwned_retained_run_next {α β : Type} [NativeCodec α] [NativeRe
   rw [releaseOwned_retained_next handle value next env token stored owners]
   simp [release, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
 
+/-- Consuming a retained Rust owner is a prefix that preserves its VM pin and
+payload. Final resource destruction is not bypassed when only one owner exists. -/
+theorem releaseOwned_retained_prefix {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (value : α) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token,handleType α,.reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id,typeName α,.tuple #[.integer 2,NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 2) :
+    Result.ReadyPrefix (releaseOwned handle) env (.ok ()) {env with nativeHeap :=
+      (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
+        if cell.1 == handle.id then
+          (handle.id,typeName α,.tuple #[.integer 1,NativeCodec.encode value]) else cell} := by
+  unfold releaseOwned
+  apply Result.ReadyPrefix.get
+  simp [lookup,payload,token,stored,owners,NativeCodec.roundtrip,referenceLimit]
+  unfold release
+  apply Result.ReadyPrefix.get
+  simp [lookup,payload,token,stored,owners,NativeCodec.roundtrip,referenceLimit]
+  apply Result.ReadyPrefix.set
+  exact .refl _ _
+
 theorem releaseOwned_retained_handled_next {α β γ : Type} [NativeCodec α] [NativeResourceCleanup α]
     (handle : NativeResourceArc α) (value : α) (finish : NativeM β) (handler : Exception → NativeM β)
     (next : β → NativeM γ) (env : Environment)
@@ -1507,6 +1530,35 @@ theorem decode_pinned_next {α β : Type} [NativeCodec α]
     allocation, owner, registry, owners, anyFresh, NativeCodec.roundtrip,
     referenceLimit, typeName, handleType, termType, a, b, c, d, e, f,
     Ne.symm a, Ne.symm b, Ne.symm c, Ne.symm d, Ne.symm e, Ne.symm f]
+
+/-- Successful resource decoding is an actual prefix through registry checking,
+VM-pin lookup and allocation of a distinct Rust owner. -/
+theorem decode_pinned_prefix {α : Type} [NativeCodec α]
+    (value : α) (env : Environment) (id pin term : Nat) (pinned : Pinned value id pin term env)
+    (registered : typeName α ∈ env.nativeResourceTypes) :
+    Result.ReadyPrefix (decode (α := α) (.reference term)) env
+      (.ok ⟨id,env.refCounter + 1⟩) {env with
+        refCounter := env.refCounter + 1
+        nativeHeap := (env.refCounter + 1,handleType α,.reference id) ::
+          env.nativeHeap.map fun cell => if cell.1 == id then
+            (id,typeName α,.tuple #[.integer 2,NativeCodec.encode value]) else cell} := by
+  have anyFresh := frame_any_id env.nativeHeap env.refCounter (env.refCounter + 1)
+    pinned.keys (by omega)
+  have allocation := pinned.allocation
+  have owner := pinned.owner
+  have registry := pinned.registry
+  have owners := pinned.owners
+  simp only [typeName] at registered
+  simp only [typeName, handleType, termType] at allocation owner registry owners
+  unfold decode
+  apply Result.ReadyPrefix.get
+  simp [registered,termOwner,termEntryOwner,registry,termType,typeName]
+  unfold clone
+  apply Result.ReadyPrefix.get
+  simp [lookup,payload,allocation,owner,owners,anyFresh,NativeCodec.roundtrip,
+    referenceLimit,typeName,handleType]
+  apply Result.ReadyPrefix.set
+  exact .refl _ _
 
 theorem decode_pinned_handled_next {α β γ : Type} [NativeCodec α]
     (value : α) (finish : NativeResourceArc α → NativeM β)
