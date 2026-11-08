@@ -49,6 +49,17 @@ theorem decode_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (st
     NativeResourceArc.decode_pinned_next payload next (pinnedEnv env state counter ns)
       3 5 6 (pin (ns := ns) env state counter bounded) registered
 
+/-- Successful VM-term decoding retains its actual lookup and owner-allocation prefix. -/
+theorem decode_prefix {ns : NamespaceSnapshot} (env : Environment) (state : State) (counter : Nat)
+    (bounded : 6 ≤ counter)
+    (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
+    Result.ReadyPrefix (NativeResourceArc.decode (.reference 6)) (pinnedEnv env state counter ns)
+      (.ok (⟨3,counter + 1⟩ : NativeResourceArc effects_native.FileResource))
+      (decodedEnv env state counter ns) := by
+  simpa [pinnedEnv,decodedEnv,NativeResourceArc.vmCells,frame,List.map] using
+    NativeResourceArc.decode_pinned_prefix payload (pinnedEnv env state counter ns)
+      3 5 6 (pin (ns := ns) env state counter bounded) registered
+
 private theorem decoded_views {ns : NamespaceSnapshot} (env : Environment) (state : State) (counter : Nat) (bounded : 6 ≤ counter) :
     (decodedEnv env state counter ns).nativeHeap.filter (fun cell => cell.1 == counter + 1) =
       [(counter + 1,NativeResourceArc.handleType effects_native.FileResource,.reference 3)] ∧
