@@ -1149,7 +1149,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1211,7 +1211,11 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.CommitPhases.phase_prefix FileResource.CommitPhases.phase_recovery
         FileResource.CommitPhases.post_sync_recovery FileResource.CommitPhases.directory_sync_recovery
         FileResource.CommitPhases.phase_witness FileResource.CommitPhases.lost_name_witness
-        FileResource.CommitPhases.nif_phase_prefix FileResource.CommitPhases.nif_phase_recovery)
+        FileResource.CommitPhases.nif_phase_prefix FileResource.CommitPhases.nif_phase_recovery
+        FileResource.CommitPhases.complete_prefix
+        FileResource.CallPrefix.release_prefix FileResource.CallPrefix.facade_prefix
+        FileResource.CallPrefix.call_run FileResource.CallPrefix.boundary_recovery
+        FileResource.CallPrefix.acknowledged_retries)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1391,6 +1395,26 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(phases_property, phases_source)
+    call_property = Path.join(project, "FileResource/CallPrefix.lean")
+    call_source = File.read!(call_property)
+
+    for wrong <- [
+          String.replace(call_source, ".reference 6", ".reference 5"),
+          String.replace(
+            call_source,
+            "(Record.done env value)",
+            "(CommitPhases.phaseEnv env value .finished)"
+          )
+        ] do
+      assert wrong != call_source
+      File.write!(call_property, wrong)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    end
+
+    File.write!(call_property, call_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
