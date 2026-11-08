@@ -152,6 +152,21 @@ pub fn scalar_resource_read(resource: &rustler::ResourceArc<ScalarResource>) -> 
     effects_core::counter_value(&resource.counter)
 }
 
+/// Applies a resource-provided amount while holding the counter's mutex.
+/// The consumed resource owner is released before the counter guard is unlocked.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+pub fn locked_increment_from_resource(
+    mutex: &Mutex<effects_core::Counter>,
+    resource: rustler::ResourceArc<ScalarResource>,
+) -> bool {
+    let guard = effects_core::recover_guard(mutex.lock());
+    let amount = scalar_resource_read(&resource);
+    drop(resource);
+    effects_core::update_release(guard, amount)
+}
+
 /// Releases the original handle, observes its retained alias, then releases it.
 ///
 /// # Panics

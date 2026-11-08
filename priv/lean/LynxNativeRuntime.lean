@@ -808,6 +808,29 @@ theorem deref_live_sharedSteps {α β : Type} [NativeCodec α]
   simp [lookup, payload, heap, token, stored, owners, NativeCodec.roundtrip,
     positive, boundInt]
 
+/-- Resource reads and owner consumption retain mutual exclusion at every local step. -/
+theorem deref_live_exclusiveSteps {α β γ : Type} [NativeCodec α]
+    (pid peer : PID) (peerPoll : Environment → Option (γ × Environment)) (handle : NativeResourceArc α) (value : α) (count : Nat)
+    (before after : Nat × List (Nat × String × Term)) (finish : α → NativeM β) (answer : β)
+    (positive : 0 < count) (bounded : count ≤ referenceLimit)
+    (token : before.2.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : before.2.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (before.2.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = count)
+    (blocked : ∀ env : Environment, env.currentPid = peer → env.refCounter = before.1 →
+      env.nativeHeap = before.2 → peerPoll env = none)
+    (rest : Result.ExclusiveSteps pid peer peerPoll (finish value) before answer after) :
+    Result.ExclusiveSteps pid peer peerPoll (deref handle >>= finish) before answer after := by
+  unfold deref
+  rw [Result.get_bind]
+  refine .read _ (finish value) before after answer ?_ blocked rest
+  intro env _ _ heap
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
+  simp [lookup, payload, heap, token, stored, owners, NativeCodec.roundtrip,
+    positive, boundInt]
+
 /-- Borrow locally and stop before the caller's next scheduler operation. -/
 theorem deref_live_registeredPrefix {α : Type} [NativeCodec α]
     (pid : PID) (handle : NativeResourceArc α) (value : α) (count : Nat)
@@ -959,6 +982,41 @@ theorem releaseOwned_live_sharedSteps {α β : Type} [NativeCodec α] [NativeRes
   · unfold release
     rw [Result.get_bind]
     refine .update _ (finish ()) before _ after answer ?_ rest
+    intro env _ counter heap
+    simp [lookup, payload, counter, heap, token, stored, owners, NativeCodec.roundtrip,
+      positive, boundInt, different, Result.set_bind]
+
+/-- Resource reads and owner consumption retain mutual exclusion at every local step. -/
+theorem releaseOwned_live_exclusiveSteps {α β γ : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (pid peer : PID) (peerPoll : Environment → Option (γ × Environment)) (handle : NativeResourceArc α) (value : α) (count : Nat)
+    (before after : Nat × List (Nat × String × Term)) (finish : Unit → NativeM β) (answer : β)
+    (nonfinal : 1 < count) (bounded : count ≤ referenceLimit)
+    (token : before.2.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : before.2.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (before.2.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = count)
+    (blocked : ∀ env : Environment, env.currentPid = peer → env.refCounter = before.1 →
+      env.nativeHeap = before.2 → peerPoll env = none)
+    (rest : Result.ExclusiveSteps pid peer peerPoll (finish ())
+      (before.1, (before.2.filter fun cell => cell.1 != handle.token).map fun cell =>
+        if cell.1 == handle.id then
+          (handle.id, typeName α, .tuple #[.integer (count - 1), NativeCodec.encode value]) else cell)
+      answer after) :
+    Result.ExclusiveSteps pid peer peerPoll (releaseOwned handle >>= finish) before answer after := by
+  have positive : 0 < count := by omega
+  have different : count ≠ 1 := by omega
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
+  unfold releaseOwned
+  rw [Result.get_bind]
+  refine .read _ (release handle >>= finish) before after answer ?_ blocked ?_
+  · intro env _ _ heap
+    simp [lookup, payload, heap, token, stored, owners, NativeCodec.roundtrip,
+      positive, boundInt, different]
+  · unfold release
+    rw [Result.get_bind]
+    refine .update _ (finish ()) before _ after answer ?_ blocked rest
     intro env _ counter heap
     simp [lookup, payload, counter, heap, token, stored, owners, NativeCodec.roundtrip,
       positive, boundInt, different, Result.set_bind]
