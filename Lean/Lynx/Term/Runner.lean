@@ -506,6 +506,97 @@ inductive RegisteredSteps (pid : PID) : Result α →
       (rest : RegisteredSteps pid body after afterTypes value final finalTypes) :
       RegisteredSteps pid (.get read) before types value final finalTypes
 
+/-- Local native steps ending at an unevaluated continuation. Only get/set
+nodes are consumed: reaching a wait leaves its poll to the actual scheduler.
+The registry, counter and heap are explicit; all process fields stay framed. -/
+inductive RegisteredPrefix (pid : PID) : Result α →
+    (Nat × List (Nat × String × Term)) → List String → Result α →
+    (Nat × List (Nat × String × Term)) → List String → Prop where
+  | refl (computation : Result α) (shared : Nat × List (Nat × String × Term)) (types : List String) :
+      RegisteredPrefix pid computation shared types computation shared types
+  | read (read : Environment → Result α) (body : Result α)
+      (before final : Nat × List (Nat × String × Term)) (types finalTypes : List String) (residual : Result α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.refCounter = before.1 →
+        env.nativeHeap = before.2 → env.nativeResourceTypes = types → read env = body)
+      (rest : RegisteredPrefix pid body before types residual final finalTypes) :
+      RegisteredPrefix pid (.get read) before types residual final finalTypes
+  | update (read : Environment → Result α) (body : Result α)
+      (before after final : Nat × List (Nat × String × Term))
+      (types afterTypes finalTypes : List String) (residual : Result α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.refCounter = before.1 →
+        env.nativeHeap = before.2 → env.nativeResourceTypes = types →
+        read env = .set {env with
+          refCounter := after.1, nativeHeap := after.2, nativeResourceTypes := afterTypes} body)
+      (rest : RegisteredPrefix pid body after afterTypes residual final finalTypes) :
+      RegisteredPrefix pid (.get read) before types residual final finalTypes
+
+/-- Concatenate only local steps; the final residual remains unevaluated. -/
+theorem RegisteredPrefix.trans {pid : PID} {computation middle residual : Result α}
+    {before midway after : Nat × List (Nat × String × Term)} {types middleTypes finalTypes : List String}
+    (first : RegisteredPrefix pid computation before types middle midway middleTypes)
+    (second : RegisteredPrefix pid middle midway middleTypes residual after finalTypes) :
+    RegisteredPrefix pid computation before types residual after finalTypes := by
+  induction first with
+  | refl => exact second
+  | read read body before midway types middleTypes middle ready rest ih =>
+      exact .read _ _ _ _ _ _ _ ready (ih second)
+  | update read body before next midway types nextTypes middleTypes middle ready rest ih =>
+      exact .update _ _ _ _ _ _ _ _ _ ready (ih second)
+
+/-- Attach an actual continuation without consuming any of its scheduler waits. -/
+theorem RegisteredPrefix.bind {pid : PID} {computation residual : Result α}
+    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
+    (trace : RegisteredPrefix pid computation before types residual after finalTypes)
+    (next : α → Result β) :
+    RegisteredPrefix pid (computation >>= next) before types (residual >>= next) after finalTypes := by
+  induction trace with
+  | refl => exact .refl _ _ _
+  | read read body before final types finalTypes residual ready rest ih =>
+      rw [Result.get_bind]
+      refine .read _ _ _ _ _ _ _ ?_ ih
+      intro env actor refs heap registered
+      rw [ready env actor refs heap registered]
+  | update read body before middle final types middleTypes finalTypes residual ready rest ih =>
+      rw [Result.get_bind]
+      refine .update _ _ _ _ _ _ _ _ _ ?_ ih
+      intro env actor refs heap registered
+      rw [ready env actor refs heap registered, Result.set_bind]
+
+/-- Preserve exception conversion at the residual, including its wait nodes. -/
+theorem RegisteredPrefix.handle {pid : PID} {computation residual : Result α}
+    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
+    (trace : RegisteredPrefix pid computation before types residual after finalTypes)
+    (handler : Exception → Result α) :
+    RegisteredPrefix pid (Result.handle computation handler) before types
+      (Result.handle residual handler) after finalTypes := by
+  induction trace with
+  | refl => exact .refl _ _ _
+  | read read body before final types finalTypes residual ready rest ih =>
+      simp only [Result.handle]
+      refine .read _ _ _ _ _ _ _ ?_ ih
+      intro env actor refs heap registered
+      rw [ready env actor refs heap registered]
+  | update read body before middle final types middleTypes finalTypes residual ready rest ih =>
+      simp only [Result.handle]
+      refine .update _ _ _ _ _ _ _ _ _ ?_ ih
+      intro env actor refs heap registered
+      rw [ready env actor refs heap registered]
+      rfl
+
+/-- Join a local prefix to its proven remaining implementation. -/
+theorem RegisteredPrefix.thenSteps {pid : PID} {computation residual : Result α} {value : α}
+    {before middle after : Nat × List (Nat × String × Term)}
+    {types middleTypes finalTypes : List String}
+    (first : RegisteredPrefix pid computation before types residual middle middleTypes)
+    (rest : RegisteredSteps pid residual middle middleTypes value after finalTypes) :
+    RegisteredSteps pid computation before types value after finalTypes := by
+  induction first with
+  | refl => exact rest
+  | read read body before middle types middleTypes residual ready tail ih =>
+      exact .read _ _ _ _ _ _ _ ready (ih rest)
+  | update read body before next middle types nextTypes middleTypes residual ready tail ih =>
+      exact .update _ _ _ _ _ _ _ _ _ ready (ih rest)
+
 /-- Registration-aware prefixes compose through the actual implementation and
 retain every non-native environment field. -/
 theorem RegisteredSteps.readyPrefix {pid : PID} {computation : Result α} {value : α}
@@ -529,9 +620,10 @@ theorem RegisteredSteps.readyPrefix {pid : PID} {computation : Result α} {value
       exact ih _ owner rfl rfl rfl
 
 private def traceEnv (pid : PID) (saved : List (PID × ProcessState))
-    (shared : Nat × List (Nat × String × Term)) (types : List String := []) : Environment :=
+    (shared : Nat × List (Nat × String × Term)) (types : List String := [])
+    (choices : List ScheduleChoice := []) : Environment :=
   { currentPid := pid, pidCounter := 2, processes := saved,
-    refCounter := shared.1, nativeHeap := shared.2, nativeResourceTypes := types }
+    refCounter := shared.1, nativeHeap := shared.2, nativeResourceTypes := types, schedule := choices }
 
 private theorem sharedSteps_left {α : Type} {computation : Result α} {value : α}
     {before after : Nat × List (Nat × String × Term)}
@@ -689,6 +781,135 @@ private theorem registeredSteps_right {α : Type} {computation : Result Term} {v
         simpa [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
           Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
           Term.Runner.removeProcess, traceEnv] using ih 2
+
+private theorem registeredPrefix_left {α : Type} {computation residual : Result α}
+    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
+    (trace : RegisteredPrefix 1 computation before types residual after finalTypes)
+    (child : Result Term) (finished : Term.Runner.Finished α) (choices : List ScheduleChoice) :
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 1 [(2, {})] before types choices))
+      (.parallel (.process 1 computation some) (.process 2 child (fun _ => none))) finished .current =
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 1 [(2, {})] after finalTypes choices))
+      (.parallel (.process 1 residual some) (.process 2 child (fun _ => none))) finished .current := by
+  induction trace with
+  | refl => rfl
+  | read read body before final types finalTypes residual ready rest ih =>
+      rw [Term.Runner.execute]
+      have evaluated := ready (traceEnv 1 [(2, {})] before types choices) rfl rfl rfl rfl
+      simp only [traceEnv] at evaluated
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv, evaluated]
+      exact ih
+  | update read body before middle final types middleTypes finalTypes residual ready rest ih =>
+      rw [Term.Runner.execute]
+      have evaluated := ready (traceEnv 1 [(2, {})] before types choices) rfl rfl rfl rfl
+      simp only [traceEnv] at evaluated
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv, evaluated]
+      rw [Term.Runner.execute]
+      simpa [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv] using ih
+
+private theorem registeredPrefix_right {α β : Type} {computation residual : Result β}
+    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
+    (trace : RegisteredPrefix 2 computation before types residual after finalTypes)
+    (parent : Result α) (finished : Term.Runner.Finished α) :
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 2 [(1, {})] before types))
+      (.parallel (.process 1 parent some) (.process 2 computation (fun _ => none))) finished .current =
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 2 [(1, {})] after finalTypes))
+      (.parallel (.process 1 parent some) (.process 2 residual (fun _ => none))) finished .current := by
+  induction trace with
+  | refl => rfl
+  | read read body before final types finalTypes residual ready rest ih =>
+      rw [Term.Runner.execute]
+      have evaluated := ready (traceEnv 2 [(1, {})] before types) rfl rfl rfl rfl
+      simp only [traceEnv] at evaluated
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv, evaluated]
+      exact ih
+  | update read body before middle final types middleTypes finalTypes residual ready rest ih =>
+      rw [Term.Runner.execute]
+      have evaluated := ready (traceEnv 2 [(1, {})] before types) rfl rfl rfl rfl
+      simp only [traceEnv] at evaluated
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv, evaluated]
+      rw [Term.Runner.execute]
+      simpa [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv] using ih
+
+private theorem registeredPrefix_right_switch {α β γ : Type}
+    {read : Environment → Result β} {poll : Environment → Option (γ × Environment)}
+    {next : γ → Result β}
+    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
+    (trace : RegisteredPrefix 2 (.get read) before types (.wait poll next) after finalTypes)
+    (parent : Result α) (finished : Term.Runner.Finished α) :
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 1 [(2, {})] before types))
+      (.parallel (.process 1 parent some) (.process 2 (.get read) (fun _ => none))) finished (.swap 2) =
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 2 [(1, {})] after finalTypes))
+      (.parallel (.process 1 parent some) (.process 2 (.wait poll next) (fun _ => none))) finished .current := by
+  cases trace with
+  | read read body before final types finalTypes residual ready rest =>
+      rw [Term.Runner.execute]
+      have evaluated := ready (traceEnv 2 [(1, {})] before types) rfl rfl rfl rfl
+      simp only [traceEnv] at evaluated
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv, evaluated]
+      exact registeredPrefix_right rest parent finished
+  | update read body before middle final types middleTypes finalTypes residual ready rest =>
+      rw [Term.Runner.execute]
+      have evaluated := ready (traceEnv 2 [(1, {})] before types) rfl rfl rfl rfl
+      simp only [traceEnv] at evaluated
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv, evaluated]
+      rw [Term.Runner.execute]
+      simpa [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv] using registeredPrefix_right rest parent finished
+
+private theorem sharedSteps_switch_from_blocked {α β : Type} {computation : Result α} {value : α}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : SharedSteps 1 computation before value after)
+    (poll : Environment → Option (β × Environment)) (next : β → Result Term)
+    (types : List String) (finished : Term.Runner.Finished α)
+    (blocked : poll (traceEnv 2 [(1, {})] before types) = none) :
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 2 [(1, {})] before types))
+      (.parallel (.process 1 computation some) (.process 2 (.wait poll next) (fun _ => none))) finished .current =
+    Term.Runner.execute 1 (Term.Runner.save (traceEnv 1 [(2, {})] before types))
+      (.parallel (.process 1 computation some) (.process 2 (.wait poll next) (fun _ => none))) finished .current := by
+  cases trace with
+  | done value shared =>
+      conv => lhs; rw [Term.Runner.execute]
+      conv => rhs; rw [Term.Runner.execute]
+      simp_all [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv]
+  | read read body before final value ready rest =>
+      conv => lhs; rw [Term.Runner.execute]
+      conv => rhs; rw [Term.Runner.execute]
+      simp_all [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv]
+  | update read body before middle final value ready rest =>
+      conv => lhs; rw [Term.Runner.execute]
+      conv => rhs; rw [Term.Runner.execute]
+      simp_all [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv]
+  | wait parentPoll parentNext reply before middle final value ready rest =>
+      have polled := ready (traceEnv 1 [(2, {})] before types) rfl rfl rfl
+      simp only [traceEnv] at polled
+      conv => lhs; rw [Term.Runner.execute]
+      conv => rhs; rw [Term.Runner.execute]
+      simp_all [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+        Term.Runner.removeProcess, traceEnv]
 
 private theorem choose_single_ready (pool : Term.Runner.Pool α) (pid : PID)
     (env : Environment) (preferred : ScheduleChoice)
@@ -1379,6 +1600,60 @@ theorem two_registered_serial_steps (parent child : Result Term) (rootValue chil
     Term.Runner.removeProcess, Term.Runner.schedule]
   simpa [traceEnv, Term.Runner.save, Term.Runner.removeProcess] using
     (registeredSteps_left parentTrace child none).trans (registeredSteps_right childTrace rootValue 1)
+
+/-- A complete caller registers and decodes locally, acquires its guard, and
+then a peer registers/decodes before attempting the held lock. The blocked peer
+cannot run its critical section; the root finishes before the peer acquires.
+Every native wait remains a scheduler step. This proves the supplied finite
+schedule, not fairness or arbitrary-interleaving safety. -/
+theorem two_registered_interleave_steps
+    (parent : Result Term) (childRead : Environment → Result Term)
+    (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
+    (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
+    (parentValue : β) (childValue : γ) (rootValue childResult : Term)
+    (s0 s1 s2 s3 s4 s5 s6 : Nat × List (Nat × String × Term))
+    (types0 types1 types2 : List String)
+    (parentPrefix : RegisteredPrefix 1 parent s0 types0 (.wait parentPoll parentNext) s1 types1)
+    (childPrefix : RegisteredPrefix 2 (.get childRead) s2 types1 (.wait childPoll childNext) s3 types2) :
+    let atState := fun (pid : PID) (saved : List (PID × ProcessState))
+        (choices : List ScheduleChoice) (shared : Nat × List (Nat × String × Term)) types =>
+      ({ currentPid := pid, pidCounter := 2, processes := saved, schedule := choices,
+         refCounter := shared.1, nativeHeap := shared.2, nativeResourceTypes := types } : Environment)
+    parentPoll (atState 1 [(2, {})] [.swap 2] s1 types1) =
+      some (parentValue, atState 1 [(2, {})] [.swap 2] s2 types1) →
+    SharedSteps 1 (parentNext parentValue) s3 rootValue s4 →
+    childPoll (atState 2 [(1, {})] [] s3 types2) = none →
+    childPoll (atState 2 [] [] s4 types2) = some (childValue, atState 2 [] [] s5 types2) →
+    SharedSteps 2 (childNext childValue) s5 childResult s6 →
+    (Result.schedule (.get childRead) (fun _ => parent))
+      { refCounter := s0.1, nativeHeap := s0.2, nativeResourceTypes := types0,
+        schedule := [.current, .swap 2] } =
+      (.ok rootValue, atState 1 [] [] s6 types2) := by
+  dsimp only
+  intro acquired parentTrace blocked childAcquired childTrace
+  change Term.Runner.run _ _ = _
+  rw [Term.Runner.run, Term.Runner.execute]
+  simp [Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.step, Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+    Term.Runner.removeProcess, Term.Runner.schedule]
+  change Term.Runner.execute 1 (Term.Runner.save (traceEnv 1 [(2, {})] s0 types0 [.swap 2]))
+    (.parallel (.process 1 parent some) (.process 2 (.get childRead) (fun _ => none))) none .current = _
+  rw [registeredPrefix_left parentPrefix (.get childRead) none [.swap 2]]
+  rw [Term.Runner.execute]
+  simp [Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.step, Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+    Term.Runner.removeProcess, Term.Runner.schedule, traceEnv, acquired]
+  change Term.Runner.execute 1 (Term.Runner.save (traceEnv 1 [(2, {})] s2 types1))
+    (.parallel (.process 1 (parentNext parentValue) some)
+      (.process 2 (.get childRead) (fun _ => none))) none (.swap 2) = _
+  rw [registeredPrefix_right_switch childPrefix (parentNext parentValue) none]
+  rw [sharedSteps_switch_from_blocked parentTrace childPoll childNext types2 none blocked]
+  rw [sharedSteps_left parentTrace (.wait childPoll childNext) none types2]
+  rw [Term.Runner.execute]
+  simp [Term.Runner.choose, Term.Runner.findReady,
+    Term.Runner.step, Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess,
+    Term.Runner.removeProcess, Term.Runner.schedule, traceEnv, childAcquired]
+  exact sharedSteps_right childTrace rootValue 2 types2
 
 /-- Two contending workers retain every IO wait in their finite ready traces.
 The root acquires first, a child acquisition is attempted while held, then both
