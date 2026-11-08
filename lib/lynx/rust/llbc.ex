@@ -229,7 +229,7 @@ defmodule Lynx.Rust.LLBC do
       end
 
     if Keyword.get(opts, :execution, :pure) == :runtime,
-      do: Lynx.Rust.NativeLifetimes.audit!(functions, modelled, translated, refs)
+      do: Lynx.Rust.NativeLifetimes.audit!(functions, modelled, translated, refs, drops)
 
     for type <- translated["type_decls"], type != nil, first_party?(type, first_party) do
       unless is_map(type["kind"]) &&
