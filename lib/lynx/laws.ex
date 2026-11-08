@@ -139,7 +139,11 @@ defmodule Lynx.Laws do
   by name may reach, as with `Lynx.Case.dynamic/1`.
 
   Pass `preludes: [source, ...]` to load `Lynx.Lean` declaration blocks before
-  translated definitions and proofs, as with `Lynx.Case.prelude/1`.
+  translated definitions and proofs, as with `Lynx.Case.prelude/1`. The first
+  block starts with a Lean module header. Later blocks can be declaration
+  fragments or complete proof files with their own module headers and imports.
+  All imports are loaded first, then blocks elaborate in order as one audited
+  module; changes to any block invalidate its dependent proof cache.
 
   Pass `postludes: [source, ...]` to load `Lynx.Lean` declaration blocks after
   translated definitions and before proofs, as with `Lynx.Case.postlude/1`.

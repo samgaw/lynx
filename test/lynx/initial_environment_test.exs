@@ -132,4 +132,52 @@ defmodule Lynx.InitialEnvironmentTest do
       assert List.last(reports).status == :skipped
     end
   end
+
+  @tag :tmp_dir
+  test "composes complete proof files with their own imports and caches the audited module", %{
+    tmp_dir: tmp,
+    plain_beam: beam
+  } do
+    second = ~LEAN"""
+    module
+    public import Lynx.Modules.Erlang.erlang
+    public section
+    namespace SecondProofFile
+    theorem equal : Erlang.erlang.«==/2» (.integer 7) (.integer 7) = .ok Lynx.Term.true := by
+      simp [Erlang.erlang.«==/2»]
+    end SecondProofFile
+    """
+
+    opts = [preludes: [@prelude, second], debug_dir: tmp, debug: :lean]
+    reports = Lynx.Laws.verify([beam], opts)
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+    assert Enum.all?(Lynx.Laws.verify([beam], opts), &(&1.status == :ok and &1.cached))
+
+    source = Path.join(tmp, "Erlang/prelude.lean")
+    assert File.read!(source) =~ "public import Lynx.Modules.Erlang.erlang"
+    {status, output} = Lynx.Commands.lake(Path.expand("Lean"), ["env", "lean", source])
+    assert status == 0, output
+
+    for extra <- [
+          "private axiom hiddenSecondFile : False",
+          "private theorem unfinishedSecondFile : True := by sorry"
+        ] do
+      wrong = %{second | source: second.source <> "\n" <> extra <> "\n"}
+      reports = Lynx.Laws.verify([beam], preludes: [@prelude, wrong])
+      assert Enum.any?(reports, &(&1.module == "Erlang.prelude" and &1.status == :error))
+      assert List.last(reports).status == :skipped
+    end
+  end
+
+  test "later declaration fragments still extend the first proof file", %{plain_beam: beam} do
+    fragment = ~LEAN"""
+    namespace InitialModel
+    theorem seeded : seven.pdict = [(.atom "seed", .integer 7)] := by
+      simp [seven, Lynx.Environment.pdict, Lynx.Environment.setPdict]
+    end InitialModel
+    """
+
+    reports = Lynx.Laws.verify([beam], preludes: [@prelude, fragment])
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+  end
 end
