@@ -31,6 +31,11 @@ private theorem publicExceptionEquations : True := by
   have _ := @Lynx.Result.monadSet_eq
   have _ := @Lynx.Result.nativeGet_continuation_run
   have _ := @Lynx.Result.nativeSet_continuation_run
+  have _ := @Lynx.Result.nativeModify_run
+  have _ := @Lynx.Result.nativeModify_apply
+  have _ := @Lynx.Result.ReadyPrefix.nativeModify
+  have _ := @Lynx.Result.RegisteredPrefix.modify
+  have _ := @Lynx.Result.RegisteredSteps.modify
   have _ := @Lynx.Result.wait_ready_run
   have _ := @Lynx.Result.wait_transition_run
   have _ := @Lynx.Result.handle_get
@@ -757,6 +762,9 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.instMonadExceptOfException",
   "Lynx.Result.instMonadStateOfEnvironment",
   "Lynx.Result.isExhausted",
+  "Lynx.Result.nativeGet",
+  "Lynx.Result.nativeModify",
+  "Lynx.Result.nativeSet",
   "Lynx.Result.ofExcept",
   "Lynx.Result.ofExceptWith",
   "Lynx.Result.ok",

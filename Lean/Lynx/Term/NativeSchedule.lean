@@ -262,6 +262,15 @@ private theorem registeredSteps_left {α : Type} {computation : Result α} {valu
         Term.NativeRunner.activate, Term.NativeRunner.save,
          traceEnv] using ih
 
+  | modify transition next reply before middle final types middleTypes finalTypes value ready rest ih =>
+      rw [Term.NativeRunner.execute_eq]
+      have evaluated := ready (traceEnv [] [([1], {})] before types) rfl rfl rfl rfl
+      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
+      simp +contextual [Term.NativeRunner.choose,  Term.NativeRunner.step,
+         Term.NativeRunner.save,
+         traceEnv, evaluated]
+      simpa +contextual [traceEnv, Term.NativeRunner.save] using ih
+
 private theorem registeredSteps_right {α : Type} {computation : Result Term} {value : Term}
     {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
     (trace : RegisteredSteps [1] computation before types value after finalTypes) (rootValue : α) (previous : PID) :
@@ -296,6 +305,18 @@ private theorem registeredSteps_right {α : Type} {computation : Result Term} {v
           Term.NativeRunner.activate, Term.NativeRunner.save,
            traceEnv] using ih [1]
 
+  | modify transition next reply before middle final types middleTypes finalTypes value ready rest ih =>
+      rw [Term.NativeRunner.execute_eq]
+      have evaluated := ready (traceEnv [1] [] before types) rfl rfl rfl rfl
+      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
+      by_cases same : previous = [1]
+      all_goals
+        simp +contextual [Term.NativeRunner.choose,
+          Term.NativeRunner.step, Term.NativeRunner.activate,
+           traceEnv, evaluated, same,
+          (eq_comm (a := [1]) (b := previous))]
+        simpa +contextual [traceEnv, Term.NativeRunner.activate] using ih [1]
+
 private theorem registeredPrefix_left {α : Type} {computation residual : Result α}
     {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
     (trace : RegisteredPrefix [] computation before types residual after finalTypes)
@@ -326,6 +347,15 @@ private theorem registeredPrefix_left {α : Type} {computation residual : Result
         Term.NativeRunner.activate, Term.NativeRunner.save,
          traceEnv] using ih
 
+  | modify transition next reply before middle final types middleTypes finalTypes residual ready rest ih =>
+      rw [Term.NativeRunner.execute_eq]
+      have evaluated := ready (traceEnv [] [([1], {})] before types choices) rfl rfl rfl rfl
+      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
+      simp +contextual [Term.NativeRunner.choose,  Term.NativeRunner.step,
+         Term.NativeRunner.save,
+         traceEnv, evaluated]
+      simpa +contextual [traceEnv, Term.NativeRunner.save] using ih
+
 private theorem registeredPrefix_right {α β : Type} {computation residual : Result β}
     {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
     (trace : RegisteredPrefix [1] computation before types residual after finalTypes)
@@ -355,6 +385,15 @@ private theorem registeredPrefix_right {α β : Type} {computation residual : Re
       simpa +contextual [Term.NativeRunner.choose, Term.NativeRunner.findReady, Term.NativeRunner.step,
         Term.NativeRunner.activate, Term.NativeRunner.save,
          traceEnv] using ih
+
+  | modify transition next reply before middle final types middleTypes finalTypes residual ready rest ih =>
+      rw [Term.NativeRunner.execute_eq]
+      have evaluated := ready (traceEnv [1] [([], {})] before types) rfl rfl rfl rfl
+      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
+      simp +contextual [Term.NativeRunner.choose,  Term.NativeRunner.step,
+         Term.NativeRunner.save,
+         traceEnv, evaluated]
+      simpa +contextual [traceEnv, Term.NativeRunner.save] using ih
 
 private theorem registeredPrefix_right_switch {α β γ : Type}
     {read : Environment → Result β} {poll : Environment → Option (γ × Environment)}

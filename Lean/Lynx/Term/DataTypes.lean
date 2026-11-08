@@ -222,6 +222,9 @@ inductive Result : (α : Type := Term) → Type 1 where
   | nativeGet {α : Type} : (Environment → Result α) → Result α
   /-- Commit shared native state and the current process's local state. -/
   | nativeSet {α : Type} : Environment → Result α → Result α
+  /-- Atomically transform shared native state and return a reply. This is a
+  synchronous state step, without a scheduling or blocking boundary. -/
+  | nativeModify {α β : Type} : (Environment → β × Environment) → (β → Result α) → Result α
   /-- A spawned child process, then the continuation receiving its PID. -/
   | schedule {α : Type} : SpawnOptions → Result Term → (PID → Result α) → Result α
   /-- Local asynchronous send. The message is in transit, and the sender continues at once. -/
@@ -254,6 +257,7 @@ namespace Result
   | .set env continuation => .set env (Result.bind continuation next)
   | .nativeGet continuation => .nativeGet fun env => Result.bind (continuation env) next
   | .nativeSet env continuation => .nativeSet env (Result.bind continuation next)
+  | .nativeModify transition continuation => .nativeModify transition fun value => Result.bind (continuation value) next
   | Result.schedule options child continuation =>
       Result.schedule options child fun pid => Result.bind (continuation pid) next
   | .send pid message continuation => .send pid message (Result.bind continuation next)
@@ -300,6 +304,7 @@ exception, so it propagates without reaching the handler. -/
   | .set env continuation => .set env (Result.handle continuation handler)
   | .nativeGet continuation => .nativeGet fun env => Result.handle (continuation env) handler
   | .nativeSet env continuation => .nativeSet env (Result.handle continuation handler)
+  | .nativeModify transition continuation => .nativeModify transition fun value => Result.handle (continuation value) handler
   | Result.schedule options child continuation =>
       Result.schedule options child fun pid => Result.handle (continuation pid) handler
   | .send pid message continuation => .send pid message (Result.handle continuation handler)
@@ -433,7 +438,7 @@ instance : MonadExceptOf Exception @Result where
       congr
       funext reply
       exact ih reply
-  | wait poll continuation ih =>
+  | wait poll continuation ih | nativeModify poll continuation ih =>
       simp only [Result.bind]
       congr
       funext value
@@ -467,7 +472,7 @@ private theorem bind_assoc_proof (computation : Result α)
       congr
       funext reply
       exact ih reply next
-  | wait poll continuation ih =>
+  | wait poll continuation ih | nativeModify poll continuation ih =>
       simp only [Result.bind]
       congr
       funext value
@@ -495,6 +500,19 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
     ¬ IsPure (.nativeGet next) := by simp [IsPure]
 @[simp] theorem not_isPure_nativeSet (env : Environment) (next : Result α) :
     ¬ IsPure (.nativeSet env next) := by simp [IsPure]
+@[simp] theorem not_isPure_nativeModify (transition : Environment → β × Environment) (next : β → Result α) :
+    ¬ IsPure (.nativeModify transition next) := by simp [IsPure]
+
+@[simp] theorem nativeModify_bind (transition : Environment → β × Environment)
+    (continuation : β → Result α) (next : α → Result γ) :
+    (Result.nativeModify transition continuation >>= next) =
+      .nativeModify transition (fun value => continuation value >>= next) := rfl
+
+theorem handle_nativeModify (transition : Environment → β × Environment)
+    (next : β → Result α) (handler : Exception → Result α) :
+    Result.handle (.nativeModify transition next) handler =
+      .nativeModify transition (fun value => Result.handle (next value) handler) := rfl
+
 @[simp] theorem not_isPure_wait (poll : Environment → Option (β × Environment)) (next : β → Result α) :
     ¬ IsPure (.wait poll next) := by simp [IsPure]
 
@@ -655,7 +673,7 @@ or make unresolved calls. Every environment read must eventually terminate. -/
   | .ok value => .ok value
   | .error exception => .error exception
   | .get next => toExceptRead (next env) env (readOnly env)
-  | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. | .nativeGet .. | .nativeSet .. =>
+  | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. | .nativeGet .. | .nativeSet .. | .nativeModify .. =>
       False.elim readOnly
 
 @[simp] theorem ok_bind (value : α) (next : α → Result β) :
@@ -773,7 +791,7 @@ namespace Lynx.Result
   match computation with
   | .ok value => .ok value
   | .error exception => .error exception
-  | .get .. | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. | .nativeGet .. | .nativeSet .. => False.elim pure
+  | .get .. | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. | .nativeGet .. | .nativeSet .. | .nativeModify .. => False.elim pure
 
 /-- Read-only evaluation agrees with pure extraction when there are no reads. -/
 @[simp] public theorem toExceptRead_pure (computation : Result α) (env : Environment)

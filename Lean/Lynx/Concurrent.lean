@@ -545,6 +545,10 @@ receive without a match and with a timeout steps by timing out. -/
     | .nativeGet next => [proceed (.internal processId) state (next (state.nativeView processId))]
     | .nativeSet updated next =>
         [proceed (.internal processId) (state.storeNative processId updated) next]
+    | .nativeModify transition next =>
+        let (value, updated) := transition (state.nativeView processId)
+        [proceed (.internal processId) (state.storeNative processId updated) (next value)]
+
     | .wait poll next =>
         match poll (state.nativeView processId) with
         | none => []
@@ -659,6 +663,9 @@ signal reaching a process that is not live, or a timer firing. -/
           [(.internal env.currentPid, .start env (next env) elapsed)]
       | .set updated next | .nativeSet updated next =>
           [(.internal env.currentPid, .start updated next elapsed)]
+      | .nativeModify transition next =>
+          [(.internal env.currentPid, .start (transition env).2 (next (transition env).1) elapsed)]
+
       | .wait poll next =>
           match poll env with
           | some (value, updated) => [(.internal env.currentPid, .start updated (next value) elapsed)]

@@ -108,6 +108,8 @@ def run (computation : Result α) (env : Environment) (choices : List ScheduleCh
   | .error exception => (.error exception, env)
   | .get next | .nativeGet next => run (next env) env choices
   | .set next continuation | .nativeSet next continuation => run continuation next choices
+  | .nativeModify transition next => run (next (transition env).1) (transition env).2 choices
+
   | .wait poll next =>
       match poll env with
       | some (value, updated) => run (next value) updated choices
@@ -183,6 +185,10 @@ private theorem run_reaches (computation : Result α) (env : Environment)
     obtain ⟨events, last, steps, terminal⟩ := ih updated
     exact ⟨_, last, .step (event := .internal env.currentPid) (by simp [Step, Config.successors]) steps,
       by rw [run]; exact terminal⟩
+  | nativeModify transition next ih =>
+    obtain ⟨events, last, steps, terminal⟩ := ih (transition env).1 (transition env).2
+    exact ⟨_, last, .step (event := .internal env.currentPid)
+      (by simp [Step, Config.successors]) steps, by simpa [run] using terminal⟩
   | wait poll next ih =>
     cases ready : poll env with
     | some pair =>
@@ -275,6 +281,20 @@ system ending in a terminal configuration with the same outcome. -/
     (env : Environment) :
     (Result.nativeSet next continuation) env = continuation next :=
   nativeSet_continuation_run next continuation env []
+
+@[simp] theorem nativeModify_run (transition : Environment → β × Environment)
+    (next : β → Result α) (env : Environment) (choices : List ScheduleChoice := []) :
+    (Result.nativeModify transition next).run env choices =
+      (next (transition env).1).run (transition env).2 choices := by
+  change Term.Runner.run (.nativeModify transition next) env choices = _
+  rw [Term.Runner.run]
+  cases transition env
+  rfl
+
+@[simp] theorem nativeModify_apply (transition : Environment → β × Environment)
+    (next : β → Result α) (env : Environment) :
+    (Result.nativeModify transition next) env = next (transition env).1 (transition env).2 :=
+  nativeModify_run transition next env []
 
 theorem run_reaches (computation : Result α) (env : Environment) (choices : List ScheduleChoice) :
     ∃ events last, Concurrent.Run (.start env computation) events last ∧
