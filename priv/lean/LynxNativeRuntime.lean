@@ -768,6 +768,22 @@ theorem deref_retained_handled_next {α β γ : Type} [NativeCodec α]
       ((Result.handle (finish value) handler) >>= next) env := by
   simp [Result.handle, deref, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
 
+/-- A retained borrow is an actual state-read prefix and leaves ownership and
+payload intact. This interface retains operation boundaries for crash proofs. -/
+theorem deref_retained_prefix {α : Type} [NativeCodec α]
+    (handle : NativeResourceArc α) (value : α) (env : Environment)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer 2, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = 2) :
+    Result.ReadyPrefix (deref handle) env (.ok value) env := by
+  unfold deref
+  apply Result.ReadyPrefix.get
+  simp [lookup,payload,token,stored,owners,NativeCodec.roundtrip,referenceLimit]
+  exact .refl _ _
+
 /-- Retaining a validated sole owner creates another token for the same value. -/
 theorem clone_single_next {α β : Type} [NativeCodec α]
     (handle : NativeResourceArc α) (value : α) (next : NativeResourceArc α → NativeM β)
