@@ -1084,6 +1084,7 @@ defmodule Lynx.Rustler.FileResourceTest do
 
   @tag :tmp_dir
   @tag :checked_record
+  @tag timeout: 900_000
   test "checked resource records reject torn values before commitment", %{tmp_dir: tmp} do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
@@ -1149,7 +1150,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix CommitFailure)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix CommitFailure DirectoryFailure)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1218,7 +1219,12 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.CallPrefix.acknowledged_retries
         FileResource.CommitFailure.commit_prefix FileResource.CommitFailure.release_prefix
         FileResource.CommitFailure.facade_prefix FileResource.CommitFailure.call_run
-        FileResource.CommitFailure.failure_env FileResource.CommitFailure.retry_run)
+        FileResource.CommitFailure.failure_env FileResource.CommitFailure.retry_run
+        FileResource.DirectoryFailure.directory_prefix FileResource.DirectoryFailure.commit_prefix
+        FileResource.DirectoryFailure.release_prefix FileResource.DirectoryFailure.facade_prefix
+        FileResource.DirectoryFailure.call_prefix FileResource.DirectoryFailure.call_run
+        FileResource.DirectoryFailure.failure_env FileResource.DirectoryFailure.failure_recovery
+        FileResource.DirectoryFailure.lost_name_witness)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1279,6 +1285,30 @@ defmodule Lynx.Rustler.FileResourceTest do
                do: name
              )
 
+    directory_path = Path.join(tmp, "failed_directory_commit.ex")
+    File.cp!(Path.join(@fixture, "file_resource_directory_failure.ex"), directory_path)
+    [{_, directory_beam}] = Code.compile_file(directory_path)
+
+    for seed <- ~w(seedOpening seedSynchronization seedCloseError) do
+      directory_reports =
+        Lynx.Laws.verify([directory_beam],
+          native: {Lynx.Rustler, options},
+          initial_environment: "FileResource.DirectoryFailure." <> seed,
+          export: Path.join(tmp, seed <> ".export")
+        )
+
+      assert Enum.all?(directory_reports, &(&1.status == :ok)),
+             inspect({seed, directory_reports}, limit: :infinity)
+
+      assert ["directory_failure_not_acknowledged/0"] ==
+               for(
+                 report <- directory_reports,
+                 %{kind: :elixir_law, status: :verified, theorem: name} <-
+                   report[:guarantees] || [],
+                 do: name
+               )
+    end
+
     warm = Lynx.Rustler.prepare!(options)
     assert Enum.all?(warm.reports, &(&1.status == :ok and &1.cached))
     export = Path.join(tmp, "record.export")
@@ -1295,6 +1325,17 @@ defmodule Lynx.Rustler.FileResourceTest do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
+
+    for seed <- ~w(seedOpening seedSynchronization seedCloseError) do
+      {status, output} =
+        Lynx.Commands.lake(
+          project,
+          ["check", "--from-export", Path.join(tmp, seed <> ".export")] ++ sandbox
+        )
+
+      assert status == 0, output
+    end
+
     property = Path.join(project, "FileResource/RecordRecovery.lean")
     source = File.read!(property)
 
@@ -1463,6 +1504,30 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(failure_property, failure_source)
+    directory_property = Path.join(project, "FileResource/DirectoryFailure.lean")
+    directory_source = File.read!(directory_property)
+
+    for wrong <- [
+          String.replace(
+            directory_source,
+            "(image.names = [] ∨ image.names = Publish.names)",
+            "image.names = Publish.names"
+          ),
+          String.replace(
+            directory_source,
+            "[(12,closedDirectoryTypeName,.tuple #[.nil])]",
+            "[(12,directoryTypeName,.tuple #[.nil])]"
+          )
+        ] do
+      assert wrong != directory_source
+      File.write!(directory_property, wrong)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    end
+
+    File.write!(directory_property, directory_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
@@ -1478,6 +1543,46 @@ defmodule Lynx.Rustler.FileResourceTest do
       assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
         Lynx.Rustler.prepare!(options)
       end
+    end
+
+    for changed <- [
+          String.replace(
+            rust,
+            ~s|    let directory = std::fs::File::open(".")?;|,
+            String.trim_trailing("""
+                let directory = match std::fs::File::open(".") {
+                    Ok(directory) => directory,
+                    Err(error) => {
+                        drop(error);
+                        return Ok(());
+                    }
+                };
+            """)
+          ),
+          String.replace(
+            rust,
+            "    directory.sync_all()\n}",
+            String.trim_trailing("""
+                match directory.sync_all() {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        drop(error);
+                        Ok(())
+                    }
+                }
+            }
+            """)
+          )
+        ] do
+      assert changed != rust
+      File.write!(native, changed)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
+
+      assert error.message =~ "DirectoryFailure.lean"
     end
 
     File.write!(native, rust)
