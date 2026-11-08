@@ -2430,7 +2430,8 @@ contribute to proofs, so they are skipped. -/
 private def exportModules (path : System.FilePath) (modules : Array Name)
     (artifacts : NameMap ImportArtifacts) (temporary : System.FilePath) : IO Unit := do
   unsafe enableInitializersExecution
-  let env ← importModules (modules.map ({ module := · })) {} (loadExts := true) (arts := artifacts)
+  let env ← importModules (modules.map ({ module := ·, importAll := true, isExported := false }))
+    {} (loadExts := true) (arts := artifacts)
   let constants := env.constants.toList.filterMap fun (name, info) => do
     let index ← env.getModuleIdxFor? name
     guard (modules.contains env.header.moduleNames[index.toNat]!)
@@ -2537,6 +2538,7 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
     let mut artifacts : NameMap ImportArtifacts := {}
     let mut sources : Array (Name × String) := #[]
     let mut exported : Array Name := #[]
+    let mut auditedExports : Array Name := #[]
     let mut verified : Std.HashSet String := {}
     let mut uncached : Std.HashSet String := {}
     for entry in files do
@@ -2640,6 +2642,10 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
         unless fileFailed do
           artifacts := artifacts.insert mainModule (cachedArtifacts directory)
           exported := exported.push mainModule
+          for name in file.auditModules do
+            let id ← IO.ofExcept <| (identifier name).run runtime.env |>.run' {}
+            unless auditedExports.contains id.getId do
+              auditedExports := auditedExports.push id.getId
           verified := verified.insert file.moduleName
           if key.isNone then uncached := uncached.insert file.moduleName
         let elapsed := (← IO.monoMsNow) - started
@@ -2652,7 +2658,12 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
           ("diagnostics", .arr diagnostics)])
     if let some path := export? then
       if exported.size == files.size then
-        exportModules path exported artifacts temporary
+        -- Imported Rust property modules can contain every logical proof while
+        -- the input module only runs reporting metaprograms. Export the audited
+        -- boundary too, including unused private proofs, rather than an empty report.
+        let roots := auditedExports.foldl (fun roots name =>
+          if roots.contains name then roots else roots.push name) exported
+        exportModules path roots artifacts temporary
     if let some debug := debug? then
       if debug.always || exported.size != files.size then
         writeSources debug.dir sources

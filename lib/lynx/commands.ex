@@ -55,7 +55,10 @@ defmodule Lynx.Commands do
 
     * `:export` - a path where the declarations of the verified modules and their
       dependencies are written in Lean's export format, for `lake check --from-export`.
-      It is written only when every module verifies.
+      Explicitly audited imported modules are included, with their private proofs,
+      even when the input module only runs proof-reporting metaprograms. Export
+      auditing does not expose private declarations to client proofs. The file is
+      written only when every module verifies.
 
   """
   @spec verify!(String.t(), [map()], keyword()) :: [Lynx.Laws.report()]
