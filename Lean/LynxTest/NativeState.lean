@@ -21,6 +21,29 @@ theorem sharedUpdate_every_schedule (choices : List ScheduleChoice) :
   · assumption
   · contradiction
 
+private def atomicIncrement : Result Unit :=
+  .nativeModify (fun env => ((), {env with nativeRefCounter := env.nativeRefCounter + 1})) .ok
+
+private def concurrentIncrements : Result :=
+  Result.schedule {} (do
+    atomicIncrement
+    Result.send [] .nil (.ok .nil)) fun _ => do
+      atomicIncrement
+      Result.receive .infinity (fun _ message => some message) fun _ =>
+        .nativeGet fun env => .ok (.integer env.nativeRefCounter)
+
+/-- A synchronous native transition retains every concurrent update. -/
+theorem atomic_updates_every_interleaving :
+    Concurrent.check (fun | .ok (.integer 2) => true | _ => false) 20
+      (.start {} concurrentIncrements) = true := by cbv
+
+/-- A synchronous native transition preserves the caller's scheduling stream. -/
+theorem atomic_transition_run (transition : Environment → β × Environment)
+    (next : β → Result α) (env : Environment) (choices : List ScheduleChoice) :
+    (Result.nativeModify transition next).run env choices =
+      (next (transition env).1).run (transition env).2 choices :=
+  Result.nativeModify_run transition next env choices
+
 private def localAndNative : Result :=
   .nativeSet {nativeRefCounter := 13} <|
     Result.schedule {} (.get fun localEnv => .send [] (.integer localEnv.nativeRefCounter) (.ok .nil)) fun _ =>

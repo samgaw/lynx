@@ -20,6 +20,12 @@ inductive ReadyPrefix : Result α → Environment → Result α → Environment 
       (residual : Result α) (after : Environment)
       (rest : ReadyPrefix next middle residual after) :
       ReadyPrefix (.nativeSet middle next) before residual after
+  | nativeModify {β : Type} (transition : Environment → β × Environment)
+      (next : β → Result α) (reply : β) (before middle : Environment)
+      (residual : Result α) (after : Environment)
+      (ready : transition before = (reply,middle))
+      (rest : ReadyPrefix (next reply) middle residual after) :
+      ReadyPrefix (.nativeModify transition next) before residual after
   | wait {β : Type} (poll : Environment → Option (β × Environment))
       (next : β → Result α) (reply : β) (before middle : Environment)
       (residual : Result α) (after : Environment)
@@ -41,6 +47,9 @@ theorem ReadyPrefix.trans {computation middle residual : Result α}
   | wait poll next reply before updated middle midway ready rest ih =>
     exact .wait _ _ _ _ _ _ _ ready (ih second)
 
+  | nativeModify transition next reply before updated middle midway ready rest ih =>
+    exact .nativeModify _ _ _ _ _ _ _ ready (ih second)
+
 /-- A ready prefix agrees with the existing runner. Completion and its outcome
 remain the responsibility of the residual computation. -/
 theorem ReadyPrefix.apply {computation residual : Result α} {before after : Environment}
@@ -58,6 +67,10 @@ theorem ReadyPrefix.apply {computation residual : Result α} {before after : Env
       rw [wait_ready_apply poll next before middle reply ready]
       exact ih
 
+  | nativeModify transition next reply before middle residual after ready rest ih =>
+    rw [nativeModify_apply, ready]
+    exact ih
+
 /-- A ready prefix preserves an explicit scheduler choice stream. -/
 theorem ReadyPrefix.run {computation residual : Result α} {before after : Environment}
     (trace : ReadyPrefix computation before residual after) (choices : List ScheduleChoice) :
@@ -73,6 +86,10 @@ theorem ReadyPrefix.run {computation residual : Result α} {before after : Envir
   | wait poll next reply before middle residual after ready rest ih =>
       rw [wait_ready_run poll next before middle reply ready choices]
       exact ih
+
+  | nativeModify transition next reply before middle residual after ready rest ih =>
+    rw [nativeModify_run transition next before choices, ready]
+    exact ih
 
 /-- Extend an existential ready prefix without choosing or rewriting the
 residual computation by hand. -/
@@ -102,6 +119,10 @@ theorem ReadyPrefix.bind {computation residual : Result α} {before after : Envi
       exact .wait poll (fun reply => continuation reply >>= next) reply before middle
         (residual >>= next) after ready ih
 
+  | nativeModify transition continuation reply before middle residual after ready rest ih =>
+    rw [nativeModify_bind]
+    exact .nativeModify _ _ _ _ _ _ _ ready ih
+
 /-- Exception handling retains the actual state transitions of a ready prefix.
 Verification exhaustion is still governed by `Result.handle` and is never caught. -/
 theorem ReadyPrefix.handle {computation residual : Result α} {before after : Environment}
@@ -118,6 +139,10 @@ theorem ReadyPrefix.handle {computation residual : Result α} {before after : En
   | wait poll continuation reply before middle residual after ready rest ih =>
       change ReadyPrefix (.wait poll fun value => Result.handle (continuation value) handler) _ _ _
       exact .wait _ _ _ _ _ _ _ ready ih
+
+  | nativeModify transition continuation reply before middle residual after ready rest ih =>
+    rw [handle_nativeModify]
+    exact .nativeModify _ _ _ _ _ _ _ ready ih
 
 /-- A protected computation's prefix composes through its real success and
 exception continuations, preserving the boundary of the protected computation. -/
@@ -274,8 +299,17 @@ inductive RegisteredSteps (pid : PID) : Result α →
           nativeRefCounter := after.1, nativeHeap := after.2, nativeResourceTypes := afterTypes} body)
       (rest : RegisteredSteps pid body after afterTypes value final finalTypes) :
       RegisteredSteps pid (.nativeGet read) before types value final finalTypes
+  | modify {β : Type} (transition : Environment → β × Environment) (next : β → Result α) (reply : β)
+      (before after final : Nat × List (Nat × String × Term))
+      (types afterTypes finalTypes : List String) (value : α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.nativeRefCounter = before.1 →
+        env.nativeHeap = before.2 → env.nativeResourceTypes = types →
+        transition env = (reply, {env with
+          nativeRefCounter := after.1, nativeHeap := after.2, nativeResourceTypes := afterTypes}))
+      (rest : RegisteredSteps pid (next reply) after afterTypes value final finalTypes) :
+      RegisteredSteps pid (.nativeModify transition next) before types value final finalTypes
 
-/-- Local native steps ending at an unevaluated continuation. Only get/set
+/-- Local native steps ending at an unevaluated continuation. Only synchronous state
 nodes are consumed: reaching a wait leaves its poll to the actual scheduler.
 The registry, counter and heap are explicit; all process fields stay framed. -/
 inductive RegisteredPrefix (pid : PID) : Result α →
@@ -298,6 +332,15 @@ inductive RegisteredPrefix (pid : PID) : Result α →
           nativeRefCounter := after.1, nativeHeap := after.2, nativeResourceTypes := afterTypes} body)
       (rest : RegisteredPrefix pid body after afterTypes residual final finalTypes) :
       RegisteredPrefix pid (.nativeGet read) before types residual final finalTypes
+  | modify {β : Type} (transition : Environment → β × Environment) (next : β → Result α) (reply : β)
+      (before after final : Nat × List (Nat × String × Term))
+      (types afterTypes finalTypes : List String) (residual : Result α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.nativeRefCounter = before.1 →
+        env.nativeHeap = before.2 → env.nativeResourceTypes = types →
+        transition env = (reply, {env with
+          nativeRefCounter := after.1, nativeHeap := after.2, nativeResourceTypes := afterTypes}))
+      (rest : RegisteredPrefix pid (next reply) after afterTypes residual final finalTypes) :
+      RegisteredPrefix pid (.nativeModify transition next) before types residual final finalTypes
 
 /-- Concatenate only local steps; the final residual remains unevaluated. -/
 theorem RegisteredPrefix.trans {pid : PID} {computation middle residual : Result α}
@@ -311,6 +354,9 @@ theorem RegisteredPrefix.trans {pid : PID} {computation middle residual : Result
       exact .read _ _ _ _ _ _ _ ready (ih second)
   | update read body before next midway types nextTypes middleTypes middle ready rest ih =>
       exact .update _ _ _ _ _ _ _ _ _ ready (ih second)
+
+  | modify transition next reply before updated midway types updatedTypes middleTypes middle ready rest ih =>
+    exact .modify _ _ _ _ _ _ _ _ _ _ ready (ih second)
 
 /-- Attach an actual continuation without consuming any of its scheduler waits. -/
 theorem RegisteredPrefix.bind {pid : PID} {computation residual : Result α}
@@ -330,6 +376,10 @@ theorem RegisteredPrefix.bind {pid : PID} {computation residual : Result α}
       refine .update _ _ _ _ _ _ _ _ _ ?_ ih
       intro env actor refs heap registered
       rw [ready env actor refs heap registered, Result.nativeSet_bind]
+
+  | modify transition continuation reply before middle final types middleTypes finalTypes residual ready rest ih =>
+    rw [nativeModify_bind]
+    exact .modify _ _ _ _ _ _ _ _ _ _ ready ih
 
 /-- Preserve exception conversion at the residual, including its wait nodes. -/
 theorem RegisteredPrefix.handle {pid : PID} {computation residual : Result α}
@@ -352,6 +402,10 @@ theorem RegisteredPrefix.handle {pid : PID} {computation residual : Result α}
       rw [ready env actor refs heap registered]
       rfl
 
+  | modify transition next reply before middle final types middleTypes finalTypes residual ready rest ih =>
+    rw [handle_nativeModify]
+    exact .modify _ _ _ _ _ _ _ _ _ _ ready ih
+
 /-- Join a local prefix to its proven remaining implementation. -/
 theorem RegisteredPrefix.thenSteps {pid : PID} {computation residual : Result α} {value : α}
     {before middle after : Nat × List (Nat × String × Term)}
@@ -365,6 +419,9 @@ theorem RegisteredPrefix.thenSteps {pid : PID} {computation residual : Result α
       exact .read _ _ _ _ _ _ _ ready (ih rest)
   | update read body before next middle types nextTypes middleTypes residual ready tail ih =>
       exact .update _ _ _ _ _ _ _ _ _ ready (ih rest)
+
+  | modify transition next reply before updated middle types updatedTypes middleTypes residual ready tail ih =>
+    exact .modify _ _ _ _ _ _ _ _ _ _ ready (ih rest)
 
 /-- Registration-aware prefixes compose through the actual implementation and
 retain every non-native environment field. -/
@@ -387,6 +444,10 @@ theorem RegisteredSteps.readyPrefix {pid : PID} {computation : Result α} {value
       rw [ready env owner counter heap available]
       apply ReadyPrefix.nativeSet
       exact ih _ owner rfl rfl rfl
+
+  | modify transition next reply before middle final types middleTypes finalTypes value ready rest ih =>
+    apply ReadyPrefix.nativeModify _ _ _ _ _ _ _ (ready env owner counter heap available)
+    exact ih _ owner rfl rfl rfl
 
 /-- Local reads, framed updates and ready polls exclude a peer before each step.
 The final state may release the peer; completion itself performs no shared write.
