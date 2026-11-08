@@ -147,6 +147,52 @@ theorem contending_multi_wait_all_choices (choices : List ScheduleChoice) :
     (update_exclusive 2 1 0) (update_full 1 3) choices
   exact result.elim id id
 
+private def localUpdate (value : Nat) : Result Term :=
+  .get fun env => .set {env with refCounter := value + 1} (
+    .get fun observed => if observed.refCounter == value + 1 then
+      .wait (release (value + 1)) fun _ => .ok .nil else .error .exhausted)
+
+private theorem local_exclusive (pid peer value : Nat) :
+    Result.ExclusiveSteps pid peer acquire (localUpdate value)
+      (value, [(1, "owner", .pid pid)]) .nil (value + 1, []) := by
+  unfold localUpdate
+  refine .update _ (.get fun observed => if observed.refCounter == value + 1 then
+    .wait (release (value + 1)) fun _ => .ok .nil else .error .exhausted)
+    _ (value + 1, [(1, "owner", .pid pid)]) _ _ ?_ ?_ ?_
+  · intro env _ counter heap
+    simp [heap]
+  · intro env _ _ heap
+    simp [acquire, heap]
+  · refine .read _ (.wait (release (value + 1)) fun _ => .ok .nil) _ _ _ ?_ ?_ ?_
+    · intro env _ counter heap
+      simp [counter]
+    · intro env _ _ heap
+      simp [acquire, heap]
+    · refine .wait _ _ () _ (value + 1, []) _ _ ?_ ?_ (.done _ _)
+      · intro env owner counter heap
+        simp [release, heap, owner]
+      · intro env _ _ heap
+        simp [acquire, heap]
+
+/-- Local read/write pairs preserve every arbitrary-choice execution, including
+switch requests at release and requests for absent processes or timeouts. -/
+theorem local_updates_all_choices (choices : List ScheduleChoice) :
+    let observed := (Result.schedule (.wait acquire localUpdate)
+      (fun _ => .wait acquire localUpdate)) {schedule := choices}
+    (observed.1, observed.2.refCounter, observed.2.nativeHeap) = (.ok Term.nil, 2, []) := by
+  have second (pid peer : PID) : Result.SharedSteps pid (.wait acquire localUpdate)
+      (1, []) .nil (2, []) := by
+    refine .wait _ _ 1 _ (1, [(1, "owner", .pid pid)]) _ _ ?_ (local_exclusive pid peer 1).ready
+    intro env owner counter heap
+    simp [acquire, heap, owner, counter]
+  have result := Result.two_wait_serial_orders acquire localUpdate acquire localUpdate 0 0 .nil .nil .nil .nil
+    (0, []) (0, [(1, "owner", .pid 1)]) (1, []) (2, [])
+    (0, [(1, "owner", .pid 2)]) (1, []) (2, [])
+    (by intro env owner counter heap; simp [acquire, heap, counter, owner])
+    (by intro env owner counter heap; simp [acquire, heap, counter, owner])
+    (local_exclusive 1 2 0) (second 2 1) (local_exclusive 2 1 0) (second 1 2) choices
+  exact result.elim id id
+
 private def stalled : Result Term :=
   .wait tick fun _ => .wait (fun _ => (none : Option (Unit × Environment))) fun _ => .ok .nil
 
