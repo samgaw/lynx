@@ -106,6 +106,7 @@ theorem update_next {α : Type} (value amount : U64) (env : Environment) (notifi
       (by simp [List.filter, live, cell, NativeMutex.typeName,
         NativeResourceArc.typeName, NativeResourceArc.handleType, NativeWaker.typeName])
     simp only [resource_locked_increment, monadLift_self, bind_assoc]
+    dsimp only at observed
     rw [observed]
     cases updated
     simpa [live, cell, List.map] using computed
