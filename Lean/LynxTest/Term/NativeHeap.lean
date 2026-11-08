@@ -91,5 +91,20 @@ theorem scheduled_cleanup (choices : List ScheduleChoice) :
   · assumption
   · contradiction
 
+private def competingCleanup : Result :=
+  Result.schedule {} (do
+    Result.consumeNativeCapability "expected" 1
+    .ok .nil) fun _ => do
+      Result.consumeNativeCapability "expected" 1
+      .ok .nil
+
+/-- Sharing one ownership token between workers cannot certify two successful
+consumptions, regardless of the transition order. -/
+theorem concurrent_double_consumption_rejected :
+    Concurrent.check (fun | .error .exhausted => true | _ => false) 24
+      (.start {nativeRefCounter := 1, nativeHeap := [(1,"expected",.atom "live")]}
+        competingCleanup) = true := by
+  cbv
+
 end LynxTest.Term.NativeHeap
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Term.NativeHeap

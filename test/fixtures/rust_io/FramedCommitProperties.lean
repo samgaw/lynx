@@ -183,10 +183,13 @@ theorem rejected_prefix (value : U16) (env : Environment)
     core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual,
     core.convert.FromSame.from,NativeM.monadLift_eq,NativeM.fromRust_ok]
   simp only [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,
-    Result.consumeNativeCapability,monadLift_self,Result.nativeGet_bind]
-  apply Result.ReadyPrefix.nativeGet
-  simp [Publish.IoErrors.returned,Publish.IoErrors.disposed,counter,Publish.IoErrors.rejected,
-    namespaceTypeName,NativeIoError.typeName,Result.nativeSet_bind,Result.ok_bind,NativeM.ok]
-  exact Result.ReadyPrefix.nativeSet _ _ _ _ _ (.refl _ _)
+    Result.consumeNativeCapability,monadLift_self,Result.wait_bind]
+  refine Result.ReadyPrefix.wait _ _ (Except.ok ()) _
+    {env with nativeRefCounter := Publish.IoErrors.returned.nativeRefCounter, nativeHeap := Publish.IoErrors.disposed.nativeHeap} _ _ ?_ ?_
+  · simp [Publish.IoErrors.returned,Publish.IoErrors.disposed,NativeIoError.typeName,namespaceTypeName]
+  · simpa [Result.ofExcept,NativeM.ok,Publish.IoErrors.returned,Publish.IoErrors.disposed,
+      Publish.IoErrors.rejected,counter] using
+      (Result.ReadyPrefix.refl (.ok false : Result Bool)
+        {env with nativeHeap := Publish.IoErrors.disposed.nativeHeap})
 
 end Publish.Commit.Framed
