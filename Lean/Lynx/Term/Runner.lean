@@ -1213,7 +1213,7 @@ private theorem sharedSteps_pendingChild {computation : Result Term} {value : Te
       · simp [Term.Runner.step]
         exact sharedSteps_sole trace 1 _ .current true _ _ value counter heap rfl
 
-/-- Ready critical-section polls exclude a peer acquisition before each step.
+/-- Local reads, framed updates and ready polls exclude a peer before each step.
 The final state may release the peer; completion itself performs no shared write.
 This evidence is used to reason over all finite scheduler choices. -/
 inductive ExclusiveSteps {γ : Type} (pid peer : PID) (peerPoll : Environment → Option (γ × Environment)) :
@@ -1221,6 +1221,23 @@ inductive ExclusiveSteps {γ : Type} (pid peer : PID) (peerPoll : Environment �
       (Nat × List (Nat × String × Term)) → Prop where
   | done (value : α) (shared : Nat × List (Nat × String × Term)) :
       ExclusiveSteps pid peer peerPoll (.ok value) shared value shared
+  | read (read : Environment → Result α) (body : Result α)
+      (before final : Nat × List (Nat × String × Term)) (value : α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.refCounter = before.1 →
+        env.nativeHeap = before.2 → read env = body)
+      (blocked : ∀ env : Environment, env.currentPid = peer → env.refCounter = before.1 →
+        env.nativeHeap = before.2 → peerPoll env = none)
+      (rest : ExclusiveSteps pid peer peerPoll body before value final) :
+      ExclusiveSteps pid peer peerPoll (.get read) before value final
+  | update (read : Environment → Result α) (body : Result α)
+      (before after final : Nat × List (Nat × String × Term)) (value : α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.refCounter = before.1 →
+        env.nativeHeap = before.2 →
+        read env = .set {env with refCounter := after.1, nativeHeap := after.2} body)
+      (blocked : ∀ env : Environment, env.currentPid = peer → env.refCounter = before.1 →
+        env.nativeHeap = before.2 → peerPoll env = none)
+      (rest : ExclusiveSteps pid peer peerPoll body after value final) :
+      ExclusiveSteps pid peer peerPoll (.get read) before value final
   | wait {β : Type} (poll : Environment → Option (β × Environment))
       (next : β → Result α) (reply : β) (before after final : Nat × List (Nat × String × Term))
       (value : α)
@@ -1238,8 +1255,35 @@ theorem ExclusiveSteps.ready {pid peer : PID} {peerPoll : Environment → Option
     SharedSteps pid computation before value after := by
   induction trace with
   | done value shared => exact .done value shared
+  | read read body before final value ready blocked rest ih =>
+      exact .read read body before final value ready ih
+  | update read body before middle final value ready blocked rest ih =>
+      exact .update read body before middle final value ready ih
   | wait poll next reply before middle final value ready blocked rest ih =>
       exact .wait poll next reply before middle final value ready ih
+
+/-- Compose an exclusive trace with its checked continuation. -/
+theorem ExclusiveSteps.bind {pid peer : PID} {peerPoll : Environment → Option (γ × Environment)} {computation : Result α} {value : α}
+    {before middle after : Nat × List (Nat × String × Term)}
+    (trace : ExclusiveSteps pid peer peerPoll computation before value middle) (next : α → Result β)
+    (tail : ExclusiveSteps pid peer peerPoll (next value) middle answer after) :
+    ExclusiveSteps pid peer peerPoll (computation >>= next) before answer after := by
+  induction trace with
+  | done => simpa only [Result.ok_bind] using tail
+  | read read body before final value ready blocked rest ih =>
+      rw [Result.get_bind]
+      refine .read _ (body >>= next) _ _ _ ?_ blocked (ih tail)
+      intro env owner count heap
+      rw [ready env owner count heap]
+  | update read body before middle final value ready blocked rest ih =>
+      rw [Result.get_bind]
+      refine .update _ (body >>= next) _ _ _ _ ?_ blocked (ih tail)
+      intro env owner count heap
+      rw [ready env owner count heap, Result.set_bind]
+  | wait poll nextStep reply before middle final value ready blocked rest ih =>
+      rw [Result.wait_bind]
+      exact .wait _ _ _ _ _ _ _ ready blocked (ih tail)
+
 
 /-- A finite ready prefix that ends at a blocked wait while excluding a peer.
 Blocking retains the current shared state and is never successful completion. -/
@@ -1302,6 +1346,37 @@ private theorem exclusiveSteps_root {β : Type} {computation : Result Term} {val
   induction trace generalizing env preferred with
   | done value shared =>
       exact sharedSteps_pendingRoot peerTrace value env preferred current counter heap
+  | read read body before final value ready blocked rest ih =>
+      have evaluated (choices : List ScheduleChoice) :=
+        ready (Term.Runner.activate {env with schedule := choices} 1) rfl counter heap
+      have excluded (choices : List ScheduleChoice) :=
+        blocked (Term.Runner.activate {env with schedule := choices} 2) rfl counter heap
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process 1 (.get read) some) (.process 2 (.wait peerPoll peerNext) (fun _ => none))) 1 env preferred
+        (by intro choices accept; cases a : accept 1 <;> cases b : accept 2 <;>
+          simp [Term.Runner.findReady, a, b, excluded])
+        (by intro choices accept; simp [Term.Runner.findTimeout])
+      simp only [Term.Runner.activate] at evaluated
+      rw [Term.Runner.execute, selected]
+      simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, evaluated]
+      apply ih <;> first | exact peerTrace | exact Or.inl rfl | rfl | exact counter | exact heap
+  | update read body before middle final value ready blocked rest ih =>
+      have evaluated (choices : List ScheduleChoice) :=
+        ready (Term.Runner.activate {env with schedule := choices} 1) rfl counter heap
+      have excluded (choices : List ScheduleChoice) :=
+        blocked (Term.Runner.activate {env with schedule := choices} 2) rfl counter heap
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process 1 (.get read) some) (.process 2 (.wait peerPoll peerNext) (fun _ => none))) 1 env preferred
+        (by intro choices accept; cases a : accept 1 <;> cases b : accept 2 <;>
+          simp [Term.Runner.findReady, a, b, excluded])
+        (by intro choices accept; simp [Term.Runner.findTimeout])
+      simp only [Term.Runner.activate] at evaluated
+      rw [Term.Runner.execute, selected]
+      simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, evaluated]
+      rw [Term.Runner.execute]
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess, Term.Runner.removeProcess]
+      apply ih <;> first | exact peerTrace | exact Or.inl rfl | rfl | exact counter | exact heap
   | wait poll next reply before middle final value ready blocked rest ih =>
       have polled (choices : List ScheduleChoice) :=
         ready (Term.Runner.activate {env with schedule := choices} 1) rfl counter heap
@@ -1316,7 +1391,7 @@ private theorem exclusiveSteps_root {β : Type} {computation : Result Term} {val
       cases choices <;> rw [Term.Runner.execute, selected]
       all_goals
         simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, polled, Term.Runner.schedule]
-        apply ih <;> first | exact peerTrace | exact Or.inl rfl | rfl
+        apply ih <;> first | exact peerTrace | exact Or.inl rfl | rfl | exact counter | exact heap
 
 private theorem exclusiveSteps_child {β : Type} {computation : Result Term} {value : Term}
     {before middle after : Nat × List (Nat × String × Term)}
@@ -1332,6 +1407,37 @@ private theorem exclusiveSteps_child {β : Type} {computation : Result Term} {va
   induction trace generalizing env preferred with
   | done value shared =>
       exact sharedSteps_pendingChild peerTrace value env preferred current counter heap
+  | read read body before final value ready blocked rest ih =>
+      have evaluated (choices : List ScheduleChoice) :=
+        ready (Term.Runner.activate {env with schedule := choices} 2) rfl counter heap
+      have excluded (choices : List ScheduleChoice) :=
+        blocked (Term.Runner.activate {env with schedule := choices} 1) rfl counter heap
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process 1 (.wait peerPoll peerNext) some) (.process 2 (.get read) (fun _ => none))) 2 env preferred
+        (by intro choices accept; cases a : accept 1 <;> cases b : accept 2 <;>
+          simp [Term.Runner.findReady, a, b, excluded])
+        (by intro choices accept; simp [Term.Runner.findTimeout])
+      simp only [Term.Runner.activate] at evaluated
+      rw [Term.Runner.execute, selected]
+      simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, evaluated]
+      apply ih <;> first | exact peerTrace | exact Or.inr rfl | rfl | exact counter | exact heap
+  | update read body before middle final value ready blocked rest ih =>
+      have evaluated (choices : List ScheduleChoice) :=
+        ready (Term.Runner.activate {env with schedule := choices} 2) rfl counter heap
+      have excluded (choices : List ScheduleChoice) :=
+        blocked (Term.Runner.activate {env with schedule := choices} 1) rfl counter heap
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process 1 (.wait peerPoll peerNext) some) (.process 2 (.get read) (fun _ => none))) 2 env preferred
+        (by intro choices accept; cases a : accept 1 <;> cases b : accept 2 <;>
+          simp [Term.Runner.findReady, a, b, excluded])
+        (by intro choices accept; simp [Term.Runner.findTimeout])
+      simp only [Term.Runner.activate] at evaluated
+      rw [Term.Runner.execute, selected]
+      simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, evaluated]
+      rw [Term.Runner.execute]
+      simp [Term.Runner.choose, Term.Runner.findReady, Term.Runner.step,
+        Term.Runner.activate, Term.Runner.save, Term.Runner.findProcess, Term.Runner.removeProcess]
+      apply ih <;> first | exact peerTrace | exact Or.inr rfl | rfl | exact counter | exact heap
   | wait poll next reply before middle final value ready blocked rest ih =>
       have polled (choices : List ScheduleChoice) :=
         ready (Term.Runner.activate {env with schedule := choices} 2) rfl counter heap
@@ -1346,7 +1452,7 @@ private theorem exclusiveSteps_child {β : Type} {computation : Result Term} {va
       cases choices <;> rw [Term.Runner.execute, selected]
       all_goals
         simp [Term.Runner.step, Term.Runner.activate, Term.Runner.save, polled, Term.Runner.schedule]
-        apply ih <;> first | exact peerTrace | exact Or.inr rfl | rfl
+        apply ih <;> first | exact peerTrace | exact Or.inr rfl | rfl | exact counter | exact heap
 
 private theorem exclusiveBlocked_root {β : Type} {computation : Result Term}
     {before after : Nat × List (Nat × String × Term)}
