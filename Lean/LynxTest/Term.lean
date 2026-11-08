@@ -57,6 +57,48 @@ theorem nativeHeap_before_failure (env : Environment) :
         { env with nativeHeap := [(1, "counter", .integer 7)] }) := by
   rfl
 
+private def incrementSharedCell : Result := .get fun env =>
+  .set {env with refCounter := env.refCounter + 1, nativeHeap := [(1, "counter", .integer (env.refCounter + 1))]}
+    (.wait (fun env => some ((), env)) (fun _ => .get fun env => .ok (.integer env.refCounter)))
+
+private def counterShared (counter : Nat) : Nat × List (Nat × String × Term) :=
+  (counter, [(1, "counter", .integer counter)])
+
+private theorem incrementSharedTrace (pid counter : Nat) (heap : List (Nat × String × Term)) :
+    Result.SharedSteps pid incrementSharedCell (counter, heap) (.integer (counter + 1))
+      (counterShared (counter + 1)) := by
+  unfold incrementSharedCell
+  refine .update _
+    (.wait (fun env => some ((), env)) (fun _ => .get fun env => .ok (.integer env.refCounter)))
+    _ (counterShared (counter + 1)) _ _ ?_ ?_
+  · intro env _ count _
+    simp [counterShared, count]
+  · refine .wait _ _ () _ (counterShared (counter + 1)) _ _ ?_ ?_
+    · intro env _ count stored
+      cases env
+      simp_all [counterShared]
+    · refine .read _ (.ok (.integer (counter + 1))) _ _ _ ?_ (.done _ _)
+      intro env _ count _
+      simp [counterShared] at count
+      simp [count]
+
+/-- The complete scheduled computations retain their get/set and wait nodes.
+The root observes its increment, then the child advances the shared cell. -/
+theorem scheduled_shared_read_write_wait :
+    (Result.schedule incrementSharedCell (fun _ => incrementSharedCell)) {} =
+      (.ok (.integer 1), {pidCounter := 2, refCounter := 2, nativeHeap := [(1, "counter", .integer 2)]}) := by
+  simpa [counterShared] using Result.two_shared_serial_steps incrementSharedCell incrementSharedCell
+    (.integer 1) (.integer 2) (0, []) (counterShared 1) (counterShared 2)
+    (incrementSharedTrace 1 0 []) (incrementSharedTrace 2 1 (counterShared 1).2)
+
+/-- The swap is consumed at the wait, after the parent's local read/write.
+The child advances the shared counter before the parent observes it again. -/
+theorem shared_wait_preserves_local_steps :
+    (Result.schedule incrementSharedCell (fun _ => incrementSharedCell))
+      {schedule := [.current, .swap 2]} =
+      (.ok (.integer 2), {pidCounter := 2, refCounter := 2, nativeHeap := [(1, "counter", .integer 2)]}) := by
+  cbv
+
 end LynxTest.Term
 
 run_cmd do
