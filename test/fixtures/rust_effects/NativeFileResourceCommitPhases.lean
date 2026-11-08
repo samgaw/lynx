@@ -60,6 +60,21 @@ theorem phase_prefix (env : Environment) (value : U16) (phase : Phase) :
     (Publish.close_poll env (Record.synced value) 7 (by decide +kernel))
   exact ⟨_,.refl _ _⟩
 
+/-- Complete the actual Rust commit while retaining the directory destruction
+and exact terminal result, so a facade can continue with resource release. -/
+theorem complete_prefix (env : Environment) (value : U16) :
+    Result.ReadyPrefix (file_resource_commit ⟨3,8⟩) (phaseEnv env value .beforeFileSync)
+      (.ok (.Ok ())) (phaseEnv env value .finished) := by
+  simp only [file_resource_commit,file_resource_sync,monadLift_self,bind_assoc]
+  apply ((borrowed env value).bind _).trans
+  simp only [Result.ok_bind,payload,effects_core.synchronize_file,monadLift_self,syncAll,Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ _ _ _ _ _
+    (file_sync_poll (ns := Publish.namespaceBefore) env (Record.written value) (Record.synced value) 7
+      (by decide +kernel) (Record.written_valid value) (Record.written_ready value) (Record.sync_step value))
+  simp only [Result.ok_bind,NativeM.monadLift_eq,NativeM.fromRust_ok,
+    core.result.Result.Insts.CoreOpsTry.branch]
+  exact Publish.directory_prefix env (Record.synced value) 7 (by decide +kernel)
+
 @[expose] def committed : Phase → Bool
   | .beforeDirectoryClose | .finished => true
   | _ => false
