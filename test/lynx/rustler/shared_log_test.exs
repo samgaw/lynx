@@ -56,7 +56,7 @@ defmodule Lynx.Rustler.SharedLogTest do
     proof = Path.join(project, "Record/SharedLogProperties.lean")
     File.write!(proof, source)
 
-    for module <- ~w(FramedLogProperties NativeLogProperties) do
+    for module <- ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties) do
       text =
         File.read!(Path.join(@fixture, module <> ".lean"))
         |> String.replace("__APPEND__", append["lean_name"])
@@ -68,13 +68,16 @@ defmodule Lynx.Rustler.SharedLogTest do
       options ++
         [
           proof_modules:
-            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties),
+            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties),
           required_properties:
             ~w(Record.SharedLogProperties.facade_contract Record.SharedLogProperties.critical_contract
               Record.SharedLogProperties.borrow_prefix Record.SharedLogProperties.aliasing_prefix
               Record.SharedLogProperties.full_write Record.FramedLogProperties.append_success
               Record.NativeLogProperties.append_prefix Record.NativeLogProperties.facade_prefix
-              Record.NativeLogProperties.adapter_continuation Record.NativeLogProperties.initial_adapter)
+              Record.NativeLogProperties.adapter_continuation Record.NativeLogProperties.initial_adapter
+              Record.FramedLogProperties.guarded_prefix Record.OverlappingLogProperties.caller_contract
+              Record.OverlappingLogProperties.acquired_prefix Record.OverlappingLogProperties.second_call
+              Record.OverlappingLogProperties.overlap_phases)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -144,6 +147,34 @@ defmodule Lynx.Rustler.SharedLogTest do
 
     File.write!(native_proof, native_source)
 
+    overlapping_proof = Path.join(project, "Record/OverlappingLogProperties.lean")
+    overlapping_source = File.read!(overlapping_proof)
+
+    for incorrect <- [
+          String.replace(
+            overlapping_source,
+            "NativeGuard.pollRelease (guard env 7)",
+            "NativeGuard.pollRelease (guard env 8)"
+          ),
+          String.replace(
+            overlapping_source,
+            ".tuple #[.integer 2, NativeCodec.encode logPayload]) else cell",
+            ".tuple #[.integer 1, NativeCodec.encode logPayload]) else cell"
+          )
+        ] do
+      refute incorrect == overlapping_source
+      File.write!(overlapping_proof, incorrect)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
+
+      assert error.message =~ "Record/OverlappingLogProperties.lean:"
+    end
+
+    File.write!(overlapping_proof, overlapping_source)
+
     # A complete synchronized write cannot be reported as rejected.
     File.write!(proof, String.replace(source, "(.ok (.Ok true)) s5", "(.ok (.Ok false)) s5"))
 
@@ -185,8 +216,16 @@ defmodule Lynx.Rustler.SharedLogTest do
     true = LynxIoFixture.Native.log_append(resource, 123)
     true = LynxIoFixture.Native.log_append(resource, 65_535)
     true = LynxIoFixture.Native.log_append(resource, 65_536)
+    writers = for value <- [1_000, 2_000] do
+      Task.async(fn -> LynxIoFixture.Native.log_append(resource, value) end)
+    end
+    [true, true] = Enum.map(writers, &Task.await/1)
     <<123::little-16, 65_412::little-16, 65_535::little-16, 0::little-16,
-      0::little-16, 65_535::little-16>> = File.read!("journal")
+      0::little-16, 65_535::little-16, tail::binary>> = File.read!("journal")
+    true = tail in [
+      <<1_000::little-16, 64_535::little-16, 2_000::little-16, 63_535::little-16>>,
+      <<2_000::little-16, 63_535::little-16, 1_000::little-16, 64_535::little-16>>
+    ]
     for invalid <- [-1, 4_294_967_296] do
       try do
         LynxIoFixture.Native.log_append(resource, invalid)
