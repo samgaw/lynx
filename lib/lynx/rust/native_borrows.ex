@@ -287,10 +287,10 @@ defmodule Lynx.Rust.NativeBorrows do
   defp statement?(%{"StorageLive" => _}, _, _, _), do: true
   defp statement?(%{"StorageDead" => _}, _, _, _), do: true
 
-  # Primitive bitwise operations cannot overflow or panic. Overloaded Rust
+  # Primitive bitwise operations and comparisons cannot overflow or panic. Overloaded Rust
   # operators are calls and still require their actual nonpanicking bodies.
   defp statement?(%{"Assign" => [_, %{"BinaryOp" => [op, _, _]}]}, _, _, _)
-       when op in ~w(BitAnd BitOr BitXor), do: true
+       when op in ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge), do: true
 
   defp statement?(%{"Assign" => [_, %{"UnaryOp" => ["Not", _]}]}, _, _, _), do: true
 
