@@ -51,7 +51,7 @@ defmodule Lynx.Rust.MutexModels do
         native_constructor: true,
         native_transfer: true,
         label:
-          "Logical Mutex::new model: fresh shared identity, exact typed payload, unlocked and unpoisoned; std implementation and physical initialization/allocation unverified; guard unwind, custom destructors and general unwind cleanup unsupported"
+          "Logical Mutex::new model: atomic logical identity allocation, fresh shared identity, exact typed payload, unlocked and unpoisoned; std implementation and physical initialization/allocation unverified; guard unwind, custom destructors and general unwind cleanup unsupported"
       }
     else
       _ -> nil

@@ -97,12 +97,11 @@ theorem constructor_prefix (env : Environment) (script : Term) :
     (sync_poll env script) ?_
   simp only [Result.ok_bind,NativeOwnedDrop.drop,NativeFile.close,Result.wait_bind]
   refine .wait _ _ (.ok ()) _ (directory env script true true .nil) _ _ (close_poll env script) ?_
-  simp only [Result.ok_bind,NativeM.ok,NativeMutex.new,NativeM.allocate,Result.nativeGet_bind]
-  apply Result.ReadyPrefix.nativeGet
-  simp [directory,fileCells,Result.nativeSet_bind,NativeM.ok,Result.ok_bind]
-  apply Result.ReadyPrefix.nativeSet
-  simpa [NativeM.expectOk_ok,Result.bind_ok,payload,mutexReady,directory,fileCells] using
-    (Result.ReadyPrefix.refl (NativeResourceArc.newOwned payload) (mutexReady env script))
+  simp only [Result.ok_bind,NativeM.ok,NativeMutex.new,NativeM.allocate,Result.wait_bind]
+  refine .wait _ _ (.ok 4 : Except Exception Nat) _ (mutexReady env script) _ _ ?_ ?_
+  · simp [directory,fileCells,mutexReady]
+  · simpa [Result.ofExcept,NativeM.ok,NativeM.expectOk_ok,Result.bind_ok,payload,mutexReady,directory,fileCells] using
+      (Result.ReadyPrefix.refl (NativeResourceArc.newOwned payload) (mutexReady env script))
 
 /-- Constructor-owned cells are below the next Arc allocation; none is a
 pre-existing owner or VM term of that fresh allocation. -/

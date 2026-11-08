@@ -70,9 +70,13 @@ defmodule Lynx.Rust.MutexModelsTest do
              native_mutex_type: 7,
              native_constructor: true,
              native_transfer: true,
-             native_cutoff_only: true
+             native_cutoff_only: true,
+             label: label
            } =
              MutexModels.resolve(function, translated, %{})
+
+    assert label =~ "atomic logical identity allocation"
+    assert label =~ "physical initialization/allocation unverified"
 
     for invalid <- [
           put_in(function, ["signature", "is_unsafe"], true),
