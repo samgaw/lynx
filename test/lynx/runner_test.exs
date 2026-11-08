@@ -22,7 +22,14 @@ defmodule Lynx.RunnerTest do
     {output, status} = System.cmd("lake", ["update"], cd: tmp, stderr_to_stdout: true)
     assert status == 0, output
     dependency = Path.join(tmp, "NativeDependency.lean")
-    source = "module\npublic section\n@[expose] def NativeDependency.value : Bool := true\n"
+
+    source = """
+    module
+    public section
+    @[expose] def NativeDependency.value : Bool := true
+    theorem importedExportSentinel : True := True.intro
+    private theorem privateExportSentinel : True := True.intro
+    """
 
     build = fn source ->
       File.write!(dependency, source)
@@ -53,6 +60,9 @@ defmodule Lynx.RunnerTest do
     assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(tmp, [input])
     export = Path.join(tmp, "shared-namespace.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(tmp, [input], export: export)
+    exported = File.read!(export)
+    assert exported =~ "importedExportSentinel"
+    assert exported =~ "privateExportSentinel"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(tmp, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
