@@ -398,4 +398,110 @@ theorem acknowledged_crash (env : Environment) (value : U16)
   intro chosen masks image accepted
   exact ⟨crash_name env value chosen masks image accepted,crash_contents env value chosen masks image accepted⟩
 
+private theorem namespace_choices (published : Bool) (script : Term) (selected : Names)
+    (unique : (selected.map (fun entry => entry.1.data)).eraseDups.length = selected.length)
+    (allowed : namespaceCrashAllowed {Publish.namespaceAfter published with script := script} selected = true) :
+    selected = [] ∨ selected = Publish.names := by
+  cases published <;>
+    simp [namespaceCrashAllowed,Publish.namespaceAfter,Publish.names,namedInode] at allowed
+  all_goals
+    have mapped : selected.map (fun entry => entry.1.data) =
+        List.replicate selected.length Creation.path.data := by
+      apply List.map_eq_replicate_iff.mpr
+      intro entry member
+      exact (allowed.1 entry.1 entry.2 member).symm
+    rw [mapped] at unique
+    cases selected with
+    | nil => exact Or.inl rfl
+    | cons head tail =>
+      have empty : tail = [] := by
+        have length : tail.length = 0 := by
+          simpa [List.replicate_succ,List.eraseDups_cons] using unique.symm
+        exact List.eq_nil_of_length_eq_zero length
+      subst tail
+      have same : head.1 = Creation.path := by
+        apply ByteArray.ext
+        exact (allowed.1 head.1 head.2 (by simp)).symm
+      cases head with
+      | mk path id =>
+        simp only at same
+        subst path
+        right
+        simp at allowed
+        simpa [Publish.names] using allowed
+
+private theorem table_unique (chosen selected : Names)
+    (table : namespaceTable (encodeNames chosen) = some selected) :
+    (selected.map (fun entry => entry.1.data)).eraseDups.length = selected.length := by
+  simp only [encodeNames,namespaceTable] at table
+  split at table
+  · contradiction
+  · simp only [Bind.bind,Option.bind_eq_some_iff] at table
+    rcases table with ⟨mapped,parsed,table⟩
+    split at table
+    · contradiction
+    · rename_i unique
+      cases table
+      simpa using unique
+
+/-- Crash projection for a single first-party inode and its publication history.
+The premises expose only the relevant filesystem observations, so resources,
+closed descriptors and other volatile ownership cells do not need new proofs. -/
+theorem crash_shape (env : Environment) (state : State) (published : Bool) (script : Term)
+    (snapshot : namespaceSnapshot env = some {namespaceAfter published with script := script})
+    (nodes : env.nativeHeap.filter (fun cell => cell.2.1 == inodeTypeName) =
+      [(1,inodeTypeName,encode state)])
+    (stored : inode 1 env = some state)
+    (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
+    (accepted : filesystemCrashImage chosen masks env = some image) :
+    ∃ mask contents, masks = [(1,mask)] ∧
+      persist state.durable state.visible mask = some contents ∧
+      image.inodes = [(1,contents)] ∧ image.highWater = env.refCounter ∧
+      (image.names = [] ∨ image.names = names) ∧
+      (published = true → image.names = names) := by
+  simp only [filesystemCrashImage,snapshot,Bind.bind,Option.bind_some,Option.bind_eq_some_iff] at accepted
+  rcases accepted with ⟨selected,table,accepted⟩
+  split at accepted
+  · contradiction
+  · rename_i allowed
+    have admitted : namespaceCrashAllowed
+        {Publish.namespaceAfter published with script := script} selected = true := by
+      simpa using allowed
+    have names := namespace_choices published script selected
+      (table_unique chosen selected table) admitted
+    have committedName : published = true → selected = Publish.names := by
+      intro yes
+      rcases names with absent | retained
+      · subst selected
+        simp [yes,namespaceCrashAllowed,Publish.namespaceAfter,Publish.names,namedInode] at admitted
+      · exact retained
+    simp only [nodes,List.length_singleton,Nat.reduceGT] at accepted
+    split at accepted
+    · contradiction
+    · rename_i keys
+      have key_eq : masks.map (·.1) = [1] := by simpa using keys
+      have shape : ∃ mask, masks = [(1,mask)] := by
+        cases masks with
+        | nil => simp at key_eq
+        | cons head tail =>
+          cases head with
+          | mk id mask =>
+            simp only [List.map_cons,List.cons.injEq,List.map_eq_nil_iff] at key_eq
+            obtain ⟨rfl,rfl⟩ := key_eq
+            exact ⟨mask,rfl⟩
+      obtain ⟨mask,rfl⟩ := shape
+      simp only [List.mapM_cons,List.mapM_nil,Option.bind_eq_some_iff,stored,Option.bind_some,
+        List.filter_cons,List.filter_nil,Nat.reduceBEq,↓reduceIte] at accepted
+      rcases accepted with ⟨images,mapped,accepted⟩
+      cases saved : persist state.durable state.visible mask with
+      | none => simp [saved,Bind.bind] at mapped
+      | some contents =>
+        have image_eq : images = [(1,contents)] := by
+          simpa [saved,Bind.bind,Pure.pure] using mapped.symm
+        subst images
+        split at accepted
+        · contradiction
+        · cases accepted
+          refine ⟨mask,contents,rfl,saved,rfl,rfl,names,committedName⟩
+
 end FileResource.Publish
