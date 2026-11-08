@@ -1087,6 +1087,45 @@ theorem decode_live_prefix {α : Type} [NativeCodec α]
   simp only [ite_eq_left registered, termOwner, registry, termEntryOwner]
   simpa using clone_live_prefix pin value count env positive bounded token stored owners fresh
 
+/-- The actual decoder acquires an owner in a registered scheduler context.
+Its local reads and write precede the continuation; no native wait or cleanup
+inside that continuation is replaced with an atomic transition. -/
+theorem decode_live_registeredSteps {α β : Type} [NativeCodec α]
+    (pid : PID) (pin : NativeResourceArc α) (term : Nat) (value : α) (count : Nat)
+    (before final : Nat × List (Nat × String × Term)) (types finalTypes : List String)
+    (next : NativeResourceArc α → NativeM β) (answer : β)
+    (registered : typeName α ∈ types)
+    (positive : 0 < count) (bounded : count < referenceLimit)
+    (registry : before.2.filter (fun cell => cell.1 == term) =
+      [(term, termType α, .tuple #[.reference pin.id, .reference pin.token])])
+    (token : before.2.filter (fun cell => cell.1 == pin.token) =
+      [(pin.token, handleType α, .reference pin.id)])
+    (stored : before.2.filter (fun cell => cell.1 == pin.id) =
+      [(pin.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (before.2.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference pin.id).length = count)
+    (fresh : before.2.any (fun cell => cell.1 == before.1 + 1) = false)
+    (rest : Result.RegisteredSteps pid (next ⟨pin.id, before.1 + 1⟩)
+      (before.1 + 1, (before.1 + 1, handleType α, .reference pin.id) :: before.2.map fun cell =>
+        if cell.1 == pin.id then
+          (pin.id, typeName α, .tuple #[.integer (count + 1), NativeCodec.encode value]) else cell)
+      types answer final finalTypes) :
+    Result.RegisteredSteps pid (decode (.reference term) >>= next)
+      before types answer final finalTypes := by
+  unfold decode
+  rw [Result.get_bind]
+  refine .read _ (clone pin >>= next) before final types finalTypes answer ?_ ?_
+  · intro env _ _ heap available
+    simp [heap, available, registered, termOwner, registry, termEntryOwner]
+  · unfold clone
+    rw [Result.get_bind]
+    refine .update _ (next ⟨pin.id, before.1 + 1⟩) before _ final types types finalTypes answer ?_ rest
+    intro env _ refs heap available
+    have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast Nat.le_of_lt bounded
+    simp only [heap, refs]
+    simp [lookup, payload, heap, refs, token, stored, owners, NativeCodec.roundtrip, positive,
+      boundInt, bounded, fresh, NativeM.ok, Result.set_bind, Result.ok_bind, available]
+
 @[simp] theorem decode_nonreference {α : Type} [NativeCodec α] (term : Term)
     (notReference : ∀ identity, term ≠ .reference identity) (env : Environment) :
     decode (α := α) term env = (.error (.error (.atom "badarg")), env) := by
