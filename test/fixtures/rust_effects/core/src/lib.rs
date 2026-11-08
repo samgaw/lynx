@@ -206,6 +206,37 @@ pub fn read_file_word(file: &mut std::fs::File) -> std::io::Result<Option<u16>> 
     }
 }
 
+/// Encodes a word and its complement for a fresh checked record.
+pub fn encode_record(value: u16) -> [u8; 4] {
+    let [low, high] = value.to_le_bytes();
+    let [inverse_low, inverse_high] = (!value).to_le_bytes();
+    [low, high, inverse_low, inverse_high]
+}
+
+/// Rejects an inconsistent word/complement pair.
+pub fn decode_record(value: u16, inverse: u16) -> Option<u16> {
+    if value ^ inverse == u16::MAX {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Reads a checked record, rejecting either incomplete word or a bad complement.
+/// # Errors
+/// Propagates the first read error without claiming an accepted record.
+pub fn read_file_record(file: &mut std::fs::File) -> std::io::Result<Option<u16>> {
+    match read_file_word(file) {
+        Err(error) => Err(error),
+        Ok(None) => Ok(None),
+        Ok(Some(value)) => match read_file_word(file) {
+            Err(error) => Err(error),
+            Ok(None) => Ok(None),
+            Ok(Some(inverse)) => Ok(decode_record(value, inverse)),
+        },
+    }
+}
+
 /// Synchronizes the current directory and closes its owned descriptor on every return.
 /// # Errors
 /// Propagates errors from opening or synchronizing the directory.
