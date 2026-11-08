@@ -1198,6 +1198,9 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.RecordErrors.error_then_retries FileResource.RecordErrors.error_crash_witness
         FileResource.RecordErrors.finite_attempts FileResource.RecordErrors.committed_attempts
         FileResource.RecordErrors.one_failed_attempt
+        FileResource.RecordErrors.open_failure_prefix FileResource.RecordErrors.recover_open_failure
+        FileResource.RecordErrors.committed_open_failure FileResource.RecordErrors.opening_retry
+        FileResource.RecordErrors.opening_witness
         FileResource.RecordCleanup.before_close FileResource.RecordCleanup.after_close
         FileResource.RecordCleanup.cleanup_prefix FileResource.RecordCleanup.cleanup_retry
         FileResource.RecordCleanup.cleanup_witness FileResource.RecordCleanup.transaction_attempts)
@@ -1323,7 +1326,17 @@ defmodule Lynx.Rustler.FileResourceTest do
             "(.ok (.Err ⟨error⟩),scan",
             "(.ok (.Err ⟨error + 1⟩),scan"
           ),
-          String.replace(error_source, "position .nil true)", "position .nil false)")
+          String.replace(error_source, "position .nil true)", "position .nil false)"),
+          String.replace(
+            error_source,
+            "(.ok (.Err ⟨error⟩),checkpoint",
+            "(.ok (.Err ⟨error + 1⟩),checkpoint"
+          ),
+          String.replace(
+            error_source,
+            "checkpoint contents generation .nil)",
+            "checkpoint contents (generation + 1) .nil)"
+          )
         ] do
       assert wrong != error_source
       File.write!(error_property, wrong)
@@ -1367,6 +1380,30 @@ defmodule Lynx.Rustler.FileResourceTest do
       assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
         Lynx.Rustler.prepare!(options)
       end
+    end
+
+    File.write!(native, rust)
+    facade = Path.join(workspace, "native/src/lib.rs")
+    facade_source = File.read!(facade)
+
+    swallowed_open_error =
+      String.replace(
+        facade_source,
+        "pub fn recover_file_record(path: &str) -> std::io::Result<Option<u16>> {\n    let mut file = std::fs::File::open(path)?;",
+        String.trim_trailing("""
+        pub fn recover_file_record(path: &str) -> std::io::Result<Option<u16>> {
+            let mut file = match std::fs::File::open(path) {
+                Ok(file) => file,
+                Err(_error) => return Ok(None),
+            };
+        """)
+      )
+
+    assert swallowed_open_error != facade_source
+    File.write!(facade, swallowed_open_error)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
     end
   end
 

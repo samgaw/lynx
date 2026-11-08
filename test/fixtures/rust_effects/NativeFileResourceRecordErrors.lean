@@ -304,8 +304,86 @@ theorem error_crash_witness (value : U16) (generation : Nat) (valid : 1 ≤ gene
   rw [scan_crash_eq _ _ _ _ generation valid position .nil true,content_layout]
   exact RecordRetry.phase_witness _ _ _ _ generation valid .finished
 
+/-- A durable checkpoint without an open descriptor. The script describes
+namespace operations, not a fabricated file resource. -/
+@[expose] def checkpoint (contents : ByteArray) (generation : Nat) (script : Term) : Environment :=
+  {refCounter := generation,nativeHeap := [
+    (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],script⟩),
+    (1,inodeTypeName,encode ⟨contents,contents,0,.nil⟩)]}
+@[expose] def openingFailure (error : Nat) : Term :=
+  .cons (.tuple #[.atom "open",.bitstring Creation.path 0,.atom "error",.integer error,.nil]) .nil
+
+omit validGeneration in
+/-- Opening may fail even when the committed name exists. No file identity is
+allocated and no inode contents or durability checkpoint are changed. -/
+theorem open_failure_poll (contents : ByteArray) (generation error : Nat) :
+    pollOpenReadOnly (toStr "resource") (checkpoint contents generation (openingFailure error)) =
+      some (.ok (.Err ⟨error⟩),checkpoint contents generation .nil) := by
+  have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
+  simp [pollOpenReadOnly,path_bytes,supportedOpenPath,Publish.valid_path,checkpoint,
+    namespaceState,namespaceSnapshot,namespaceTable,namespaceHistory,namespaceEntry,
+    encodeNamespace,encodeNames,Publish.names,List.eraseDups_cons,tablesEqual,
+    openChoice,pathChoice,openingFailure,nonnegative,replaceNamespaceScript]
+
+omit validGeneration in
+/-- The extracted question-mark error path returns before reading or destroying
+any file; its residual is the exact original I/O error. -/
+theorem open_failure_prefix (contents : ByteArray) (generation error : Nat) :
+    Result.ReadyPrefix (recover_file_record (toStr "resource"))
+      (checkpoint contents generation (openingFailure error))
+      (.ok (.Err ⟨error⟩)) (checkpoint contents generation .nil) := by
+  simp only [recover_file_record,monadLift_self,openReadOnly,Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ _ _ _ _ _ (open_failure_poll contents generation error)
+  simp [core.result.Result.Insts.CoreOpsTry.branch,
+    core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual,
+    NativeM.monadLift_eq,NativeM.fromRust,NativeM.ok]
+  exact .refl _ _
+
+omit validGeneration in
+theorem recover_open_failure (contents : ByteArray) (generation error : Nat) :
+    recover_file_record (toStr "resource") (checkpoint contents generation (openingFailure error)) =
+      (.ok (.Err ⟨error⟩),checkpoint contents generation .nil) := by
+  simpa only [Result.ok_apply] using (open_failure_prefix contents generation error).apply
+
+/-- Consuming a namespace script changes no persistent observation. -/
+private theorem checkpoint_crash_eq (script : Term) (chosen : Names) (masks : List (Nat × ByteArray)) :
+    filesystemCrashImage chosen masks (checkpoint (data a b c d) generation script) =
+    filesystemCrashImage chosen masks (RecordRecovery.boot a b c d generation) := by
+  have nodes (rest : Term) :
+      (checkpoint (data a b c d) generation rest).nativeHeap.filter (fun cell => cell.2.1 == inodeTypeName) =
+      [(1,inodeTypeName,encode ⟨data a b c d,data a b c d,0,.nil⟩)] := by
+    simp [checkpoint,namespaceTypeName,inodeTypeName]
+  have reference : (RecordRecovery.boot a b c d generation).nativeHeap.filter
+      (fun cell => cell.2.1 == inodeTypeName) =
+      [(1,inodeTypeName,encode ⟨data a b c d,data a b c d,0,.nil⟩)] := by
+    simp [RecordRecovery.boot,namespaceTypeName,inodeTypeName]
+  simp only [filesystemCrashImage,nodes,reference]
+  simp [checkpoint,RecordRecovery.boot,namespaceSnapshot,namespaceTable,namespaceHistory,
+    namespaceEntry,encodeNamespace,encodeNames,List.eraseDups_cons,tablesEqual,
+    Publish.names,Publish.valid_path,namespaceCrashAllowed,inode,decode,encode,limit,
+    data_size,not_lt.mpr validGeneration]
+  rfl
+
+/-- An opening failure allocates nothing, so an admitted crash preserves both
+bytes and the previous freshness watermark. -/
+theorem opening_crash (script : Term) (chosen : Names) (masks : List (Nat × ByteArray))
+    (image : FilesystemImage)
+    (accepted : filesystemCrashImage chosen masks (checkpoint (data a b c d) generation script) = some image) :
+    image = ⟨Publish.names,[(1,data a b c d)],generation⟩ := by
+  rw [checkpoint_crash_eq a b c d generation validGeneration script] at accepted
+  exact RecordRetry.phase_crash a b c d generation validGeneration .beforeOpen chosen masks image accepted
+
+/-- The selected namespace outcome is installed only after validating the actual
+persistent image, including inode identity and freshness. -/
+theorem restart_checkpoint (script : Term) :
+    restartFilesystem ⟨Publish.names,[(1,data a b c d)],generation⟩ script =
+      some (checkpoint (data a b c d) generation script) := by
+  simp [restartFilesystem,checkpoint,namespaceTable,namespaceEntry,encodeNames,Publish.names,
+    List.eraseDups_cons,Publish.valid_path,data_size,limit,not_lt.mpr validGeneration]
+
 /-- Finite attempts may mix crashes during ready recovery with read-failure
-attempts interrupted before or after destruction. Infinite failures carry no success guarantee. -/
+attempts interrupted before or after destruction, and opening failures without
+allocation. Infinite failures carry no success guarantee. -/
 inductive Attempts (value : U16) : Nat → Nat → Prop where
   | done (generation : Nat) : Attempts value generation generation
   | interrupted (generation : Nat) (phase : RecordRetry.Phase) (chosen : Names)
@@ -319,6 +397,11 @@ inductive Attempts (value : U16) : Nat → Nat → Prop where
       (accepted : filesystemCrashImage chosen masks
         (cleanupState (Record.low value) (Record.high value) (Record.low (~~~value))
           (Record.high (~~~value)) generation position closeError closed) = some image)
+      (rest : Attempts value image.highWater last) : Attempts value generation last
+  | openFailed (generation error : Nat) (chosen : Names) (masks : List (Nat × ByteArray))
+      (image : FilesystemImage) (last : Nat)
+      (accepted : filesystemCrashImage chosen masks
+        (checkpoint (Record.content value) generation .nil) = some image)
       (rest : Attempts value image.highWater last) : Attempts value generation last
 
 omit validGeneration in
@@ -357,6 +440,13 @@ theorem finite_attempts (value : U16) (generation last : Nat) (trace : Attempts 
       omega
     rcases ih fresh.1 with ⟨validLast,ordered,recovered⟩
     exact ⟨validLast,Nat.le_trans fresh.2 ordered,recovered⟩
+  | openFailed generation error chosen masks image last accepted rest ih =>
+    intro valid
+    rw [content_layout] at accepted
+    have same := opening_crash _ _ _ _ generation valid .nil chosen masks image accepted
+    have fresh : image.highWater = generation := by rw [same]
+    rw [fresh] at ih
+    exact ih valid
 
 omit validGeneration in
 /-- The initial acknowledged image composes with the mixed failure/interruption
@@ -400,5 +490,67 @@ theorem one_failed_attempt (value : U16) (generation : Nat) (valid : 1 ≤ gener
     .failed generation position error inside closeError true Publish.names [(1,⟨#[0,0,0,0]⟩)]
       ⟨Publish.names,[(1,Record.content value)],generation + 1⟩ _ executed.2 (.done _)
   exact ⟨executed.1,trace,(finite_attempts value generation _ trace valid).2.2⟩
+
+omit validGeneration in
+/-- Acknowledgment does not imply later open success. An admitted committed
+image can return its chosen opening error without allocating a descriptor. -/
+theorem committed_open_failure (env : Environment) (value : U16) (chosen : Names)
+    (masks : List (Nat × ByteArray)) (image : FilesystemImage) (error : Nat)
+    (accepted : filesystemCrashImage chosen masks (Record.done env value) = some image) :
+    restartFilesystem image (openingFailure error) =
+      some (checkpoint (Record.content value) image.highWater (openingFailure error)) ∧
+    recover_file_record (toStr "resource")
+      (checkpoint (Record.content value) image.highWater (openingFailure error)) =
+      (.ok (.Err ⟨error⟩),checkpoint (Record.content value) image.highWater .nil) := by
+  have same := RecordRetry.committed_crash env value chosen masks image accepted
+  refine ⟨?_,recover_open_failure _ _ _⟩
+  rw [same,content_layout]
+  exact restart_checkpoint _ _ _ _ 9 (by decide +kernel) _
+
+omit validGeneration in
+/-- Transient opening failure preserves the committed bytes. Any admitted crash
+then composes with further mixed attempts and actual final recovery. -/
+theorem opening_retry (value : U16) (generation : Nat) (valid : 1 ≤ generation) (error : Nat)
+    (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage) (last : Nat)
+    (accepted : filesystemCrashImage chosen masks
+      (checkpoint (Record.content value) generation .nil) = some image)
+    (trace : Attempts value image.highWater last) :
+    recover_file_record (toStr "resource")
+      (checkpoint (Record.content value) generation (openingFailure error)) =
+      (.ok (.Err ⟨error⟩),checkpoint (Record.content value) generation .nil) ∧
+    restartFilesystem image openingScript =
+      some (RecordRecovery.boot (Record.low value) (Record.high value)
+        (Record.low (~~~value)) (Record.high (~~~value)) image.highWater) ∧
+    recover_file_record (toStr "resource")
+      (RecordRecovery.boot (Record.low value) (Record.high value)
+        (Record.low (~~~value)) (Record.high (~~~value)) last) =
+      (.ok (.Ok (some value)),scan (Record.low value) (Record.high value)
+        (Record.low (~~~value)) (Record.high (~~~value)) last 4 .nil true) := by
+  rw [content_layout] at accepted
+  have same := opening_crash _ _ _ _ generation valid .nil chosen masks image accepted
+  have fresh : 1 ≤ image.highWater := by rw [same]; exact valid
+  refine ⟨recover_open_failure _ _ _,?_,(finite_attempts value image.highWater last trace fresh).2.2⟩
+  rw [same]
+  exact RecordRecovery.restart_image _ _ _ _ generation valid
+
+omit validGeneration in
+/-- Every opening error has an actual prefix and a concrete crash witness.
+The retry relation includes this failed attempt despite its unchanged watermark. -/
+theorem opening_witness (value : U16) (generation : Nat) (valid : 1 ≤ generation) (error : Nat) :
+    Result.ReadyPrefix (recover_file_record (toStr "resource"))
+      (checkpoint (Record.content value) generation (openingFailure error))
+      (.ok (.Err ⟨error⟩)) (checkpoint (Record.content value) generation .nil) ∧
+    filesystemCrashImage Publish.names [(1,⟨#[0,0,0,0]⟩)]
+      (checkpoint (Record.content value) generation .nil) =
+      some ⟨Publish.names,[(1,Record.content value)],generation⟩ ∧
+    Attempts value generation generation := by
+  have admitted : filesystemCrashImage Publish.names [(1,⟨#[0,0,0,0]⟩)]
+      (checkpoint (Record.content value) generation .nil) =
+      some ⟨Publish.names,[(1,Record.content value)],generation⟩ := by
+    rw [content_layout,checkpoint_crash_eq _ _ _ _ generation valid .nil]
+    exact RecordRetry.phase_witness _ _ _ _ generation valid .beforeOpen
+  exact ⟨open_failure_prefix _ _ _,admitted,
+    .openFailed generation error Publish.names [(1,⟨#[0,0,0,0]⟩)]
+      ⟨Publish.names,[(1,Record.content value)],generation⟩ _ admitted (.done _)⟩
 
 end FileResource.RecordErrors
