@@ -73,4 +73,13 @@ theorem executeNative_readyPrefix {α : Type} {computation residual : Result α}
   unfold executeNative
   exact (trace.bind _).handle _
 
+/-- Preserve the actual exception adapter and encoder in a successful
+scheduled native trace, including its local resource bookkeeping. -/
+theorem executeNative_sharedSteps {α : Type} {pid : PID} {computation : Result α} {value : α}
+    {before after : Nat × List (Nat × String × Term)}
+    (trace : Result.SharedSteps pid computation before value after) (encode : α → Term) :
+    Result.SharedSteps pid (executeNative computation encode) before (encode value) after := by
+  unfold executeNative
+  exact (trace.bind (fun reply => Result.ok (encode reply)) (.done (encode value) after)).handle _
+
 end Lynx.Rustler
