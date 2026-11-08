@@ -1150,7 +1150,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix CommitFailure DirectoryFailure FailurePhases)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix CommitFailure DirectoryFailure FailurePhases Persistence SyncErrorRecovery)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1182,7 +1182,8 @@ defmodule Lynx.Rustler.FileResourceTest do
       base ++
         [
           proof_modules: Enum.map(modules, &("FileResource." <> &1)),
-          required_properties: ~w(FileResource.Record.encode_spec FileResource.Record.decode_spec
+          required_properties:
+            ~w(FileResource.Record.encode_spec FileResource.Record.decode_spec
         FileResource.Record.torn_decode FileResource.Record.decode_layout FileResource.Record.write_next
         FileResource.Record.short_not_acknowledged FileResource.Record.create_write_commit
         FileResource.RecordRecovery.recover_record FileResource.RecordRecovery.recover_value
@@ -1229,7 +1230,10 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.FailurePhases.close_prefix FileResource.FailurePhases.released_prefix
         FileResource.FailurePhases.boundary_prefix FileResource.FailurePhases.boundary_recovery
         FileResource.FailurePhases.post_sync_recovery FileResource.FailurePhases.boundary_witness
-        FileResource.FailurePhases.post_sync_attempts)
+        FileResource.FailurePhases.post_sync_attempts
+        FileResource.SyncErrorRecovery.failed_prefix FileResource.SyncErrorRecovery.released_prefix
+        FileResource.SyncErrorRecovery.boundary_prefix FileResource.SyncErrorRecovery.boundary_recovery
+        FileResource.SyncErrorRecovery.boundary_witness FileResource.SyncErrorRecovery.finite_background_recovery)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1560,6 +1564,42 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(interruption_property, interruption_source)
+    persistence_property = Path.join(project, "FileResource/Persistence.lean")
+    persistence_source = File.read!(persistence_property)
+    inverted_mask = String.replace(persistence_source, "then 1 else 0", "then 0 else 1")
+    assert inverted_mask != persistence_source
+    File.write!(persistence_property, inverted_mask)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+    assert error.message =~ "Persistence.lean"
+    File.write!(persistence_property, persistence_source)
+    sync_error_property = Path.join(project, "FileResource/SyncErrorRecovery.lean")
+    sync_error_source = File.read!(sync_error_property)
+
+    for wrong <- [
+          String.replace(sync_error_source, "| _ => true", "| _ => false"),
+          String.replace(
+            sync_error_source,
+            "result = .Ok none ∨ result = .Ok (some value)",
+            "result = .Ok none"
+          )
+        ] do
+      assert wrong != sync_error_source
+      File.write!(sync_error_property, wrong)
+
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
+
+      assert error.message =~ "SyncErrorRecovery.lean"
+    end
+
+    File.write!(sync_error_property, sync_error_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
