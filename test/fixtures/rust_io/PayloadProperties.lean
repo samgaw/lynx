@@ -26,13 +26,13 @@ theorem not_directory : (b.data == #[46]) = false := by decide +kernel
 variable (data : ByteArray) (bounded : data.size ≤ limit)
 
 @[expose] def initial : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,writableHandleTypeName,encodeHandle ⟨1,0,actionOk "sync_all" ByteArray.empty
       (actionOk "close" (zeroMask data) .nil)⟩),
     (1,inodeTypeName,encode ⟨data,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,oldNames,[],renameScript⟩)]}
 @[expose] def published : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,closedDirectoryTypeName,.tuple #[.nil]),
     (2,closedHandleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩),
@@ -54,13 +54,13 @@ variable (data : ByteArray) (bounded : data.size ≤ limit)
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,oldNames,[newNames],opening⟩)]}
 @[expose] def afterOpen : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,directoryTypeName,.tuple #[dirScript]),
     (2,closedHandleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,oldNames,[newNames],.nil⟩)]}
 @[expose] def afterDirectorySync : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,directoryTypeName,.tuple #[actionOk "close_dir" ByteArray.empty .nil]),
     (2,closedHandleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩),
@@ -126,18 +126,24 @@ theorem publish_contract : publish_file ⟨2⟩ source target (initial data) = (
   simp only [publish_file,synchronize_then_close,sync_directory,io_core.synchronize,
     io_core.rename_file,io_core.open_readonly,monadLift_self,NativeOwnedDrop.drop,
     syncAll,close,NativeFile.rename,openReadOnly,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (sync_poll data bounded)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (sync_poll data bounded)]
   simp only [Result.ok_bind,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (close_poll data bounded)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (close_poll data bounded)]
   simp only [Result.ok_bind,NativeM.ok,core.result.Result.Insts.CoreOpsTry.branch,
     NativeM.monadLift_eq,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (rename_poll data bounded)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (rename_poll data bounded)]
   simp only [Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (open_poll data bounded)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (open_poll data bounded)]
   simp only [Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (directory_sync_poll data bounded)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (directory_sync_poll data bounded)]
   simp only [Result.ok_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (directory_close_poll data bounded)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (directory_close_poll data bounded)]
   simp []
 
 /-- Every permitted post-sync byte mask gives the same saved data. -/
@@ -155,11 +161,11 @@ theorem checkpoint_image_all (mask result : ByteArray)
     closedHandleTypeName]
 
 @[expose] def rebooted : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],reopening⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩)]}
 @[expose] def recovered : Environment :=
-  {refCounter := 4,nativeHeap := [
+  {nativeRefCounter := 4,nativeHeap := [
     (4,handleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],.nil⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩)]}
@@ -181,7 +187,8 @@ theorem recover_published : open_readonly target (rebooted data) = (.ok (.Ok ⟨
       encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,openChoice,pathChoice,inode,decode,encode,
       limit,replaceNamespaceScript,encodeHandle,namespaceTypeName,inodeTypeName,handleTypeName]
   simp only [open_readonly,io_core.open_readonly,monadLift_self,openReadOnly]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp
 
 /-- Publication is composed with restart and the actual Rust opener. Every
@@ -206,14 +213,14 @@ theorem publication_restart (mask result : ByteArray)
     (actionOk "close" ByteArray.empty .nil)
 
 @[expose] def failing (error : Nat) (closed : Bool := false) : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,(if closed then closedHandleTypeName else writableHandleTypeName),
       encodeHandle ⟨1,0,(if closed then .nil else syncError error)⟩),
     (1,inodeTypeName,encode ⟨data,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,oldNames,[],renameScript⟩)]}
 
 @[expose] def failed : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,writableHandleTypeName,encodeHandle ⟨1,0,actionOk "close" ByteArray.empty .nil⟩),
     (1,inodeTypeName,encode ⟨data,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,oldNames,[],renameScript⟩)]}
@@ -247,9 +254,11 @@ theorem failed_publication (error : Nat) :
       (.ok (.Err ⟨error⟩),failing data 0 true) := by
   simp only [publish_file,synchronize_then_close,io_core.synchronize,monadLift_self,
     syncAll,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (failed_sync_poll data bounded error)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (failed_sync_poll data bounded error)]
   simp only [Result.ok_bind,NativeOwnedDrop.drop,close,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (failed_close_poll data bounded)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (failed_close_poll data bounded)]
   simp [NativeM.ok,core.result.Result.Insts.CoreOpsTry.branch,NativeM.monadLift_eq,
     NativeM.fromRust_ok,core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual,
     core.convert.FromSame]
@@ -280,7 +289,8 @@ theorem payload_bound (tooLarge : limit < data.size) :
       directoryTypeName]
   simp only [publish_file,synchronize_then_close,io_core.synchronize,monadLift_self,
     syncAll,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.error_apply]
 
 end Publish.Payload

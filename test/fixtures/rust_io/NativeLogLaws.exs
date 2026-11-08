@@ -19,7 +19,7 @@ defmodule LynxIoFixture.SharedLogLaws do
       Lynx.Rustler.decodeUnsigned, range.1, range.2, Lynx.Result.ofExcept,
       Lynx.Rustler.withResourceTypes, Lynx.Result.set_bind, Lynx.Result.set_continuation_apply,
       Lynx.Result.handle, Erlang.erlang.«==/2»]
-    rw [Record.NativeLogProperties.initial_adapter]
+    rw [Record.NativeLogProperties.initial_adapter _ _ _ _ _ _ schedule]
     all_goals simp [Record.NativeLogProperties.initial, Record.NativeLogProperties.pinned,
       Record.FramedLogProperties.framedEnv]
     """

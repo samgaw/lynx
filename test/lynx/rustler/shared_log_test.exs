@@ -205,8 +205,12 @@ defmodule Lynx.Rustler.SharedLogTest do
     assert status == 0, output
 
     for incorrect <- [
-          String.replace(concurrent_source, "refCounter := 12", "refCounter := 13"),
-          String.replace(concurrent_source, "body_steps 1 true 11 10", "body_steps 1 true 11 11"),
+          String.replace(concurrent_source, "nativeRefCounter := 12", "nativeRefCounter := 13"),
+          String.replace(
+            concurrent_source,
+            "body_steps [] true 11 10",
+            "body_steps [] true 11 11"
+          ),
           String.replace(concurrent_source, "(.integer 19)", "(.integer 20)"),
           concurrent_source <> "\nprivate axiom unchecked_constructed_claim : False\n",
           concurrent_source <>
@@ -234,7 +238,11 @@ defmodule Lynx.Rustler.SharedLogTest do
     File.write!(concurrent_path, concurrent_source)
 
     for incorrect <- [
-          String.replace(constructor_source, "next (.reference 8)", "next (.reference 9)"),
+          String.replace(
+            constructor_source,
+            "next (.nativeReference 8)",
+            "next (.nativeReference 9)"
+          ),
           constructor_source <> "\nprivate axiom unchecked_constructor_claim : False\n",
           constructor_source <>
             "\nprivate theorem unfinished_constructor_claim : False := by sorry\n"
@@ -384,8 +392,8 @@ defmodule Lynx.Rustler.SharedLogTest do
     assert status == 0, output
 
     for incorrect <- [
-          String.replace(contended_source, "refCounter := 10", "refCounter := 11"),
-          String.replace(contended_source, "body_steps 1 true 9 8", "body_steps 1 true 9 9"),
+          String.replace(contended_source, "nativeRefCounter := 10", "nativeRefCounter := 11"),
+          String.replace(contended_source, "body_steps [] true 9 8", "body_steps [] true 9 9"),
           String.replace(contended_source, "(.integer 19)", "(.integer 20)"),
           contended_source <> "\nprivate axiom unchecked_native_claim : False\n",
           contended_source <> "\nprivate theorem unfinished_native_claim : False := by sorry\n"
@@ -401,7 +409,7 @@ defmodule Lynx.Rustler.SharedLogTest do
     end
 
     for incorrect <- [
-          String.replace(adapter_source, "refCounter := 10", "refCounter := 11"),
+          String.replace(adapter_source, "nativeRefCounter := 10", "nativeRefCounter := 11"),
           String.replace(adapter_source, "(.integer 19)", "(.integer 20)"),
           String.replace(
             adapter_source,
@@ -484,7 +492,7 @@ defmodule Lynx.Rustler.SharedLogTest do
     scheduled_source = File.read!(scheduled_proof)
 
     for incorrect <- [
-          String.replace(scheduled_source, "refCounter := 11", "refCounter := 12"),
+          String.replace(scheduled_source, "nativeRefCounter := 11", "nativeRefCounter := 12"),
           String.replace(
             scheduled_source,
             "overwrite ByteArray.empty 0 (bytes (payload 13#u16)) 4",

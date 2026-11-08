@@ -58,11 +58,11 @@ theorem stable_bytes (low high : UInt8) :
 variable (generation : Nat)
 
 @[expose] def boot (script : Term := readScript) : Environment :=
-  {refCounter := generation,nativeHeap := [
+  {nativeRefCounter := generation,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],openingScript script⟩),
     (1,inodeTypeName,encode ⟨(wordBytes low high),(wordBytes low high),0,.nil⟩)]}
 @[expose] def scan (position : Nat) (script : Term) (closed : Bool := false) : Environment :=
-  {refCounter := generation + 1,nativeHeap := [
+  {nativeRefCounter := generation + 1,nativeHeap := [
     (generation + 1,(if closed then closedHandleTypeName else handleTypeName),encodeHandle ⟨1,position,script⟩),
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],.nil⟩),
     (1,inodeTypeName,encode ⟨(wordBytes low high),(wordBytes low high),0,.nil⟩)]}

@@ -9,7 +9,7 @@ theorem cancel_call_next {α : Type} (env : Environment) (value amount : U64) (c
     (bounded : 5 ≤ counter) (next : Term → NativeM α)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative (__CANCEL__ owner amount) Rustler.encodeBool
       next result) (pinnedEnv env value counter) =
       next Term.true (pinnedEnv env value (counter+1)) := by
@@ -23,10 +23,10 @@ theorem cancel_call_next {α : Type} (env : Environment) (value amount : U64) (c
 theorem cancel_call_at {α : Type} (env : Environment) (value amount : U64) (counter : Nat)
     (bounded : 5 ≤ counter) (next : Term → NativeM α)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 2 4 5 ++ [cell value])
-    (count : env.refCounter = counter)
+    (count : env.nativeRefCounter = counter)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative (__CANCEL__ owner amount) Rustler.encodeBool
       next result) env =
       next Term.true (pinnedEnv env value (counter+1)) := by

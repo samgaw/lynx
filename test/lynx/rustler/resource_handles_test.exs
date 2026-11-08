@@ -136,8 +136,8 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
     broken_frame =
       String.replace(
         original_properties,
-        "(env.refCounter + 4) ++ env.nativeHeap}",
-        "(env.refCounter + 4)}",
+        "(env.nativeRefCounter + 4) ++ env.nativeHeap}",
+        "(env.nativeRefCounter + 4)}",
         global: false
       )
 
@@ -212,10 +212,10 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
           Elixir.LynxEffectsFixture.Native.«resource_value/1»,
           Elixir.LynxEffectsFixture.Native.«resource_value:execution/1»,
           Lynx.Rustler.withResourceTypes, input, Lynx.Result.ofExcept,
-          Lynx.Result.ok_bind, Lynx.Result.get_bind, Lynx.Result.set_bind,
-          Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply, bind_assoc]
+          Lynx.Result.ok_bind, Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
+          Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply, bind_assoc]
         rw [Handles.Properties.create_continuation]
-        · simp only [Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+        · simp only [Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
           rw [Handles.Properties.read_continuation seven _ _ 1 3 4]
           all_goals simp [seven, Lynx.NativeResourceArc.typeName, Aeneas.Std.UScalar.val,
             Erlang.erlang.«==/2», -Aeneas.Std.UScalar.bv_toNat]
@@ -243,19 +243,19 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
           Elixir.LynxEffectsFixture.Native.«resource_value/1»,
           Elixir.LynxEffectsFixture.Native.«resource_value:execution/1»,
           Lynx.Rustler.withResourceTypes, input, Lynx.Result.ofExcept,
-          Lynx.Result.ok_bind, Lynx.Result.get_bind, Lynx.Result.set_bind,
-          Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply, bind_assoc]
+          Lynx.Result.ok_bind, Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
+          Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply, bind_assoc]
         rw [Handles.Properties.create_continuation]
         · simp only [Lynx.Result.andAlso_eq, Lynx.Result.tryWith_eq,
             Lynx.Rustler.decodeBool,
-            Lynx.Result.handle_get, Lynx.Result.handle_set, Lynx.Result.handle_error, bind_assoc, Lynx.Result.error_bind,
-            Lynx.Result.get_bind, Lynx.Result.set_bind,
-            Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+            Lynx.Result.handle_nativeGet, Lynx.Result.handle_nativeSet, Lynx.Result.handle_error, bind_assoc, Lynx.Result.error_bind,
+            Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
+            Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
           rw [Lynx.NativeResourceArc.decode_failure_cleanup_handled_next
             (effects_native.ScalarResource.mk (effects_native.effects_core.Counter.mk seven)) _ _ _ 1 3 4]
           · simp only [Lynx.Result.pure_eq_ok, Lynx.Result.ok_bind,
-              Lynx.Exception.classTerm, Lynx.Exception.reason, Lynx.Result.get_bind,
-              Lynx.Result.set_bind, Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+              Lynx.Exception.classTerm, Lynx.Exception.reason, Lynx.Result.nativeGet_bind,
+              Lynx.Result.nativeSet_bind, Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
             rw [Handles.Properties.read_continuation seven _ _ 1 3 4]
             all_goals simp [seven, Lynx.NativeResourceArc.typeName, Aeneas.Std.UScalar.val,
               Erlang.erlang.«==/2», -Aeneas.Std.UScalar.bv_toNat]
@@ -285,15 +285,15 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
           Elixir.LynxEffectsFixture.Native.«resource_value/1»,
           Elixir.LynxEffectsFixture.Native.«resource_value:execution/1»,
           Lynx.Rustler.withResourceTypes, input7, input9, Lynx.Result.ofExcept,
-          Lynx.Result.andAlso_eq, Lynx.Result.ok_bind, Lynx.Result.get_bind, Lynx.Result.set_bind,
-          Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply, bind_assoc]
+          Lynx.Result.andAlso_eq, Lynx.Result.ok_bind, Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
+          Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply, bind_assoc]
         rw [Handles.Properties.create_framed_continuation seven]
-        · simp only [Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+        · simp only [Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
           rw [Handles.Properties.create_framed_continuation nine]
-          · simp only [Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+          · simp only [Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
             rw [Handles.Properties.read_pinned_continuation seven _ _ 1 3 4]
             · simp only [eq7, Lynx.Result.ofExcept, Lynx.Result.ok_bind,
-                Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply]
+                Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
               rw [Handles.Properties.read_pinned_continuation nine _ _ 5 7 8]
               · simp [eq9, Lynx.Result.ofExcept]
               · constructor <;> simp [Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.typeName,

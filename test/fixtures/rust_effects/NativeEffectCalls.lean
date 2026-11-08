@@ -7,7 +7,7 @@ namespace EffectCalls.Properties
 /-- Identical constructor inputs produce two distinct identities and cells. -/
 theorem distinct_allocations (value : U64) :
     identical_mutexes value {} = (.ok (⟨1⟩, ⟨2⟩), {
-      refCounter := 2, nativeHeap := [
+      nativeRefCounter := 2, nativeHeap := [
         (2, NativeMutex.typeName U64,
           .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]),
         (1, NativeMutex.typeName U64,
@@ -21,7 +21,7 @@ theorem discarded_effect (mutex : NativeMutex effects_core.Counter) (amount : U6
       effects_core.locked_increment mutex amount) := by rfl
 
 @[expose] def state (value : U64) (counter : Nat) : Environment :=
-  {refCounter := counter, nativeHeap := [
+  {nativeRefCounter := counter, nativeHeap := [
     (1, NativeMutex.typeName effects_core.Counter,
       .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (effects_core.Counter.mk value)])]}
 

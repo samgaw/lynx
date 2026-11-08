@@ -41,7 +41,7 @@ theorem decoded_lock_prefix (pid : PID) (first : Bool) (types : List String)
     (registered : NativeResourceArc.typeName shared_log.LogResource ∈ types)
     (contents : Term) (state : State) (value : U16) :
     Result.RegisteredPrefix pid (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__APPEND__ owner value) Rustler.encodeBool)
       (Record.ScheduledLogProperties.shared (beforeCounter first) (beforeFrame first) contents state) types
       (.wait (NativeMutex.pollLock (⟨1⟩ : NativeMutex NativeFile)) (resume first value))

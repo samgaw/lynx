@@ -14,19 +14,19 @@ namespace ResourceAwait.Properties
   (1, NativeMutex.typeName effects_core.Counter,
     .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode ({value} : effects_core.Counter)])
 @[expose] def live (env : Environment) (value : U64) (counter : Nat) (notified : Bool) : Environment :=
-  {env with refCounter := counter, nativeHeap := [
-    (3, NativeResourceArc.handleType CounterResource, .reference 2),
+  {env with nativeRefCounter := counter, nativeHeap := [
+    (3, NativeResourceArc.handleType CounterResource, .nativeReference 2),
     (2, NativeResourceArc.typeName CounterResource,
       .tuple #[.integer 1, NativeCodec.encode ({state := ⟨1⟩} : CounterResource)]), cell value,
     (0, NativeWaker.typeName, .atom (if notified then "notified" else "idle"))]}
 @[expose] def cleaned (env : Environment) (counter : Nat) (notified : Bool) : Environment :=
-  {env with refCounter := counter, nativeHeap := [
-    (3, NativeResourceArc.handleType CounterResource, .reference 2),
+  {env with nativeRefCounter := counter, nativeHeap := [
+    (3, NativeResourceArc.handleType CounterResource, .nativeReference 2),
     (2, NativeResourceArc.typeName CounterResource,
       .tuple #[.integer 1, NativeCodec.encode ({state := ⟨1⟩} : CounterResource)]),
     (0, NativeWaker.typeName, .atom (if notified then "notified" else "idle"))]}
 @[expose] def reclaimed (env : Environment) (counter : Nat) (notified : Bool) : Environment :=
-  {env with refCounter := counter, nativeHeap := [
+  {env with nativeRefCounter := counter, nativeHeap := [
     (0, NativeWaker.typeName, .atom (if notified then "notified" else "idle"))]}
 
 theorem initial_state (amount : U64) :

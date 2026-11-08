@@ -26,8 +26,8 @@ theorem record_next (file : NativeFile) (env : Environment)
     (r2 : readStep s2 (one 0#u8) = some (.Ok 1#usize, s3, one (low (~~~value))))
     (r3 : readStep s3 (one 0#u8) = some (.Ok 1#usize, s4, one (high (~~~value))))
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_record file >>= next) (fileEnv env file s0 frame) =
-      next (.Ok (some value), file) (fileEnv env file s4 frame) := by
+    (read_record file >>= next).run (fileEnv env file s0 frame) =
+      (next (.Ok (some value), file)).run (fileEnv env file s4 frame) := by
   simp only [read_record, monadLift_self, bind_assoc]
   rw [word_next file env frame s0 s1 s2 _ _ separate v0 v1 n0 n1 r0 r1]
   simp only [bind_assoc]
@@ -41,8 +41,8 @@ theorem first_next (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (first second : U16) (rest : Term)
     (separate : Separate file frame)
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_record file >>= next) (fileEnv env file (scanning (pairData first second) rest 0) frame) =
-      next (.Ok (some first), file) (fileEnv env file (scanning (pairData first second) rest 4) frame) := by
+    (read_record file >>= next).run (fileEnv env file (scanning (pairData first second) rest 0) frame) =
+      (next (.Ok (some first), file)).run (fileEnv env file (scanning (pairData first second) rest 4) frame) := by
   apply record_next file env frame _ (scanning (pairData first second) rest 1)
     (scanning (pairData first second) rest 2) (scanning (pairData first second) rest 3)
     (scanning (pairData first second) rest 4) first separate
@@ -54,8 +54,8 @@ theorem second_next (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (first second : U16) (rest : Term)
     (separate : Separate file frame)
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_record file >>= next) (fileEnv env file (scanning (pairData first second) rest 4) frame) =
-      next (.Ok (some second), file) (fileEnv env file (scanning (pairData first second) rest 8) frame) := by
+    (read_record file >>= next).run (fileEnv env file (scanning (pairData first second) rest 4) frame) =
+      (next (.Ok (some second), file)).run (fileEnv env file (scanning (pairData first second) rest 8) frame) := by
   apply record_next file env frame _ (scanning (pairData first second) rest 5)
     (scanning (pairData first second) rest 6) (scanning (pairData first second) rest 7)
     (scanning (pairData first second) rest 8) second separate
@@ -86,7 +86,7 @@ theorem recover_log_two (file : NativeFile) (env : Environment)
     have start : (alloc.vec.Vec.new U16).len < 2#usize := by
       simp [alloc.vec.Vec.len, alloc.vec.Vec.new]
     simp only [recover_log_loop.body, monadLift_self, start, ite_true, bind_assoc]
-    change (read_record file >>= _) _ = _
+    change (read_record file >>= _).run _ = _
     rw [first_next file env frame first second rest separate]
     simp only [NativeM.ok, Result.ok_bind]
     rw [push_from [] first (by decide)]
@@ -97,7 +97,7 @@ theorem recover_log_two (file : NativeFile) (env : Environment)
     simp only [alloc.vec.Vec.len, alloc.vec.Vec.from_val, List.length_cons, List.length_nil,
       Usize.ofNatCore, UScalar.lt_equiv, UScalar.ofNat, UScalar.ofNatCore_val_eq,
       Nat.reduceAdd, Nat.reduceLT, ite_true, bind_assoc]
-    change (read_record file >>= _) _ = _
+    change (read_record file >>= _).run _ = _
     rw [second_next file env frame first second rest separate]
     simp only [NativeM.ok, Result.ok_bind]
     rw [push_from [first] second (by simp)]
@@ -130,7 +130,7 @@ theorem append_ready (file : NativeFile) (value : U16) (env : Environment)
       step, store_at env file before after frame separate]
   simp only [append_record, io_core.seek_from, Record.Extraction.FileModel.seek,
     monadLift_self, NativeFile.seek, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  rw [Result.wait_ready_run _ _ _ _ _ ready]
   simp [Result.ok_bind]
 
 theorem append_bytes (before : ByteArray) (value : U16) :

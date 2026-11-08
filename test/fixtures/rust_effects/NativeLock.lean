@@ -14,15 +14,15 @@ theorem acquired (mutex : NativeMutex effects_core.Counter) (value : effects_cor
     (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
       [(mutex.id, NativeMutex.typeName effects_core.Counter, .tuple #[.atom "unlocked",
         .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])])
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     effects_core.acquire_counter mutex env = (.ok (
-      if poisoned then .Err ⟨⟨mutex, env.refCounter + 1, env.currentPid, value⟩⟩
-      else .Ok ⟨mutex, env.refCounter + 1, env.currentPid, value⟩),
+      if poisoned then .Err ⟨⟨mutex, env.nativeRefCounter + 1, env.currentPid, value⟩⟩
+      else .Ok ⟨mutex, env.nativeRefCounter + 1, env.currentPid, value⟩),
       { env with
-        refCounter := env.refCounter + 1
+        nativeRefCounter := env.nativeRefCounter + 1
         nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
           (mutex.id, NativeMutex.typeName effects_core.Counter,
-            NativeMutex.lockedContents env.currentPid (env.refCounter + 1) poisoned value)
+            NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value)
           else cell }) := by
   simpa [callee_contract] using NativeMutex.lock_unlocked mutex value poisoned env stored fresh
 
@@ -34,7 +34,7 @@ theorem composed_acquisition (mutex : NativeMutex effects_core.Counter) :
 
 /-- Another context's guard makes acquisition wait rather than return a guard. -/
 theorem contention_waits (mutex : NativeMutex effects_core.Counter) (value : effects_core.Counter)
-    (owner token : Nat) (poisoned : Bool) (env : Environment)
+    (owner : PID) (token : Nat) (poisoned : Bool) (env : Environment)
     (different : owner ≠ env.currentPid)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
       [(mutex.id, NativeMutex.typeName effects_core.Counter,

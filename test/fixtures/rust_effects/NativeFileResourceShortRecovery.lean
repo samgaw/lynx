@@ -18,12 +18,12 @@ open FileResource.Recovery (one path_bytes)
 @[expose] def openingScript (contents : List U8) : Term :=
   .cons (.tuple #[.atom "open",.bitstring Creation.path 0,.atom "ok",.integer 0,reads contents contents]) .nil
 @[expose] def boot (contents : List U8) (generation : Nat) : Environment :=
-  {refCounter := generation,nativeHeap := [
+  {nativeRefCounter := generation,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],openingScript contents⟩),
     (1,inodeTypeName,encode ⟨raw contents,raw contents,0,.nil⟩)]}
 @[expose] def scan (contents : List U8) (generation position : Nat) (script : Term)
     (closed : Bool := false) : Environment :=
-  {refCounter := generation + 1,nativeHeap := [
+  {nativeRefCounter := generation + 1,nativeHeap := [
     (generation + 1,(if closed then closedHandleTypeName else handleTypeName),encodeHandle ⟨1,position,script⟩),
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],.nil⟩),
     (1,inodeTypeName,encode ⟨raw contents,raw contents,0,.nil⟩)]}
@@ -263,11 +263,11 @@ theorem uncommitted_short_recovery (env : Environment) (value : U16) (mask data 
 @[expose] def missingChoice (error : Nat) : Term :=
   .cons (.tuple #[.atom "open",.bitstring Creation.path 0,.atom "error",.integer error,.nil]) .nil
 @[expose] def missingBoot (data : ByteArray) (generation error : Nat) : Environment :=
-  {refCounter := generation,nativeHeap := [
+  {nativeRefCounter := generation,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨[],[],[],missingChoice error⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩)]}
 @[expose] def missingDone (data : ByteArray) (generation : Nat) : Environment :=
-  {refCounter := generation,nativeHeap := [
+  {nativeRefCounter := generation,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨[],[],[],.nil⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩)]}
 
@@ -649,7 +649,7 @@ theorem create_partial (env : Environment) (value : U16) (count : Nat) (shortCou
       (.ok Term.false,CreatedCalls.pinnedEnv env (partialState value count) 7) := by
   rw [Creation.create_next (rest := .nil) env (partialBefore count).script _ registered]
   change (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__WRITE_RECORD__ owner value) Rustler.encodeBool)
     (CreatedCalls.pinnedEnv env (partialBefore count) 6) = _
   have valid : CreatedCalls.Valid (partialBefore count) := by simp [CreatedCalls.Valid,partialBefore,limit,← ByteArray.size_data]

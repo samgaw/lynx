@@ -11,8 +11,8 @@ attribute [local simp] NativeCodec.typeName NativeMutex.typeName
 @[expose] def payload (amount : U64) : ScalarResource := ⟨⟨amount⟩⟩
 @[expose] def pin (amount : U64) := NativeResourceArc.vmCells (payload amount) 2 4 5
 @[expose] def both (amount : U64) : List (Nat × String × Term) :=
-  (7,NativeResourceArc.handleType ScalarResource,.reference 2) ::
-  (6,NativeResourceArc.handleType ScalarResource,.reference 2) ::
+  (7,NativeResourceArc.handleType ScalarResource,.nativeReference 2) ::
+  (6,NativeResourceArc.handleType ScalarResource,.nativeReference 2) ::
     (pin amount).map fun cell => if cell.1 == 2 then
       (2,NativeResourceArc.typeName ScalarResource,.tuple #[.integer 3,NativeCodec.encode (payload amount)]) else cell
 @[expose] def retained (parent : Bool) (amount : U64) :=
@@ -27,7 +27,7 @@ attribute [local simp] NativeCodec.typeName NativeMutex.typeName
 @[expose] def count (first : Bool) : Nat := if first then 3 else 2
 @[expose] def free (value : U64) : Term :=
   .tuple #[.atom "unlocked",.atom "unpoisoned",NativeCodec.encode (effects_core.Counter.mk value)]
-@[expose] def held (pid token : Nat) (value : U64) : Term :=
+@[expose] def held (pid : PID) (token : Nat) (value : U64) : Term :=
   NativeMutex.lockedContents pid token false (effects_core.Counter.mk value)
 @[expose] def shared (refs : Nat) (frame : List (Nat × String × Term)) (contents : Term) :
     Nat × List (Nat × String × Term) :=
@@ -75,7 +75,7 @@ theorem worker_wait (resource : NativeResourceArc ScalarResource) :
   funext reply
   cases reply <;> simp [postAcquire]
 
-private theorem blocked (pid peer token refs : Nat) (different : pid ≠ peer)
+private theorem blocked (pid peer : PID) (token refs : Nat) (different : pid ≠ peer)
     (first parent : Bool) (before amount : U64) (env : Environment)
     (actor : env.currentPid = peer)
     (heap : env.nativeHeap = (shared refs (initialFrame first parent amount) (held pid token before)).2) :
@@ -84,7 +84,7 @@ private theorem blocked (pid peer token refs : Nat) (different : pid ≠ peer)
     simp [NativeMutex.pollLock,heap,shared,initialFrame,both,retained,pin,
       NativeResourceArc.vmCells,List.filter,List.map,held,NativeMutex.lockedContents,NativeCodec.roundtrip,actor,different]
 
-private theorem final_blocked (pid peer token refs : Nat) (different : pid ≠ peer)
+private theorem final_blocked (pid peer : PID) (token refs : Nat) (different : pid ≠ peer)
     (first parent : Bool) (before amount : U64) (env : Environment)
     (actor : env.currentPid = peer)
     (heap : env.nativeHeap = (shared refs (finalFrame first parent amount) (held pid token before)).2) :
@@ -95,7 +95,7 @@ private theorem final_blocked (pid peer token refs : Nat) (different : pid ≠ p
 
 /-- Resource lookup and owner-release get/set nodes stay inside the actual held
 mutex. Every local state excludes the peer, not only the IO wait boundaries. -/
-theorem body_exclusive (pid peer token refs : Nat) (different : pid ≠ peer)
+theorem body_exclusive (pid peer : PID) (token refs : Nat) (different : pid ≠ peer)
     (first parent : Bool) (before amount after : U64)
     (sum : after.val = before.val + amount.val) :
     Result.ExclusiveSteps pid peer (NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩)
@@ -148,14 +148,14 @@ theorem body_exclusive (pid peer token refs : Nat) (different : pid ≠ peer)
           both,retained,pin,NativeResourceArc.vmCells,List.filter,List.map] using releaseTrace
 
 
-private theorem acquire_ready (pid refs : Nat) (first parent : Bool)
+private theorem acquire_ready (pid : PID) (refs : Nat) (first parent : Bool)
     (before amount : U64) (fresh : 7 ≤ refs) (env : Environment)
-    (actor : env.currentPid = pid) (counter : env.refCounter = refs)
+    (actor : env.currentPid = pid) (counter : env.nativeRefCounter = refs)
     (heap : env.nativeHeap = (shared refs (initialFrame first parent amount) (free before)).2) :
     NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩ env =
       some (.ok (.Ok ⟨⟨1⟩,refs + 1,pid,⟨before⟩⟩),
         {env with
-          refCounter := refs + 1,
+          nativeRefCounter := refs + 1,
           nativeHeap := (shared (refs + 1) (initialFrame first parent amount) (held pid (refs + 1) before)).2}) := by
   have acquired := NativeMutex.pollLock_unlocked (⟨1⟩ : NativeMutex effects_core.Counter)
     (effects_core.Counter.mk before) false env
@@ -167,7 +167,7 @@ private theorem acquire_ready (pid refs : Nat) (first parent : Bool)
   cases first <;> cases parent <;>
     simpa [heap,counter,actor,shared,initialFrame,both,retained,pin,NativeResourceArc.vmCells,List.filter,List.map,held] using acquired
 
-private theorem second_steps (pid peer : Nat) (parent : Bool) (refs : Nat)
+private theorem second_steps (pid peer : PID) (parent : Bool) (refs : Nat)
     (different : pid ≠ peer) (fresh : 7 ≤ refs) (before amount after : U64)
     (sum : after.val = before.val + amount.val) :
     Result.SharedSteps pid
@@ -190,30 +190,30 @@ theorem updates_all_choices (before amount intermediate final : U64)
     let worker := fun resource : NativeResourceArc ScalarResource => (do
       let changed ← locked_increment_from_resource ⟨1⟩ resource
       Result.ok (if changed then Term.true else Term.false))
-    let observed := (Result.schedule (worker (owner false)) (fun _ => worker (owner true)))
-      {refCounter := 7,nativeHeap := (shared 7 (both amount) (free before)).2,schedule := choices}
-    (observed.1,observed.2.refCounter,observed.2.nativeHeap) =
+    let observed := (Result.schedule {} (worker (owner false)) (fun _ => worker (owner true))).run
+      {nativeRefCounter := 7,nativeHeap := (shared 7 (both amount) (free before)).2} choices
+    (observed.1,observed.2.nativeRefCounter,observed.2.nativeHeap) =
       (.ok Term.true,shared 9 (pin amount) (free final)) := by
   dsimp only
   simp only [worker_wait]
   have serialized := Result.two_wait_serial_orders
     (NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩) (postAcquire (owner true))
     (NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩) (postAcquire (owner false))
-    (.ok (.Ok ⟨⟨1⟩,8,1,⟨before⟩⟩)) (.ok (.Ok ⟨⟨1⟩,8,2,⟨before⟩⟩))
+    (.ok (.Ok ⟨⟨1⟩,8,[],⟨before⟩⟩)) (.ok (.Ok ⟨⟨1⟩,8,[1],⟨before⟩⟩))
     Term.true Term.true Term.true Term.true
     (shared 7 (both amount) (free before))
-    (shared 8 (both amount) (held 1 8 before))
+    (shared 8 (both amount) (held [] 8 before))
     (shared 8 (retained false amount) (free intermediate)) (shared 9 (pin amount) (free final))
-    (shared 8 (both amount) (held 2 8 before))
+    (shared 8 (both amount) (held [1] 8 before))
     (shared 8 (retained true amount) (free intermediate)) (shared 9 (pin amount) (free final))
-    (by intro env actor counter heap; exact acquire_ready 1 7 true true before amount (by decide) env actor counter heap)
-    (by intro env actor counter heap; exact acquire_ready 2 7 true false before amount (by decide) env actor counter heap)
+    (by intro env actor counter heap; exact acquire_ready [] 7 true true before amount (by decide) env actor counter heap)
+    (by intro env actor counter heap; exact acquire_ready [1] 7 true false before amount (by decide) env actor counter heap)
     (by simpa only [initialFrame,finalFrame,Bool.true_eq,↓reduceIte,Bool.not_true] using
-      body_exclusive 1 2 8 8 (by decide) true true before amount intermediate firstSum)
-    (second_steps 2 1 false 8 (by decide) (by decide) intermediate amount final secondSum)
+      body_exclusive [] [1] 8 8 (by decide) true true before amount intermediate firstSum)
+    (second_steps [1] [] false 8 (by decide) (by decide) intermediate amount final secondSum)
     (by simpa only [initialFrame,finalFrame,Bool.true_eq,↓reduceIte,Bool.not_false] using
-      body_exclusive 2 1 8 8 (by decide) true false before amount intermediate firstSum)
-    (second_steps 1 2 true 8 (by decide) (by decide) intermediate amount final secondSum) choices
+      body_exclusive [1] [] 8 8 (by decide) true false before amount intermediate firstSum)
+    (second_steps [] [1] true 8 (by decide) (by decide) intermediate amount final secondSum) choices
   exact serialized.elim id id
 
 end Owned.ResourceConcurrent

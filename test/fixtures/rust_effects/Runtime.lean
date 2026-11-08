@@ -100,7 +100,7 @@ theorem checked_next_overflow :
 
 /-- State already committed to the runtime is retained when native code panics. -/
 theorem state_before_panic (before after : Environment) :
-    (Result.set after (require_nonzero 0#u64)) before =
+    (Result.nativeSet after (require_nonzero 0#u64)) before =
       (.error (.error (.atom "rust_panicked")), after) := by
   simp [zero_panics]
 

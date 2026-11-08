@@ -16,7 +16,7 @@ theorem facade_continuation {β : Type} (value : U64) (next : Term → Result β
     (env : Environment) (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes)
     (empty : env.nativeHeap = []) :
     (Rustler.executeNative (__NIF__ value) Rustler.encodeUnsigned >>= next) env =
-      next (.integer value.val) { env with refCounter := env.refCounter + 3 } := by
+      next (.integer value.val) { env with nativeRefCounter := env.nativeRefCounter + 3 } := by
   have cycle := NativeResourceArc.clone_release_cycle_handled_next
     (ScalarResource.mk (effects_core.Counter.mk value))
     (fun resource => Result.ok (Rustler.encodeUnsigned resource.counter.value))

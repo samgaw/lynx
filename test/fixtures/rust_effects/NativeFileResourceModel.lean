@@ -18,22 +18,22 @@ theorem decode_valid (state : State) (valid : Valid state) :
 @[expose] def closedCell (state : State) : Nat × String × Term := (1, closedTypeName, encode state)
 
 @[expose] def initial (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 1, nativeHeap := [fileCell state]}
+  {env with nativeRefCounter := 1, nativeHeap := [fileCell state]}
 
 @[expose] def live (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 3, nativeHeap := [
-    (3, NativeResourceArc.handleType effects_native.FileResource, .reference 2),
+  {env with nativeRefCounter := 3, nativeHeap := [
+    (3, NativeResourceArc.handleType effects_native.FileResource, .nativeReference 2),
     (2, NativeResourceArc.typeName effects_native.FileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), fileCell state]}
 
 @[expose] def cleaned (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 3, nativeHeap := [
-    (3, NativeResourceArc.handleType effects_native.FileResource, .reference 2),
+  {env with nativeRefCounter := 3, nativeHeap := [
+    (3, NativeResourceArc.handleType effects_native.FileResource, .nativeReference 2),
     (2, NativeResourceArc.typeName effects_native.FileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), closedCell state]}
 
 @[expose] def retired (env : Environment) (state : State) (counter : Nat := 3) : Environment :=
-  {env with refCounter := counter, nativeHeap := [closedCell state]}
+  {env with nativeRefCounter := counter, nativeHeap := [closedCell state]}
 
 /-- This is the actual optimized compiler destructor, not a substitute cleanup. -/
 theorem cleanup_contract (value : effects_native.FileResource) :

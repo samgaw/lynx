@@ -16,7 +16,7 @@ theorem core_increment (value : U64) :
 /-- The Pending path retains progress and requests the registered wake before returning. -/
 theorem callee_pending {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin effects_core.PausedCounter × NativeTaskContext) → Result α)
-    (env : Environment) (bounded : waker.id ≤ env.refCounter)
+    (env : Environment) (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :
@@ -45,7 +45,7 @@ theorem initial_state (value : U64) :
 /-- Compose the actual compiler poll with the proved first-party Pending transition. -/
 theorem first_pending_next {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin suspended_increment.closure × NativeTaskContext) → Result α)
-    (env : Environment) (bounded : waker.id ≤ env.refCounter)
+    (env : Environment) (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :
@@ -64,7 +64,7 @@ theorem first_pending_next {α : Type} (value : U64) (waker : NativeWaker)
   simpa [after, bind_assoc] using composed
 
 theorem first_pending (value : U64) (waker : NativeWaker) (env : Environment)
-    (bounded : waker.id ≤ env.refCounter)
+    (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :
@@ -107,7 +107,7 @@ theorem repoll_completed (value : U64) (context : NativeTaskContext) :
       Result.error (.error (.atom "rust_panicked")) := rfl
 
 theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment)
-    (bounded : waker.id ≤ env.refCounter)
+    (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :

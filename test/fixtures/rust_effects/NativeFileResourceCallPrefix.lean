@@ -6,7 +6,7 @@ namespace FileResource.CallPrefix
 open NativeFile FileResource.CreatedCalls FileResource.Creation
 
 @[expose] def invoke : Result := do
-  let owner ← NativeResourceArc.decode (.reference 6)
+  let owner ← NativeResourceArc.decode (.nativeReference 6)
   Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
 
 inductive Boundary where
@@ -25,13 +25,13 @@ theorem release_prefix (env : Environment) (value : U16) :
     Result.ReadyPrefix (file_resource_release ⟨3,8⟩)
       (CommitPhases.phaseEnv env value .finished) (.ok ()) (Record.done env value) := by
   have token : (CommitPhases.phaseEnv env value .finished).nativeHeap.filter (fun cell => cell.1 == 8) =
-      [(8,NativeResourceArc.handleType effects_native.FileResource,.reference 3)] := by
+      [(8,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3)] := by
     simp [CommitPhases.phaseEnv,Publish.directoryEnv,decodedEnv,frame,List.filter]
   have stored : (CommitPhases.phaseEnv env value .finished).nativeHeap.filter (fun cell => cell.1 == 3) =
       [(3,NativeResourceArc.typeName effects_native.FileResource,.tuple #[.integer 2,NativeCodec.encode payload])] := by
     simp [CommitPhases.phaseEnv,Publish.directoryEnv,decodedEnv,frame,List.filter]
   have owners : ((CommitPhases.phaseEnv env value .finished).nativeHeap.filter (fun cell =>
-      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .reference 3)).length = 2 := by
+      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .nativeReference 3)).length = 2 := by
     simp [CommitPhases.phaseEnv,Publish.directoryEnv,decodedEnv,frame,List.filter,
       NativeResourceArc.typeName,NativeResourceArc.handleType,NativeResourceArc.termType,
       writableHandleTypeName,inodeTypeName,namespaceTypeName,closedDirectoryTypeName]
@@ -86,12 +86,12 @@ theorem boundary_prefix (env : Environment) (value : U16) (boundary : Boundary)
 
 /-- The complete prefix supplies the ordinary invocation equation in a
 caller's current heap, without requiring the caller to unfold resource internals. -/
-theorem call_run (value : U16) (env : Environment) (counter : env.refCounter = 7)
+theorem call_run (value : U16) (env : Environment) (counter : env.nativeRefCounter = 7)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++
       frame (Record.written value) Publish.namespaceBefore)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool) env =
       (.ok Term.true,Record.done env value) := by
   have trace := (invocation_prefix env value registered).apply
@@ -179,8 +179,8 @@ theorem registered_prefix (env : Environment) (value : U16) :
     Result.ReadyPrefix registered_invoke (boundaryEnv env value .beforeDecode) (.ok Term.true)
       (Record.done (registeredEnv env) value) := by
   unfold registered_invoke Rustler.withResourceTypes
-  apply Result.ReadyPrefix.get
-  apply Result.ReadyPrefix.set
+  apply Result.ReadyPrefix.nativeGet
+  apply Result.ReadyPrefix.nativeSet
   have registered : NativeResourceArc.typeName effects_native.FileResource ∈
       (registeredEnv env).nativeResourceTypes := by simp [registeredEnv]
   simpa [registeredEnv,boundaryEnv,pinnedEnv] using invocation_prefix (registeredEnv env) value registered

@@ -448,7 +448,8 @@ defmodule Lynx.Case do
 
     options = Keyword.get(opts, :options, [])
 
-    for key <- Keyword.keys(opts), key not in [:options, :native, :lean_project, :externals] do
+    for key <- Keyword.keys(opts),
+        key not in [:options, :native, :lean_project, :externals, :initial_environment] do
       raise ArgumentError, "unknown laws option #{inspect(key)}"
     end
 
@@ -490,7 +491,8 @@ defmodule Lynx.Case do
         postludes: Enum.reverse(Module.get_attribute(module, :lynx_postludes))
       ]
 
-      {name, group_laws, translation, Keyword.take(opts, [:options, :native, :lean_project, :externals, :initial_environment])}
+      {name, group_laws, translation,
+       Keyword.take(opts, [:options, :native, :lean_project, :externals, :initial_environment])}
     after
       Module.delete_attribute(module, :lynx_laws)
       Module.delete_attribute(module, :lynx_termination_suffixes)

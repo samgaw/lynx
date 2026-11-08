@@ -14,14 +14,14 @@ namespace Shared.Properties
 
 @[expose] def pinnedEnv (env : Environment) (value : U64) (counter : Nat := 5) : Environment :=
   { env with
-    refCounter := counter
+    nativeRefCounter := counter
     nativeHeap := NativeResourceArc.vmCells payload 2 4 5 ++ [cell value]}
 
 @[expose] def ownedEnv (env : Environment) (value : U64) (token counter : Nat) : Environment :=
-  {env with refCounter := counter, nativeHeap := [
-    (token, NativeResourceArc.handleType CounterResource, .reference 2),
-    (5, NativeResourceArc.termType CounterResource, .tuple #[.reference 2, .reference 4]),
-    (4, NativeResourceArc.handleType CounterResource, .reference 2),
+  {env with nativeRefCounter := counter, nativeHeap := [
+    (token, NativeResourceArc.handleType CounterResource, .nativeReference 2),
+    (5, NativeResourceArc.termType CounterResource, .tuple #[.nativeReference 2, .nativeReference 4]),
+    (4, NativeResourceArc.handleType CounterResource, .nativeReference 2),
     (2, NativeResourceArc.typeName CounterResource, .tuple #[.integer 2, NativeCodec.encode payload]), cell value]}
 
 @[expose] def decodedEnv (env : Environment) (value : U64) (counter : Nat) : Environment :=
@@ -44,7 +44,7 @@ theorem pin (env : Environment) (value : U64) (counter : Nat) (bounded : 5 ≤ c
 theorem decode_next {α : Type} (env : Environment) (value : U64) (counter : Nat)
     (bounded : 5 ≤ counter) (next : NativeResourceArc CounterResource → NativeM α)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
-    (NativeResourceArc.decode (.reference 5) >>= next) (pinnedEnv env value counter) =
+    (NativeResourceArc.decode (.nativeReference 5) >>= next) (pinnedEnv env value counter) =
       next ⟨2, counter + 1⟩ (decodedEnv env value counter) := by
   have decoded := NativeResourceArc.decode_pinned_next payload next (pinnedEnv env value counter)
     2 4 5 (pin env value counter bounded) registered
@@ -52,14 +52,14 @@ theorem decode_next {α : Type} (env : Environment) (value : U64) (counter : Nat
 
 theorem create_next {α : Type} (value : U64) (env : Environment) (next : Term → NativeM α)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes)
-    (empty : env.nativeHeap = []) (zero : env.refCounter = 0) :
+    (empty : env.nativeHeap = []) (zero : env.nativeRefCounter = 0) :
     (Rustler.executeNative (do
       let owner ← __CREATE__ value
       let term ← NativeResourceArc.encode owner
       NativeOwnedDrop.drop owner
       Result.ok term) id >>= next) env =
-      next (.reference 5) (pinnedEnv env value) := by
-  let allocated : Environment := {env with refCounter := 1, nativeHeap := [cell value]}
+      next (.nativeReference 5) (pinnedEnv env value) := by
+  let allocated : Environment := {env with nativeRefCounter := 1, nativeHeap := [cell value]}
   have frame : NativeResourceArc.FrameBelow CounterResource 1 [cell value] := by
     intro c member
     simp only [List.mem_singleton] at member
@@ -73,8 +73,8 @@ theorem create_next {α : Type} (value : U64) (env : Environment) (next : Term �
   convert model using 1 <;> simp [__CREATE__,
     resource_new, Rustler.executeNative, NativeMutex.new, NativeM.allocate,
     NativeOwnedDrop.drop, empty, zero, allocated, pinnedEnv, cell, payload, bind_assoc,
-    Result.handle_get, Result.handle_set, Result.get_bind, Result.set_bind,
-    Result.get_continuation_apply, Result.set_continuation_apply]
+    Result.handle_nativeGet, Result.handle_nativeSet, Result.nativeGet_bind, Result.nativeSet_bind,
+    Result.nativeGet_continuation_apply, Result.nativeSet_continuation_apply]
   all_goals rfl
 
 private theorem fresh_beq (token : Nat) (bounded : 5 < token) (small : Nat) (bound : small ≤ 5) :
@@ -82,7 +82,7 @@ private theorem fresh_beq (token : Nat) (bounded : 5 < token) (small : Nat) (bou
 
 private theorem decoded_fresh (env : Environment) (value : U64) (counter : Nat) (bounded : 5 ≤ counter) :
     (decodedEnv env value counter).nativeHeap.any
-      (fun cell => cell.1 == (decodedEnv env value counter).refCounter + 1) = false := by
+      (fun cell => cell.1 == (decodedEnv env value counter).nativeRefCounter + 1) = false := by
   apply List.any_eq_false.mpr
   intro c member
   simp only [decodedEnv, ownedEnv, List.mem_cons, List.not_mem_nil, or_false] at member
@@ -93,7 +93,7 @@ theorem decode_handled_next {α β : Type} (env : Environment) (value : U64) (co
     (bounded : 5 ≤ counter) (finish : NativeResourceArc CounterResource → NativeM α)
     (handler : Exception → NativeM α) (next : α → NativeM β)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
-    ((Result.handle (NativeResourceArc.decode (.reference 5) >>= finish) handler) >>= next) (pinnedEnv env value counter) =
+    ((Result.handle (NativeResourceArc.decode (.nativeReference 5) >>= finish) handler) >>= next) (pinnedEnv env value counter) =
       ((Result.handle (finish ⟨2, counter + 1⟩) handler) >>= next) (decodedEnv env value counter) := by
   have decoded := NativeResourceArc.decode_pinned_handled_next payload finish handler next (pinnedEnv env value counter)
     2 4 5 (pin env value counter bounded) registered
@@ -182,7 +182,7 @@ theorem read_call_next {α : Type} (env : Environment) (value : U64) (counter : 
     (bounded : 5 ≤ counter) (next : Term → NativeM α)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative
         (__READ__ owner) Rustler.encodeUnsigned
       next result) (pinnedEnv env value counter) =
@@ -199,7 +199,7 @@ theorem add_call_next {α : Type} (env : Environment) (value amount : U64) (coun
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     ∃ changed updated,
       (do
-        let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+        let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
         let result ← Rustler.executeNative
           (__ADD__ owner amount) Rustler.encodeBool
         next result) (pinnedEnv env value counter) =
@@ -229,7 +229,7 @@ theorem add_safe_call_next {α : Type} (env : Environment) (value amount total :
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes)
     (fits : value.val + amount.val ≤ U64.max) (sum : total.val = value.val + amount.val) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative
         (__ADD__ owner amount) Rustler.encodeBool
       next result) (pinnedEnv env value counter) =
@@ -248,7 +248,7 @@ theorem add_overflow_call_next {α : Type} (env : Environment) (value amount : U
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes)
     (overflow : U64.max < value.val + amount.val) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative
         (__ADD__ owner amount) Rustler.encodeBool
       next result) (pinnedEnv env value counter) =
@@ -266,10 +266,10 @@ theorem add_overflow_call_next {α : Type} (env : Environment) (value amount : U
 theorem read_call_at {α : Type} (env : Environment) (value : U64) (counter : Nat)
     (bounded : 5 ≤ counter) (next : Term → NativeM α)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 2 4 5 ++ [cell value])
-    (count : env.refCounter = counter)
+    (count : env.nativeRefCounter = counter)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative
         (__READ__ owner) Rustler.encodeUnsigned
       next result) env =
@@ -284,11 +284,11 @@ theorem read_call_at {α : Type} (env : Environment) (value : U64) (counter : Na
 theorem add_safe_call_at {α : Type} (env : Environment) (value amount total : U64) (counter : Nat)
     (bounded : 5 ≤ counter) (next : Term → NativeM α)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 2 4 5 ++ [cell value])
-    (count : env.refCounter = counter)
+    (count : env.nativeRefCounter = counter)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes)
     (fits : value.val + amount.val ≤ U64.max) (sum : total.val = value.val + amount.val) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative
         (__ADD__ owner amount) Rustler.encodeBool
       next result) env =
@@ -303,11 +303,11 @@ theorem add_safe_call_at {α : Type} (env : Environment) (value amount total : U
 theorem add_overflow_call_at {α : Type} (env : Environment) (value amount : U64) (counter : Nat)
     (bounded : 5 ≤ counter) (next : Term → NativeM α)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 2 4 5 ++ [cell value])
-    (count : env.refCounter = counter)
+    (count : env.nativeRefCounter = counter)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes)
     (overflow : U64.max < value.val + amount.val) :
     (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       let result ← Rustler.executeNative
         (__ADD__ owner amount) Rustler.encodeBool
       next result) env =
@@ -324,10 +324,10 @@ theorem payload_cleanup (value : CounterResource) :
 theorem decoder_badarg_cleanup_at {α β : Type} (env : Environment) (value : U64) (counter : Nat)
     (bounded : 5 ≤ counter) (handler : Exception → NativeM α) (next : α → NativeM β)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 2 4 5 ++ [cell value])
-    (count : env.refCounter = counter)
+    (count : env.nativeRefCounter = counter)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     ((Result.handle (do
-      let owner ← NativeResourceArc.decode (α := CounterResource) (.reference 5)
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
       NativeOwnedDrop.drop owner
       Result.error (.error (.atom "badarg"))) handler) >>= next) env =
       (handler (.error (.atom "badarg")) >>= next) (pinnedEnv env value (counter+1)) := by

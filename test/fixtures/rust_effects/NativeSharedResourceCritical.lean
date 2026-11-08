@@ -96,11 +96,11 @@ theorem critical_state_handled_next {α β : Type} (finish : Bool → NativeM α
     (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
       [(mutex.id, NativeMutex.typeName effects_core.Counter, .tuple #[.atom "unlocked",
         .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])])
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     ∃ changed updated,
       ((Result.handle (effects_core.locked_increment mutex amount >>= finish) handler) >>= next) env =
       ((Result.handle (finish changed) handler) >>= next) { env with
-        refCounter := env.refCounter + 1
+        nativeRefCounter := env.nativeRefCounter + 1
         nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
           (mutex.id, NativeMutex.typeName effects_core.Counter, .tuple #[.atom "unlocked",
             .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode updated])
@@ -110,20 +110,20 @@ theorem critical_state_handled_next {α β : Type} (finish : Bool → NativeM α
   obtain ⟨changed, updated, returned, property⟩ := increment_spec value amount
   refine ⟨changed, updated, ?_, property⟩
   let acquiredEnv : Environment := { env with
-    refCounter := env.refCounter + 1
+    nativeRefCounter := env.nativeRefCounter + 1
     nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-      (NativeMutex.lockedContents env.currentPid (env.refCounter + 1) poisoned value) }
+      (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value) }
   have held := replacement_filter env.nativeHeap mutex.id
     (NativeMutex.typeName effects_core.Counter) _
-    (NativeMutex.lockedContents env.currentPid (env.refCounter + 1) poisoned value) stored
+    (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value) stored
   have released := NativeGuard.release_owned_handled_next
-    (⟨mutex, env.refCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
+    (⟨mutex, env.nativeRefCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
     value poisoned (finish changed) handler next acquiredEnv rfl held
   have finalState : ((Result.handle (do
-      NativeGuard.release (⟨mutex, env.refCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
+      NativeGuard.release (⟨mutex, env.nativeRefCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
       finish changed) handler) >>= next) acquiredEnv =
         ((Result.handle (finish changed) handler) >>= next) { env with
-        refCounter := env.refCounter + 1
+        nativeRefCounter := env.nativeRefCounter + 1
         nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
           (.tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode updated]) } := by
     change _ = ((Result.handle (finish changed) handler) >>= next) { acquiredEnv with
@@ -146,7 +146,7 @@ theorem locked_read_handled_next {α β : Type} (finish : U64 → NativeM α)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
       [(mutex.id, NativeMutex.typeName effects_core.Counter,
         .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value])])
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     ((Result.handle (do
       let acquired ← NativeMutex.lock mutex
       let guard ← effects_core.recover_guard acquired
@@ -154,24 +154,24 @@ theorem locked_read_handled_next {α β : Type} (finish : U64 → NativeM α)
       effects_core.release_guard guard
       finish observed) handler) >>= next) env =
       ((Result.handle (finish value.value) handler) >>= next) { env with
-        refCounter := env.refCounter + 1
+        nativeRefCounter := env.nativeRefCounter + 1
         nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
           (mutex.id, NativeMutex.typeName effects_core.Counter,
             .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]) else cell} := by
   let heldEnv : Environment := { env with
-    refCounter := env.refCounter + 1
+    nativeRefCounter := env.nativeRefCounter + 1
     nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-      (NativeMutex.lockedContents env.currentPid (env.refCounter + 1) false value)}
+      (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) false value)}
   have held := replacement_filter env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter) _
-    (NativeMutex.lockedContents env.currentPid (env.refCounter + 1) false value) stored
+    (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) false value) stored
   have released := NativeGuard.release_owned_handled_next
-    (⟨mutex, env.refCounter + 1, env.currentPid, value⟩ : NativeGuard effects_core.Counter)
+    (⟨mutex, env.nativeRefCounter + 1, env.currentPid, value⟩ : NativeGuard effects_core.Counter)
     value false (finish value.value) handler next heldEnv rfl held
   have result : ((Result.handle (do
-      NativeGuard.release (⟨mutex, env.refCounter + 1, env.currentPid, value⟩ : NativeGuard effects_core.Counter)
+      NativeGuard.release (⟨mutex, env.nativeRefCounter + 1, env.currentPid, value⟩ : NativeGuard effects_core.Counter)
       finish value.value) handler) >>= next) heldEnv =
       ((Result.handle (finish value.value) handler) >>= next) { env with
-        refCounter := env.refCounter + 1
+        nativeRefCounter := env.nativeRefCounter + 1
         nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
           (.tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value])} := by
     change _ = ((Result.handle (finish value.value) handler) >>= next) { heldEnv with

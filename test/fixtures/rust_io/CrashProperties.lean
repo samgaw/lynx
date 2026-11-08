@@ -16,11 +16,11 @@ theorem word_first_eof_next (file : NativeFile) (env : Environment)
     (notBlocked : blocked before = false)
     (first : readStep before (one 0#u8) = some (.Ok 0#usize, after, one 0#u8))
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_word file >>= next) (fileEnv env file before frame) =
-      next (.Ok none, file) (fileEnv env file after frame) := by
+    (read_word file >>= next).run (fileEnv env file before frame) =
+      (next (.Ok none, file)).run (fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     bind_assoc, Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before after _ _ separate valid notBlocked first]
   simp [NativeM.ok]
 
@@ -32,14 +32,14 @@ theorem word_second_eof_next (file : NativeFile) (env : Environment)
     (first : readStep before (one 0#u8) = some (.Ok 1#usize, middle, one lo))
     (second : readStep middle (one 0#u8) = some (.Ok 0#usize, after, one 0#u8))
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_word file >>= next) (fileEnv env file before frame) =
-      next (.Ok none, file) (fileEnv env file after frame) := by
+    (read_word file >>= next).run (fileEnv env file before frame) =
+      (next (.Ok none, file)).run (fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     bind_assoc, Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before middle _ _ separate valid notBlocked first]
   simp only [UScalar.ofNatCore_val_eq, bind_assoc]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame middle after _ _ separate validMiddle notBlockedMiddle second]
   simp [NativeM.ok]
 
@@ -55,7 +55,7 @@ theorem word_second_eof_next (file : NativeFile) (env : Environment)
 theorem truncated_reads (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (values : List U8) (rest : Term)
     (separate : Separate file frame) (short : values.length < 4) :
-    read_record file (fileEnv env file (scanning (disk values) rest 0) frame) =
+    (read_record file).run (fileEnv env file (scanning (disk values) rest 0) frame) =
       (.ok (.Ok none, file), fileEnv env file (finished (disk values) rest) frame) := by
   cases values with
   | nil =>
@@ -118,7 +118,7 @@ nonzero torn bytes. This is a property of the actual extracted record reader. -/
 theorem truncated_data (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (data : ByteArray) (rest : Term)
     (separate : Separate file frame) (short : data.size < 4) :
-    read_record file (fileEnv env file (scanning data rest 0) frame) =
+    (read_record file).run (fileEnv env file (scanning data rest 0) frame) =
       (.ok (.Ok none, file), fileEnv env file (finished data rest) frame) := by
   simpa only [disk_roundtrip] using truncated_reads file env frame
     (data.data.toList.map byteValue) rest separate
@@ -132,7 +132,7 @@ rejects it, regardless of the incoming valid offset. -/
 theorem recover_truncated (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (data : ByteArray) (rest : Term) (position : Nat)
     (separate : Separate file frame) (short : data.size < 4) (bounded : position ≤ limit) :
-    recover_record file (fileEnv env file
+    (recover_record file).run (fileEnv env file
       ⟨data, data, position, recoveryScript data rest⟩ frame) =
       (.ok (.Ok none, file), fileEnv env file (finished data rest) frame) := by
   simp only [recover_record, monadLift_self]
@@ -295,7 +295,7 @@ theorem crash_fresh (value : U16) (file : NativeFile) (env : Environment)
   unfold crashImage at captured
   rw [lookup_at env file state frame separate valid] at captured
   change (persist state.durable state.visible mask).bind (fun durable =>
-    some (⟨durable, (fileEnv env file state frame).refCounter⟩ : Image)) = some image at captured
+    some (⟨durable, (fileEnv env file state frame).nativeRefCounter⟩ : Image)) = some image at captured
   obtain ⟨durable, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj record
   exact persist_fresh value state.durable state.visible mask durable durableFresh visibleFresh accepted
@@ -523,7 +523,7 @@ theorem write_once_crash (file : NativeFile) (value : U16)
       step, store_at env file before _ frame separate]
   constructor
   · simp only [io_core.write_once, monadLift_self, NativeFile.write]
-    rw [Result.wait_ready_apply _ _ _ _ _ ready]
+    rw [Result.wait_ready_run _ _ _ _ _ ready]
     simp
   · have fresh := written_fresh value before amount mask durable writeRest
       emptyVisible emptyDurable start accepted

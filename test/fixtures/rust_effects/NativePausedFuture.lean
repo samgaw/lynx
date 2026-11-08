@@ -16,7 +16,7 @@ theorem core_increment (value : U64) :
 /-- The Pending path retains progress and requests the registered wake before returning. -/
 theorem callee_pending {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin effects_core.PausedCounter × NativeTaskContext) → Result α)
-    (env : Environment) (bounded : waker.id ≤ env.refCounter)
+    (env : Environment) (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :
@@ -39,7 +39,7 @@ theorem callee_ready (value : U64) (context : NativeTaskContext) :
   simp [effects_core.PausedCounter.Insts.CoreFutureFutureFutureU64.poll,
     core.pin.PinMutAT.get_mut, NativeM.ok, computed]
 
-theorem caller_pending (value : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.refCounter)
+theorem caller_pending (value : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :
@@ -50,7 +50,7 @@ theorem caller_pending (value : U64) (waker : NativeWaker) (env : Environment) (
   have model := callee_pending value waker Result.ok env bounded stored callback
   simpa [effects_core.paused_counter, poll_paused, NativeM.ok] using model
 
-theorem no_early_completion (value result : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.refCounter)
+theorem no_early_completion (value result : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false)
@@ -78,7 +78,7 @@ theorem missing_registration (value : U64) (waker : NativeWaker) (env : Environm
     (NativeWaker.wakeByRef_missing_next waker next env missing callback)
 
 /-- A second explicit poll completes; no executor fairness or implicit repoll is assumed. -/
-theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.refCounter)
+theorem two_polls (value : U64) (waker : NativeWaker) (env : Environment) (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :

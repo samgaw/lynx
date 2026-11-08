@@ -110,7 +110,11 @@ defmodule Lynx.Rust.NativePayloadDropTest do
     proof = File.read!(property)
 
     wrong =
-      String.replace(proof, "refCounter := env.refCounter + 1", "refCounter := env.refCounter")
+      String.replace(
+        proof,
+        "nativeRefCounter := env.nativeRefCounter + 1",
+        "nativeRefCounter := env.nativeRefCounter"
+      )
 
     refute wrong == proof
     File.write!(property, wrong)

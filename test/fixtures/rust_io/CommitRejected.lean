@@ -12,7 +12,7 @@ open NativeFile Publish.Properties
 @[expose] def start (script : Term) : Environment :=
   {nativeHeap := [(0,namespaceTypeName,encodeNamespace ⟨[],[],[],createChoice script⟩)]}
 @[expose] def world (data : ByteArray) (position : Nat) (script : Term) (closed : Bool := false) : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,(if closed then closedHandleTypeName else writableHandleTypeName),encodeHandle ⟨1,position,script⟩),
     (1,inodeTypeName,encode ⟨data,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,[],[oldNames],renameScript⟩)]}

@@ -150,7 +150,7 @@ defmodule Lynx.Rust.NativeLockTest do
     File.write!(
       property,
       proof <>
-        "\ntheorem wrong_missing : effects_native.mutex_acquire ⟨1⟩ {} = (.ok (.Ok { mutex := ⟨1⟩, token := 1, ownerContext := 1, value := ⟨0#u64⟩ }), {}) := by rfl\n"
+        "\ntheorem wrong_missing : effects_native.mutex_acquire ⟨1⟩ {} = (.ok (.Ok { mutex := ⟨1⟩, token := 1, ownerContext := [], value := ⟨0#u64⟩ }), {}) := by rfl\n"
     )
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->

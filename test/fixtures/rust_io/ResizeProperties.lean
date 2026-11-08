@@ -46,7 +46,7 @@ theorem resize_next (file : NativeFile) (length : U64) (env : Environment)
     (separate : Separate file frame) (valid : Admitted before)
     (ready : blocked before = false) (step : setLenStep before length = some (reply, after))
     (next : core.result.Result Unit NativeIoError → NativeM α) :
-    (io_core.resize_to file length >>= next) (fileEnv env file before frame) =
+    (io_core.resize_to file length >>= next).run (fileEnv env file before frame) =
       next reply (fileEnv env file after frame) := by
   have readyPoll : pollSetLen file length (fileEnv env file before frame) =
       some (.ok reply, fileEnv env file after frame) := by
@@ -54,7 +54,7 @@ theorem resize_next (file : NativeFile) (length : U64) (env : Environment)
       lookup_admitted env file before frame separate valid, ready,
       step, store_at env file before after frame separate]
   simp only [io_core.resize_to, setLen, monadLift_self, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ readyPoll]
+  rw [Result.wait_ready_run _ _ _ _ _ readyPoll]
   simp [Result.ok_bind]
 
 theorem sync_next (file : NativeFile) (env : Environment)
@@ -63,14 +63,14 @@ theorem sync_next (file : NativeFile) (env : Environment)
     (separate : Separate file frame) (valid : Admitted before)
     (ready : blocked before = false) (step : syncStep before = some (reply, after))
     (next : core.result.Result Unit NativeIoError → NativeM α) :
-    (io_core.synchronize file >>= next) (fileEnv env file before frame) =
+    (io_core.synchronize file >>= next).run (fileEnv env file before frame) =
       next reply (fileEnv env file after frame) := by
   have readyPoll : pollSync file (fileEnv env file before frame) =
       some (.ok reply, fileEnv env file after frame) := by
     simp [pollSync, lookup_admitted env file before frame separate valid, ready,
       step, store_at env file before after frame separate]
   simp only [io_core.synchronize, syncAll, monadLift_self, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ readyPoll]
+  rw [Result.wait_ready_run _ _ _ _ _ readyPoll]
   simp [Result.ok_bind]
 
 @[expose] def resized (before : State) (length : Nat) (rest : Term) : State :=
@@ -85,8 +85,8 @@ theorem resize_success_next (file : NativeFile) (length : U64) (env : Environmen
     (script : before.script = outcome "set_len" true 0 mask (outcome "sync_all" true 0 syncMask rest))
     (accepted : persist before.durable (resize before.visible length.val) mask = some durable)
     (next : core.result.Result Unit NativeIoError → NativeM α) :
-    (resize_then_sync file length >>= next) (fileEnv env file before frame) =
-      next (.Ok ()) (fileEnv env file (resized before length.val rest) frame) := by
+    (resize_then_sync file length >>= next).run (fileEnv env file before frame) =
+      (next (.Ok ())).run (fileEnv env file (resized before length.val rest) frame) := by
   let middle : State := ⟨resize before.visible length.val, durable, before.position,
     outcome "sync_all" true 0 syncMask rest⟩
   have step : setLenStep before length = some (.Ok (), middle) := by
@@ -357,7 +357,7 @@ theorem resize_outside (file : NativeFile) (env : Environment)
     simp [-getHandle, pollSetLen, no_shared_handle_at env file before frame separate,
       lookup_admitted env file before frame separate valid, ready, setLenStep, limit]
   simp only [io_core.resize_to, setLen, monadLift_self]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp
 
 end Record.ResizeProperties

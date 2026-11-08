@@ -173,7 +173,11 @@ defmodule Lynx.Rust.ResourceModelsTest do
     assert status == 0, output
 
     original = File.read!(property)
-    File.write!(property, String.replace(original, "env.refCounter + 3", "env.refCounter + 2"))
+
+    File.write!(
+      property,
+      String.replace(original, "env.nativeRefCounter + 3", "env.nativeRefCounter + 2")
+    )
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Project.build!(project, ["Resource.ModelProperties"])

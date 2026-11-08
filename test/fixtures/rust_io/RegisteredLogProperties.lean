@@ -15,46 +15,46 @@ attribute [local simp] NativeCodec.typeName NativeCodec.encode NativeMutex.typeN
   (counter, frame ++ [(2, NativeFile.typeName, encode state), (1, NativeMutex.typeName NativeFile, contents)])
 
 private theorem framed_eq (env : Environment) (counter : Nat) (frame : List (Nat × String × Term))
-    (contents : Term) (state : State) (count : env.refCounter = counter)
+    (contents : Term) (state : State) (count : env.nativeRefCounter = counter)
     (heap : env.nativeHeap = (shared counter frame contents state).2) :
     framedEnv env counter frame contents state = env := by
   cases env
   simp_all [shared, framedEnv]
 
-private theorem seek_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+private theorem seek_ready (pid : PID) (counter : Nat) (frame : List (Nat × String × Term))
     (contents : Term) (before after : State) (position : U64)
     (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
     (ready : blocked before = false)
     (step : seekStep before (.end_ 0#i64) = some (.Ok position, after))
     (env : Environment) (_owner : env.currentPid = pid)
-    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    (count : env.nativeRefCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
     pollSeek ⟨2⟩ (.end_ 0#i64) env = some (.ok (.Ok position, ⟨2⟩),
-      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+      {env with nativeRefCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
   have found := seek_poll env counter frame contents before after position apart bound valid ready step
   rw [framed_eq env counter frame contents before count heap] at found
   exact found
 
-private theorem write_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+private theorem write_ready (pid : PID) (counter : Nat) (frame : List (Nat × String × Term))
     (contents : Term) (before after : State) (value : U16)
     (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
     (ready : blocked before = false)
     (step : writeStep before (payload value) = some (.Ok 4#usize, after))
     (env : Environment) (_owner : env.currentPid = pid)
-    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    (count : env.nativeRefCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
     pollWrite ⟨2⟩ (payload value) env = some (.ok (.Ok 4#usize, ⟨2⟩),
-      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+      {env with nativeRefCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
   have found := write_poll env counter frame contents before after value apart bound valid ready step
   rw [framed_eq env counter frame contents before count heap] at found
   exact found
 
-private theorem sync_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+private theorem sync_ready (pid : PID) (counter : Nat) (frame : List (Nat × String × Term))
     (contents : Term) (before after : State)
     (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
     (ready : blocked before = false) (step : syncStep before = some (.Ok (), after))
     (env : Environment) (_owner : env.currentPid = pid)
-    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    (count : env.nativeRefCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
     pollSync ⟨2⟩ env = some (.ok (.Ok ()),
-      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+      {env with nativeRefCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
   have found := sync_poll env counter frame contents before after apart bound valid ready step
   rw [framed_eq env counter frame contents before count heap] at found
   exact found
@@ -189,7 +189,7 @@ theorem decoded_call_steps (pid : PID) (first : Bool) (types : List String)
     (write : writeStep sought (payload value) = some (.Ok 4#usize, written))
     (sync : syncStep written = some (.Ok (), committed)) :
     Result.RegisteredSteps pid (do
-      let resource ← NativeResourceArc.decode (.reference 6)
+      let resource ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__APPEND__ resource value) Rustler.encodeBool)
       (shared (counter first - 1) pinnedFrame (Record.FramedLogProperties.free false) before)
       types Term.true

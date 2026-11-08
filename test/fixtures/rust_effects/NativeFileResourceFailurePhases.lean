@@ -142,7 +142,7 @@ private theorem lift_decode (env : Environment) (value : U16) (failure : Failure
       (DirectoryFailure.owned env (Record.written value) (DirectoryFailure.namespaceBefore failure closeFailed))
       remaining after) :
     ∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (DirectoryFailure.initial env value failure closeFailed) residual after := by
   refine ⟨Rustler.executeNative remaining Rustler.encodeBool,?_⟩
@@ -155,13 +155,13 @@ theorem boundary_prefix (env : Environment) (value : U16) (failure : Failure) (c
     (boundary : Boundary failure)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     ∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (DirectoryFailure.initial env value failure closeFailed) residual (boundaryEnv env value failure closeFailed boundary) := by
   cases boundary with
   | beforeDecode =>
     refine ⟨(do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool),?_⟩
     exact .refl _ _
   | beforeFileSync =>
@@ -258,7 +258,7 @@ private theorem inode_cells (env : Environment) (value : U16) (failure : Failure
 
 private theorem water_view (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool)
     (point : Point) :
-    (pointEnv env value failure closeFailed point).refCounter = pointWater failure point := by
+    (pointEnv env value failure closeFailed point).nativeRefCounter = pointWater failure point := by
   cases failure <;> cases point <;> rfl
 
 /-- Classify every admitted image at each actual failure/cleanup boundary.
@@ -290,7 +290,7 @@ theorem boundary_recovery (env : Environment) (value : U16) (failure : Failure) 
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage) (error : Nat)
     (accepted : filesystemCrashImage chosen masks (boundaryEnv env value failure closeFailed boundary) = some image) :
     (∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (DirectoryFailure.initial env value failure closeFailed) residual
       (boundaryEnv env value failure closeFailed boundary)) ∧
@@ -369,7 +369,7 @@ theorem boundary_witness (env : Environment) (value : U16) (failure : Failure) (
     (boundary : Boundary failure) (retainName : Bool)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (DirectoryFailure.initial env value failure closeFailed) residual
       (boundaryEnv env value failure closeFailed boundary)) ∧
@@ -394,7 +394,7 @@ theorem post_sync_attempts (env : Environment) (value : U16) (failure : Failure)
     (accepted : filesystemCrashImage chosen masks (boundaryEnv env value failure closeFailed boundary) = some image)
     (trace : RecordErrors.Attempts value image.highWater last) :
     (∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (DirectoryFailure.initial env value failure closeFailed) residual
       (boundaryEnv env value failure closeFailed boundary)) ∧

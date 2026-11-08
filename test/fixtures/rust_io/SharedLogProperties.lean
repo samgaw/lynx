@@ -38,13 +38,13 @@ theorem borrow_prefix (resource : NativeResourceArc shared_log.LogResource)
     (log : shared_log.LogResource) (value : U16) (count : Nat) (env : Environment)
     (positive : 0 < count) (bounded : count ≤ NativeResourceArc.referenceLimit)
     (token : env.nativeHeap.filter (fun cell => cell.1 == resource.token) =
-      [(resource.token, NativeResourceArc.handleType shared_log.LogResource, .reference resource.id)])
+      [(resource.token, NativeResourceArc.handleType shared_log.LogResource, .nativeReference resource.id)])
     (stored : env.nativeHeap.filter (fun cell => cell.1 == resource.id) =
       [(resource.id, NativeResourceArc.typeName shared_log.LogResource,
         .tuple #[.integer count, NativeCodec.encode log])])
     (owners : (env.nativeHeap.filter fun cell =>
       cell.2.1 == NativeResourceArc.handleType shared_log.LogResource &&
-        cell.2.2 == .reference resource.id).length = count) :
+        cell.2.2 == .nativeReference resource.id).length = count) :
     Result.ReadyPrefix (shared_log.append resource value) env
       (locked_append_or_rollback log.file value) env := by
   have trace := (NativeResourceArc.deref_live_prefix resource log count env positive bounded
@@ -56,11 +56,11 @@ theorem borrow_prefix (resource : NativeResourceArc shared_log.LogResource)
 /-- One VM pin and two decoded Rust owners share the same mutex and file.
 The file bytes remain in their independent mutable heap cell. -/
 @[expose] def overlappingEnv (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 8, nativeHeap := [
-    (8, NativeResourceArc.handleType shared_log.LogResource, .reference 3),
-    (7, NativeResourceArc.handleType shared_log.LogResource, .reference 3),
-    (6, NativeResourceArc.termType shared_log.LogResource, .tuple #[.reference 3, .reference 5]),
-    (5, NativeResourceArc.handleType shared_log.LogResource, .reference 3),
+  {env with nativeRefCounter := 8, nativeHeap := [
+    (8, NativeResourceArc.handleType shared_log.LogResource, .nativeReference 3),
+    (7, NativeResourceArc.handleType shared_log.LogResource, .nativeReference 3),
+    (6, NativeResourceArc.termType shared_log.LogResource, .tuple #[.nativeReference 3, .nativeReference 5]),
+    (5, NativeResourceArc.handleType shared_log.LogResource, .nativeReference 3),
     (3, NativeResourceArc.typeName shared_log.LogResource,
       .tuple #[.integer 3, NativeCodec.encode logPayload]),
     (1, NativeMutex.typeName NativeFile, Record.LockedConcurrent.free),

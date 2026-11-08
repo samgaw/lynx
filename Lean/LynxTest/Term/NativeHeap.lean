@@ -6,7 +6,7 @@ namespace LynxTest.Term.NativeHeap
 open Lynx
 
 theorem consumes_unique_live (tag : String) (identity : Nat) (env : Environment)
-    (nonzero : identity ≠ 0) (bounded : identity ≤ env.refCounter)
+    (nonzero : identity ≠ 0) (bounded : identity ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == identity) =
       [(identity,tag,.atom "live")]) :
     Result.consumeNativeCapability tag identity env =
@@ -28,23 +28,23 @@ theorem repeated_rejected (tag : String) (identity : Nat) (env : Environment) :
 
 theorem wrong_type :
     Result.consumeNativeCapability "expected" 1
-      {refCounter := 1,nativeHeap := [(1,"different",.atom "live")]} =
+      {nativeRefCounter := 1,nativeHeap := [(1,"different",.atom "live")]} =
       (.error .exhausted,
-        {refCounter := 1,nativeHeap := [(1,"different",.atom "live")]}) := by
+        {nativeRefCounter := 1,nativeHeap := [(1,"different",.atom "live")]}) := by
   simp [Result.consumeNativeCapability]
 
 theorem custom_payload :
     Result.consumeNativeCapability "expected" 1
-      {refCounter := 1,nativeHeap := [(1,"expected",.atom "custom")]} =
+      {nativeRefCounter := 1,nativeHeap := [(1,"expected",.atom "custom")]} =
       (.error .exhausted,
-        {refCounter := 1,nativeHeap := [(1,"expected",.atom "custom")]}) := by
+        {nativeRefCounter := 1,nativeHeap := [(1,"expected",.atom "custom")]}) := by
   simp [Result.consumeNativeCapability]
 
 theorem duplicate_identity :
     Result.consumeNativeCapability "expected" 1
-      {refCounter := 1,nativeHeap := [(1,"expected",.atom "live"),(1,"expected",.atom "live")]} =
+      {nativeRefCounter := 1,nativeHeap := [(1,"expected",.atom "live"),(1,"expected",.atom "live")]} =
       (.error .exhausted,
-        {refCounter := 1,nativeHeap := [(1,"expected",.atom "live"),(1,"expected",.atom "live")]}) := by
+        {nativeRefCounter := 1,nativeHeap := [(1,"expected",.atom "live"),(1,"expected",.atom "live")]}) := by
   simp [Result.consumeNativeCapability]
 
 theorem zero_identity (tag : String) (env : Environment) :
@@ -52,15 +52,16 @@ theorem zero_identity (tag : String) (env : Environment) :
   simp [Result.consumeNativeCapability]
 
 theorem unallocated_identity (tag : String) (env : Environment) :
-    Result.consumeNativeCapability tag (env.refCounter + 1) env = (.error .exhausted,env) := by
+    Result.consumeNativeCapability tag (env.nativeRefCounter + 1) env = (.error .exhausted,env) := by
   simp [Result.consumeNativeCapability]
 
 theorem explicit_initial_state (choices : List ScheduleChoice) :
-    concurrentFrom {refCounter := 7} (Result.get fun env => .ok env.refCounter) choices = .ok 7 := by
+    concurrentFrom {nativeRefCounter := 7} (Result.nativeGet fun env => .ok env.nativeRefCounter) choices = .ok 7 := by
   simp [concurrentFrom_eq_run]
 
 theorem scheduler_choices_remain_universal (initial : Environment) (choices : List ScheduleChoice) :
-    concurrentFrom initial (Result.get fun env => .ok env.schedule) choices = .ok choices := by
+    concurrentFrom initial (Result.nativeGet fun env => .ok (env.nativeRefCounter, env.nativeHeap)) choices =
+      .ok (initial.nativeRefCounter, initial.nativeHeap) := by
   simp [concurrentFrom_eq_run]
 
 theorem fresh_runtime_unchanged (computation : Result α) (choices : List ScheduleChoice) :
@@ -68,9 +69,27 @@ theorem fresh_runtime_unchanged (computation : Result α) (choices : List Schedu
   rw [concurrentFrom_eq_run,concurrent_eq_run]
 
 theorem admitted_cleanup_from_context (choices : List ScheduleChoice) :
-    concurrentFrom {refCounter := 1,nativeHeap := [(1,"expected",.atom "live")]}
+    concurrentFrom {nativeRefCounter := 1,nativeHeap := [(1,"expected",.atom "live")]}
       (Result.consumeNativeCapability "expected" 1) choices = .ok () := by
   simp [concurrentFrom_eq_run,Result.consumeNativeCapability]
+
+private def sharedCleanup : Result :=
+  .nativeSet {nativeRefCounter := 1, nativeHeap := [(1,"expected",.atom "live")]} <|
+    Result.schedule {} (do
+      Result.consumeNativeCapability "expected" 1
+      Result.ok .nil) fun _ =>
+        .wait (fun env => if env.nativeHeap.isEmpty then some ((), env) else none) fun _ =>
+          .nativeGet fun env => .ok (.integer env.nativeRefCounter)
+
+/-- Capability cleanup in a child uses the shared allocator and is visible to
+its waiting parent under every finite scheduler choice list. -/
+theorem scheduled_cleanup (choices : List ScheduleChoice) :
+    concurrent sharedCleanup choices = .ok (.integer 1) := by
+  have checked := concurrent_of_check sharedCleanup
+    (fun | .ok (.integer 1) => true | _ => false) 24 (by cbv) choices
+  split at checked
+  · assumption
+  · contradiction
 
 end LynxTest.Term.NativeHeap
 run_cmd LynxTest.ProofAudit.checkModule `LynxTest.Term.NativeHeap

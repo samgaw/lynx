@@ -10,7 +10,7 @@ open NativeFile Record.Properties Record.ReadProperties Record.RecoveryPropertie
 /-- Guard payloads contain only the file identity; file bytes stay in their
 independent heap cell and cannot be restored from an acquisition snapshot. -/
 theorem file_codec (file : NativeFile) :
-    NativeCodec.encode file = .reference file.id ∧ NativeCodec.decode (α := NativeFile) (.reference file.id) = some file := by
+    NativeCodec.encode file = .nativeReference file.id ∧ NativeCodec.decode (α := NativeFile) (.nativeReference file.id) = some file := by
   cases file
   simp [NativeCodec.encode, NativeCodec.decode]
 
@@ -85,20 +85,20 @@ theorem append_next (file : NativeFile) (value : U16) (s0 s1 s2 s3 : Environment
     (write : pollWrite file (payload value) s1 = some (.ok (.Ok 4#usize, file), s2))
     (sync : pollSync file s2 = some (.ok (.Ok ()), s3))
     (next : core.result.Result Bool NativeIoError × NativeFile → NativeM α) :
-    (append_record file value >>= next) s0 = next (.Ok true, file) s3 := by
+    (append_record file value >>= next).run s0 = next (.Ok true, file) s3 := by
   rw [append_contract]
   simp only [bind_assoc, NativeFile.seek, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ seek]
+  rw [Result.wait_ready_run _ _ _ _ _ seek]
   simp only [Result.ok_bind, NativeFile.write, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ write]
+  rw [Result.wait_ready_run _ _ _ _ _ write]
   simp only [Result.ok_bind, NativeFile.syncAll, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ sync]
+  rw [Result.wait_ready_run _ _ _ _ _ sync]
   simp [NativeM.ok]
 
 /-- A different native execution context cannot acquire the file mutex while
 this guard is held. This states safety at the boundary, not fairness or liveness. -/
 theorem contention_waits (mutex : NativeMutex NativeFile) (file : NativeFile)
-    (value : U16) (owner token : Nat) (poisoned : Bool) (env : Environment)
+    (value : U16) (owner : PID) (token : Nat) (poisoned : Bool) (env : Environment)
     (different : owner ≠ env.currentPid)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
       [(mutex.id, NativeMutex.typeName NativeFile, NativeMutex.lockedContents owner token poisoned file)]) :
@@ -125,39 +125,39 @@ theorem critical_steps (mutex : NativeMutex NativeFile) (value : U16) (guard : N
     locked_append mutex value s0 = (.ok (.Ok true), s5) := by
   rw [critical_contract]
   simp only [NativeMutex.lock, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ lock]
+  rw [Result.wait_ready_run _ _ _ _ _ lock]
   simp only [Result.ok_bind, recovered]
   rw [append_next guard.value value s1 s2 s3 s4 position seek write sync]
   simp only [NativeGuard.release, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ release]
+  rw [Result.wait_ready_run _ _ _ _ _ release]
   simp [NativeM.ok]
 
 @[expose] def unlocked (base : Environment) (state : State) (poisoned : Bool) (counter : Nat) : Environment :=
-  fileEnv {base with refCounter := counter} ⟨2⟩ state
+  fileEnv {base with nativeRefCounter := counter} ⟨2⟩ state
     [(1, NativeMutex.typeName NativeFile, .tuple #[.atom "unlocked",
       .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode (⟨2⟩ : NativeFile)])]
 
 @[expose] def held (base : Environment) (state : State) (poisoned : Bool) : Environment :=
-  fileEnv {base with refCounter := 3} ⟨2⟩ state
+  fileEnv {base with nativeRefCounter := 3} ⟨2⟩ state
     [(1, NativeMutex.typeName NativeFile, NativeMutex.lockedContents base.currentPid 3 poisoned (⟨2⟩ : NativeFile))]
 
 @[expose] def guard (base : Environment) : NativeGuard NativeFile := ⟨⟨1⟩, 3, base.currentPid, ⟨2⟩⟩
 
 theorem held_lookup (base : Environment) (state : State) (poisoned : Bool) (valid : Valid state) :
     lookup (⟨2⟩ : NativeFile) (held base state poisoned) = some state := by
-  exact lookup_at {base with refCounter := 3} ⟨2⟩ state
+  exact lookup_at {base with nativeRefCounter := 3} ⟨2⟩ state
     [(1, NativeMutex.typeName NativeFile, NativeMutex.lockedContents base.currentPid 3 poisoned (⟨2⟩ : NativeFile))]
     (by simp [Separate]) valid
 
 theorem held_not_read_only (base : Environment) (state : State) (poisoned : Bool) :
     getHandle (⟨2⟩ : NativeFile) handleTypeName (held base state poisoned) = none := by
-  exact no_shared_handle_at {base with refCounter := 3} ⟨2⟩ state
+  exact no_shared_handle_at {base with nativeRefCounter := 3} ⟨2⟩ state
     [(1,NativeMutex.typeName NativeFile,NativeMutex.lockedContents base.currentPid 3 poisoned (⟨2⟩ : NativeFile))]
     (by simp [Separate])
 
 theorem held_store (base : Environment) (before after : State) (poisoned : Bool) :
     store (⟨2⟩ : NativeFile) after (held base before poisoned) = held base after poisoned := by
-  exact store_at {base with refCounter := 3} ⟨2⟩ before after
+  exact store_at {base with nativeRefCounter := 3} ⟨2⟩ before after
     [(1, NativeMutex.typeName NativeFile, NativeMutex.lockedContents base.currentPid 3 poisoned (⟨2⟩ : NativeFile))]
     (by simp [Separate])
 
@@ -251,15 +251,15 @@ theorem critical_error_steps (mutex : NativeMutex NativeFile) (value : U16) (gua
     locked_append mutex value s0 = (.ok (.Err error), s4) := by
   rw [critical_contract]
   simp only [NativeMutex.lock, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ lock]
+  rw [Result.wait_ready_run _ _ _ _ _ lock]
   simp only [Result.ok_bind, recovered]
   rw [append_contract]
   simp only [bind_assoc, NativeFile.seek, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ seek]
+  rw [Result.wait_ready_run _ _ _ _ _ seek]
   simp only [Result.ok_bind, NativeFile.write, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ write]
+  rw [Result.wait_ready_run _ _ _ _ _ write]
   simp only [NativeM.ok, Result.ok_bind, NativeGuard.release, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ release]
+  rw [Result.wait_ready_run _ _ _ _ _ release]
   simp
 
 end Record.LockedProperties

@@ -12,11 +12,11 @@ open NativeFile Publish.Properties
 @[expose] def openingScript : Term :=
   .cons (.tuple #[.atom "open",.bitstring b 0,.atom "ok",.integer 0,readScript]) .nil
 @[expose] def boot : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],openingScript⟩),
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩)]}
 @[expose] def scan (position : Nat) (script : Term) (closed : Bool := false) : Environment :=
-  {refCounter := 4,nativeHeap := [
+  {nativeRefCounter := 4,nativeHeap := [
     (4,(if closed then closedHandleTypeName else handleTypeName),encodeHandle ⟨1,position,script⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],.nil⟩),
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩)]}
@@ -66,9 +66,10 @@ theorem read_next {α : Type} (env updated : Environment) (buffer output : Slice
     (reply : core.result.Result Usize NativeIoError)
     (ready : pollRead ⟨4⟩ buffer env = some (.ok (reply,⟨4⟩,output),updated))
     (next : core.result.Result Usize NativeIoError × NativeFile × Slice U8 → NativeM α) :
-    (io_core.read_once ⟨4⟩ buffer >>= next) env = next (reply,⟨4⟩,output) updated := by
+    (io_core.read_once ⟨4⟩ buffer >>= next).run env = next (reply,⟨4⟩,output) updated := by
   simp only [io_core.read_once,monadLift_self,NativeFile.read,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ ready]
   simp
 
 /-- The actual parser reads both bytes from the shared named inode. -/
@@ -76,9 +77,9 @@ theorem parsed_word : read_word ⟨4⟩ (scan 0 readScript) =
     (.ok (.Ok (some 7#u16),⟨4⟩),scan 2 closeScript) := by
   simp only [read_word,NativeM.lift,monadLift_self,Result.ok_bind,
     Array.to_slice_mut,Array.to_slice,Array.make_val]
-  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
   rw [read_next _ _ _ _ _ first_poll]
-  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
   rw [read_next _ _ _ _ _ second_poll]
   simp [decoded_word,NativeM.ok,NativeM.lift,Array.from_slice,Array.to_slice_mut,
     one,Array.make_val,Array.index_usize,NativeM.monadLift_eq,NativeM.fromRust,
@@ -88,14 +89,14 @@ theorem parsed_word : read_word ⟨4⟩ (scan 0 readScript) =
 theorem parse_and_close : read_and_close_word ⟨4⟩ (scan 0 readScript) =
     (.ok (.Ok (some 7#u16)),scan 2 .nil true) := by
   have parser {α : Type} (next : _ → NativeM α) :
-      (read_word ⟨4⟩ >>= next) (scan 0 readScript) =
+      (read_word ⟨4⟩ >>= next).run (scan 0 readScript) =
         next (.Ok (some 7#u16),⟨4⟩) (scan 2 closeScript) := by
     simp only [read_word,NativeM.lift,monadLift_self,Result.ok_bind,
       Array.to_slice_mut,Array.to_slice,Array.make_val,bind_assoc]
-    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
     rw [read_next _ _ _ _ _ first_poll]
     simp [bind_assoc]
-    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
     rw [read_next _ _ _ _ _ second_poll]
     simp [decoded_word,NativeM.ok,NativeM.lift,Array.from_slice,Array.to_slice_mut,
       one,Array.make_val,Array.index_usize,NativeM.monadLift_eq,NativeM.fromRust,
@@ -103,14 +104,16 @@ theorem parse_and_close : read_and_close_word ⟨4⟩ (scan 0 readScript) =
   simp only [read_and_close_word,monadLift_self]
   rw [parser]
   simp only [NativeOwnedDrop.drop,close,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ close_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ close_poll]
   simp [NativeM.ok]
 
 /-- Opening, decoding and scope cleanup use extracted first-party Rust code. -/
 theorem recover_word : recover_named_word target boot =
     (.ok (.Ok (some 7#u16)),scan 2 .nil true) := by
   simp only [recover_named_word,io_core.open_readonly,monadLift_self,openReadOnly,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ open_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ open_poll]
   simp only [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,
     NativeM.monadLift_eq,NativeM.fromRust_ok]
   exact parse_and_close
@@ -149,10 +152,11 @@ theorem read_error_cleanup (error : Nat) :
       (.ok (.Err ⟨error⟩),scan 0 .nil true) := by
   simp only [read_and_close_word,read_word,NativeM.lift,monadLift_self,Result.ok_bind,
     Array.to_slice_mut,Array.to_slice,Array.make_val,bind_assoc]
-  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
   rw [read_next _ _ _ _ _ (error_poll error)]
   simp only [NativeM.ok,Result.ok_bind,NativeOwnedDrop.drop,close,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ close_error_path]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ close_error_path]
   simp [NativeM.ok]
 
 end Publish.NamedRecovery

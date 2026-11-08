@@ -16,7 +16,7 @@ theorem retained_payload (value : Bool) (env : Environment)
       let observed ← NativeResourceArc.deref retained
       NativeResourceArc.release retained
       Result.ok observed) env =
-        (.ok value, { env with refCounter := env.refCounter + 3 }) := by
+        (.ok value, { env with nativeRefCounter := env.nativeRefCounter + 3 }) := by
   exact NativeResourceArc.clone_release_cycle value env registered empty
 
 theorem absent_registration (value : Bool) (env : Environment)
@@ -32,7 +32,7 @@ theorem consumed_release (handle : NativeResourceArc Bool) (env : Environment)
 theorem forged_count (handle : NativeResourceArc Bool) (value : Bool) (env : Environment)
     (distinct : handle.id ≠ handle.token)
     (stored : env.nativeHeap = [
-      (handle.token, NativeResourceArc.handleType Bool, .reference handle.id),
+      (handle.token, NativeResourceArc.handleType Bool, .nativeReference handle.id),
       (handle.id, NativeResourceArc.typeName Bool,
         .tuple #[.integer 2, NativeCodec.encode value])]) :
     NativeResourceArc.deref handle env = (.error .exhausted, env) := by
@@ -41,20 +41,20 @@ theorem forged_count (handle : NativeResourceArc Bool) (value : Bool) (env : Env
 /-- Identity freshness alone cannot justify allocation if an older token points
 at the prospective new allocation. The resource frame must exclude this alias. -/
 theorem future_owner_not_bounded :
-    ¬ NativeResourceArc.FrameBelow Bool 1 [(1, NativeResourceArc.handleType Bool, .reference 2)] := by
+    ¬ NativeResourceArc.FrameBelow Bool 1 [(1, NativeResourceArc.handleType Bool, .nativeReference 2)] := by
   intro bounded
-  have impossible := (bounded (1, NativeResourceArc.handleType Bool, .reference 2)
+  have impossible := (bounded (1, NativeResourceArc.handleType Bool, .nativeReference 2)
     (by simp)).2.1 rfl 2 rfl
   omega
 
 /-- Ordinary imports expose the actual retained-borrow prefix without exposing lookup internals. -/
 theorem retained_borrow_prefix (handle : NativeResourceArc Bool) (value : Bool) (env : Environment)
     (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
-      [(handle.token,NativeResourceArc.handleType Bool,.reference handle.id)])
+      [(handle.token,NativeResourceArc.handleType Bool,.nativeReference handle.id)])
     (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
       [(handle.id,NativeResourceArc.typeName Bool,.tuple #[.integer 2,NativeCodec.encode value])])
     (owners : (env.nativeHeap.filter fun cell =>
-      cell.2.1 == NativeResourceArc.handleType Bool && cell.2.2 == .reference handle.id).length = 2) :
+      cell.2.1 == NativeResourceArc.handleType Bool && cell.2.2 == .nativeReference handle.id).length = 2) :
     Result.ReadyPrefix (NativeResourceArc.deref handle) env (.ok value) env := by
   exact NativeResourceArc.deref_retained_prefix handle value env token stored owners
 
@@ -62,10 +62,10 @@ theorem retained_borrow_prefix (handle : NativeResourceArc Bool) (value : Bool) 
 theorem pinned_decode_prefix (value : Bool) (env : Environment) (id pin term : Nat)
     (pinned : NativeResourceArc.Pinned value id pin term env)
     (registered : NativeResourceArc.typeName Bool ∈ env.nativeResourceTypes) :
-    Result.ReadyPrefix (NativeResourceArc.decode (.reference term)) env
-      (.ok (⟨id,env.refCounter + 1⟩ : NativeResourceArc Bool)) {env with
-        refCounter := env.refCounter + 1
-        nativeHeap := (env.refCounter + 1,NativeResourceArc.handleType Bool,.reference id) ::
+    Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference term)) env
+      (.ok (⟨id,env.nativeRefCounter + 1⟩ : NativeResourceArc Bool)) {env with
+        nativeRefCounter := env.nativeRefCounter + 1
+        nativeHeap := (env.nativeRefCounter + 1,NativeResourceArc.handleType Bool,.nativeReference id) ::
           env.nativeHeap.map fun cell => if cell.1 == id then
             (id,NativeResourceArc.typeName Bool,.tuple #[.integer 2,NativeCodec.encode value]) else cell} := by
   exact NativeResourceArc.decode_pinned_prefix value env id pin term pinned registered
@@ -73,11 +73,11 @@ theorem pinned_decode_prefix (value : Bool) (env : Environment) (id pin term : N
 /-- Nonfinal owned release retains its actual state transitions and payload. -/
 theorem retained_release_prefix [NativeResourceCleanup Bool] (handle : NativeResourceArc Bool) (value : Bool) (env : Environment)
     (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
-      [(handle.token,NativeResourceArc.handleType Bool,.reference handle.id)])
+      [(handle.token,NativeResourceArc.handleType Bool,.nativeReference handle.id)])
     (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
       [(handle.id,NativeResourceArc.typeName Bool,.tuple #[.integer 2,NativeCodec.encode value])])
     (owners : (env.nativeHeap.filter fun cell =>
-      cell.2.1 == NativeResourceArc.handleType Bool && cell.2.2 == .reference handle.id).length = 2) :
+      cell.2.1 == NativeResourceArc.handleType Bool && cell.2.2 == .nativeReference handle.id).length = 2) :
     Result.ReadyPrefix (NativeResourceArc.releaseOwned handle) env (.ok ()) ({env with
       nativeHeap := List.map (fun cell => if cell.1 == handle.id then
         (handle.id,NativeResourceArc.typeName Bool,.tuple #[.integer 1,NativeCodec.encode value]) else cell)
@@ -88,11 +88,11 @@ theorem retained_release_prefix [NativeResourceCleanup Bool] (handle : NativeRes
 interface retains the read boundary and checks all three ownership tokens. -/
 theorem overlapping_borrow_prefix (handle : NativeResourceArc Bool) (value : Bool) (env : Environment)
     (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
-      [(handle.token, NativeResourceArc.handleType Bool, .reference handle.id)])
+      [(handle.token, NativeResourceArc.handleType Bool, .nativeReference handle.id)])
     (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
       [(handle.id, NativeResourceArc.typeName Bool, .tuple #[.integer 3, NativeCodec.encode value])])
     (owners : (env.nativeHeap.filter fun cell =>
-      cell.2.1 == NativeResourceArc.handleType Bool && cell.2.2 == .reference handle.id).length = 3) :
+      cell.2.1 == NativeResourceArc.handleType Bool && cell.2.2 == .nativeReference handle.id).length = 3) :
     Result.ReadyPrefix (NativeResourceArc.deref handle) env (.ok value) env := by
   exact NativeResourceArc.deref_live_prefix handle value 3 env (by decide) (by decide)
     token stored owners

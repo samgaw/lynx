@@ -84,15 +84,15 @@ theorem word_next (file : NativeFile) (env : Environment)
     (first : readStep before (one 0#u8) = some (.Ok 1#usize, middle, one lo))
     (second : readStep middle (one 0#u8) = some (.Ok 1#usize, after, one hi))
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_word file >>= next) (fileEnv env file before frame) =
-      next (.Ok (some (word lo hi)), file) (fileEnv env file after frame) := by
+    (read_word file >>= next).run (fileEnv env file before frame) =
+      (next (.Ok (some (word lo hi)), file)).run (fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     bind_assoc, Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before middle _ (one lo)
     separate valid notBlocked first]
   simp only [UScalar.ofNat, UScalar.ofNatCore_val_eq, bind_assoc]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame middle after _ (one hi)
     separate validMiddle notBlockedMiddle second]
   simp [NativeM.ok, NativeM.lift, Array.from_slice, one, Array.index_usize,
@@ -109,7 +109,7 @@ theorem record_ready (file : NativeFile) (env : Environment)
     (r1 : readStep s1 (one 0#u8) = some (.Ok 1#usize, s2, one b))
     (r2 : readStep s2 (one 0#u8) = some (.Ok 1#usize, s3, one c))
     (r3 : readStep s3 (one 0#u8) = some (.Ok 1#usize, s4, one d)) :
-    read_record file (fileEnv env file s0 frame) =
+    (read_record file).run (fileEnv env file s0 frame) =
       (io_core.decode_record (word a b) (word c d) >>= fun value =>
         NativeM.ok (.Ok value, file)) (fileEnv env file s4 frame) := by
   simp only [read_record, monadLift_self]
@@ -130,9 +130,9 @@ theorem record_torn (file : NativeFile) (env : Environment)
     (r1 : readStep s1 (one 0#u8) = some (.Ok 1#usize, s2, one (selected b (high value))))
     (r2 : readStep s2 (one 0#u8) = some (.Ok 1#usize, s3, one (selected c (low (~~~value)))))
     (r3 : readStep s3 (one 0#u8) = some (.Ok 1#usize, s4, one (selected d (high (~~~value))))) :
-    read_record file (fileEnv env file s0 frame) =
+    (read_record file).run (fileEnv env file s0 frame) =
       (.ok (.Ok none, file), fileEnv env file s4 frame) ∨
-    read_record file (fileEnv env file s0 frame) =
+    (read_record file).run (fileEnv env file s0 frame) =
       (.ok (.Ok (some value), file), fileEnv env file s4 frame) := by
   rw [record_ready file env frame s0 s1 s2 s3 s4 _ _ _ _ separate
     v0 v1 v2 v3 n0 n1 n2 n3 r0 r1 r2 r3]
@@ -172,7 +172,7 @@ or assumed read transition is supplied by the client. -/
 theorem four_reads (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (a b c d : U8) (rest : Term)
     (separate : Separate file frame) :
-    read_record file (fileEnv env file (reading (fourBytes a b c d) rest 0) frame) =
+    (read_record file).run (fileEnv env file (reading (fourBytes a b c d) rest 0) frame) =
       (io_core.decode_record (word a b) (word c d) >>= fun value =>
         NativeM.ok (.Ok value, file))
           (fileEnv env file (reading (fourBytes a b c d) rest 4) frame) := by
@@ -189,7 +189,7 @@ theorem four_reads (file : NativeFile) (env : Environment)
 theorem recover_four (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (a b c d : U8) (rest : Term) (position : Nat)
     (separate : Separate file frame) (bounded : position ≤ limit) :
-    recover_record file (fileEnv env file
+    (recover_record file).run (fileEnv env file
       ⟨fourBytes a b c d, fourBytes a b c d, position,
         outcome "seek" true 0 (zeroMask (fourBytes a b c d))
           (readScript (zeroMask (fourBytes a b c d)) rest 4)⟩ frame) =
@@ -261,8 +261,8 @@ theorem protocol_next (file : NativeFile) (data : Slice U8)
     (writeReady : writeStep before data = some (.Ok amount, middle))
     (syncReady : syncStep middle = some (.Ok (), after))
     (next : core.result.Result Usize NativeIoError × NativeFile → NativeM α) :
-    (write_then_sync file data >>= next) (fileEnv env file before frame) =
-      next (.Ok amount, file) (fileEnv env file after frame) := by
+    (write_then_sync file data >>= next).run (fileEnv env file before frame) =
+      (next (.Ok amount, file)).run (fileEnv env file after frame) := by
   have first : pollWrite file data (fileEnv env file before frame) =
       some (.ok (.Ok amount, file), fileEnv env file middle frame) := by
     simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
@@ -275,10 +275,10 @@ theorem protocol_next (file : NativeFile) (data : Slice U8)
   rw [cross_contract]
   simp only [bind_assoc]
   unfold NativeFile.write
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ first]
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ first]
   simp only [Result.ok_bind, bind_assoc]
   unfold NativeFile.syncAll
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ second]
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ second]
   simp [Result.ok_bind]
 
 /-- The actual facade acknowledges exactly a full record write followed by sync. -/

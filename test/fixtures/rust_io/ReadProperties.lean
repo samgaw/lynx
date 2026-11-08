@@ -17,14 +17,14 @@ theorem read_next (file : NativeFile) (buffer : Slice U8) (env : Environment)
     (notBlocked : blocked before = false)
     (step : readStep before buffer = some (reply, after, updated))
     (next : core.result.Result Usize NativeIoError × NativeFile × Slice U8 → NativeM α) :
-    (io_core.read_once file buffer >>= next) (fileEnv env file before frame) =
-      next (reply, file, updated) (fileEnv env file after frame) := by
+    (io_core.read_once file buffer >>= next).run (fileEnv env file before frame) =
+      (next (reply, file, updated)).run (fileEnv env file after frame) := by
   have ready : pollRead file buffer (fileEnv env file before frame) =
       some (.ok (reply, file, updated), fileEnv env file after frame) := by
     simp [pollRead, lookup_at env file before frame separate valid, notBlocked,
       step, store_at env file before after frame separate]
   simp only [io_core.read_once, monadLift_self, NativeFile.read, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  rw [Result.wait_ready_run _ _ _ _ _ ready]
   simp [Result.ok_bind]
 
 /-- Unfold the real parser, including both mutable array reconstructions,
@@ -35,14 +35,14 @@ theorem parser_ready (file : NativeFile) (env : Environment)
     (notBlocked : blocked before = false) (notBlockedMiddle : blocked middle = false)
     (first : readStep before (one 0#u8) = some (.Ok 1#usize, middle, one low))
     (second : readStep middle (one 0#u8) = some (.Ok 1#usize, after, one high)) :
-    read_word file (fileEnv env file before frame) =
+    (read_word file).run (fileEnv env file before frame) =
       (.ok (.Ok (some (word low high)), file), fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before middle _ (one low)
     separate valid notBlocked first]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame middle after _ (one high)
     separate validMiddle notBlockedMiddle second]
   simp [NativeM.ok, NativeM.lift, Array.from_slice, Array.to_slice_mut,
@@ -94,7 +94,7 @@ theorem parser_success (file : NativeFile) (env : Environment)
     (script : before.script = outcome "read" true 1 mask1 (outcome "read" true 1 mask2 rest))
     (accepted1 : persist before.durable before.visible mask1 = some durable1)
     (accepted2 : persist durable1 before.visible mask2 = some durable2) :
-    read_word file (fileEnv env file before frame) =
+    (read_word file).run (fileEnv env file before frame) =
       (.ok (.Ok (some (word (byteValue low) (byteValue high))), file), fileEnv env file
         (readState (readState before 1 durable1 (outcome "read" true 1 mask2 rest)) 1 durable2 rest) frame) := by
   let middle := readState before 1 durable1 (outcome "read" true 1 mask2 rest)
@@ -136,11 +136,11 @@ theorem parser_first_eof (file : NativeFile) (env : Environment)
     (separate : Separate file frame) (valid : Valid before)
     (notBlocked : blocked before = false)
     (first : readStep before (one 0#u8) = some (.Ok 0#usize, after, one 0#u8)) :
-    read_word file (fileEnv env file before frame) =
+    (read_word file).run (fileEnv env file before frame) =
       (.ok (.Ok none, file), fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before after _ _ separate valid notBlocked first]
   simp [NativeM.ok, Result.ok_apply]
 
@@ -151,13 +151,13 @@ theorem parser_second_eof (file : NativeFile) (env : Environment)
     (notBlocked : blocked before = false) (notBlockedMiddle : blocked middle = false)
     (first : readStep before (one 0#u8) = some (.Ok 1#usize, middle, one low))
     (second : readStep middle (one 0#u8) = some (.Ok 0#usize, after, one 0#u8)) :
-    read_word file (fileEnv env file before frame) =
+    (read_word file).run (fileEnv env file before frame) =
       (.ok (.Ok none, file), fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before middle _ _ separate valid notBlocked first]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame middle after _ _ separate validMiddle notBlockedMiddle second]
   simp [NativeM.ok, Result.ok_apply]
 
@@ -166,11 +166,11 @@ theorem parser_first_error (file : NativeFile) (env : Environment)
     (separate : Separate file frame) (valid : Valid before)
     (notBlocked : blocked before = false)
     (first : readStep before (one 0#u8) = some (.Err error, after, one 0#u8)) :
-    read_word file (fileEnv env file before frame) =
+    (read_word file).run (fileEnv env file before frame) =
       (.ok (.Err error, file), fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before after _ _ separate valid notBlocked first]
   simp [NativeM.ok, Result.ok_apply]
 
@@ -180,13 +180,13 @@ theorem parser_second_error (file : NativeFile) (env : Environment)
     (notBlocked : blocked before = false) (notBlockedMiddle : blocked middle = false)
     (first : readStep before (one 0#u8) = some (.Ok 1#usize, middle, one low))
     (second : readStep middle (one 0#u8) = some (.Err error, after, one 0#u8)) :
-    read_word file (fileEnv env file before frame) =
+    (read_word file).run (fileEnv env file before frame) =
       (.ok (.Err error, file), fileEnv env file after frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind,
     Array.to_slice_mut, Array.to_slice, Array.make_val]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame before middle _ _ separate valid notBlocked first]
-  change (io_core.read_once file (one 0#u8) >>= _) _ = _
+  change (io_core.read_once file (one 0#u8) >>= _).run _ = _
   rw [read_next file (one 0#u8) env frame middle after _ _ separate validMiddle notBlockedMiddle second]
   simp [NativeM.ok, Result.ok_apply]
 

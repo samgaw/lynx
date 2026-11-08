@@ -381,11 +381,11 @@ defmodule Lynx.Rust.FileAppendTest do
     for broken <- [
           correct
           |> String.replace(
-            "(.deadlock, shared 3 (owned 1 3) (stopped data amount rest))",
+            "(.deadlock, shared 3 (owned [] 3) (stopped data amount rest))",
             "(.deadlock, shared 3 free (stopped data amount rest))"
           )
           |> String.replace(
-            "(.deadlock, shared 3 (owned 2 3) (stopped data amount rest))",
+            "(.deadlock, shared 3 (owned [1] 3) (stopped data amount rest))",
             "(.deadlock, shared 3 free (stopped data amount rest))"
           ),
           String.replace(

@@ -17,7 +17,7 @@ theorem otherAtomIsNotBool (name : String) (ht : name ≠ "true") (hf : name ≠
 /-- Loader capabilities do not allocate or modify resource cells. -/
 theorem registrationKeepsHeap (names : List String) (env : Lynx.Environment) :
     Lynx.Rustler.withResourceTypes names
-      (.get fun loaded => Lynx.Result.ok loaded.nativeHeap) env =
+      (.nativeGet fun loaded => Lynx.Result.ok loaded.nativeHeap) env =
       (.ok env.nativeHeap,
         { env with nativeResourceTypes := (env.nativeResourceTypes ++ names).eraseDups }) := by
   simp
@@ -36,7 +36,7 @@ theorem registeredCapability (names : List String) (env : Lynx.Environment)
 /-- A native panic does not undo effects performed before the failure. -/
 theorem nativePanicPreservesState (env updated : Lynx.Environment) :
     Lynx.Rustler.executeNative
-      (Lynx.Result.set updated (.error (.error (.atom "rust_panicked"))) : Lynx.Result Lynx.Term)
+      (Lynx.Result.nativeSet updated (.error (.error (.atom "rust_panicked"))) : Lynx.Result Lynx.Term)
       id env = (.error (.error (.atom "nif_panicked")), updated) := by
   simp [Lynx.Rustler.executeNative, Lynx.Result.handle]
 

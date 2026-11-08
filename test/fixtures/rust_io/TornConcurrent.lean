@@ -19,7 +19,7 @@ open Record.InterruptedProperties (blocked_prefix short_stopped)
 @[expose] def pending (data durable : ByteArray) (amount : Nat) (rest : Term) : State :=
   ⟨data, durable, data.size + amount, .cons (.atom "blocked") rest⟩
 
-private theorem torn_trace (pid peer token counter : Nat) (different : pid ≠ peer)
+private theorem torn_trace (pid peer : PID) (token counter : Nat) (different : pid ≠ peer)
     (fresh : 2 ≤ counter) (data : ByteArray) (value : U16) (position amount : Nat)
     (writeMask resizeMask writtenDurable resizedDurable : ByteArray) (rest : Term)
     (fits : data.size + 4 ≤ limit) (offset : position ≤ limit) (short : amount < 4)
@@ -77,25 +77,25 @@ theorem torn_rollback_stalls (data : ByteArray) (first second : U16)
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
-        (.deadlock, shared 3 (owned 1 3) (pending data firstResized amount rest)) ∨
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
-        (.deadlock, shared 3 (owned 2 3) (pending data secondResized amount rest)) := by
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
+    (observed.1, observed.2.nativeRefCounter, observed.2.nativeHeap) =
+        (.deadlock, shared 3 (owned [] 3) (pending data firstResized amount rest)) ∨
+    (observed.1, observed.2.nativeRefCounter, observed.2.nativeHeap) =
+        (.deadlock, shared 3 (owned [1] 3) (pending data secondResized amount rest)) := by
   have result := Result.two_wait_blocked_orders
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
     (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩))
     (shared 2 free (input data position amount writeMask resizeMask rest))
-    (shared 3 (owned 1 3) (input data position amount writeMask resizeMask rest))
-    (shared 3 (owned 1 3) (pending data firstResized amount rest))
-    (shared 3 (owned 2 3) (input data position amount writeMask resizeMask rest))
-    (shared 3 (owned 2 3) (pending data secondResized amount rest))
-    (lock_poll 1 2 _ (by decide)) (lock_poll 2 2 _ (by decide))
-    (torn_trace 1 2 3 3 (by decide) (by decide) data first position amount writeMask resizeMask firstWritten firstResized
+    (shared 3 (owned [] 3) (input data position amount writeMask resizeMask rest))
+    (shared 3 (owned [] 3) (pending data firstResized amount rest))
+    (shared 3 (owned [1] 3) (input data position amount writeMask resizeMask rest))
+    (shared 3 (owned [1] 3) (pending data secondResized amount rest))
+    (lock_poll [] 2 _ (by decide)) (lock_poll [1] 2 _ (by decide))
+    (torn_trace [] [1] 3 3 (by decide) (by decide) data first position amount writeMask resizeMask firstWritten firstResized
       rest fits offset short firstWrite firstResize)
-    (torn_trace 2 1 3 3 (by decide) (by decide) data second position amount writeMask resizeMask secondWritten secondResized
+    (torn_trace [1] [] 3 3 (by decide) (by decide) data second position amount writeMask resizeMask secondWritten secondResized
       rest fits offset short secondWrite secondResize) choices
   simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared] using result
 
@@ -116,9 +116,9 @@ theorem overwrite_log_image (values : List U16) (value : U16) (amount : Nat) (sh
 
 /-- Capture any admitted partial-tail file state in the independently stored
 shared file cell. Both visible and durable images must retain the same prefix. -/
-theorem crash_shared_image (env : Environment) (pid : Nat) (values : List U16)
+theorem crash_shared_image (env : Environment) (pid : PID) (values : List U16)
     (state : State) (mask : ByteArray) (image : Image)
-    (fits : (disk (logBytes values)).size + 4 ≤ limit) (counter : env.refCounter = 3)
+    (fits : (disk (logBytes values)).size + 4 ≤ limit) (counter : env.nativeRefCounter = 3)
     (heap : env.nativeHeap = (shared 3 (owned pid 3) state).2)
     (offset : state.position ≤ limit) (visible : LogImage values state.visible)
     (durable : LogImage values state.durable)
@@ -132,16 +132,16 @@ theorem crash_shared_image (env : Environment) (pid : Nat) (values : List U16)
   unfold crashImage at captured
   rw [found] at captured
   change (persist state.durable state.visible mask).bind
-    (fun bytes => some (⟨bytes, env.refCounter⟩ : Image)) = some image at captured
+    (fun bytes => some (⟨bytes, env.nativeRefCounter⟩ : Image)) = some image at captured
   obtain ⟨bytes, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj record
   have shape := persist_log_image values state.durable state.visible mask bytes durable visible accepted
   exact ⟨shape, by dsimp only; have bound := shape.2; omega⟩
 
-private theorem crash_pending (env : Environment) (pid : Nat) (values : List U16)
+private theorem crash_pending (env : Environment) (pid : PID) (values : List U16)
     (durable : ByteArray) (amount : Nat) (rest : Term) (mask : ByteArray) (image : Image)
     (fits : (disk (logBytes values)).size + 4 ≤ limit) (short : amount < 4)
-    (durableImage : LogImage values durable) (counter : env.refCounter = 3)
+    (durableImage : LogImage values durable) (counter : env.nativeRefCounter = 3)
     (heap : env.nativeHeap = (shared 3 (owned pid 3) (pending (disk (logBytes values)) durable amount rest)).2)
     (captured : crashImage ⟨2⟩ mask env = some image) :
     LogImage values image.bytes ∧ image.bytes.size ≤ limit := by
@@ -174,8 +174,8 @@ theorem torn_crash_repair (values : List U16) (first second : U16)
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
     crashImage ⟨2⟩ mask observed.2 = some image →
     observed.1 = .deadlock ∧ LogImage values image.bytes ∧
     repair_log ⟨image.highWater + 1⟩ maxRecords
@@ -241,8 +241,8 @@ private theorem tail_keep (value : U16) :
     persist (crop (encoded value) 2) ByteArray.empty ⟨#[0, 0]⟩ = some (crop (encoded value) 2) := by
   simpa [zeroMask, tail_size, _root_.Array.replicate_succ] using persist_keep_old (crop (encoded value) 2) ByteArray.empty
 
-private theorem capture_tail (env : Environment) (pid : Nat) (value : U16) (rest : Term)
-    (counter : env.refCounter = 3)
+private theorem capture_tail (env : Environment) (pid : PID) (value : U16) (rest : Term)
+    (counter : env.nativeRefCounter = 3)
     (heap : env.nativeHeap = (shared 3 (owned pid 3) (pending ByteArray.empty (crop (encoded value) 2) 2 rest)).2) :
     crashImage ⟨2⟩ ⟨#[0, 0]⟩ env = some (⟨crop (encoded value) 2, 3⟩ : Image) := by
   have valid : Admitted (pending ByteArray.empty (crop (encoded value) 2) 2 rest) := by
@@ -260,8 +260,8 @@ theorem persisted_tail_images (first second : U16) (rest : Term) (choices : List
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
     (observed.1, crashImage ⟨2⟩ ⟨#[0, 0]⟩ observed.2) =
         (.deadlock, some (⟨crop (encoded first) 2, 3⟩ : Image)) ∨
     (observed.1, crashImage ⟨2⟩ ⟨#[0, 0]⟩ observed.2) =
@@ -276,10 +276,10 @@ theorem persisted_tail_images (first second : U16) (rest : Term) (choices : List
   · left
     have fields := Prod.mk.inj equal
     have sharedFields := Prod.mk.inj fields.2
-    exact Prod.ext fields.1 (capture_tail _ 1 first rest sharedFields.1 sharedFields.2)
+    exact Prod.ext fields.1 (capture_tail _ [] first rest sharedFields.1 sharedFields.2)
   · right
     have fields := Prod.mk.inj equal
     have sharedFields := Prod.mk.inj fields.2
-    exact Prod.ext fields.1 (capture_tail _ 2 second rest sharedFields.1 sharedFields.2)
+    exact Prod.ext fields.1 (capture_tail _ [1] second rest sharedFields.1 sharedFields.2)
 
 end Record.TornConcurrent

@@ -18,9 +18,9 @@ theorem loop_prefix_next (file : NativeFile) (env : Environment)
     (enough : values.length ≤ fuel) (accumulatedValid : accumulated.length ≤ Usize.max)
     (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
     (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-      fuel (file, alloc.vec.Vec.from accumulated accumulatedValid) >>= next) (fileEnv env file before frame) =
+      fuel (file, alloc.vec.Vec.from accumulated accumulatedValid) >>= next).run (fileEnv env file before frame) =
     (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-      (fuel - values.length) (file, alloc.vec.Vec.from (accumulated ++ values) (by simp; scalar_tac)) >>= next)
+      (fuel - values.length) (file, alloc.vec.Vec.from (accumulated ++ values) (by simp; scalar_tac)) >>= next).run
       (fileEnv env file after frame) := by
   induction trace generalizing accumulated fuel with
   | nil state => simp
@@ -35,7 +35,7 @@ theorem loop_prefix_next (file : NativeFile) (env : Environment)
         omega
       rw [NativeM.loopFuel]
       simp only [recover_log_loop.body, monadLift_self, go, ite_true, bind_assoc]
-      change (read_record file >>= _) _ = _
+      change (read_record file >>= _).run _ = _
       rw [record_step_next file env frame before middle value separate step]
       simp only [NativeM.ok]
       rw [push_from accumulated value (by simp only [List.length_cons] at capacity; omega)]
@@ -92,8 +92,8 @@ theorem truncated_at (file : NativeFile) (env : Environment)
     (separate : Separate file frame) (short : tail.length < 4)
     (bounded : (head ++ tail).length ≤ limit)
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_record file >>= next) (fileEnv env file (reader (disk (head ++ tail)) rest head.length) frame) =
-      next (.Ok none, file) (fileEnv env file (finished (disk (head ++ tail)) rest) frame) := by
+    (read_record file >>= next).run (fileEnv env file (reader (disk (head ++ tail)) rest head.length) frame) =
+      (next (.Ok none, file)).run (fileEnv env file (finished (disk (head ++ tail)) rest) frame) := by
   let data := disk (head ++ tail)
   have size : data.size = head.length + tail.length := by simp [data, disk, ← ByteArray.size_data]
   have bound : data.size ≤ limit := by simpa [size] using bounded
@@ -107,7 +107,7 @@ theorem truncated_at (file : NativeFile) (env : Environment)
   have valid (n : Nat) (small : n ≤ tail.length) := reader_valid data rest (head.length + n) bound (by omega)
   have eof : readStep (reader data rest (head.length + tail.length)) (one 0#u8) =
       some (.Ok 0#usize, finished data rest, one 0#u8) := by rw [← size]; exact reader_eof data rest
-  change (read_record file >>= next) (fileEnv env file (reader data rest head.length) frame) = _
+  change (read_record file >>= next).run (fileEnv env file (reader data rest head.length) frame) = _
   simp only [read_record, monadLift_self, bind_assoc]
   cases tail with
   | nil =>
@@ -173,7 +173,7 @@ theorem loop_truncated_next (file : NativeFile) (env : Environment)
     (valid : values.length ≤ Usize.max)
     (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
     (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-      fuel (file, alloc.vec.Vec.from values valid) >>= next)
+      fuel (file, alloc.vec.Vec.from values valid) >>= next).run
       (fileEnv env file (reader (disk (logBytes values ++ tail)) rest (4 * values.length)) frame) =
       next (.Ok (alloc.vec.Vec.from values valid), file)
         (fileEnv env file (finished (disk (logBytes values ++ tail)) rest) frame) := by
@@ -185,7 +185,7 @@ theorem loop_truncated_next (file : NativeFile) (env : Environment)
         Usize.ofNatCore, UScalar.ofNatCore_val_eq] using more
     rw [NativeM.loopFuel]
     simp only [recover_log_loop.body, monadLift_self, go, ite_true, bind_assoc]
-    change (read_record file >>= _) _ = _
+    change (read_record file >>= _).run _ = _
     rw [← logBytes_length values]
     rw [truncated_at file env frame (logBytes values) tail rest separate short bounded]
     simp [NativeM.ok]
@@ -200,7 +200,7 @@ theorem recover_truncated_log_next (file : NativeFile) (env : Environment)
     (bounded : (logBytes values ++ tail).length ≤ limit)
     (offset : position ≤ limit) (more : values.length < maxRecords.val)
     (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
-    (recover_log file maxRecords >>= next) (fileEnv env file
+    (recover_log file maxRecords >>= next).run (fileEnv env file
       ⟨disk (logBytes values ++ tail), disk (logBytes values ++ tail), position,
         outcome "seek" true 0 (zeroMask (disk (logBytes values ++ tail)))
           (reader (disk (logBytes values ++ tail)) rest 0).script⟩ frame) =

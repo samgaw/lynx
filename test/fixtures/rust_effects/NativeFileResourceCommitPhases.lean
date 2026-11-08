@@ -245,7 +245,7 @@ private theorem full_bytes (value : U16) (phase : Phase) :
   all_goals rfl
 
 private theorem water_view (env : Environment) (value : U16) (phase : Phase) :
-    (phaseEnv env value phase).refCounter = phaseWater phase := by
+    (phaseEnv env value phase).nativeRefCounter = phaseWater phase := by
   cases phase <;> rfl
 
 /-- Every phase is executable and admits a full-content persistent image. -/

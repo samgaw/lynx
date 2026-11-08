@@ -15,9 +15,9 @@ open NativeFile
 @[expose] def nodeCell (state : State) : Nat × String × Term :=
   (1, inodeTypeName, encode {state with position := 0, script := .nil})
 @[expose] def initial (state : State) (script : Term) : Environment :=
-  {refCounter := 1, nativeHeap := [namespaceCell script, nodeCell state]}
+  {nativeRefCounter := 1, nativeHeap := [namespaceCell script, nodeCell state]}
 @[expose] def opened (state : State) (script rest : Term) : Environment :=
-  {refCounter := 2, nativeHeap := [
+  {nativeRefCounter := 2, nativeHeap := [
     (2, handleTypeName, encodeHandle ⟨1,0,script⟩), namespaceCell rest, nodeCell state]}
 
 theorem path_bytes : bytes path = nameBytes := by
@@ -46,7 +46,7 @@ theorem core_open_next {α : Type} (state : State) (script rest : Term)
   simp [Result.ok_bind]
 
 @[expose] def openedPair (state : State) (firstScript secondScript rest : Term) : Environment :=
-  {refCounter := 3, nativeHeap := [
+  {nativeRefCounter := 3, nativeHeap := [
     (3, handleTypeName, encodeHandle ⟨1,0,secondScript⟩),
     (2, handleTypeName, encodeHandle ⟨1,0,firstScript⟩),
     namespaceCell rest, nodeCell state]}

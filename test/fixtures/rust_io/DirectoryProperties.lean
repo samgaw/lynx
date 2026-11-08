@@ -13,9 +13,9 @@ open NativeFile
 @[expose] def node (state : State) : Nat × String × Term :=
   (1,inodeTypeName,encode {state with position := 0, script := .nil})
 @[expose] def initial (state : State) (script : Term) : Environment :=
-  {refCounter := 1,nativeHeap := [(0,namespaceTypeName,ns false script),node state]}
+  {nativeRefCounter := 1,nativeHeap := [(0,namespaceTypeName,ns false script),node state]}
 @[expose] def world (state : State) (committed closed : Bool) (script rest : Term) : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,(if closed then closedDirectoryTypeName else directoryTypeName),.tuple #[script]),
     (0,namespaceTypeName,ns committed rest),node state]}
 @[expose] def opening (script rest : Term) : Term :=

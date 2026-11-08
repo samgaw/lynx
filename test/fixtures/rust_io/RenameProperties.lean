@@ -18,7 +18,7 @@ open NativeFile
 @[expose] def node (id : Nat) (state : State) : Nat × String × Term :=
   (id,inodeTypeName,encode {state with position := 0, script := .nil})
 @[expose] def world (first second : State) (names : Names) (pending : List Names) (script : Term) : Environment :=
-  {refCounter := 4,nativeHeap := [
+  {nativeRefCounter := 4,nativeHeap := [
     (3,handleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (4,handleTypeName,encodeHandle ⟨2,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨names,originalNames,pending,script⟩),
@@ -125,7 +125,7 @@ theorem error_keeps_names (first second : State) (error : Nat) (rest : Term) :
 
 @[expose] def aliasNames : Names := [(sourceBytes,1),(targetBytes,1)]
 @[expose] def aliases (state : State) (script : Term) : Environment :=
-  {refCounter := 1,nativeHeap := [
+  {nativeRefCounter := 1,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨aliasNames,aliasNames,[],script⟩),node 1 state]}
 
 theorem same_inode_noop (state : State) (valid : Bounded state) (rest : Term) :

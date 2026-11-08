@@ -16,7 +16,7 @@ theorem core_increment (value : U64) :
 /-- The Pending path retains progress and requests the registered wake before returning. -/
 theorem callee_pending {α : Type} (value : U64) (waker : NativeWaker)
     (next : (core.task.poll.Poll U64 × effects_native.core.pin.Pin effects_core.PausedCounter × NativeTaskContext) → Result α)
-    (env : Environment) (bounded : waker.id ≤ env.refCounter)
+    (env : Environment) (bounded : waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == waker.id) =
       [(waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : waker.isNoop = false) :
@@ -49,15 +49,15 @@ theorem callee_ready (value : U64) (context : NativeTaskContext) :
   ⟨value, 1#u32, none, some ⟨false, ⟨value⟩⟩, some false⟩
 
 @[expose] def registered (env : Environment) : Environment :=
-  {env with refCounter := 0, nativeHeap := [(0, NativeWaker.typeName, .atom "idle")]}
+  {env with nativeRefCounter := 0, nativeHeap := [(0, NativeWaker.typeName, .atom "idle")]}
 
 @[expose] def retained (env : Environment) (value : U64) : Environment :=
-  {env with refCounter := 1, nativeHeap := [
+  {env with nativeRefCounter := 1, nativeHeap := [
     (1, NativeMutex.typeName U64, .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]),
     (0, NativeWaker.typeName, .atom "notified")]}
 
 @[expose] def reclaimed (env : Environment) : Environment :=
-  {env with refCounter := 1, nativeHeap := [(0, NativeWaker.typeName, .atom "notified")]}
+  {env with nativeRefCounter := 1, nativeHeap := [(0, NativeWaker.typeName, .atom "notified")]}
 
 theorem initial_state (value : U64) :
     owned_suspending value = Result.ok (initial value) := rfl
@@ -88,7 +88,7 @@ theorem first_pending_next {α : Type} (value : U64) (env : Environment)
         core.pin.PinMutAT.get_mut, NativeM.ok, bind_assoc] <;> simp_all [UScalar.ofNatCore, UScalar.val]
   rw [unfolded]
   simp [NativeMutex.new, NativeM.allocate, registered, bind_assoc]
-  let allocated : Environment := { env with refCounter := 1, nativeHeap := [
+  let allocated : Environment := { env with nativeRefCounter := 1, nativeHeap := [
     (1, NativeMutex.typeName U64, .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]),
     (0, NativeWaker.typeName, .atom "idle")] }
   have ready : NativeWaker.pollWake ⟨0, false⟩ allocated = some (.ok (), retained env value) := by

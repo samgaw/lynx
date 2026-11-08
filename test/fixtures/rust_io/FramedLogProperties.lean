@@ -12,7 +12,7 @@ open NativeFile Record.Properties Record.ReadProperties Record.RecoveryPropertie
 
 @[expose] def framedEnv (base : Environment) (counter : Nat)
     (frame : List (Nat × String × Term)) (contents : Term) (state : State) : Environment :=
-  {base with refCounter := counter, nativeHeap :=
+  {base with nativeRefCounter := counter, nativeHeap :=
     frame ++ [(2, NativeFile.typeName, encode state),
     (1, NativeMutex.typeName NativeFile, contents)]}
 
@@ -74,7 +74,7 @@ theorem sync_poll (base : Environment) (counter : Nat) (frame : List (Nat × Str
   simp [ready, step, file_store base counter frame contents before after apart]
 
 @[expose] def free (poisoned : Bool) : Term :=
-  .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), .reference 2]
+  .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), .nativeReference 2]
 
 @[expose] def held (base : Environment) (counter : Nat) (poisoned : Bool) : Term :=
   NativeMutex.lockedContents base.currentPid (counter + 1) poisoned (⟨2⟩ : NativeFile)

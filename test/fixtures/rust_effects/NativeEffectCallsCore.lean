@@ -96,11 +96,11 @@ theorem critical_state_next {α : Type} (next : Bool → NativeM α)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
       [(mutex.id, NativeMutex.typeName effects_core.Counter, .tuple #[.atom "unlocked",
         .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])])
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     ∃ changed updated,
       (effects_core.locked_increment mutex amount >>= next) env =
       next changed {env with
-        refCounter := env.refCounter + 1
+        nativeRefCounter := env.nativeRefCounter + 1
         nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
           (mutex.id, NativeMutex.typeName effects_core.Counter, .tuple #[.atom "unlocked",
             .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode updated])
@@ -110,19 +110,19 @@ theorem critical_state_next {α : Type} (next : Bool → NativeM α)
   obtain ⟨changed, updated, returned, property⟩ := increment_spec value amount
   refine ⟨changed, updated, ?_, property⟩
   let acquiredEnv : Environment := {env with
-    refCounter := env.refCounter + 1
+    nativeRefCounter := env.nativeRefCounter + 1
     nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-      (NativeMutex.lockedContents env.currentPid (env.refCounter + 1) poisoned value)}
+      (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value)}
   have held := replacement_filter env.nativeHeap mutex.id
     (NativeMutex.typeName effects_core.Counter) _
-    (NativeMutex.lockedContents env.currentPid (env.refCounter + 1) poisoned value) stored
+    (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value) stored
   have released := NativeGuard.release_owned_next
-    (⟨mutex, env.refCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
+    (⟨mutex, env.nativeRefCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
     value poisoned (next changed) acquiredEnv rfl held
   have finalState : (do
-      NativeGuard.release (⟨mutex, env.refCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
+      NativeGuard.release (⟨mutex, env.nativeRefCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
       next changed) acquiredEnv = next changed {env with
-        refCounter := env.refCounter + 1
+        nativeRefCounter := env.nativeRefCounter + 1
         nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
           (.tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode updated])} := by
     change _ = next changed {acquiredEnv with
