@@ -1039,6 +1039,7 @@ defmodule Lynx.Translation do
           "file" => hd(declarations)["file"],
           "imports" => [],
           "contents" => [],
+          "audit_modules" => [name],
           "preludes" => declarations
         },
         %{},
