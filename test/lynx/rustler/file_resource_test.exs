@@ -1145,7 +1145,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1177,7 +1177,8 @@ defmodule Lynx.Rustler.FileResourceTest do
       base ++
         [
           proof_modules: Enum.map(modules, &("FileResource." <> &1)),
-          required_properties: ~w(FileResource.Record.encode_spec FileResource.Record.decode_spec
+          required_properties:
+            ~w(FileResource.Record.encode_spec FileResource.Record.decode_spec
         FileResource.Record.torn_decode FileResource.Record.decode_layout FileResource.Record.write_next
         FileResource.Record.short_not_acknowledged FileResource.Record.create_write_commit
         FileResource.RecordRecovery.recover_record FileResource.RecordRecovery.recover_value
@@ -1196,7 +1197,10 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.RecordErrors.recover_complete FileResource.RecordErrors.committed_error
         FileResource.RecordErrors.error_then_retries FileResource.RecordErrors.error_crash_witness
         FileResource.RecordErrors.finite_attempts FileResource.RecordErrors.committed_attempts
-        FileResource.RecordErrors.one_failed_attempt)
+        FileResource.RecordErrors.one_failed_attempt
+        FileResource.RecordCleanup.before_close FileResource.RecordCleanup.after_close
+        FileResource.RecordCleanup.cleanup_prefix FileResource.RecordCleanup.cleanup_retry
+        FileResource.RecordCleanup.cleanup_witness FileResource.RecordCleanup.transaction_attempts)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1330,6 +1334,24 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(error_property, error_source)
+    cleanup_property = Path.join(project, "FileResource/RecordCleanup.lean")
+    cleanup_source = File.read!(cleanup_property)
+
+    premature_close =
+      String.replace(
+        cleanup_source,
+        "(cleanup generation error) (scan a b c d generation position (closing closeError))",
+        "(cleanup generation error) (scan a b c d generation position .nil true)"
+      )
+
+    assert premature_close != cleanup_source
+    File.write!(cleanup_property, premature_close)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(cleanup_property, cleanup_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 

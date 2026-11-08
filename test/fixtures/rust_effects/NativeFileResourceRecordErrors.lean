@@ -218,23 +218,37 @@ theorem committed_error (env : Environment) (value : U16) (chosen : Names)
   rw [same,content_layout]
   exact restart_image _ _ _ _ 9 (by decide +kernel) _
 
-/-- Closed descriptor cursors are volatile: their positions do not alter any
-permitted filesystem crash image. This is equality of the declared OS model. -/
-private theorem closed_crash_eq (position : Nat) (chosen : Names)
+/-- Descriptor cursors, scripts and ownership status are volatile: only inode
+and namespace state affect a filesystem crash image. -/
+private theorem scan_crash_eq (position : Nat) (script : Term) (closed : Bool) (chosen : Names)
     (masks : List (Nat × ByteArray)) :
-    filesystemCrashImage chosen masks (scan a b c d generation position .nil true) =
+    filesystemCrashImage chosen masks (scan a b c d generation position script closed) =
     filesystemCrashImage chosen masks (scan a b c d generation 4 .nil true) := by
   have insideId : ¬ generation + 1 < 1 := by omega
   have genNonzero : generation ≠ 0 := by omega
-  have nodes (cursor : Nat) :
-      (scan a b c d generation cursor .nil true).nativeHeap.filter (fun cell => cell.2.1 == inodeTypeName) =
+  have nodes (cursor : Nat) (rest : Term) (retired : Bool) :
+      (scan a b c d generation cursor rest retired).nativeHeap.filter (fun cell => cell.2.1 == inodeTypeName) =
       [(1,inodeTypeName,encode ⟨data a b c d,data a b c d,0,.nil⟩)] := by
-    simp [scan,inodeTypeName,namespaceTypeName,closedHandleTypeName]
+    cases retired <;> simp [scan,inodeTypeName,namespaceTypeName,handleTypeName,closedHandleTypeName]
   simp only [filesystemCrashImage,nodes]
-  simp [List.filter_cons,List.filter_nil,scan,namespaceSnapshot,namespaceTable,namespaceHistory,
-    namespaceEntry,encodeNamespace,encodeNames,List.eraseDups_cons,tablesEqual,
-    Publish.names,Publish.valid_path,inode,decode,encode,limit,data_size,
-    insideId,genNonzero,inodeTypeName,namespaceTypeName,closedHandleTypeName]
+  cases closed <;>
+    simp [List.filter_cons,List.filter_nil,scan,namespaceSnapshot,namespaceTable,namespaceHistory,
+      namespaceEntry,encodeNamespace,encodeNames,List.eraseDups_cons,tablesEqual,
+      Publish.names,Publish.valid_path,inode,decode,encode,limit,data_size,
+      insideId,genNonzero,inodeTypeName,namespaceTypeName,handleTypeName,closedHandleTypeName]
+
+@[expose] def cleanupState (a b c d : U8) (generation position : Nat)
+    (closeError : Option Nat) (closed : Bool) : Environment :=
+  if closed then scan a b c d generation position .nil true
+  else scan a b c d generation position (closing closeError)
+
+/-- Both sides of destruction admit exactly the same persistent crash image. -/
+theorem cleanup_crash_eq (position : Nat) (closeError : Option Nat) (closed : Bool)
+    (chosen : Names) (masks : List (Nat × ByteArray)) :
+    filesystemCrashImage chosen masks (cleanupState a b c d generation position closeError closed) =
+    filesystemCrashImage chosen masks (scan a b c d generation 4 .nil true) := by
+  cases closed <;> simp only [cleanupState,Bool.false_eq_true,↓reduceIte]
+  all_goals exact scan_crash_eq a b c d generation validGeneration position _ _ chosen masks
 
 omit validGeneration in
 /-- A failed recovery closes its file. Any admitted subsequent crash retains the
@@ -263,7 +277,7 @@ theorem error_then_retries (value : U16) (generation : Nat) (valid : 1 ≤ gener
   have afterCrash : filesystemCrashImage chosen masks
       (RecordRetry.phaseEnv (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) generation .finished) = some image := by
-    rw [closed_crash_eq _ _ _ _ generation valid position chosen masks] at accepted
+    rw [scan_crash_eq _ _ _ _ generation valid position .nil true chosen masks] at accepted
     exact accepted
   have same := RecordRetry.phase_crash _ _ _ _ generation valid .finished chosen masks image afterCrash
   have fresh : 1 ≤ image.highWater := by rw [same]; change 1 ≤ generation + 1; omega
@@ -287,11 +301,11 @@ theorem error_crash_witness (value : U16) (generation : Nat) (valid : 1 ≤ gene
         (Record.high (~~~value)) generation position .nil true) =
       some ⟨Publish.names,[(1,Record.content value)],generation + 1⟩ := by
   refine ⟨recover_error _ _ _ _ generation valid position error inside closeError,?_⟩
-  rw [closed_crash_eq _ _ _ _ generation valid position,content_layout]
+  rw [scan_crash_eq _ _ _ _ generation valid position .nil true,content_layout]
   exact RecordRetry.phase_witness _ _ _ _ generation valid .finished
 
-/-- Finite attempts may mix crashes during ready recovery with completed failed
-read attempts followed by crashes. Infinite failures carry no success guarantee. -/
+/-- Finite attempts may mix crashes during ready recovery with read-failure
+attempts interrupted before or after destruction. Infinite failures carry no success guarantee. -/
 inductive Attempts (value : U16) : Nat → Nat → Prop where
   | done (generation : Nat) : Attempts value generation generation
   | interrupted (generation : Nat) (phase : RecordRetry.Phase) (chosen : Names)
@@ -300,11 +314,11 @@ inductive Attempts (value : U16) : Nat → Nat → Prop where
         (RecordRetry.phaseEnv (Record.low value) (Record.high value) (Record.low (~~~value))
           (Record.high (~~~value)) generation phase) = some image)
       (rest : Attempts value image.highWater last) : Attempts value generation last
-  | failed (generation position error : Nat) (inside : position < 4) (closeError : Option Nat)
+  | failed (generation position error : Nat) (inside : position < 4) (closeError : Option Nat) (closed : Bool)
       (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage) (last : Nat)
       (accepted : filesystemCrashImage chosen masks
-        (scan (Record.low value) (Record.high value) (Record.low (~~~value))
-          (Record.high (~~~value)) generation position .nil true) = some image)
+        (cleanupState (Record.low value) (Record.high value) (Record.low (~~~value))
+          (Record.high (~~~value)) generation position closeError closed) = some image)
       (rest : Attempts value image.highWater last) : Attempts value generation last
 
 omit validGeneration in
@@ -329,12 +343,12 @@ theorem finite_attempts (value : U16) (generation last : Nat) (trace : Attempts 
       exact RecordRetry.phase_water_valid generation valid phase
     rcases ih fresh.1 with ⟨validLast,ordered,recovered⟩
     exact ⟨validLast,Nat.le_trans fresh.2 ordered,recovered⟩
-  | failed generation position error inside closeError chosen masks image last accepted rest ih =>
+  | failed generation position error inside closeError closed chosen masks image last accepted rest ih =>
     intro valid
     have admitted : filesystemCrashImage chosen masks
         (RecordRetry.phaseEnv (Record.low value) (Record.high value) (Record.low (~~~value))
           (Record.high (~~~value)) generation .finished) = some image := by
-      rw [closed_crash_eq _ _ _ _ generation valid position] at accepted
+      rw [cleanup_crash_eq _ _ _ _ generation valid position closeError closed] at accepted
       exact accepted
     have same := RecordRetry.phase_crash _ _ _ _ generation valid .finished chosen masks image admitted
     have fresh : 1 ≤ image.highWater ∧ generation ≤ image.highWater := by
@@ -383,7 +397,7 @@ theorem one_failed_attempt (value : U16) (generation : Nat) (valid : 1 ≤ gener
         (Record.low (~~~value)) (Record.high (~~~value)) (generation + 1) 4 .nil true) := by
   have executed := error_crash_witness value generation valid position error inside closeError
   have trace : Attempts value generation (generation + 1) :=
-    .failed generation position error inside closeError Publish.names [(1,⟨#[0,0,0,0]⟩)]
+    .failed generation position error inside closeError true Publish.names [(1,⟨#[0,0,0,0]⟩)]
       ⟨Publish.names,[(1,Record.content value)],generation + 1⟩ _ executed.2 (.done _)
   exact ⟨executed.1,trace,(finite_attempts value generation _ trace valid).2.2⟩
 
