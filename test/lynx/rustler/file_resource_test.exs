@@ -1145,7 +1145,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1191,7 +1191,12 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.ShortRecovery.partial_missing_recovery
         FileResource.RecordRetry.phase_prefix FileResource.RecordRetry.phase_retry
         FileResource.RecordRetry.finite_retries FileResource.RecordRetry.nonempty_retry
-        FileResource.RecordRetry.committed_retries FileResource.RecordRetry.transaction_retries)
+        FileResource.RecordRetry.committed_retries FileResource.RecordRetry.transaction_retries
+        FileResource.RecordErrors.record_error FileResource.RecordErrors.recover_error
+        FileResource.RecordErrors.recover_complete FileResource.RecordErrors.committed_error
+        FileResource.RecordErrors.error_then_retries FileResource.RecordErrors.error_crash_witness
+        FileResource.RecordErrors.finite_attempts FileResource.RecordErrors.committed_attempts
+        FileResource.RecordErrors.one_failed_attempt)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1305,13 +1310,34 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(retry_property, retry_source)
+    error_property = Path.join(project, "FileResource/RecordErrors.lean")
+    error_source = File.read!(error_property)
+
+    for wrong <- [
+          String.replace(
+            error_source,
+            "(.ok (.Err ⟨error⟩),scan",
+            "(.ok (.Err ⟨error + 1⟩),scan"
+          ),
+          String.replace(error_source, "position .nil true)", "position .nil false)")
+        ] do
+      assert wrong != error_source
+      File.write!(error_property, wrong)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    end
+
+    File.write!(error_property, error_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
     for changed <- [
           String.replace(rust, "(!value).to_le_bytes()", "value.to_le_bytes()"),
           String.replace(rust, "value ^ inverse == u16::MAX", "value ^ inverse != u16::MAX"),
-          String.replace(rust, "Ok(None) => Ok(None),", "Ok(None) => Ok(Some(0)),")
+          String.replace(rust, "Ok(None) => Ok(None),", "Ok(None) => Ok(Some(0)),"),
+          String.replace(rust, "Err(error) => Err(error),", "Err(_error) => Ok(None),")
         ] do
       assert changed != rust
       File.write!(native, changed)
