@@ -43,6 +43,22 @@ theorem withResourceTypes_registeredSteps {pid : PID} {computation : Result α}
   cases env
   simp_all
 
+/-- Registration remains local when the following decoder stops before a wait. -/
+theorem withResourceTypes_registeredPrefix {pid : PID} {computation residual : Result α}
+    {before after : Nat × List (Nat × String × Term)}
+    (available types finalTypes : List String)
+    (trace : Result.RegisteredPrefix pid computation before
+      (available ++ types).eraseDups residual after finalTypes) :
+    Result.RegisteredPrefix pid (withResourceTypes types computation)
+      before available residual after finalTypes := by
+  unfold withResourceTypes
+  refine .update _ computation before before after available
+    (available ++ types).eraseDups finalTypes residual ?_ trace
+  intro env _ refs heap registry
+  congr 1
+  cases env
+  simp_all
+
 /-- Rustler 0.38/0.39 accept only the atoms `true` and `false` as booleans. -/
 @[expose] def decodeBool : Term → Except Exception Bool
   | .atom "true" => .ok true
@@ -88,6 +104,17 @@ theorem executeNative_readyPrefix {α : Type} {computation residual : Result α}
     {before after : Environment} (trace : Result.ReadyPrefix computation before residual after)
     (encode : α → Term) :
     Result.ReadyPrefix (executeNative computation encode) before (executeNative residual encode) after := by
+  unfold executeNative
+  exact (trace.bind _).handle _
+
+/-- Local decoder/borrow steps retain the actual exception adapter at their
+residual. A wait there is still interpreted by the scheduler. -/
+theorem executeNative_registeredPrefix {α : Type} {pid : PID} {computation residual : Result α}
+    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
+    (trace : Result.RegisteredPrefix pid computation before types residual after finalTypes)
+    (encode : α → Term) :
+    Result.RegisteredPrefix pid (executeNative computation encode) before types
+      (executeNative residual encode) after finalTypes := by
   unfold executeNative
   exact (trace.bind _).handle _
 

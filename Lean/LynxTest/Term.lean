@@ -104,18 +104,26 @@ private def registeredIncrement : Result := Rustler.withResourceTypes ["counter"
   (.get fun env => if "counter" ∈ env.nativeResourceTypes then incrementSharedCell
     else .error (.error (.atom "badarg")))
 
+private theorem registeredIncrementPrefix (pid counter : Nat)
+    (heap : List (Nat × String × Term)) (types : List String)
+    (same : (types ++ ["counter"]).eraseDups = ["counter"]) :
+    Result.RegisteredPrefix pid registeredIncrement (counter, heap) types
+      incrementSharedCell (counter, heap) ["counter"] := by
+  unfold registeredIncrement
+  apply Rustler.withResourceTypes_registeredPrefix
+  rw [same]
+  refine .read _ incrementSharedCell _ _ _ _ _ ?_
+    (.refl _ _ _)
+  intro env _ _ _ registered
+  simp [registered]
+
 private theorem registeredIncrementTrace (pid counter : Nat)
     (heap : List (Nat × String × Term)) (types : List String)
     (same : (types ++ ["counter"]).eraseDups = ["counter"]) :
     Result.RegisteredSteps pid registeredIncrement (counter, heap) types
-      (.integer (counter + 1)) (counterShared (counter + 1)) ["counter"] := by
-  unfold registeredIncrement
-  apply Rustler.withResourceTypes_registeredSteps
-  rw [same]
-  refine .read _ incrementSharedCell _ _ _ _ _ ?_
+      (.integer (counter + 1)) (counterShared (counter + 1)) ["counter"] :=
+  (registeredIncrementPrefix pid counter heap types same).thenSteps
     (.shared (incrementSharedTrace pid counter heap) ["counter"])
-  intro env _ _ _ registered
-  simp [registered]
 
 /-- Both actual registration prefixes execute in the pool, including the
 second registration's duplicate elimination; the conditional read sees the
