@@ -114,52 +114,6 @@ private theorem inode_cells (env : Environment) (value : U16) (phase : Phase) :
       NativeResourceArc.typeName,NativeResourceArc.handleType,NativeResourceArc.termType,
       writableHandleTypeName,inodeTypeName,namespaceTypeName,directoryTypeName,closedDirectoryTypeName]
 
-private theorem namespace_choices (published : Bool) (script : Term) (selected : Names)
-    (unique : (selected.map (fun entry => entry.1.data)).eraseDups.length = selected.length)
-    (allowed : namespaceCrashAllowed {Publish.namespaceAfter published with script := script} selected = true) :
-    selected = [] ∨ selected = Publish.names := by
-  cases published <;>
-    simp [namespaceCrashAllowed,Publish.namespaceAfter,Publish.names,namedInode] at allowed
-  all_goals
-    have mapped : selected.map (fun entry => entry.1.data) =
-        List.replicate selected.length Creation.path.data := by
-      apply List.map_eq_replicate_iff.mpr
-      intro entry member
-      exact (allowed.1 entry.1 entry.2 member).symm
-    rw [mapped] at unique
-    cases selected with
-    | nil => exact Or.inl rfl
-    | cons head tail =>
-      have empty : tail = [] := by
-        have length : tail.length = 0 := by
-          simpa [List.replicate_succ,List.eraseDups_cons] using unique.symm
-        exact List.eq_nil_of_length_eq_zero length
-      subst tail
-      have same : head.1 = Creation.path := by
-        apply ByteArray.ext
-        exact (allowed.1 head.1 head.2 (by simp)).symm
-      cases head with
-      | mk path id =>
-        simp only at same
-        subst path
-        right
-        simp at allowed
-        simpa [Publish.names] using allowed
-
-private theorem table_unique (chosen selected : Names)
-    (table : namespaceTable (encodeNames chosen) = some selected) :
-    (selected.map (fun entry => entry.1.data)).eraseDups.length = selected.length := by
-  simp only [encodeNames,namespaceTable] at table
-  split at table
-  · contradiction
-  · simp only [Bind.bind,Option.bind_eq_some_iff] at table
-    rcases table with ⟨mapped,parsed,table⟩
-    split at table
-    · contradiction
-    · rename_i unique
-      cases table
-      simpa using unique
-
 /-- All admitted names, inode images and watermarks are retained. Data fsync
 fixes file bytes; only directory fsync rules out losing the name. -/
 theorem phase_crash (env : Environment) (value : U16) (phase : Phase) (chosen : Names)
@@ -170,51 +124,13 @@ theorem phase_crash (env : Environment) (value : U16) (phase : Phase) (chosen : 
       image.inodes = [(1,contents)] ∧ image.highWater = phaseWater phase ∧
       (image.names = [] ∨ image.names = Publish.names) ∧
       (committed phase = true → image.names = Publish.names) := by
-  simp only [filesystemCrashImage,namespace_view,Bind.bind,Option.bind_some,Option.bind_eq_some_iff] at accepted
-  rcases accepted with ⟨selected,table,accepted⟩
-  split at accepted
-  · contradiction
-  · rename_i allowed
-    have admitted : namespaceCrashAllowed
-        {Publish.namespaceAfter (committed phase) with script := namespaceScript phase} selected = true := by
-      simpa using allowed
-    have names := namespace_choices (committed phase) (namespaceScript phase) selected
-      (table_unique chosen selected table) admitted
-    have published : committed phase = true → selected = Publish.names := by
-      intro yes
-      rcases names with absent | retained
-      · subst selected
-        simp [yes,namespaceCrashAllowed,Publish.namespaceAfter,Publish.names,namedInode] at admitted
-      · exact retained
-    simp only [inode_cells,List.length_singleton,Nat.reduceGT] at accepted
-    split at accepted
-    · contradiction
-    · rename_i keys
-      have key_eq : masks.map (·.1) = [1] := by simpa using keys
-      have shape : ∃ mask, masks = [(1,mask)] := by
-        cases masks with
-        | nil => simp at key_eq
-        | cons head tail =>
-          cases head with
-          | mk id mask =>
-            simp only [List.map_cons,List.cons.injEq,List.map_eq_nil_iff] at key_eq
-            obtain ⟨rfl,rfl⟩ := key_eq
-            exact ⟨mask,rfl⟩
-      obtain ⟨mask,rfl⟩ := shape
-      simp only [List.mapM_cons,List.mapM_nil,Option.bind_eq_some_iff,inode_view,Option.bind_some,
-        List.filter_cons,List.filter_nil,Nat.reduceBEq,↓reduceIte] at accepted
-      rcases accepted with ⟨images,mapped,accepted⟩
-      cases saved : persist (durable value phase) (Record.content value) mask with
-      | none => simp [saved,Bind.bind] at mapped
-      | some contents =>
-        have image_eq : images = [(1,contents)] := by
-          simpa [saved,Bind.bind,Pure.pure] using mapped.symm
-        subst images
-        split at accepted
-        · contradiction
-        · cases accepted
-          refine ⟨mask,contents,rfl,saved,rfl,?_,names,published⟩
-          cases phase <;> rfl
+  obtain ⟨mask,contents,masksEq,saved,inodes,water,names,published⟩ :=
+    Publish.crash_shape (phaseEnv env value phase)
+      ⟨Record.content value,durable value phase,0,.nil⟩ (committed phase) (namespaceScript phase)
+      (namespace_view env value phase) (inode_cells env value phase) (inode_view env value phase)
+      chosen masks image accepted
+  refine ⟨mask,contents,masksEq,saved,inodes,?_,names,published⟩
+  cases phase <;> exact water
 
 private theorem fixed_after_sync (value : U16) (phase : Phase) (synced : phase ≠ .beforeFileSync)
     (mask contents : ByteArray)
