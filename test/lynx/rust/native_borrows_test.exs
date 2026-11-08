@@ -38,8 +38,8 @@ defmodule Lynx.Rust.NativeBorrowsTest do
     )
   end
 
-  test "classifies only closed primitive bitwise operators without erasing arithmetic failures" do
-    for op <- ~w(BitAnd BitOr BitXor Add Sub Mul Div Rem Shl Shr) do
+  test "classifies primitive bitwise and comparison operators without erasing arithmetic failures" do
+    for op <- ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge Add Sub Mul Div Rem Shl Shr) do
       function = %{
         "def_id" => 1,
         "body" => %{
@@ -59,7 +59,7 @@ defmodule Lynx.Rust.NativeBorrowsTest do
       }
 
       result = NativeBorrows.nonpanicking_calls([function], %{})
-      assert MapSet.member?(result, 1) == op in ~w(BitAnd BitOr BitXor)
+      assert MapSet.member?(result, 1) == op in ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge)
     end
   end
 
