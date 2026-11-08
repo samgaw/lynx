@@ -60,6 +60,10 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.Result.SharedSteps.update
   have _ := @Lynx.Result.SharedSteps.bind
   have _ := @Lynx.Result.SharedSteps.handle
+  have _ := @Lynx.Result.RegisteredSteps
+  have _ := @Lynx.Result.RegisteredSteps.readyPrefix
+  have _ := @Lynx.Result.two_registered_serial_steps
+  have _ := @Lynx.Rustler.withResourceTypes_registeredSteps
   have _ := @Lynx.Result.two_shared_serial_steps
   have _ := @Lynx.Result.ExclusiveSteps
   have _ := @Lynx.Result.ExclusiveBlocked
@@ -722,6 +726,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
   "Lynx.Result.ReadyPrefix",
+  "Lynx.Result.RegisteredSteps",
   "Lynx.Result.SharedSteps",
   "Lynx.Result.Talks",
   "Lynx.Result.andAlso",

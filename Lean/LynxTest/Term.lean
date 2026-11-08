@@ -1,5 +1,6 @@
 import LynxTest.ProofAudit
 import Lynx.Term
+import Lynx.Rustler
 
 namespace LynxTest.Term
 
@@ -98,6 +99,36 @@ theorem shared_wait_preserves_local_steps :
       {schedule := [.current, .swap 2]} =
       (.ok (.integer 2), {pidCounter := 2, refCounter := 2, nativeHeap := [(1, "counter", .integer 2)]}) := by
   cbv
+
+private def registeredIncrement : Result := Rustler.withResourceTypes ["counter"]
+  (.get fun env => if "counter" ∈ env.nativeResourceTypes then incrementSharedCell
+    else .error (.error (.atom "badarg")))
+
+private theorem registeredIncrementTrace (pid counter : Nat)
+    (heap : List (Nat × String × Term)) (types : List String)
+    (same : (types ++ ["counter"]).eraseDups = ["counter"]) :
+    Result.RegisteredSteps pid registeredIncrement (counter, heap) types
+      (.integer (counter + 1)) (counterShared (counter + 1)) ["counter"] := by
+  unfold registeredIncrement
+  apply Rustler.withResourceTypes_registeredSteps
+  rw [same]
+  refine .read _ incrementSharedCell _ _ _ _ _ ?_
+    (.shared (incrementSharedTrace pid counter heap) ["counter"])
+  intro env _ _ _ registered
+  simp [registered]
+
+/-- Both actual registration prefixes execute in the pool, including the
+second registration's duplicate elimination; the conditional read sees the
+registered type and the native computation retains its wait. -/
+theorem scheduled_registered_read_write_wait :
+    (Result.schedule registeredIncrement (fun _ => registeredIncrement)) {} =
+      (.ok (.integer 1), {
+        pidCounter := 2, refCounter := 2, nativeHeap := [(1, "counter", .integer 2)], nativeResourceTypes := ["counter"]}) := by
+  simpa [counterShared] using Result.two_registered_serial_steps registeredIncrement registeredIncrement
+    (.integer 1) (.integer 2) (0, []) (counterShared 1) (counterShared 2)
+    [] ["counter"] ["counter"]
+    (registeredIncrementTrace 1 0 [] [] rfl)
+    (registeredIncrementTrace 2 1 (counterShared 1).2 ["counter"] rfl)
 
 end LynxTest.Term
 
