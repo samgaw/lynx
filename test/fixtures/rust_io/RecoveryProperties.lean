@@ -231,7 +231,7 @@ theorem acknowledged_recovery (file : NativeFile) (data : Slice U8)
   · exact accepted1
   · exact accepted2
 
-theorem seek_from_contract (file : NativeFile) (origin : io_protocol.core.io.seek.SeekFrom) :
+theorem seek_from_contract (file : NativeFile) (origin : core.io.seek.SeekFrom) :
     io_core.seek_from file origin = NativeFile.seek file (match origin with
       | .Start offset => .start offset | .End offset => .end_ offset | .Current offset => .current offset) := by
   rfl

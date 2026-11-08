@@ -9,3 +9,6 @@ crate-type = ["cdylib"]
 [dependencies]
 io-protocol = { path = "../protocol" }
 rustler = "=0.39.0"
+
+[features]
+shared-log = []
