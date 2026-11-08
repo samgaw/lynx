@@ -115,6 +115,7 @@ theorem update_next {α : Type} (value amount : U64) (env : Environment)
       (by simp [List.filter, live, cell, NativeMutex.typeName,
         NativeResourceArc.typeName, NativeResourceArc.handleType])
     simp only [resource_locked_increment, monadLift_self, bind_assoc]
+    dsimp only at observed
     rw [observed]
     cases updated
     simpa [live, cell, List.map] using computed
@@ -133,10 +134,26 @@ theorem complete_cycle (value amount : U64) (env : Environment)
   obtain ⟨changed, updated, computed, arithmetic⟩ := update_next value amount env finish
   refine ⟨changed, updated, ?_, arithmetic⟩
   simp only [resource_cycle, monadLift_self, bind_assoc]
-  rw [construct_next value env _ registered]
-  rw [clone_next value env]
-  rw [nonfinal_release_next value env]
-  change (resource_locked_increment ⟨2,4⟩ amount >>= finish) (live env value 4 4) = _
+  have constructed := construct_next value env (fun first => do
+    let retained ← resource_clone first
+    resource_release first
+    let changed ← resource_locked_increment retained amount
+    resource_release retained
+    NativeM.ok changed) registered
+  dsimp only at constructed
+  rw [constructed]
+  have cloned := clone_next value env (fun retained => do
+    resource_release ⟨2,3⟩
+    let changed ← resource_locked_increment retained amount
+    resource_release retained
+    NativeM.ok changed)
+  have released := nonfinal_release_next value env (fun _ => do
+    let changed ← resource_locked_increment ⟨2,4⟩ amount
+    resource_release ⟨2,4⟩
+    NativeM.ok changed)
+  dsimp only at cloned released computed
+  rw [cloned, released]
+  change (resource_locked_increment ⟨2,4⟩ amount >>= finish).run (live env value 4 4) = _
   rw [computed]
   simpa [finish, NativeM.ok] using
     final_release_next (fun _ => NativeM.ok changed) updated env 4 5 (by decide)

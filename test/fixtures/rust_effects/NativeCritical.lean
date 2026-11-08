@@ -130,7 +130,8 @@ theorem critical_state (mutex : NativeMutex effects_core.Counter) (value : effec
     simpa only [acquiredEnv, replacement_overwrite] using released
   rw [critical_contract]
   unfold NativeMutex.lock
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _
+  dsimp only
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _
     (NativeMutex.pollLock_unlocked mutex value poisoned env stored fresh)]
   cases poisoned <;>
     simpa [effects_core.recover_guard, NativePoisonError.into_inner, NativeM.ok, returned,
@@ -164,7 +165,8 @@ theorem missing_cutoff (mutex : NativeMutex effects_core.Counter) (amount : U64)
     simp [NativeMutex.pollLock, missing]
   rw [critical_contract]
   unfold NativeMutex.lock
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  dsimp only
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ ready]
   simp
 
 end Runtime.CriticalProperties

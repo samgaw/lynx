@@ -130,7 +130,7 @@ theorem critical_state_next {α : Type} (next : Bool → NativeM α) (mutex : Na
   rw [critical_contract]
   simp only [bind_assoc]
   unfold NativeMutex.lock
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _
     (NativeMutex.pollLock_unlocked mutex value poisoned env stored fresh)]
   cases poisoned <;>
     simpa [effects_core.recover_guard, NativePoisonError.into_inner, NativeM.ok, returned,

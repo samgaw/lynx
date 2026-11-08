@@ -57,9 +57,8 @@ theorem completion (value amount : U64) (env : Environment) :
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
   simp only [NativeTask.drive]
-  rw [first_poll_next]
-  rw [NativeWaker.await_notified_next ⟨0, false⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell]) rfl]
-  simp only []
+  simp only [first_poll_next]
+  simp only [NativeWaker.await_notified_next ⟨0, false⟩ (fun _ => false) _ (live env value 3 true) (by simp [live]) rfl (by simp [live, cell]) rfl]
   have consumed : {live env value 3 true with
       nativeHeap := (live env value 3 true).nativeHeap.map fun cell =>
         if cell.1 == 0 then (0, NativeWaker.typeName, .atom "idle") else cell} = live env value 3 false := by
@@ -86,8 +85,8 @@ theorem cancellation (value amount : U64) (env : Environment) :
       resource_suspending.closure.drop_owned (fun _ => true) ⟨⟨0, false⟩⟩ 2 (initial amount) (live env value 3 false) =
       (.ok none, reclaimed env 3 true) := by
   simp only [NativeTask.drive]
-  rw [first_poll_next]
-  rw [NativeWaker.await_cancelled_next ⟨0, false⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell]) rfl]
+  simp only [first_poll_next]
+  simp only [NativeWaker.await_cancelled_next ⟨0, false⟩ (fun _ => true) _ (live env value 3 true) (by simp [live]) rfl (by simp [live, cell]) rfl]
   change (resource_release ⟨2,3⟩ >>= fun _ => Result.ok none) _ = _
   simpa using release_next value 3 true env (fun _ => Result.ok (none : Option Bool))
 
@@ -101,8 +100,8 @@ theorem cutoff_one (value amount : U64) (env : Environment) :
       resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0, false⟩⟩ 1 (initial amount) (live env value 3 false) =
       (.error .exhausted, live env value 3 false) := by
   simp only [NativeTask.drive]
-  rw [first_poll_next]
-  rw [NativeWaker.await_notified_next ⟨0, false⟩ _ _ _ (by simp [live]) rfl (by simp [live, cell]) rfl]
+  simp only [first_poll_next]
+  simp only [NativeWaker.await_notified_next ⟨0, false⟩ (fun _ => false) _ (live env value 3 true) (by simp [live]) rfl (by simp [live, cell]) rfl]
   simp [live, cell]
 
 theorem idle_blocks (value : U64) (env : Environment) :
