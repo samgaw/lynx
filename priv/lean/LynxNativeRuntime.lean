@@ -167,14 +167,17 @@ end NativeCodec
 
 namespace NativeM
 
-/-- Allocate a logical cell without overwriting a prior identity. Physical
-allocation and the native primitive's implementation remain trusted models. -/
+/-- Allocate a logical cell in one atomic scheduler transition. Freshness and
+publication cannot race with another logical allocation. Physical allocation
+and the native primitive's implementation remain explicit trusted boundaries. -/
 @[expose] def allocate (typeName : String) (value : Term) : NativeM Nat :=
-  .nativeGet fun env =>
+  .wait (fun env => some (
     let id := env.nativeRefCounter + 1
-    if env.nativeHeap.any (fun cell => cell.1 == id) then .error .exhausted
-    else .nativeSet { env with nativeRefCounter := id, nativeHeap := (id, typeName, value) :: env.nativeHeap }
-      (.ok id)
+    if env.nativeHeap.any (fun cell => cell.1 == id) then
+      ((Except.error .exhausted : Except Exception Nat), env)
+    else (Except.ok id, { env with
+      nativeRefCounter := id, nativeHeap := (id, typeName, value) :: env.nativeHeap })))
+    Result.ofExcept
 
 /-- Wrong-type, missing and ambiguous identities exhaust verification. This
 helper is not a Rustler resource decoder or an Elixir-visible failure. -/

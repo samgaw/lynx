@@ -252,10 +252,59 @@ namespace Result
 
 /-- Every execution, under any scheduler choices, is a run of the transition
 system ending in a terminal configuration with the same outcome. -/
+@[simp] theorem nativeGet_continuation_run (continuation : Environment → Result α)
+    (env : Environment) (choices : List ScheduleChoice) :
+    (Result.nativeGet continuation).run env choices = (continuation env).run env choices := by
+  change Term.Runner.run (.nativeGet continuation) env choices = _
+  rw [Term.Runner.run]
+  rfl
+
+@[simp] theorem nativeSet_continuation_run (next : Environment) (continuation : Result α)
+    (env : Environment) (choices : List ScheduleChoice) :
+    (Result.nativeSet next continuation).run env choices = continuation.run next choices := by
+  change Term.Runner.run (.nativeSet next continuation) env choices = _
+  rw [Term.Runner.run]
+  rfl
+
+@[simp] theorem nativeGet_continuation_apply (continuation : Environment → Result α)
+    (env : Environment) :
+    (Result.nativeGet continuation) env = (continuation env) env :=
+  nativeGet_continuation_run continuation env []
+
+@[simp] theorem nativeSet_continuation_apply (next : Environment) (continuation : Result α)
+    (env : Environment) :
+    (Result.nativeSet next continuation) env = continuation next :=
+  nativeSet_continuation_run next continuation env []
+
 theorem run_reaches (computation : Result α) (env : Environment) (choices : List ScheduleChoice) :
     ∃ events last, Concurrent.Run (.start env computation) events last ∧
       Concurrent.Terminal last (computation.run env choices).1 :=
   Term.Runner.run_reaches computation env choices
+
+@[simp] theorem wait_ready_run (poll : Environment → Option (β × Environment))
+    (next : β → Result α) (env updated : Environment) (value : β)
+    (ready : poll env = some (value, updated)) (choices : List ScheduleChoice := []) :
+    (Result.wait poll next).run env choices = (next value).run updated choices := by
+  change Term.Runner.run (.wait poll next) env choices = _
+  rw [Term.Runner.run, ready]
+  rfl
+
+/-- A total environment transition is one ready scheduler operation. This
+keeps its read and update indivisible without hiding any caller continuation. -/
+@[simp] theorem wait_transition_run (transition : Environment → β × Environment)
+    (next : β → Result α) (env : Environment) (choices : List ScheduleChoice) :
+    (Result.wait (fun current => some (transition current)) next).run env choices =
+      (next (transition env).1).run (transition env).2 choices := by
+  exact wait_ready_run _ next env (transition env).2 (transition env).1 rfl choices
+
+/-- A ready native wait executes atomically. -/
+@[simp] theorem wait_ready_apply (poll : Environment → Option (β × Environment))
+    (next : β → Result α) (env updated : Environment) (value : β)
+    (ready : poll env = some (value, updated)) :
+    (Result.wait poll next) env = next value updated := by
+  change Term.Runner.run (.wait poll next) env [] = _
+  rw [Term.Runner.run, ready]
+  rfl
 
 @[simp] theorem IsPure.ok_iff (computation : Result α) (pure : IsPure computation)
     (env final : Environment) (choices : List ScheduleChoice) (value : α) :
