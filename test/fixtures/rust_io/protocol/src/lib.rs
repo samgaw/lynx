@@ -373,3 +373,14 @@ pub fn commit_ack(value: u16) -> bool {
         }
     }
 }
+
+/// Acknowledges handling an admitted OS error after its first-party destructor call.
+///
+/// Verification admits only registered callback-free operating-system errors.
+///
+/// # Panics
+/// A custom error payload's destructor may panic.
+pub fn discard_error_ack(error: io::Error) -> bool {
+    io_core::discard_io_error(error);
+    true
+}
