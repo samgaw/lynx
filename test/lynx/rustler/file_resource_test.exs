@@ -1144,7 +1144,7 @@ defmodule Lynx.Rustler.FileResourceTest do
              &match?(%{kind: :nonpanicking_borrow_call, caller: ^recovery, function: ^reader}, &1)
            )
 
-    modules = ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery)
+    modules = ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1181,7 +1181,13 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.Record.short_not_acknowledged FileResource.Record.create_write_commit
         FileResource.RecordRecovery.recover_record FileResource.RecordRecovery.recover_value
         FileResource.RecordRecovery.torn_recovery FileResource.RecordRecovery.create_write
-        FileResource.RecordRecovery.uncommitted_write_recovery)
+        FileResource.RecordRecovery.uncommitted_write_recovery
+        FileResource.ShortRecovery.recover_short FileResource.ShortRecovery.recover_bytes
+        FileResource.ShortRecovery.uncommitted_short_recovery FileResource.ShortRecovery.short_witness
+        FileResource.ShortRecovery.missing_recovery FileResource.ShortRecovery.uncommitted_missing_recovery
+        FileResource.ShortRecovery.named_image_recovery FileResource.ShortRecovery.all_image_recovery
+        FileResource.ShortRecovery.create_partial FileResource.ShortRecovery.partial_write_recovery
+        FileResource.ShortRecovery.partial_missing_recovery)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1204,6 +1210,24 @@ defmodule Lynx.Rustler.FileResourceTest do
     assert [%{kind: :elixir_law, status: :verified, theorem: "record_then_commit/1"}] =
              Enum.filter(guarantees, &(&1.kind == :elixir_law))
 
+    short_path = Path.join(tmp, "short_record.ex")
+    File.cp!(Path.join(@fixture, "file_resource_short.ex"), short_path)
+    [{_, short_beam}] = Code.compile_file(short_path)
+
+    short_reports =
+      Lynx.Laws.verify([short_beam],
+        native: {Lynx.Rustler, options},
+        initial_environment: "FileResource.ShortRecovery.seed"
+      )
+
+    assert Enum.all?(short_reports, &(&1.status == :ok)), inspect(short_reports, limit: :infinity)
+
+    short_laws =
+      for report <- short_reports,
+          %{kind: :elixir_law, status: :verified, theorem: name} <- report[:guarantees] || [],
+          do: name
+
+    assert short_laws == ["short_record_not_committed/1"]
     warm = Lynx.Rustler.prepare!(options)
     assert Enum.all?(warm.reports, &(&1.status == :ok and &1.cached))
     export = Path.join(tmp, "record.export")
@@ -1243,12 +1267,33 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(property, source)
+    short_property = Path.join(project, "FileResource/ShortRecovery.lean")
+    short_source = File.read!(short_property)
+
+    for wrong <- [
+          String.replace(short_source, "(.ok (.Ok none),scan", "(.ok (.Ok (some 0#u16)),scan"),
+          String.replace(
+            short_source,
+            "(.ok (.Err ⟨error⟩),missingDone",
+            "(.ok (.Err ⟨error + 1⟩),missingDone"
+          )
+        ] do
+      assert wrong != short_source
+      File.write!(short_property, wrong)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    end
+
+    File.write!(short_property, short_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
     for changed <- [
           String.replace(rust, "(!value).to_le_bytes()", "value.to_le_bytes()"),
-          String.replace(rust, "value ^ inverse == u16::MAX", "value ^ inverse != u16::MAX")
+          String.replace(rust, "value ^ inverse == u16::MAX", "value ^ inverse != u16::MAX"),
+          String.replace(rust, "Ok(None) => Ok(None),", "Ok(None) => Ok(Some(0)),")
         ] do
       assert changed != rust
       File.write!(native, changed)
