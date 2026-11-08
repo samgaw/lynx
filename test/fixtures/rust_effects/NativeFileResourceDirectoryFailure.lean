@@ -78,7 +78,7 @@ theorem decode_prefix (env : Environment) (value : U16) (failure : Failure) (clo
     NativeResourceArc.decode_pinned_prefix payload (initial env value failure closeFailed) 3 5 6
       (pinned env value failure closeFailed) registered
 
-private theorem borrowed (env : Environment) (state : State) (ns : NamespaceSnapshot) :
+theorem borrow_prefix (env : Environment) (state : State) (ns : NamespaceSnapshot) :
     Result.ReadyPrefix (NativeResourceArc.deref (⟨3,11⟩ : NativeResourceArc effects_native.FileResource))
       (owned env state ns) (.ok payload) (owned env state ns) := by
   apply NativeResourceArc.deref_retained_prefix
@@ -158,7 +158,7 @@ theorem commit_prefix (env : Environment) (value : U16) (failure : Failure) (clo
       (owned env (Record.written value) (namespaceBefore failure closeFailed)) (.ok (.Err ⟨10⟩))
       (nativeDone env value failure) := by
   simp only [file_resource_commit,file_resource_sync,monadLift_self,bind_assoc]
-  apply ((borrowed env (Record.written value) (namespaceBefore failure closeFailed)).bind _).trans
+  apply ((borrow_prefix env (Record.written value) (namespaceBefore failure closeFailed)).bind _).trans
   simp only [Result.ok_bind,payload,effects_core.synchronize_file,monadLift_self,syncAll,Result.wait_bind]
   apply Result.ReadyPrefix.wait _ _ _ _ _ _ _ (file_poll env value (namespaceBefore failure closeFailed))
   simpa [Result.ok_bind,NativeM.monadLift_eq,NativeM.fromRust_ok,
