@@ -24,9 +24,9 @@ defmodule Lynx.Rust.NativeDrops do
         label:
           if(get_in(translated, ["options", "owned_drops"]) == true,
             do:
-              "Consuming native destruction with validated nonpanicking structural resource payload cleanup linked to actual compiler drop MIR; mutex and guard primitives, Rust std, allocation, VM callbacks and FFI remain modeled boundaries; custom resource destructor unwind unsupported",
+              "Consuming native destruction with validated nonpanicking structural resource payload cleanup linked to actual compiler drop MIR; mutex cell reclamation is atomic in the logical heap and payload cleanup remains separately sequenced; mutex and guard primitives, Rust std, allocation, VM callbacks and FFI remain modeled boundaries; custom resource destructor unwind unsupported",
             else:
-              "Consuming destruction model: Mutex with a destructor-free payload removes a live unlocked cell; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; Rust-owned ResourceArc consumes one token and reclaims a destructor-free allocation on final release under default Resource callbacks; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
+              "Consuming destruction model: Mutex with a destructor-free payload atomically removes its own live unlocked, unpoisoned cell without overwriting unrelated native state; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; Rust-owned ResourceArc consumes one token and reclaims a destructor-free allocation on final release under default Resource callbacks; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind and projected/custom payload destruction unsupported"
           )
       }
       |> then(fn model ->

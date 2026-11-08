@@ -201,16 +201,18 @@ helper is not a Rustler resource decoder or an Elixir-visible failure. -/
     readCell typeName id env = (.ok value, env) := by
   simp [readCell, stored]
 
-/-- Consume a unique typed cell. The caller must establish the destructor's
-payload/ownership requirements; malformed identities exhaust verification. -/
+/-- Consume a unique typed cell in one atomic transition. Concurrent creation
+or cleanup of unrelated cells cannot be overwritten. The caller must establish
+the destructor's payload/ownership requirements; malformed identities exhaust
+verification without changing state. -/
 @[expose] def removeCell (typeName : String) (id : Nat) : NativeM Term :=
-  .nativeGet fun env =>
+  .wait (fun env => some (
     match env.nativeHeap.filter (fun cell => cell.1 == id) with
     | [(_, storedType, value)] =>
       if storedType == typeName then
-        .nativeSet { env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != id) } (.ok value)
-      else .error .exhausted
-    | _ => .error .exhausted
+        (Except.ok value, { env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != id) })
+      else ((Except.error .exhausted : Except Exception Term), env)
+    | _ => (Except.error .exhausted, env))) Result.ofExcept
 
 end NativeM
 
