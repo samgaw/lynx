@@ -57,7 +57,7 @@ defmodule Lynx.Rustler.SharedLogTest do
     File.write!(proof, source)
 
     for module <-
-          ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties ScheduledLogProperties RegisteredLogProperties ContendedLogProperties ConstructorLogProperties ConstructedLogProperties) do
+          ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties ScheduledLogProperties RegisteredLogProperties ContendedLogProperties ConstructorLogProperties ConstructedLogProperties ConstructedConcurrentProperties) do
       text =
         File.read!(Path.join(@fixture, module <> ".lean"))
         |> String.replace("__APPEND__", append["lean_name"])
@@ -70,7 +70,7 @@ defmodule Lynx.Rustler.SharedLogTest do
       options ++
         [
           proof_modules:
-            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties Record.ScheduledLogProperties Record.RegisteredLogProperties Record.ContendedLogProperties Record.ConstructorLogProperties Record.ConstructedLogProperties),
+            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties Record.ScheduledLogProperties Record.RegisteredLogProperties Record.ContendedLogProperties Record.ConstructorLogProperties Record.ConstructedLogProperties Record.ConstructedConcurrentProperties),
           required_properties:
             ~w(Record.SharedLogProperties.facade_contract Record.SharedLogProperties.critical_contract
               Record.SharedLogProperties.borrow_prefix Record.SharedLogProperties.aliasing_prefix
@@ -84,7 +84,8 @@ defmodule Lynx.Rustler.SharedLogTest do
               Record.RegisteredLogProperties.call_steps Record.RegisteredLogProperties.decoded_call_steps
               Record.ContendedLogProperties.decoded_lock_prefix
               Record.ConstructorLogProperties.constructor_prefix Record.ConstructedLogProperties.append_prefix
-              Record.ConstructedLogProperties.appended)
+              Record.ConstructedLogProperties.appended
+              Record.ConstructedConcurrentProperties.decoded_lock_prefix)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -167,6 +168,70 @@ defmodule Lynx.Rustler.SharedLogTest do
       Lynx.Commands.lake(project, ["check", "--from-export", constructed_export] ++ sandbox)
 
     assert status == 0, output
+
+    concurrent_source = File.read!(Path.join(@fixture, "ConstructedContendedProperties.lean"))
+    concurrent_path = Path.join(project, "concurrent-prelude.lean")
+    File.write!(concurrent_path, concurrent_source)
+
+    concurrent_files =
+      Lynx.Translation.new(
+        externals: [checked.external],
+        preludes: [Lynx.Lean.from_file!(constructor_path), Lynx.Lean.from_file!(concurrent_path)]
+      )
+      |> Lynx.Translation.assemble()
+
+    assert Enum.all?(
+             Lynx.Commands.verify!(project, concurrent_files),
+             &(&1.status == :ok)
+           )
+
+    assert Enum.all?(
+             Lynx.Commands.verify!(project, concurrent_files),
+             &(&1.status == :ok and &1.cached)
+           )
+
+    concurrent_export = Path.join(tmp, "constructed-concurrent.export")
+
+    assert Enum.all?(
+             Lynx.Commands.verify!(project, concurrent_files, export: concurrent_export),
+             &(&1.status == :ok)
+           )
+
+    assert File.read!(concurrent_export) =~ "created_contended_records"
+
+    {status, output} =
+      Lynx.Commands.lake(project, ["check", "--from-export", concurrent_export] ++ sandbox)
+
+    assert status == 0, output
+
+    for incorrect <- [
+          String.replace(concurrent_source, "refCounter := 12", "refCounter := 13"),
+          String.replace(concurrent_source, "body_steps 1 true 11 10", "body_steps 1 true 11 11"),
+          String.replace(concurrent_source, "(.integer 19)", "(.integer 20)"),
+          concurrent_source <> "\nprivate axiom unchecked_constructed_claim : False\n",
+          concurrent_source <>
+            "\nprivate theorem unfinished_constructed_claim : False := by sorry\n"
+        ] do
+      refute incorrect == concurrent_source
+      File.write!(concurrent_path, incorrect)
+
+      wrong_files =
+        Lynx.Translation.new(
+          externals: [checked.external],
+          preludes: [
+            Lynx.Lean.from_file!(constructor_path),
+            Lynx.Lean.from_file!(concurrent_path)
+          ]
+        )
+        |> Lynx.Translation.assemble()
+
+      assert Enum.any?(
+               Lynx.Commands.verify!(project, wrong_files),
+               &(&1.module == "Erlang.prelude" and &1.status == :error)
+             )
+    end
+
+    File.write!(concurrent_path, concurrent_source)
 
     for incorrect <- [
           String.replace(constructor_source, "next (.reference 8)", "next (.reference 9)"),
