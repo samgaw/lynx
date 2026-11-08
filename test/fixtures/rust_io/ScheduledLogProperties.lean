@@ -65,13 +65,13 @@ private theorem sync_ready (pid counter : Nat) (frame : List (Nat × String × T
 @[expose] def owner (first : Bool) : NativeResourceArc shared_log.LogResource := ⟨3, if first then 7 else 9⟩
 @[expose] def count (first : Bool) : Nat := if first then 3 else 2
 
-private theorem drop_steps (pid : PID) (first : Bool) (state : State) :
+private theorem drop_steps (pid : PID) (first : Bool) (refs : Nat) (state : State) :
     Result.SharedSteps pid (do NativeOwnedDrop.drop (owner first); NativeM.ok true)
-      (shared (counter first + 1) (frame first) (Record.FramedLogProperties.free false) state) true
-      (shared (counter first + 1) (afterFrame first) (Record.FramedLogProperties.free false) state) := by
+      (shared (refs) (frame first) (Record.FramedLogProperties.free false) state) true
+      (shared (refs) (afterFrame first) (Record.FramedLogProperties.free false) state) := by
   have released := NativeResourceArc.releaseOwned_live_sharedSteps pid (owner first) logPayload (count first)
-    (shared (counter first + 1) (frame first) (Record.FramedLogProperties.free false) state)
-    (shared (counter first + 1) (afterFrame first) (Record.FramedLogProperties.free false) state)
+    (shared (refs) (frame first) (Record.FramedLogProperties.free false) state)
+    (shared (refs) (afterFrame first) (Record.FramedLogProperties.free false) state)
     (fun _ => NativeM.ok true) true
     (by cases first <;> decide) (by cases first <;> decide)
     (by cases first <;> simp [owner, frame, shared, afterFirstFrame, overlappingFrame,
@@ -86,14 +86,14 @@ private theorem drop_steps (pid : PID) (first : Bool) (state : State) :
       simpa [NativeM.ok, owner, frame, afterFrame, count, counter, shared, afterFirstFrame, overlappingFrame,
         decodedFrame, pinnedFrame, NativeResourceArc.vmCells, List.filter] using
           (Result.SharedSteps.done (pid := pid) true
-            (shared 11 pinnedFrame (Record.FramedLogProperties.free false) state))
+            (shared refs pinnedFrame (Record.FramedLogProperties.free false) state))
     | true =>
       simpa [NativeM.ok, owner, frame, afterFrame, count, counter, shared, afterFirstFrame, overlappingFrame,
         decodedFrame, pinnedFrame, NativeResourceArc.vmCells, List.filter] using
           (Result.SharedSteps.done (pid := pid) true
-            (shared 10 afterFirstFrame (Record.FramedLogProperties.free false) state))
+            (shared refs afterFirstFrame (Record.FramedLogProperties.free false) state))
 
-private theorem body_steps (pid : PID) (first : Bool)
+theorem body_steps (pid : PID) (first : Bool) (refs guardToken : Nat) (bound : 2 ≤ refs)
     (before sought written committed : State) (value : U16) (position : U64)
     (valid0 : Record.Properties.Valid before) (valid1 : Record.Properties.Valid sought)
     (valid2 : Record.Properties.Valid written)
@@ -101,40 +101,40 @@ private theorem body_steps (pid : PID) (first : Bool)
     (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
     (write : writeStep sought (payload value) = some (.Ok 4#usize, written))
     (sync : syncStep written = some (.Ok (), committed)) :
-    let guard : NativeGuard NativeFile := ⟨⟨1⟩, counter first + 1, pid, ⟨2⟩⟩
+    let guard : NativeGuard NativeFile := ⟨⟨1⟩, guardToken, pid, ⟨2⟩⟩
     Result.SharedSteps pid (afterGuard (owner first) guard value)
-      (shared (counter first + 1) (frame first) (NativeMutex.lockedContents pid (counter first + 1) false
+      (shared (refs) (frame first) (NativeMutex.lockedContents pid guardToken false
         (⟨2⟩ : NativeFile)) before) true
-      (shared (counter first + 1) (afterFrame first) (Record.FramedLogProperties.free false) committed) := by
+      (shared (refs) (afterFrame first) (Record.FramedLogProperties.free false) committed) := by
   dsimp only
+  let amount : Usize := 4#usize
   simp only [afterGuard, Record.RollbackProperties.append_contract, bind_assoc, NativeFile.seek,
     Result.wait_bind]
   have apart2 : Apart 2 (frame first) := by
     cases first <;> simp [Apart, frame, afterFirstFrame, overlappingFrame, decodedFrame,
       pinnedFrame, NativeResourceArc.vmCells]
-  have bound : 2 ≤ counter first + 1 := by cases first <;> decide
-  let locked := NativeMutex.lockedContents pid (counter first + 1) false (⟨2⟩ : NativeFile)
+  let locked := NativeMutex.lockedContents pid guardToken false (⟨2⟩ : NativeFile)
   refine .wait _ _ (.ok (.Ok position, (⟨2⟩ : NativeFile))) _
-    (shared (counter first + 1) (frame first) locked sought) _ _
-    (seek_ready pid (counter first + 1) (frame first) locked before sought position apart2 bound valid0 ready0 seek) ?_
+    (shared (refs) (frame first) locked sought) _ _
+    (by simpa only [shared] using seek_ready pid (refs) (frame first) locked before sought position apart2 bound valid0 ready0 seek) ?_
   simp only [Result.ok_bind, NativeFile.write, Result.wait_bind]
-  refine .wait _ _ (.ok (.Ok 4#usize, (⟨2⟩ : NativeFile))) _
-    (shared (counter first + 1) (frame first) locked written) _ _
-    (write_ready pid (counter first + 1) (frame first) locked sought written value apart2 bound valid1 ready1 write) ?_
+  refine .wait _ _ (.ok (.Ok amount, (⟨2⟩ : NativeFile))) _
+    (shared (refs) (frame first) locked written) _ _
+    (by simpa only [shared] using write_ready pid (refs) (frame first) locked sought written value apart2 bound valid1 ready1 write) ?_
   simp only [Result.ok_bind, NativeFile.syncAll, Result.wait_bind]
-  refine .wait _ _ (.ok (.Ok ())) _ (shared (counter first + 1) (frame first) locked committed) _ _
-    (sync_ready pid (counter first + 1) (frame first) locked written committed apart2 bound valid2 ready2 sync) ?_
+  refine .wait _ _ (.ok (.Ok ())) _ (shared (refs) (frame first) locked committed) _ _
+    (by simpa only [shared] using sync_ready pid (refs) (frame first) locked written committed apart2 bound valid2 ready2 sync) ?_
   simp only [Result.ok_bind, NativeGuard.release, Result.wait_bind]
   refine .wait _ _ (.ok ()) _
-    (shared (counter first + 1) (frame first) (Record.FramedLogProperties.free false) committed) _ _ ?_ ?_
-  · intro env actor refs cells
-    have freed := release_framed env (counter first + 1) (counter first + 1) (frame first) false committed
+    (shared (refs) (frame first) (Record.FramedLogProperties.free false) committed) _ _ ?_ ?_
+  · intro env actor refsEq cells
+    have freed := release_framed env refs guardToken (frame first) false committed
       (by cases first <;> simp [Apart, frame, afterFirstFrame, overlappingFrame, decodedFrame,
         pinnedFrame, NativeResourceArc.vmCells])
     rw [actor] at freed
-    rw [framed_eq env (counter first + 1) (frame first) locked committed refs cells] at freed
+    rw [framed_eq env (refs) (frame first) locked committed refsEq cells] at freed
     simpa [shared, framedEnv] using freed
-  · simpa only [Result.ok_bind] using drop_steps pid first committed
+  · simpa only [Result.ok_bind] using drop_steps pid first refs committed
 
 /-- A complete extracted native caller retains resource reads, mutex/file
 waits and owner-release reads/writes as distinct scheduled steps. -/
@@ -173,7 +173,8 @@ theorem call_steps (pid : PID) (first : Bool)
       rw [framed_eq env (counter first) (frame first) (Record.FramedLogProperties.free false) before refs cells]
         at acquired
       simpa [shared, framedEnv, Record.FramedLogProperties.guard, Record.FramedLogProperties.held, actor] using acquired
-    · simpa [Result.ok_bind, recoverGuard] using body_steps pid first before sought written committed value position
+    · simpa [Result.ok_bind, recoverGuard] using body_steps pid first (counter first + 1) (counter first + 1)
+        (by cases first <;> decide) before sought written committed value position
         valid0 valid1 valid2 ready0 ready1 ready2 seek write sync
 
 /-- The scheduler runs both actual computations from explicitly predecoded
