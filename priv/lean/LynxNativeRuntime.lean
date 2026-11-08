@@ -808,6 +808,24 @@ theorem deref_live_sharedSteps {α β : Type} [NativeCodec α]
   simp [lookup, payload, heap, token, stored, owners, NativeCodec.roundtrip,
     positive, boundInt]
 
+/-- Borrow locally and stop before the caller's next scheduler operation. -/
+theorem deref_live_registeredPrefix {α : Type} [NativeCodec α]
+    (pid : PID) (handle : NativeResourceArc α) (value : α) (count : Nat)
+    (before : Nat × List (Nat × String × Term)) (types : List String)
+    (positive : 0 < count) (bounded : count ≤ referenceLimit)
+    (token : before.2.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : before.2.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (before.2.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = count) :
+    Result.RegisteredPrefix pid (deref handle) before types (.ok value) before types := by
+  unfold deref
+  refine .read _ (.ok value) before before types types _ ?_ (.refl _ _ _)
+  intro env _ _ heap _
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
+  simp [lookup, payload, heap, token, stored, owners, NativeCodec.roundtrip, positive, boundInt]
+
 /-- A retained borrow is an actual state-read prefix and leaves ownership and
 payload intact. This interface retains operation boundaries for crash proofs. -/
 theorem deref_retained_prefix {α : Type} [NativeCodec α]
@@ -1087,6 +1105,38 @@ theorem decode_live_prefix {α : Type} [NativeCodec α]
   simp only [ite_eq_left registered, termOwner, registry, termEntryOwner]
   simpa using clone_live_prefix pin value count env positive bounded token stored owners fresh
 
+/-- Decoder ownership changes are local steps; the residual is the actual
+fresh handle and no subsequent lock or file poll is consumed. -/
+theorem decode_live_registeredPrefix {α : Type} [NativeCodec α]
+    (pid : PID) (pin : NativeResourceArc α) (term : Nat) (value : α) (count : Nat)
+    (before : Nat × List (Nat × String × Term)) (types : List String)
+    (registered : typeName α ∈ types)
+    (positive : 0 < count) (bounded : count < referenceLimit)
+    (registry : before.2.filter (fun cell => cell.1 == term) =
+      [(term, termType α, .tuple #[.reference pin.id, .reference pin.token])])
+    (token : before.2.filter (fun cell => cell.1 == pin.token) =
+      [(pin.token, handleType α, .reference pin.id)])
+    (stored : before.2.filter (fun cell => cell.1 == pin.id) =
+      [(pin.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (before.2.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference pin.id).length = count)
+    (fresh : before.2.any (fun cell => cell.1 == before.1 + 1) = false) :
+    Result.RegisteredPrefix pid (decode (.reference term)) before types
+      (.ok (⟨pin.id, before.1 + 1⟩ : NativeResourceArc α))
+      (before.1 + 1, (before.1 + 1, handleType α, .reference pin.id) :: before.2.map fun cell =>
+        if cell.1 == pin.id then
+          (pin.id, typeName α, .tuple #[.integer (count + 1), NativeCodec.encode value]) else cell) types := by
+  unfold decode
+  refine .read _ (clone pin) before _ types types _ ?_ ?_
+  · intro env _ _ heap available
+    simp [heap, available, registered, termOwner, registry, termEntryOwner]
+  · unfold clone
+    refine .update _ (.ok ⟨pin.id, before.1 + 1⟩) before _ _ types types types _ ?_ (.refl _ _ _)
+    intro env _ refs heap available
+    have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast Nat.le_of_lt bounded
+    simp [lookup, payload, heap, refs, token, stored, owners, NativeCodec.roundtrip, positive,
+      boundInt, bounded, fresh, available]
+
 /-- The actual decoder acquires an owner in a registered scheduler context.
 Its local reads and write precede the continuation; no native wait or cleanup
 inside that continuation is replaced with an atomic transition. -/
@@ -1112,19 +1162,10 @@ theorem decode_live_registeredSteps {α β : Type} [NativeCodec α]
       types answer final finalTypes) :
     Result.RegisteredSteps pid (decode (.reference term) >>= next)
       before types answer final finalTypes := by
-  unfold decode
-  rw [Result.get_bind]
-  refine .read _ (clone pin >>= next) before final types finalTypes answer ?_ ?_
-  · intro env _ _ heap available
-    simp [heap, available, registered, termOwner, registry, termEntryOwner]
-  · unfold clone
-    rw [Result.get_bind]
-    refine .update _ (next ⟨pin.id, before.1 + 1⟩) before _ final types types finalTypes answer ?_ rest
-    intro env _ refs heap available
-    have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast Nat.le_of_lt bounded
-    simp only [heap, refs]
-    simp [lookup, payload, heap, refs, token, stored, owners, NativeCodec.roundtrip, positive,
-      boundInt, bounded, fresh, NativeM.ok, Result.set_bind, Result.ok_bind, available]
+  have head := (decode_live_registeredPrefix pid pin term value count before types
+    registered positive bounded registry token stored owners fresh).bind next
+  simp only [Result.ok_bind] at head
+  exact head.thenSteps rest
 
 @[simp] theorem decode_nonreference {α : Type} [NativeCodec α] (term : Term)
     (notReference : ∀ identity, term ≠ .reference identity) (env : Environment) :
