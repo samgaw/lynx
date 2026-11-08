@@ -1116,7 +1116,11 @@ defmodule Lynx.Rustler.FileResourceTest do
         file_commit: 1,
         file_write_record: 2
       ],
-      proof_roots: ["effects_native::recover_file_word", "effects_native::recover_file_record"],
+      proof_roots: [
+        "effects_native::recover_file_word",
+        "effects_native::recover_file_record",
+        "effects_core::synchronize_directory"
+      ],
       execution: :runtime,
       files: :regular,
       owned_drops: true
@@ -1145,7 +1149,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1177,8 +1181,7 @@ defmodule Lynx.Rustler.FileResourceTest do
       base ++
         [
           proof_modules: Enum.map(modules, &("FileResource." <> &1)),
-          required_properties:
-            ~w(FileResource.Record.encode_spec FileResource.Record.decode_spec
+          required_properties: ~w(FileResource.Record.encode_spec FileResource.Record.decode_spec
         FileResource.Record.torn_decode FileResource.Record.decode_layout FileResource.Record.write_next
         FileResource.Record.short_not_acknowledged FileResource.Record.create_write_commit
         FileResource.RecordRecovery.recover_record FileResource.RecordRecovery.recover_value
@@ -1203,7 +1206,12 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.RecordErrors.opening_witness
         FileResource.RecordCleanup.before_close FileResource.RecordCleanup.after_close
         FileResource.RecordCleanup.cleanup_prefix FileResource.RecordCleanup.cleanup_retry
-        FileResource.RecordCleanup.cleanup_witness FileResource.RecordCleanup.transaction_attempts)
+        FileResource.RecordCleanup.cleanup_witness FileResource.RecordCleanup.transaction_attempts
+        FileResource.ShortRecovery.persisted_image_recovery
+        FileResource.CommitPhases.phase_prefix FileResource.CommitPhases.phase_recovery
+        FileResource.CommitPhases.post_sync_recovery FileResource.CommitPhases.directory_sync_recovery
+        FileResource.CommitPhases.phase_witness FileResource.CommitPhases.lost_name_witness
+        FileResource.CommitPhases.nif_phase_prefix FileResource.CommitPhases.nif_phase_recovery)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1365,6 +1373,24 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(cleanup_property, cleanup_source)
+    phases_property = Path.join(project, "FileResource/CommitPhases.lean")
+    phases_source = File.read!(phases_property)
+
+    premature_namespace =
+      String.replace(
+        phases_source,
+        "(image.names = [] ∨ image.names = Publish.names) ∧",
+        "image.names = Publish.names ∧"
+      )
+
+    assert premature_namespace != phases_source
+    File.write!(phases_property, premature_namespace)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(phases_property, phases_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
@@ -1399,11 +1425,25 @@ defmodule Lynx.Rustler.FileResourceTest do
         """)
       )
 
-    assert swallowed_open_error != facade_source
-    File.write!(facade, swallowed_open_error)
+    for changed <- [
+          swallowed_open_error,
+          String.replace(
+            facade_source,
+            "    file_resource_sync(resource)?;",
+            "    let _ = resource;"
+          ),
+          String.replace(
+            facade_source,
+            "    effects_core::synchronize_directory()\n}",
+            "    Ok(())\n}"
+          )
+        ] do
+      assert changed != facade_source
+      File.write!(facade, changed)
 
-    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Rustler.prepare!(options)
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
     end
   end
 
