@@ -2121,21 +2121,56 @@ private def insertProofSource (source rendered : String) : String := Id.run do
 private def renderedRuntime : List (String × String) :=
   [("public import ", "Lynx"), ("import ", "Lynx.Runner.Elab")]
 
-/-- Prelude blocks follow their header, which the runner extends with the runtime and the
-file's imports. The rendered header declares them too, after the prelude's own imports. -/
+/-- A prelude block's source, padded so positions match the block's original span. -/
+private def preludeSource (block : Json) : Except String (String × String) := do
+  fields block ["source", "file", "span", "indentation"]
+  let origin ← str block "file"
+  let source ← str block "source"
+  let indentation ← (← field block "indentation").getNat?
+  let span ← arr block "span"
+  let line ← if let some line := span[0]? then line.getNat? else pure 1
+  let column ← if let some column := span[1]? then column.getNat? else pure 1
+  let lines := source.splitOn "\n"
+  let source := String.ofList (List.replicate (line - 1) '\n') ++
+    String.ofList (List.replicate (column - 1) ' ') ++
+    String.intercalate ("\n" ++ String.ofList (List.replicate indentation ' ')) lines
+  pure (origin, source)
+
+/-- A prelude block's optional module header, parsed by Lean. -/
+private def preludeHeader (block : Json) :
+    IO (Parser.InputContext × Elab.HeaderSyntax × Parser.ModuleParserState × MessageLog) := do
+  let (origin, source) ← IO.ofExcept (preludeSource block)
+  let input := Parser.mkInputContext source origin (normalizeLineEndings := false)
+  let (header, state, messages) ← Parser.parseHeader input
+  return (input, header, state, messages)
+
+/-- Preserve every prelude's imports when composing their bodies, and include
+all dependencies the runner supplies during elaboration. -/
 private def renderPreludes (file : DecodedFile) : IO String := do
   let sources ← file.preludes.mapM fun block => IO.ofExcept (str block "source")
   let some first := sources[0]? | return ""
   let input := Parser.mkInputContext first file.fileName (normalizeLineEndings := false)
   let (header, _, _) ← Parser.parseHeader input
   let header : Elab.HeaderSyntax := header
-  let declared := (header.imports (includeInit := false)).map fun (declared : Import) => declared.module.toString
+  let mut declared := header.imports (includeInit := false)
+  let mut imports : List String := []
+  let mut bodies : List String := []
+  for source in sources.toList.drop 1 do
+    let input := Parser.mkInputContext source file.fileName (normalizeLineEndings := false)
+    let (nextHeader, state, _) ← Parser.parseHeader input
+    let nextHeader : Elab.HeaderSyntax := nextHeader
+    for dependency in nextHeader.imports (includeInit := false) do
+      unless declared.contains dependency do
+        declared := declared.push dependency
+        imports := imports ++ [toString dependency]
+    bodies := bodies ++ [state.pos.extract input.inputString input.endPos]
+  let names := declared.toList.map fun (dependency : Import) => dependency.module.toString
   let added := renderedRuntime ++ file.imports.toList.map ("public import ", ·)
-  let imports := added.filter (!declared.contains ·.2) |>.map fun (keyword, name) => keyword ++ name
+  imports := imports ++ (added.filter (!names.contains ·.2)).map fun (keyword, name) => keyword ++ name
   let stop := header.raw.getTailPos?.getD 0
   let first := String.Pos.Raw.extract first 0 stop ++ String.join (imports.map ("\n" ++ ·)) ++
     String.Pos.Raw.extract first stop first.rawEndPos
-  return String.intercalate "\n\n" (first :: sources.toList.drop 1) ++ "\n"
+  return String.intercalate "\n\n" (first :: bodies) ++ "\n"
 
 private def renderFile (file : DecodedFile) (env : Lean.Environment) : IO String := do
   if !file.preludes.isEmpty then return ← renderPreludes file
@@ -2319,35 +2354,15 @@ private def preludeLocation (ranges : Array (Option String × Nat × Nat × Nat)
       return .unknown
   return .unknown
 
-/-- A prelude block's source, padded so positions match the block's original span. -/
-private def preludeSource (block : Json) : Except String (String × String) := do
-  fields block ["source", "file", "span", "indentation"]
-  let origin ← str block "file"
-  let source ← str block "source"
-  let indentation ← (← field block "indentation").getNat?
-  let span ← arr block "span"
-  let line ← if let some line := span[0]? then line.getNat? else pure 1
-  let column ← if let some column := span[1]? then column.getNat? else pure 1
-  let lines := source.splitOn "\n"
-  let source := String.ofList (List.replicate (line - 1) '\n') ++
-    String.ofList (List.replicate (column - 1) ' ') ++
-    String.intercalate ("\n" ++ String.ofList (List.replicate indentation ' ')) lines
-  pure (origin, source)
-
-/-- The module header the first prelude block begins with, parsed by Lean. -/
-private def preludeHeader (block : Json) :
-    IO (Parser.InputContext × Elab.HeaderSyntax × Parser.ModuleParserState × MessageLog) := do
-  let (origin, source) ← IO.ofExcept (preludeSource block)
-  let input := Parser.mkInputContext source origin (normalizeLineEndings := false)
-  let (header, state, messages) ← Parser.parseHeader input
-  return (input, header, state, messages)
-
 /-- The imports a prelude declares in its header. -/
 private def preludeImports (entry : Json) : IO (Array Import) := do
   let preludes := (arr entry "preludes").toOption.getD #[]
-  let some first := preludes[0]? | return #[]
-  let (_, header, _, _) ← preludeHeader first
-  return header.imports (includeInit := false)
+  let mut imports : Array Import := #[]
+  for block in preludes do
+    let (_, header, _, _) ← preludeHeader block
+    for declared in header.imports (includeInit := false) do
+      unless imports.contains declared do imports := imports.push declared
+  return imports
 
 /-- Elaborate one prelude block without waiting for the proofs elaborating in the background:
 the final command state, whose environment may still be checking proofs, and the snapshot tree
@@ -2362,9 +2377,10 @@ private partial def processBlock (input : Parser.InputContext) (parserState : Pa
   let final := last initial
   return (final.elabSnap.resultSnap.get.cmdState, Language.toSnapshotTree initial)
 
-/-- Elaborate a prelude as one module: the first block begins with its header, and
-blocks follow in order, so each command can extend the parser for later commands.
-The frontend retains the sigils' original positions. -/
+/-- Elaborate proof files and declaration fragments in order as one module.
+The first block requires a module header; later blocks may have their own headers.
+All declared imports are loaded before elaboration, while each block keeps its
+original source positions and extends the parser for subsequent commands. -/
 private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
     IO (Elab.Command.State × Array (Message × Option Name) × Array Json) := do
   let (initial, _, _) ← elaborateFile env file.fileName file.fileMap #[] #[] (async := true)
@@ -2373,19 +2389,14 @@ private def elaboratePreludes (env : Lean.Environment) (file : DecodedFile) :
   let mut trees : Array Language.SnapshotTree := #[]
   let mut first := true
   for block in file.preludes do
-    let (input, parserState) ← if first then
-        let (input, header, parserState, headerMessages) ← preludeHeader block
-        for message in headerMessages.toList do
-          messages := messages.push (message, none)
-        unless header.isModule do
-          let message : Message := {
-            fileName := input.fileName, pos := ⟨1, 0⟩, severity := .error,
-            data := "a prelude must begin with a module header" }
-          messages := messages.push (message, none)
-        pure (input, parserState)
-      else
-        let (origin, source) ← IO.ofExcept (preludeSource block)
-        pure (Parser.mkInputContext source origin (normalizeLineEndings := false), {})
+    let (input, header, parserState, headerMessages) ← preludeHeader block
+    for message in headerMessages.toList do
+      messages := messages.push (message, none)
+    if first && !header.isModule then
+      let message : Message := {
+        fileName := input.fileName, pos := ⟨1, 0⟩, severity := .error,
+        data := "a prelude must begin with a module header" }
+      messages := messages.push (message, none)
     first := false
     let (next, tree) ← processBlock input parserState { state with messages := {} }
     state := next
