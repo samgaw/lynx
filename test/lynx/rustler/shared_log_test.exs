@@ -57,7 +57,7 @@ defmodule Lynx.Rustler.SharedLogTest do
     File.write!(proof, source)
 
     for module <-
-          ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties ScheduledLogProperties RegisteredLogProperties) do
+          ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties ScheduledLogProperties RegisteredLogProperties ContendedLogProperties) do
       text =
         File.read!(Path.join(@fixture, module <> ".lean"))
         |> String.replace("__APPEND__", append["lean_name"])
@@ -69,7 +69,7 @@ defmodule Lynx.Rustler.SharedLogTest do
       options ++
         [
           proof_modules:
-            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties Record.ScheduledLogProperties Record.RegisteredLogProperties),
+            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties Record.ScheduledLogProperties Record.RegisteredLogProperties Record.ContendedLogProperties),
           required_properties:
             ~w(Record.SharedLogProperties.facade_contract Record.SharedLogProperties.critical_contract
               Record.SharedLogProperties.borrow_prefix Record.SharedLogProperties.aliasing_prefix
@@ -80,7 +80,8 @@ defmodule Lynx.Rustler.SharedLogTest do
               Record.OverlappingLogProperties.acquired_prefix Record.OverlappingLogProperties.second_call
               Record.OverlappingLogProperties.overlap_phases Record.ScheduledLogProperties.call_steps
               Record.ScheduledLogProperties.scheduled_calls Record.ScheduledLogProperties.scheduled_records
-              Record.RegisteredLogProperties.call_steps Record.RegisteredLogProperties.decoded_call_steps)
+              Record.RegisteredLogProperties.call_steps Record.RegisteredLogProperties.decoded_call_steps
+              Record.ContendedLogProperties.decoded_lock_prefix)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -143,10 +144,32 @@ defmodule Lynx.Rustler.SharedLogTest do
     native_files =
       Lynx.Translation.new(externals: [checked.external]) |> Lynx.Translation.assemble()
 
+    contended_source = File.read!(Path.join(@fixture, "ContendedAdapterProperties.lean"))
+    [adapter_prelude] = adapter_file["preludes"]
+
+    contended_file = %{
+      adapter_file
+      | "module" => "Record.ContendedAdapterProperties",
+        "file" => "Record.ContendedAdapterProperties.lean",
+        "imports" => ["Record.RegisteredAdapterProperties", "Record.ContendedLogProperties"],
+        "audit_modules" => ["Record.ContendedAdapterProperties", "Record.ContendedLogProperties"],
+        "preludes" => [
+          %{
+            adapter_prelude
+            | "source" => contended_source,
+              "file" => "Record.ContendedAdapterProperties.lean"
+          }
+        ]
+    }
+
     scheduler_file = %{
       "module" => "Record.SchedulerExport",
       "file" => "Record.SchedulerExport.lean",
-      "imports" => ["Record.ScheduledLogProperties", "Record.RegisteredAdapterProperties"],
+      "imports" => [
+        "Record.ScheduledLogProperties",
+        "Record.RegisteredAdapterProperties",
+        "Record.ContendedAdapterProperties"
+      ],
       "contents" => [],
       "audit_modules" => [
         "Record.ScheduledLogProperties",
@@ -159,8 +182,10 @@ defmodule Lynx.Rustler.SharedLogTest do
           module
           public import Record.ScheduledLogProperties
           public import Record.RegisteredAdapterProperties
+          public import Record.ContendedAdapterProperties
           public def checkedSchedulerWitness := Record.ScheduledLogProperties.scheduled_records
           public def checkedRegisteredWitness := Record.RegisteredAdapterProperties.registered_records
+          public def checkedContendedWitness := Record.ContendedAdapterProperties.contended_records
           """,
           "file" => "Record.SchedulerExport.lean",
           "span" => [1],
@@ -170,7 +195,9 @@ defmodule Lynx.Rustler.SharedLogTest do
     }
 
     assert Enum.all?(
-             Lynx.Commands.verify!(project, native_files ++ [adapter_file, scheduler_file],
+             Lynx.Commands.verify!(
+               project,
+               native_files ++ [adapter_file, contended_file, scheduler_file],
                export: scheduler_export
              ),
              &(&1.status == :ok)
@@ -178,11 +205,29 @@ defmodule Lynx.Rustler.SharedLogTest do
 
     assert File.read!(scheduler_export) =~ "scheduled_records"
     assert File.read!(scheduler_export) =~ "registered_records"
+    assert File.read!(scheduler_export) =~ "contended_records"
 
     {status, output} =
       Lynx.Commands.lake(project, ["check", "--from-export", scheduler_export] ++ sandbox)
 
     assert status == 0, output
+
+    for incorrect <- [
+          String.replace(contended_source, "refCounter := 10", "refCounter := 11"),
+          String.replace(contended_source, "body_steps 1 true 9 8", "body_steps 1 true 9 9"),
+          String.replace(contended_source, "(.integer 19)", "(.integer 20)"),
+          contended_source <> "\nprivate axiom unchecked_native_claim : False\n",
+          contended_source <> "\nprivate theorem unfinished_native_claim : False := by sorry\n"
+        ] do
+      refute incorrect == contended_source
+      [prelude] = contended_file["preludes"]
+      wrong = %{contended_file | "preludes" => [%{prelude | "source" => incorrect}]}
+
+      assert Enum.any?(
+               Lynx.Commands.verify!(project, native_files ++ [adapter_file, wrong]),
+               &(&1.module == "Record.ContendedAdapterProperties" and &1.status == :error)
+             )
+    end
 
     for incorrect <- [
           String.replace(adapter_source, "refCounter := 10", "refCounter := 11"),
