@@ -800,6 +800,32 @@ theorem deref_retained_prefix {α : Type} [NativeCodec α]
     Result.ReadyPrefix (deref handle) env (.ok value) env := by
   exact deref_live_prefix handle value 2 env (by decide) (by decide) token stored owners
 
+/-- Retaining a live allocation preserves its payload and every unrelated cell,
+including while another Rust caller already owns a decoded token. -/
+theorem clone_live_prefix {α : Type} [NativeCodec α]
+    (handle : NativeResourceArc α) (value : α) (count : Nat) (env : Environment)
+    (positive : 0 < count) (bounded : count < referenceLimit)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = count)
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    Result.ReadyPrefix (clone handle) env
+      (.ok (⟨handle.id, env.refCounter + 1⟩ : NativeResourceArc α)) {env with
+        refCounter := env.refCounter + 1, nativeHeap :=
+          (env.refCounter + 1, handleType α, .reference handle.id) :: env.nativeHeap.map fun cell =>
+            if cell.1 == handle.id then
+              (handle.id, typeName α, .tuple #[.integer (count + 1), NativeCodec.encode value]) else cell} := by
+  unfold clone
+  apply Result.ReadyPrefix.get
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast Nat.le_of_lt bounded
+  simp [lookup, payload, token, stored, owners, NativeCodec.roundtrip, positive,
+    boundInt, bounded, fresh]
+  apply Result.ReadyPrefix.set
+  exact .refl _ _
+
 /-- Retaining a validated sole owner creates another token for the same value. -/
 theorem clone_single_next {α β : Type} [NativeCodec α]
     (handle : NativeResourceArc α) (value : α) (next : NativeResourceArc α → NativeM β)
@@ -835,6 +861,35 @@ theorem releaseOwned_retained_run_next {α β : Type} [NativeCodec α] [NativeRe
   rw [releaseOwned_retained_next handle value next env token stored owners]
   simp [release, lookup, payload, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
 
+/-- Nonfinal release supports overlapping Rust callers and a VM pin. The
+complete owner registry must agree with the stored count before consumption. -/
+theorem releaseOwned_live_prefix {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (value : α) (count : Nat) (env : Environment)
+    (nonfinal : 1 < count) (bounded : count ≤ referenceLimit)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .reference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference handle.id).length = count) :
+    Result.ReadyPrefix (releaseOwned handle) env (.ok ()) {env with nativeHeap :=
+      (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
+        if cell.1 == handle.id then
+          (handle.id, typeName α, .tuple #[.integer (count - 1), NativeCodec.encode value]) else cell} := by
+  have positive : 0 < count := by omega
+  have different : count ≠ 1 := by omega
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
+  unfold releaseOwned
+  apply Result.ReadyPrefix.get
+  simp [lookup, payload, token, stored, owners, NativeCodec.roundtrip, positive,
+    boundInt, different]
+  unfold release
+  apply Result.ReadyPrefix.get
+  simp [lookup, payload, token, stored, owners, NativeCodec.roundtrip, positive, boundInt,
+    different]
+  apply Result.ReadyPrefix.set
+  exact .refl _ _
+
 /-- Consuming a retained Rust owner is a prefix that preserves its VM pin and
 payload. Final resource destruction is not bypassed when only one owner exists. -/
 theorem releaseOwned_retained_prefix {α : Type} [NativeCodec α] [NativeResourceCleanup α]
@@ -849,14 +904,7 @@ theorem releaseOwned_retained_prefix {α : Type} [NativeCodec α] [NativeResourc
       (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
         if cell.1 == handle.id then
           (handle.id,typeName α,.tuple #[.integer 1,NativeCodec.encode value]) else cell} := by
-  unfold releaseOwned
-  apply Result.ReadyPrefix.get
-  simp [lookup,payload,token,stored,owners,NativeCodec.roundtrip,referenceLimit]
-  unfold release
-  apply Result.ReadyPrefix.get
-  simp [lookup,payload,token,stored,owners,NativeCodec.roundtrip,referenceLimit]
-  apply Result.ReadyPrefix.set
-  exact .refl _ _
+  exact releaseOwned_live_prefix handle value 2 env (by decide) (by decide) token stored owners
 
 theorem releaseOwned_retained_handled_next {α β γ : Type} [NativeCodec α] [NativeResourceCleanup α]
     (handle : NativeResourceArc α) (value : α) (finish : NativeM β) (handler : Exception → NativeM β)
@@ -957,6 +1005,32 @@ def decode {α : Type} [NativeCodec α] (term : Term) : NativeM (NativeResourceA
       | none => .error (.error (.atom "badarg"))
       | some pin => clone pin
     else .error (.error (.atom "badarg"))
+
+/-- Decode through the surviving VM pin while other Rust owners are live.
+The actual registry, allocation and owner-token count are checked together. -/
+theorem decode_live_prefix {α : Type} [NativeCodec α]
+    (pin : NativeResourceArc α) (term : Nat) (value : α) (count : Nat) (env : Environment)
+    (registered : typeName α ∈ env.nativeResourceTypes)
+    (positive : 0 < count) (bounded : count < referenceLimit)
+    (registry : env.nativeHeap.filter (fun cell => cell.1 == term) =
+      [(term, termType α, .tuple #[.reference pin.id, .reference pin.token])])
+    (token : env.nativeHeap.filter (fun cell => cell.1 == pin.token) =
+      [(pin.token, handleType α, .reference pin.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == pin.id) =
+      [(pin.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .reference pin.id).length = count)
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    Result.ReadyPrefix (decode (.reference term)) env
+      (.ok (⟨pin.id, env.refCounter + 1⟩ : NativeResourceArc α)) {env with
+        refCounter := env.refCounter + 1, nativeHeap :=
+          (env.refCounter + 1, handleType α, .reference pin.id) :: env.nativeHeap.map fun cell =>
+            if cell.1 == pin.id then
+              (pin.id, typeName α, .tuple #[.integer (count + 1), NativeCodec.encode value]) else cell} := by
+  unfold decode
+  apply Result.ReadyPrefix.get
+  simp only [ite_eq_left registered, termOwner, registry, termEntryOwner]
+  simpa using clone_live_prefix pin value count env positive bounded token stored owners fresh
 
 @[simp] theorem decode_nonreference {α : Type} [NativeCodec α] (term : Term)
     (notReference : ∀ identity, term ≠ .reference identity) (env : Environment) :
