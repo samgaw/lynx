@@ -34,7 +34,7 @@ defmodule Lynx.Rustler.SharedLogTest do
       owned_drops: true,
       cargo: [features: ["shared-log"]],
       only: [log_create: 0, log_append: 2],
-      proof_roots: fixture_options[:roots],
+      proof_roots: fixture_options[:roots] ++ ["io_protocol::sync_directory"],
       lean_project: project,
       module_prefix: "Record.Extraction",
       build_dir: Path.join(tmp, "build")
@@ -43,7 +43,7 @@ defmodule Lynx.Rustler.SharedLogTest do
     prepared = Lynx.Rustler.prepare!(options)
 
     assert [
-             %{"name" => "log_create", "arity" => 0, "flags" => 2},
+             %{"name" => "log_create", "arity" => 0, "flags" => 2} = create,
              %{"name" => "log_append", "arity" => 2, "flags" => 2} = append
            ] = prepared.bindings.bindings
 
@@ -57,10 +57,11 @@ defmodule Lynx.Rustler.SharedLogTest do
     File.write!(proof, source)
 
     for module <-
-          ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties ScheduledLogProperties RegisteredLogProperties ContendedLogProperties) do
+          ~w(FramedLogProperties NativeLogProperties OverlappingLogProperties ScheduledLogProperties RegisteredLogProperties ContendedLogProperties ConstructorLogProperties ConstructedLogProperties) do
       text =
         File.read!(Path.join(@fixture, module <> ".lean"))
         |> String.replace("__APPEND__", append["lean_name"])
+        |> String.replace("__CREATE__", create["lean_name"])
 
       File.write!(Path.join(project, "Record/" <> module <> ".lean"), text)
     end
@@ -69,7 +70,7 @@ defmodule Lynx.Rustler.SharedLogTest do
       options ++
         [
           proof_modules:
-            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties Record.ScheduledLogProperties Record.RegisteredLogProperties Record.ContendedLogProperties),
+            ~w(Record.SharedLogProperties Record.FramedLogProperties Record.NativeLogProperties Record.OverlappingLogProperties Record.ScheduledLogProperties Record.RegisteredLogProperties Record.ContendedLogProperties Record.ConstructorLogProperties Record.ConstructedLogProperties),
           required_properties:
             ~w(Record.SharedLogProperties.facade_contract Record.SharedLogProperties.critical_contract
               Record.SharedLogProperties.borrow_prefix Record.SharedLogProperties.aliasing_prefix
@@ -81,7 +82,9 @@ defmodule Lynx.Rustler.SharedLogTest do
               Record.OverlappingLogProperties.overlap_phases Record.ScheduledLogProperties.call_steps
               Record.ScheduledLogProperties.scheduled_calls Record.ScheduledLogProperties.scheduled_records
               Record.RegisteredLogProperties.call_steps Record.RegisteredLogProperties.decoded_call_steps
-              Record.ContendedLogProperties.decoded_lock_prefix)
+              Record.ContendedLogProperties.decoded_lock_prefix
+              Record.ConstructorLogProperties.constructor_prefix Record.ConstructedLogProperties.append_prefix
+              Record.ConstructedLogProperties.appended)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -117,6 +120,109 @@ defmodule Lynx.Rustler.SharedLogTest do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
+
+    constructor_source =
+      File.read!(Path.join(@fixture, "ConstructorAdapterProperties.lean"))
+      |> String.replace("__APPEND__", append["lean_name"])
+      |> String.replace("__CREATE__", create["lean_name"])
+
+    constructor_path = Path.join(project, "constructor-prelude.lean")
+    File.write!(constructor_path, constructor_source)
+    [{_, constructed_beam}] = Code.compile_file(Path.join(@fixture, "ConstructedLogLaws.exs"))
+
+    constructed_options = [
+      native: {Lynx.Rustler, options},
+      initial_environment: "Record.ConstructedLogProperties.initial",
+      preludes: [Lynx.Lean.from_file!(constructor_path)]
+    ]
+
+    constructed_reports = Lynx.Laws.verify([constructed_beam], constructed_options)
+
+    assert Enum.all?(constructed_reports, &(&1.status == :ok)),
+           inspect(constructed_reports, limit: :infinity)
+
+    assert Enum.any?(
+             constructed_reports,
+             &(&1[:initial_environments] == ["Record.ConstructedLogProperties.initial"])
+           )
+
+    assert Enum.all?(
+             Lynx.Laws.verify([constructed_beam], constructed_options),
+             &(&1.status == :ok and &1.cached)
+           )
+
+    constructed_export = Path.join(tmp, "constructed-log.export")
+
+    assert Enum.all?(
+             Lynx.Laws.verify(
+               [constructed_beam],
+               constructed_options ++ [export: constructed_export]
+             ),
+             &(&1.status == :ok)
+           )
+
+    assert File.read!(constructed_export) =~ "create_append_next"
+
+    {status, output} =
+      Lynx.Commands.lake(project, ["check", "--from-export", constructed_export] ++ sandbox)
+
+    assert status == 0, output
+
+    for incorrect <- [
+          String.replace(constructor_source, "next (.reference 8)", "next (.reference 9)"),
+          constructor_source <> "\nprivate axiom unchecked_constructor_claim : False\n",
+          constructor_source <>
+            "\nprivate theorem unfinished_constructor_claim : False := by sorry\n"
+        ] do
+      refute incorrect == constructor_source
+      File.write!(constructor_path, incorrect)
+
+      wrong_files =
+        Lynx.Translation.new(
+          externals: [checked.external],
+          preludes: [Lynx.Lean.from_file!(constructor_path)]
+        )
+        |> Lynx.Translation.assemble()
+
+      assert Enum.any?(
+               Lynx.Commands.verify!(project, wrong_files),
+               &(&1.module == "Erlang.prelude" and &1.status == :error)
+             )
+    end
+
+    File.write!(constructor_path, constructor_source)
+
+    constructed_law = File.read!(Path.join(@fixture, "ConstructedLogLaws.exs"))
+    wrong_constructed_law = String.replace(constructed_law, "13) == true", "13) == false")
+    refute wrong_constructed_law == constructed_law
+    [{_, wrong_constructed_beam}] = Code.compile_string(wrong_constructed_law)
+
+    assert Enum.any?(
+             Lynx.Laws.verify([wrong_constructed_beam], constructed_options),
+             &(&1.status == :error)
+           )
+
+    constructed_proof = Path.join(project, "Record/ConstructedLogProperties.lean")
+    constructed_source = File.read!(constructed_proof)
+
+    wrong_contents =
+      String.replace(
+        constructed_source,
+        "Record.AppendProperties.appended input 13#u16 .nil",
+        "Record.AppendProperties.appended input 19#u16 .nil"
+      )
+
+    refute wrong_contents == constructed_source
+    File.write!(constructed_proof, wrong_contents)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+    assert error.message =~ "Record/ConstructedLogProperties.lean:"
+    File.write!(constructed_proof, constructed_source)
+    checked = Lynx.Rustler.prepare!(options)
 
     scheduler_export = Path.join(tmp, "native-scheduler.export")
 
@@ -345,6 +451,25 @@ defmodule Lynx.Rustler.SharedLogTest do
     # Changing the actual Rust critical section invalidates the facade contract.
     rust = Path.join(workspace, "native/src/lib.rs")
     implementation = File.read!(rust)
+
+    # Removing the actual directory synchronization invalidates constructor reachability.
+    without_sync =
+      String.replace(
+        implementation,
+        "match io_protocol::sync_directory() {",
+        "match io_protocol::close_directory() {"
+      )
+
+    refute without_sync == implementation
+    File.write!(rust, without_sync)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+    assert error.message =~ "Record/ConstructorLogProperties.lean:"
+    File.write!(rust, implementation)
 
     File.write!(
       rust,
