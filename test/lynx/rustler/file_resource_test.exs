@@ -1149,7 +1149,7 @@ defmodule Lynx.Rustler.FileResourceTest do
            )
 
     modules =
-      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix)
+      ~w(Creation CreatedCalls Write Publish Recovery Record RecordRecovery ShortRecovery RecordRetry RecordErrors RecordCleanup CommitPhases CallPrefix CommitFailure)
 
     replacements = %{
       "file_create" => "__CREATE__",
@@ -1215,7 +1215,10 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.CommitPhases.complete_prefix
         FileResource.CallPrefix.release_prefix FileResource.CallPrefix.facade_prefix
         FileResource.CallPrefix.call_run FileResource.CallPrefix.boundary_recovery
-        FileResource.CallPrefix.acknowledged_retries)
+        FileResource.CallPrefix.acknowledged_retries
+        FileResource.CommitFailure.commit_prefix FileResource.CommitFailure.release_prefix
+        FileResource.CommitFailure.facade_prefix FileResource.CommitFailure.call_run
+        FileResource.CommitFailure.failure_env FileResource.CommitFailure.retry_run)
         ]
 
     verified = Lynx.Rustler.prepare!(options)
@@ -1256,6 +1259,26 @@ defmodule Lynx.Rustler.FileResourceTest do
           do: name
 
     assert short_laws == ["short_record_not_committed/1"]
+    failure_path = Path.join(tmp, "failed_commit.ex")
+    File.cp!(Path.join(@fixture, "file_resource_failure.ex"), failure_path)
+    [{_, failure_beam}] = Code.compile_file(failure_path)
+
+    failure_reports =
+      Lynx.Laws.verify([failure_beam],
+        native: {Lynx.Rustler, options},
+        initial_environment: "FileResource.CommitFailure.seed"
+      )
+
+    assert Enum.all?(failure_reports, &(&1.status == :ok)),
+           inspect(failure_reports, limit: :infinity)
+
+    assert ["failed_sync_can_retry/0"] ==
+             for(
+               report <- failure_reports,
+               %{kind: :elixir_law, status: :verified, theorem: name} <- report[:guarantees] || [],
+               do: name
+             )
+
     warm = Lynx.Rustler.prepare!(options)
     assert Enum.all?(warm.reports, &(&1.status == :ok and &1.cached))
     export = Path.join(tmp, "record.export")
@@ -1415,6 +1438,31 @@ defmodule Lynx.Rustler.FileResourceTest do
     end
 
     File.write!(call_property, call_source)
+    failure_property = Path.join(project, "FileResource/CommitFailure.lean")
+    failure_source = File.read!(failure_property)
+
+    for wrong <- [
+          String.replace(failure_source, "(.ok false) (done", "(.ok true) (done"),
+          String.replace(
+            failure_source,
+            "Record.content value,saved,4,rest",
+            "Record.content value,ByteArray.empty,4,rest"
+          ),
+          String.replace(
+            failure_source,
+            "(10,NativeIoError.typeName,.atom \"live\")",
+            "(10,NativeIoError.typeName,.atom \"stale\")"
+          )
+        ] do
+      assert wrong != failure_source
+      File.write!(failure_property, wrong)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    end
+
+    File.write!(failure_property, failure_source)
     native = Path.join(workspace, "core/src/lib.rs")
     rust = File.read!(native)
 
@@ -1449,7 +1497,15 @@ defmodule Lynx.Rustler.FileResourceTest do
         """)
       )
 
+    acknowledged_error =
+      String.replace(
+        facade_source,
+        "let outcome = file_resource_commit(&resource);\n    file_resource_release(resource);\n    match outcome {\n        Ok(()) => true,\n        Err(error) => {\n            drop(error);\n            false",
+        "let outcome = file_resource_commit(&resource);\n    file_resource_release(resource);\n    match outcome {\n        Ok(()) => true,\n        Err(error) => {\n            drop(error);\n            true"
+      )
+
     for changed <- [
+          acknowledged_error,
           swallowed_open_error,
           String.replace(
             facade_source,
