@@ -104,7 +104,7 @@ theorem repair_prepare (file : NativeFile) (env : Environment)
       (resize_then_sync file (U64.ofNatCore (4 * values.length) (by
           have bound := bounded
           simp only [List.length_append, logBytes_length, limit, UScalarTy.numBits] at *
-          omega)) >>= repairReply file (alloc.vec.Vec.from values (by scalar_tac)))
+          omega)) >>= repairReply file (alloc.vec.Vec.from values (by scalar_tac))).run
         (fileEnv env file (finished (disk (logBytes values ++ tail)) plan) frame) := by
   let data := disk (logBytes values ++ tail)
   have capacity : values.length ≤ 262144 := by
@@ -153,8 +153,8 @@ theorem resize_pending (file : NativeFile) (length : U64) (env : Environment)
     (script : before.script = outcome "set_len" true 0 mask rest)
     (accepted : persist before.durable (resize before.visible length.val) mask = some durable)
     (next : core.result.Result Unit NativeIoError → NativeM α) :
-    (resize_then_sync file length >>= next) (fileEnv env file before frame) =
-      (io_core.synchronize file >>= next) (fileEnv env file
+    (resize_then_sync file length >>= next).run (fileEnv env file before frame) =
+      (io_core.synchronize file >>= next).run (fileEnv env file
         ⟨resize before.visible length.val, durable, before.position, rest⟩ frame) := by
   simp only [resize_then_sync, monadLift_self, bind_assoc]
   rw [resize_next file length env frame before
@@ -174,7 +174,7 @@ theorem crash_log_image (file : NativeFile) (env : Environment)
   unfold crashImage at captured
   rw [lookup_admitted env file state frame separate valid] at captured
   change (persist state.durable state.visible mask).bind (fun bytes =>
-    some (⟨bytes, (fileEnv env file state frame).refCounter⟩ : Image)) = some image at captured
+    some (⟨bytes, (fileEnv env file state frame).nativeRefCounter⟩ : Image)) = some image at captured
   obtain ⟨bytes, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj record
   have lengths := persist_lengths _ _ _ _ accepted
@@ -219,7 +219,7 @@ theorem repair_at_sync (file : NativeFile) (env : Environment)
       ⟨disk (logBytes values ++ tail), disk (logBytes values ++ tail), position,
         outcome "seek" true 0 (zeroMask (disk (logBytes values ++ tail)))
           (reader (disk (logBytes values ++ tail)) (outcome "set_len" true 0 mask rest) 0).script⟩ frame) =
-      (io_core.synchronize file >>= repairReply file (alloc.vec.Vec.from values (by scalar_tac)))
+      (io_core.synchronize file >>= repairReply file (alloc.vec.Vec.from values (by scalar_tac))).run
         (fileEnv env file (pendingRepair values tail durable rest) frame) := by
   have capacity : values.length ≤ 262144 := by
     simp only [List.length_append, logBytes_length, limit] at bounded
@@ -296,7 +296,7 @@ theorem repair_interrupt (file : NativeFile) (env : Environment)
         outcome "seek" true 0 (zeroMask (disk (logBytes values ++ tail)))
           (reader (disk (logBytes values ++ tail))
             (outcome "set_len" true 0 mask (.cons (.atom "blocked") rest)) 0).script⟩ frame) =
-      (io_core.synchronize file >>= repairReply file (alloc.vec.Vec.from values (by scalar_tac)))
+      (io_core.synchronize file >>= repairReply file (alloc.vec.Vec.from values (by scalar_tac))).run
         (fileEnv env file (pendingRepair values tail durable (.cons (.atom "blocked") rest)) frame) ∧
     pollSync file (fileEnv env file (pendingRepair values tail durable (.cons (.atom "blocked") rest)) frame) = none ∧
     repair_log ⟨image.highWater + 1⟩ maxRecords

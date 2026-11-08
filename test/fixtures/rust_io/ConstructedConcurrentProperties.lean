@@ -16,11 +16,11 @@ inductive Phase where
 @[expose] def payload : shared_log.LogResource := Record.ConstructorLogProperties.payload
 @[expose] def pinnedFrame := NativeResourceArc.vmCells payload 5 7 8
 @[expose] def decodedFrame :=
-  (9, NativeResourceArc.handleType shared_log.LogResource, .reference 5) ::
+  (9, NativeResourceArc.handleType shared_log.LogResource, .nativeReference 5) ::
     pinnedFrame.map fun cell => if cell.1 == 5 then
       (5, NativeResourceArc.typeName shared_log.LogResource, .tuple #[.integer 2, NativeCodec.encode payload]) else cell
 @[expose] def overlappingFrame :=
-  (11, NativeResourceArc.handleType shared_log.LogResource, .reference 5) ::
+  (11, NativeResourceArc.handleType shared_log.LogResource, .nativeReference 5) ::
     decodedFrame.map fun cell => if cell.1 == 5 then
       (5, NativeResourceArc.typeName shared_log.LogResource, .tuple #[.integer 3, NativeCodec.encode payload]) else cell
 @[expose] def remainingFrame :=
@@ -41,10 +41,10 @@ inductive Phase where
     (0, namespaceTypeName, encodeNamespace ⟨Record.ConstructorLogProperties.names,
       Record.ConstructorLogProperties.names,[],.nil⟩)])
 @[expose] def world (env : Environment) (counter : Nat) (phase : Phase) (mutex : Term) (state : State) : Environment :=
-  {env with refCounter := counter, nativeHeap := (shared counter phase mutex state).2}
+  {env with nativeRefCounter := counter, nativeHeap := (shared counter phase mutex state).2}
 
 private theorem world_eq (env : Environment) (counter : Nat) (phase : Phase)
-    (mutex : Term) (state : State) (count : env.refCounter = counter)
+    (mutex : Term) (state : State) (count : env.nativeRefCounter = counter)
     (heap : env.nativeHeap = (shared counter phase mutex state).2) :
     world env counter phase mutex state = env := by
   cases env
@@ -244,7 +244,7 @@ theorem decoded_lock_prefix (pid : PID) (first : Bool) (types : List String)
     (registered : NativeResourceArc.typeName shared_log.LogResource ∈ types)
     (contents : Term) (state : State) (value : U16) :
     Result.RegisteredPrefix pid (do
-      let owner ← NativeResourceArc.decode (.reference 8)
+      let owner ← NativeResourceArc.decode (.nativeReference 8)
       Rustler.executeNative (__APPEND__ owner value) Rustler.encodeBool)
       (shared (beforeCounter first) (beforeFrame first) contents state) types
       (.wait (NativeMutex.pollLock (⟨4⟩ : NativeMutex NativeFile)) (resume first value))

@@ -14,7 +14,7 @@ open NativeFile
 @[expose] def initial (script : Term) : Environment :=
   {nativeHeap := [(0,namespaceTypeName,encodeNamespace ⟨[],[],[],script⟩)]}
 @[expose] def created (script rest : Term) : Environment :=
-  {refCounter := 2, nativeHeap := [
+  {nativeRefCounter := 2, nativeHeap := [
     (2,writableHandleTypeName,encodeHandle ⟨1,0,script⟩),
     (1,inodeTypeName,encode ⟨ByteArray.empty,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨names,[],[names],rest⟩)]}
@@ -59,7 +59,7 @@ theorem not_directory_synced (script rest : Term) :
     rfl
 
 @[expose] def occupied (script : Term) : Environment :=
-  {refCounter := 1, nativeHeap := [
+  {nativeRefCounter := 1, nativeHeap := [
     (1,inodeTypeName,encode ⟨ByteArray.empty,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨names,names,[],script⟩)]}
 

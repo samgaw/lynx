@@ -25,7 +25,7 @@ theorem adapter_steps (pid : PID) (first : Bool) (available : List String)
     (sync : syncStep written = some (.Ok (), committed)) :
     Result.RegisteredSteps pid
       (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0)
-        (.reference 6) (.integer (if first then 13 else 19)))
+        (.nativeReference 6) (.integer (if first then 13 else 19)))
       (shared (Record.RegisteredLogProperties.counter first - 1) pinnedFrame (Record.FramedLogProperties.free false) before)
       available Term.true
       (shared (Record.RegisteredLogProperties.counter first + 1) pinnedFrame (Record.FramedLogProperties.free false) committed) resourceTypes := by
@@ -54,29 +54,29 @@ theorem adapter_calls (before sought1 written1 committed1 sought2 written2 commi
     (seek2 : seekStep committed1 (.end_ 0#i64) = some (.Ok position2, sought2))
     (write2 : writeStep sought2 (payload 19#u16) = some (.Ok 4#usize, written2))
     (sync2 : syncStep written2 = some (.Ok (), committed2)) :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 19)
-    (Result.schedule child (fun _ => parent))
-      {refCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) before).2} =
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 19)
+    (Result.schedule {} child (fun _ => parent))
+      {nativeRefCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) before).2} =
       (.ok Term.true, {
-        pidCounter := 2, refCounter := 10, nativeResourceTypes := resourceTypes,
+        nativeRefCounter := 10, nativeResourceTypes := resourceTypes,
         nativeHeap := (shared 10 pinnedFrame (Record.FramedLogProperties.free false) committed2).2}) := by
   dsimp only
-  have parent := adapter_steps 1 true [] rfl before sought1 written1 committed1 position1
+  have parent := adapter_steps [] true [] rfl before sought1 written1 committed1 position1
     valid0 valid1 valid2 ready0 ready1 ready2 seek1 write1 sync1
-  have child := adapter_steps 2 false resourceTypes (by simp [resourceTypes, List.eraseDups_cons])
+  have child := adapter_steps [1] false resourceTypes (by simp [resourceTypes, List.eraseDups_cons])
     committed1 sought2 written2 committed2 position2
     valid3 valid4 valid5 ready3 ready4 ready5 seek2 write2 sync2
   simpa [Record.RegisteredLogProperties.counter, shared, resourceTypes] using
     Result.two_registered_serial_steps _ _ _ _ _ _ _ _ _ _ parent child
 
 theorem registered_records :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 19)
-    (Result.schedule child (fun _ => parent))
-      {refCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) firstInput).2} =
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 19)
+    (Result.schedule {} child (fun _ => parent))
+      {nativeRefCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) firstInput).2} =
       (.ok Term.true, {
-        pidCounter := 2, refCounter := 10, nativeResourceTypes := resourceTypes,
+        nativeRefCounter := 10, nativeResourceTypes := resourceTypes,
         nativeHeap := (shared 10 pinnedFrame (Record.FramedLogProperties.free false) complete).2}) := by
   have bytes13 : (bytes (payload 13#u16)).size = 4 := by
     simp [bytes_size, payload, Record.IntegrityProperties.layout]

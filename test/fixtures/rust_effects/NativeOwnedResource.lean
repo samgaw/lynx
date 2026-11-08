@@ -5,21 +5,21 @@ open Aeneas Aeneas.Std effects_native Lynx
 namespace Resource.Properties
 
 @[expose] def initial (env : Environment) : Environment :=
-  {env with refCounter := 0, nativeHeap := []}
+  {env with nativeRefCounter := 0, nativeHeap := []}
 
 @[expose] def cell (value : U64) : Nat × String × Term :=
   (1, NativeMutex.typeName effects_core.Counter,
     .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode ({value} : effects_core.Counter)])
 
 @[expose] def live (env : Environment) (value : U64) (token : Nat := 3) (counter : Nat := 3) : Environment :=
-  {env with refCounter := counter, nativeHeap := [
-    (token, NativeResourceArc.handleType CounterResource, .reference 2),
+  {env with nativeRefCounter := counter, nativeHeap := [
+    (token, NativeResourceArc.handleType CounterResource, .nativeReference 2),
     (2, NativeResourceArc.typeName CounterResource,
       .tuple #[.integer 1, NativeCodec.encode ({state := ⟨1⟩} : CounterResource)]), cell value]}
 
 @[expose] def payloadReclaimed (env : Environment) (token : Nat := 3) (counter : Nat := 3) : Environment :=
-  {env with refCounter := counter, nativeHeap := [
-    (token, NativeResourceArc.handleType CounterResource, .reference 2),
+  {env with nativeRefCounter := counter, nativeHeap := [
+    (token, NativeResourceArc.handleType CounterResource, .nativeReference 2),
     (2, NativeResourceArc.typeName CounterResource,
       .tuple #[.integer 1, NativeCodec.encode ({state := ⟨1⟩} : CounterResource)])]}
 
@@ -39,7 +39,7 @@ theorem construct (value : U64) (env : Environment)
 theorem unregistered_cleanup (value : U64) (env : Environment)
     (absent : NativeResourceArc.typeName CounterResource ∉ env.nativeResourceTypes) :
     resource_new value (initial env) =
-      (.error (.error (.atom "rust_panicked")), {env with refCounter := 1, nativeHeap := []}) := by
+      (.error (.error (.atom "rust_panicked")), {env with nativeRefCounter := 1, nativeHeap := []}) := by
   simp [resource_new, NativeMutex.new, NativeResourceArc.newOwned, NativeResourceCleanup.cleanup,
     CounterResource.drop_owned, NativeOwnedDrop.drop, NativeMutex.dispose,
     NativeM.allocate, NativeM.readCell, NativeM.removeCell, NativeM.ok, NativeM.fail,
@@ -55,7 +55,7 @@ theorem payload_cleanup_next {α : Type} (value : U64) (env : Environment) (toke
 
 theorem final_release_next {α : Type} (next : Unit → NativeM α) (value : U64) (env : Environment) (token counter : Nat) (valid : 3 ≤ token) :
     (resource_release ⟨2,token⟩ >>= next) (live env value token counter) =
-      next () {env with refCounter := counter, nativeHeap := []} := by
+      next () {env with nativeRefCounter := counter, nativeHeap := []} := by
   have n1 : (token == 1) = false := by simp; omega
   have n2 : (token == 2) = false := by simp; omega
   have r1 : (1 == token) = false := by simp; omega
@@ -72,9 +72,9 @@ theorem final_release_next {α : Type} (next : Unit → NativeM α) (value : U64
   simpa [n1, n2, r1, r2, bne_eq, List.filter, resource_release, NativeOwnedDrop.drop, payloadReclaimed, (by omega : token ≠ 2)] using released
 
 @[expose] def aliased (env : Environment) (value : U64) : Environment :=
-  {env with refCounter := 4, nativeHeap := [
-    (4, NativeResourceArc.handleType CounterResource, .reference 2),
-    (3, NativeResourceArc.handleType CounterResource, .reference 2),
+  {env with nativeRefCounter := 4, nativeHeap := [
+    (4, NativeResourceArc.handleType CounterResource, .nativeReference 2),
+    (3, NativeResourceArc.handleType CounterResource, .nativeReference 2),
     (2, NativeResourceArc.typeName CounterResource,
       .tuple #[.integer 2, NativeCodec.encode ({state := ⟨1⟩} : CounterResource)]), cell value]}
 
@@ -124,7 +124,7 @@ theorem complete_cycle (value amount : U64) (env : Environment)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     ∃ (changed : Bool) (updated : U64),
       resource_cycle value amount (initial env) =
-        (.ok changed, {env with refCounter := 5, nativeHeap := []}) ∧
+        (.ok changed, {env with nativeRefCounter := 5, nativeHeap := []}) ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
   let finish : Bool → NativeM Bool := fun changed => do

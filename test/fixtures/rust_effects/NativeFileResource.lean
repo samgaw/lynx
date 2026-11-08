@@ -35,15 +35,15 @@ theorem final_release_next {α : Type} (before after : State) (env : Environment
     using released
 
 @[expose] def aliased (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 4, nativeHeap := [
-    (4, NativeResourceArc.handleType effects_native.FileResource, .reference 2),
-    (3, NativeResourceArc.handleType effects_native.FileResource, .reference 2),
+  {env with nativeRefCounter := 4, nativeHeap := [
+    (4, NativeResourceArc.handleType effects_native.FileResource, .nativeReference 2),
+    (3, NativeResourceArc.handleType effects_native.FileResource, .nativeReference 2),
     (2, NativeResourceArc.typeName effects_native.FileResource,
       .tuple #[.integer 2, NativeCodec.encode payload]), fileCell state]}
 
 @[expose] def retained (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 4, nativeHeap := [
-    (4, NativeResourceArc.handleType effects_native.FileResource, .reference 2),
+  {env with nativeRefCounter := 4, nativeHeap := [
+    (4, NativeResourceArc.handleType effects_native.FileResource, .nativeReference 2),
     (2, NativeResourceArc.typeName effects_native.FileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), fileCell state]}
 
@@ -70,8 +70,8 @@ theorem retained_release_next {α : Type} (state : State) (env : Environment)
     List.filter, List.map] using released
 
 @[expose] def retainedCleaned (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 4, nativeHeap := [
-    (4, NativeResourceArc.handleType effects_native.FileResource, .reference 2),
+  {env with nativeRefCounter := 4, nativeHeap := [
+    (4, NativeResourceArc.handleType effects_native.FileResource, .nativeReference 2),
     (2, NativeResourceArc.typeName effects_native.FileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), closedCell state]}
 

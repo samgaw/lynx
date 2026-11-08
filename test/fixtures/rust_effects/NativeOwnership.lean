@@ -26,10 +26,10 @@ theorem release_state (mutex : NativeMutex U64) (value : U64) (accepted : Bool)
 
 /-- The caller composes the checked callee contract without losing cleanup on failure. -/
 theorem composed_release (value : U64) (accepted : Bool) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     mutex_release_checked value accepted env =
       (if accepted then .ok () else .error (.error (.atom "rust_panicked")),
-        { env with refCounter := env.refCounter + 1 }) := by
+        { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   have lifecycle := NativeMutex.new_dispose_next value (NativeM.massert accepted) env fresh
   cases accepted <;>
     simpa [mutex_release_checked, release_contract, NativeM.massert, NativeM.fail] using lifecycle

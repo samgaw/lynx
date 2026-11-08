@@ -34,10 +34,10 @@ theorem callee_state (mutex : NativeMutex U64) (value : U64) (accepted : Bool)
 
 /-- An assertion with a live local owner preserves the prior heap after unwind. -/
 theorem local_cleanup (value : U64) (accepted : Bool) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     mutex_assert_scalar value accepted env =
       (if accepted then .ok () else .error (.error (.atom "rust_panicked")),
-        { env with refCounter := env.refCounter + 1 }) := by
+        { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   have lifecycle := NativeMutex.new_dispose_next value
     (if accepted then Result.ok () else NativeM.fail .panic) env fresh
   cases accepted <;>
@@ -45,10 +45,10 @@ theorem local_cleanup (value : U64) (accepted : Bool) (env : Environment)
 
 /-- The caller composes the checked callee's actual unwind behavior. -/
 theorem composed_cleanup (value : U64) (accepted : Bool) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     mutex_assert_release value accepted env =
       (if accepted then .ok () else .error (.error (.atom "rust_panicked")),
-        { env with refCounter := env.refCounter + 1 }) := by
+        { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   have lifecycle := NativeMutex.new_dispose_next value
     (if accepted then Result.ok () else NativeM.fail .panic) env fresh
   cases accepted <;>
@@ -56,10 +56,10 @@ theorem composed_cleanup (value : U64) (accepted : Bool) (env : Environment)
 
 /-- Either rejected assertion performs cleanup, including the second failure path. -/
 theorem repeated_cleanup (value : U64) (first second : Bool) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     mutex_two_assertions value first second env =
       (if first && second then .ok () else .error (.error (.atom "rust_panicked")),
-        { env with refCounter := env.refCounter + 1 }) := by
+        { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   have lifecycle := NativeMutex.new_dispose_next value
     (if first && second then Result.ok () else NativeM.fail .panic) env fresh
   cases first <;> cases second <;>

@@ -65,28 +65,28 @@ theorem updates_interleave (before parentAmount childAmount intermediate final :
       let changed ← locked_increment ⟨1⟩ amount
       return if changed then Term.true else Term.false : Result Term)
     let computation : Result Term := do
-      let _ ← Result.schedule (worker childAmount) .ok
+      let _ ← Result.schedule {} (worker childAmount) .ok
       worker parentAmount
-    let observed := computation {
-      refCounter := 1
+    let observed := computation.run {
+      nativeRefCounter := 1
       nativeHeap := [(1, NativeMutex.typeName effects_core.Counter,
         .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (effects_core.Counter.mk before)])]
-      schedule := [.current, .swap 2]
-    }
+
+    } [.current, .swap [1]]
     observed.1 = .ok Term.true ∧ observed.2.nativeHeap =
       [(1, NativeMutex.typeName effects_core.Counter,
         .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (effects_core.Counter.mk final)])] := by
   have trace := Result.two_wait_interleave
     (NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩) (postAcquire parentAmount)
     (NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩) (postAcquire childAmount)
-    (NativeGuard.pollRelease (⟨⟨1⟩, 2, 1, ⟨intermediate⟩⟩ : NativeGuard effects_core.Counter)) finish
-    (NativeGuard.pollRelease (⟨⟨1⟩, 3, 2, ⟨final⟩⟩ : NativeGuard effects_core.Counter)) finish
-    (.ok (.Ok ⟨⟨1⟩, 2, 1, ⟨before⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨intermediate⟩⟩))
+    (NativeGuard.pollRelease (⟨⟨1⟩,2,[], ⟨intermediate⟩⟩ : NativeGuard effects_core.Counter)) finish
+    (NativeGuard.pollRelease (⟨⟨1⟩,3,[1], ⟨final⟩⟩ : NativeGuard effects_core.Counter)) finish
+    (.ok (.Ok ⟨⟨1⟩,2,[], ⟨before⟩⟩)) (.ok (.Ok ⟨⟨1⟩,3,[1], ⟨intermediate⟩⟩))
     (.ok ()) (.ok ()) Term.true Term.true
     (shared 1 (unlocked before))
-    (shared 2 (NativeMutex.lockedContents 1 2 false (effects_core.Counter.mk before)))
+    (shared 2 (NativeMutex.lockedContents [] 2 false (effects_core.Counter.mk before)))
     (shared 2 (unlocked intermediate))
-    (shared 3 (NativeMutex.lockedContents 2 3 false (effects_core.Counter.mk intermediate)))
+    (shared 3 (NativeMutex.lockedContents [1] 3 false (effects_core.Counter.mk intermediate)))
     (shared 3 (unlocked final))
     (by simp [shared, unlocked, NativeMutex.pollLock, NativeCodec.roundtrip, NativeMutex.lockedContents])
     (by
@@ -123,28 +123,28 @@ theorem updates_interleave_child_first (before parentAmount childAmount intermed
       let changed ← locked_increment ⟨1⟩ amount
       return if changed then Term.true else Term.false : Result Term)
     let computation : Result Term := do
-      let _ ← Result.schedule (worker childAmount) .ok
+      let _ ← Result.schedule {} (worker childAmount) .ok
       worker parentAmount
-    let observed := computation {
-      refCounter := 1
+    let observed := computation.run {
+      nativeRefCounter := 1
       nativeHeap := [(1, NativeMutex.typeName effects_core.Counter,
         .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (effects_core.Counter.mk before)])]
-      schedule := [.swap 2, .swap 1]
-    }
+
+    } [.swap [1], .swap []]
     observed.1 = .ok Term.true ∧ observed.2.nativeHeap =
       [(1, NativeMutex.typeName effects_core.Counter,
         .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode (effects_core.Counter.mk final)])] := by
   have trace := Result.two_wait_interleave_child_first
     (NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩) (postAcquire parentAmount)
     (NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩) (postAcquire childAmount)
-    (NativeGuard.pollRelease (⟨⟨1⟩, 3, 1, ⟨final⟩⟩ : NativeGuard effects_core.Counter)) finish
-    (NativeGuard.pollRelease (⟨⟨1⟩, 2, 2, ⟨intermediate⟩⟩ : NativeGuard effects_core.Counter)) finish
-    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨intermediate⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 2, 2, ⟨before⟩⟩))
+    (NativeGuard.pollRelease (⟨⟨1⟩,3,[], ⟨final⟩⟩ : NativeGuard effects_core.Counter)) finish
+    (NativeGuard.pollRelease (⟨⟨1⟩,2,[1], ⟨intermediate⟩⟩ : NativeGuard effects_core.Counter)) finish
+    (.ok (.Ok ⟨⟨1⟩,3,[], ⟨intermediate⟩⟩)) (.ok (.Ok ⟨⟨1⟩,2,[1], ⟨before⟩⟩))
     (.ok ()) (.ok ()) Term.true Term.true
     (shared 1 (unlocked before))
-    (shared 2 (NativeMutex.lockedContents 2 2 false (effects_core.Counter.mk before)))
+    (shared 2 (NativeMutex.lockedContents [1] 2 false (effects_core.Counter.mk before)))
     (shared 2 (unlocked intermediate))
-    (shared 3 (NativeMutex.lockedContents 1 3 false (effects_core.Counter.mk intermediate)))
+    (shared 3 (NativeMutex.lockedContents [] 3 false (effects_core.Counter.mk intermediate)))
     (shared 3 (unlocked final))
     (by simp [shared, unlocked, NativeMutex.pollLock, NativeCodec.roundtrip, NativeMutex.lockedContents])
     (by

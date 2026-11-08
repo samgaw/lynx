@@ -22,13 +22,13 @@ open NativeFile
   .cons (.tuple #[.atom "rename",.bitstring a 0,.bitstring b 0,.atom "ok",.integer 0,
     .atom "apply"]) opening
 @[expose] def initial : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,writableHandleTypeName,encodeHandle ⟨1,0,actionOk "sync_all" ByteArray.empty
       (actionOk "close" ⟨#[0,0]⟩ .nil)⟩),
     (1,inodeTypeName,encode ⟨content,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,oldNames,[],renameScript⟩)]}
 @[expose] def published : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,closedDirectoryTypeName,.tuple #[.nil]),
     (2,closedHandleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩),
@@ -61,13 +61,13 @@ theorem stable_content : persist content content ⟨#[0,0]⟩ = some content := 
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,oldNames,[newNames],opening⟩)]}
 @[expose] def afterOpen : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,directoryTypeName,.tuple #[dirScript]),
     (2,closedHandleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,oldNames,[newNames],.nil⟩)]}
 @[expose] def afterDirectorySync : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,directoryTypeName,.tuple #[actionOk "close_dir" ByteArray.empty .nil]),
     (2,closedHandleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩),
@@ -128,18 +128,24 @@ theorem publish_contract : publish_file ⟨2⟩ source target initial = (.ok (.O
   simp only [publish_file,synchronize_then_close,sync_directory,io_core.synchronize,
     io_core.rename_file,io_core.open_readonly,monadLift_self,NativeOwnedDrop.drop,
     syncAll,close,NativeFile.rename,openReadOnly,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ sync_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ sync_poll]
   simp only [Result.ok_bind,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ close_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ close_poll]
   simp only [Result.ok_bind,NativeM.ok,core.result.Result.Insts.CoreOpsTry.branch,
     NativeM.monadLift_eq,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ rename_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ rename_poll]
   simp only [Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ open_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ open_poll]
   simp only [Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ directory_sync_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ directory_sync_poll]
   simp only [Result.ok_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ directory_close_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ directory_close_poll]
   simp []
 
 theorem persist_same (bytes mask result : ByteArray)
@@ -191,11 +197,11 @@ theorem checkpoint_image :
 @[expose] def reopening : Term :=
   .cons (.tuple #[.atom "open",.bitstring b 0,.atom "ok",.integer 0,.nil]) .nil
 @[expose] def rebooted : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],reopening⟩),
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩)]}
 @[expose] def recovered : Environment :=
-  {refCounter := 4,nativeHeap := [
+  {nativeRefCounter := 4,nativeHeap := [
     (4,handleTypeName,encodeHandle ⟨1,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],.nil⟩),
     (1,inodeTypeName,encode ⟨content,content,0,.nil⟩)]}
@@ -214,7 +220,8 @@ theorem recover_published : open_readonly target rebooted = (.ok (.Ok ⟨4⟩),r
       limit,replaceNamespaceScript,encodeHandle,namespaceTypeName,inodeTypeName,handleTypeName]
     decide +kernel
   simp only [open_readonly,io_core.open_readonly,monadLift_self,openReadOnly]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp
 
 /-- Publication is composed with restart and the actual Rust opener. Every

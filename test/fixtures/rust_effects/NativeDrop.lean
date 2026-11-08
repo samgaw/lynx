@@ -23,25 +23,25 @@ theorem increment_spec (counter : effects_core.Counter) (amount : U64) :
       exact found.2.1
 
 theorem explicit_dispose (value : U64) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
-    mutex_discard_scalar value env = (.ok (), { env with refCounter := env.refCounter + 1 }) := by
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    mutex_discard_scalar value env = (.ok (), { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   simpa [mutex_discard_scalar, NativeDrop.drop] using NativeMutex.new_dispose value env fresh
 
 theorem scope_dispose (value : U64) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
-    mutex_scope_scalar value env = (.ok (), { env with refCounter := env.refCounter + 1 }) := by
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    mutex_scope_scalar value env = (.ok (), { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   simpa [mutex_scope_scalar, NativeDrop.drop] using NativeMutex.new_dispose value env fresh
 
 theorem scope_result (value : U64) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
-    mutex_scope_flag value env = (.ok true, { env with refCounter := env.refCounter + 1 }) := by
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    mutex_scope_flag value env = (.ok true, { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   simpa [mutex_scope_flag, NativeDrop.drop, NativeM.ok] using
     NativeMutex.new_dispose_next value (Result.ok true) env fresh
 
 theorem checked_dispose (value amount : U64) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     mutex_checked_discard value amount env =
-      (.ok (decide (value.val + amount.val ≤ U64.max)), { env with refCounter := env.refCounter + 1 }) := by
+      (.ok (decide (value.val + amount.val ≤ U64.max)), { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   obtain ⟨success, counter, returned, property⟩ := increment_spec ⟨value⟩ amount
   have flag : success = decide (value.val + amount.val ≤ U64.max) := by
     cases success with
@@ -58,10 +58,10 @@ theorem checked_dispose (value amount : U64) (env : Environment)
   simpa [mutex_checked_discard, returned, NativeDrop.drop, NativeM.ok, flag] using lifecycle
 
 theorem dispose_before_assert (value : U64) (accepted : Bool) (env : Environment)
-    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.refCounter + 1) = false) :
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
     mutex_dispose_then_assert value accepted env =
       (if accepted then .ok () else .error (.error (.atom "rust_panicked")),
-        { env with refCounter := env.refCounter + 1 }) := by
+        { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   have lifecycle := NativeMutex.new_dispose_next value
     (do NativeM.massert (accepted = true); NativeM.ok ()) env fresh
   cases accepted <;>

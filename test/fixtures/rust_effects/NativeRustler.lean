@@ -26,7 +26,7 @@ theorem increment_spec (counter : effects_core.Counter) (amount : U64) :
 theorem internal_state (value amount : U64) (env : Environment)
     (empty : env.nativeHeap = []) :
     ∃ changed, mutex_locked_scalar value amount env =
-      (.ok changed, { env with refCounter := env.refCounter + 2 }) ∧
+      (.ok changed, { env with nativeRefCounter := env.nativeRefCounter + 2 }) ∧
       changed = decide (value.val + amount.val ≤ U64.max) := by
   obtain ⟨changed, updated, returned, property⟩ := increment_spec ⟨value⟩ amount
   refine ⟨changed, ?_, ?_⟩
@@ -60,7 +60,7 @@ theorem facade_adapter_continuation {β : Type} (value amount : U64)
         (__CHECKED__ value amount) Rustler.encodeBool
       next encoded) env =
       next (Rustler.encodeBool (decide (value.val + amount.val ≤ U64.max)))
-        { env with refCounter := env.refCounter + 2 } := by
+        { env with nativeRefCounter := env.nativeRefCounter + 2 } := by
   obtain ⟨changed, updated, returned, property⟩ := increment_spec ⟨value⟩ amount
   have flag : changed = decide (value.val + amount.val ≤ U64.max) := by
     cases changed with
@@ -93,8 +93,8 @@ theorem released_adapter_continuation {β : Type} (value : U64) (accepted : Bool
       let encoded ← Rustler.executeNative
         (__RELEASED__ value accepted) Rustler.encodeBool
       next encoded) env =
-      if accepted then next Term.true { env with refCounter := env.refCounter + 1 }
-      else (.error (.error (.atom "nif_panicked")), { env with refCounter := env.refCounter + 1 }) := by
+      if accepted then next Term.true { env with nativeRefCounter := env.nativeRefCounter + 1 }
+      else (.error (.error (.atom "nif_panicked")), { env with nativeRefCounter := env.nativeRefCounter + 1 }) := by
   cases accepted <;>
     simp [__RELEASED__,
       mutex_dispose_then_assert, Rustler.executeNative, Result.handle,
@@ -107,8 +107,8 @@ theorem released_handler_continuation {β : Type} (value : U64) (accepted : Bool
     (env : Environment) (empty : env.nativeHeap = []) :
     Result.tryWith (Rustler.executeNative (__RELEASED__ value accepted) Rustler.encodeBool)
       next handler env =
-      if accepted then next Term.true { env with refCounter := env.refCounter + 1 }
-      else handler (.error (.atom "nif_panicked")) { env with refCounter := env.refCounter + 1 } := by
+      if accepted then next Term.true { env with nativeRefCounter := env.nativeRefCounter + 1 }
+      else handler (.error (.atom "nif_panicked")) { env with nativeRefCounter := env.nativeRefCounter + 1 } := by
   cases accepted <;>
     simp [__RELEASED__, mutex_dispose_then_assert, Rustler.executeNative,
       Result.tryWith, Result.handle, Result.bind, NativeMutex.new, NativeM.allocate, NativeDrop.drop,
@@ -121,8 +121,8 @@ theorem released_handler_prefix {β γ : Type} (value : U64) (accepted : Bool)
     Result.tryWith (do
       let encoded ← Rustler.executeNative (__RELEASED__ value accepted) Rustler.encodeBool
       tail encoded) next handler env =
-      if accepted then Result.tryWith (tail Term.true) next handler { env with refCounter := env.refCounter + 1 }
-      else handler (.error (.atom "nif_panicked")) { env with refCounter := env.refCounter + 1 } := by
+      if accepted then Result.tryWith (tail Term.true) next handler { env with nativeRefCounter := env.nativeRefCounter + 1 }
+      else handler (.error (.atom "nif_panicked")) { env with nativeRefCounter := env.nativeRefCounter + 1 } := by
   cases accepted <;>
     simp [__RELEASED__, mutex_dispose_then_assert, Rustler.executeNative,
       Result.tryWith, Result.handle, Result.bind, NativeMutex.new, NativeM.allocate, NativeDrop.drop,

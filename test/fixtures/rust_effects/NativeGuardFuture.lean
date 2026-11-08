@@ -43,19 +43,19 @@ theorem callee_contract (guard : NativeGuard effects_core.Counter) (amount : U64
   ⟨⟨1⟩, amount, 1#u32, none, some changed, some ⟨false, ⟨amount⟩⟩, some false⟩
 
 @[expose] def registered (env : Environment) (value : effects_core.Counter) (poisoned : Bool) : Environment :=
-  { env with refCounter := 1, nativeHeap := [
+  { env with nativeRefCounter := 1, nativeHeap := [
     (1, NativeMutex.typeName effects_core.Counter,
       .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value]),
     (0, NativeWaker.typeName, .atom "idle")] }
 
 @[expose] def held (env : Environment) (value : effects_core.Counter) (poisoned : Bool) : Environment :=
-  { env with refCounter := 2, nativeHeap := [
+  { env with nativeRefCounter := 2, nativeHeap := [
     (1, NativeMutex.typeName effects_core.Counter,
       NativeMutex.lockedContents env.currentPid 2 poisoned value),
     (0, NativeWaker.typeName, .atom "notified")] }
 
 @[expose] def released (env : Environment) (value : effects_core.Counter) (poisoned : Bool) : Environment :=
-  { env with refCounter := 2, nativeHeap := [
+  { env with nativeRefCounter := 2, nativeHeap := [
     (1, NativeMutex.typeName effects_core.Counter,
       .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value]),
     (0, NativeWaker.typeName, .atom "notified")] }
@@ -92,7 +92,7 @@ theorem first_pending_next {α : Type} (value updated : effects_core.Counter) (a
         simp_all [UScalar.ofNatCore, UScalar.val]
   rw [unfolded]
   let start := registered env value poisoned
-  let acquired : Environment := {start with refCounter := 2, nativeHeap := [(1, NativeMutex.typeName effects_core.Counter,
+  let acquired : Environment := {start with nativeRefCounter := 2, nativeHeap := [(1, NativeMutex.typeName effects_core.Counter,
       NativeMutex.lockedContents env.currentPid 2 poisoned value),
       (0, NativeWaker.typeName, .atom "idle")] }
   have ready : NativeMutex.pollLock (α := effects_core.Counter) ⟨1⟩ start = some (.ok

@@ -44,6 +44,12 @@ deriving Repr
 
 namespace Term
 
+/-- Logical native identities occupy the reserved zero-prefixed namespace.
+Ordinary process paths and reference counters generated from the root are
+positive. Correspondence with opaque VM resource terms remains an adapter
+boundary, rather than a claim about their native memory representation. -/
+@[expose, reducible, match_pattern] def nativeReference (id : Nat) : Term := .reference [0, id]
+
 /-- A proper list of the given elements. -/
 @[expose, reducible] def list : List Term → Term
   | [] => .nil
@@ -128,6 +134,7 @@ structure Environment where
   pdict : List (Term × Term) := []
   /-- Shared native cells: logical identity, nominal type tag and encoded contents.
   Native backends validate typed access. -/
+  nativeRefCounter : Nat := 0
   nativeHeap : List (Nat × String × Term) := []
   /-- Resource types registered by the modeled native loader. -/
   nativeResourceTypes : List String := []
@@ -211,6 +218,10 @@ inductive Result : (α : Type := Term) → Type 1 where
   | error {α : Type} : Exception → Result α
   | get {α : Type} : (Environment → Result α) → Result α
   | set {α : Type} : Environment → Result α → Result α
+  /-- Read the shared native state rather than a process-local environment. -/
+  | nativeGet {α : Type} : (Environment → Result α) → Result α
+  /-- Commit shared native state and the current process's local state. -/
+  | nativeSet {α : Type} : Environment → Result α → Result α
   /-- A spawned child process, then the continuation receiving its PID. -/
   | schedule {α : Type} : SpawnOptions → Result Term → (PID → Result α) → Result α
   /-- Local asynchronous send. The message is in transit, and the sender continues at once. -/
@@ -241,6 +252,8 @@ namespace Result
   | .error exception => .error exception
   | .get continuation => .get fun env => Result.bind (continuation env) next
   | .set env continuation => .set env (Result.bind continuation next)
+  | .nativeGet continuation => .nativeGet fun env => Result.bind (continuation env) next
+  | .nativeSet env continuation => .nativeSet env (Result.bind continuation next)
   | Result.schedule options child continuation =>
       Result.schedule options child fun pid => Result.bind (continuation pid) next
   | .send pid message continuation => .send pid message (Result.bind continuation next)
@@ -270,6 +283,12 @@ instance : MonadStateOf Environment @Result where
     let (value, next) := update env
     .set next (.ok value)
 
+/-- Public equations for the process-local MonadState instance. -/
+theorem monadGet_eq : (MonadState.get : Result Environment) = .get .ok := rfl
+
+theorem monadSet_eq (env : Environment) :
+    (MonadStateOf.set env : Result Unit) = .set env (.ok ()) := rfl
+
 /-- Handle exceptions raised by the computation. `exhausted` is not an Erlang
 exception, so it propagates without reaching the handler. -/
 @[expose] protected def handle (computation : Result α) (handler : Exception → Result α) : Result α :=
@@ -279,6 +298,8 @@ exception, so it propagates without reaching the handler. -/
   | .error exception => handler exception
   | .get continuation => .get fun env => Result.handle (continuation env) handler
   | .set env continuation => .set env (Result.handle continuation handler)
+  | .nativeGet continuation => .nativeGet fun env => Result.handle (continuation env) handler
+  | .nativeSet env continuation => .nativeSet env (Result.handle continuation handler)
   | Result.schedule options child continuation =>
       Result.schedule options child fun pid => Result.handle (continuation pid) handler
   | .send pid message continuation => .send pid message (Result.handle continuation handler)
@@ -295,6 +316,14 @@ theorem handle_get (body : Environment → Result α) (handler : Exception → R
 /-- Move a handler through an environment update without unfolding its body. -/
 theorem handle_set (env : Environment) (body : Result α) (handler : Exception → Result α) :
     Result.handle (.set env body) handler = .set env (Result.handle body handler) := rfl
+
+/-- Exception conversion preserves a native shared-state read. -/
+theorem handle_nativeGet (body : Environment → Result α) (handler : Exception → Result α) :
+    Result.handle (.nativeGet body) handler = .nativeGet (fun env => Result.handle (body env) handler) := rfl
+
+/-- Exception conversion preserves a native shared-state update. -/
+theorem handle_nativeSet (env : Environment) (body : Result α) (handler : Exception → Result α) :
+    Result.handle (.nativeSet env body) handler = .nativeSet env (Result.handle body handler) := rfl
 
 /-- Ordinary error exceptions reach the handler; exhaustion remains separate. -/
 theorem handle_error (reason : Term) (handler : Exception → Result α) :
@@ -382,12 +411,12 @@ instance : MonadExceptOf Exception @Result where
   change Result.bind computation .ok = computation
   induction computation with
   | ok | error => rfl
-  | get continuation ih =>
+  | get continuation ih | nativeGet continuation ih =>
       simp only [Result.bind]
       congr
       funext env
       exact ih env
-  | set env continuation ih => simp [Result.bind, ih]
+  | set env continuation ih | nativeSet env continuation ih => simp [Result.bind, ih]
   | schedule options child continuation childIh continuationIh =>
       simp only [Result.bind]
       congr
@@ -416,12 +445,12 @@ private theorem bind_assoc_proof (computation : Result α)
       Result.bind computation fun value => Result.bind (next value) final := by
   induction computation with
   | ok | error => rfl
-  | get continuation ih =>
+  | get continuation ih | nativeGet continuation ih =>
       simp only [Result.bind]
       congr
       funext env
       exact ih env next
-  | set env continuation ih => simp [Result.bind, ih next]
+  | set env continuation ih | nativeSet env continuation ih => simp [Result.bind, ih next]
   | schedule options child continuation childIh continuationIh =>
       simp only [Result.bind]
       congr
@@ -461,6 +490,13 @@ instance : LawfulMonad @Result := LawfulMonad.mk' _
     ¬ IsPure (.get next) := by simp [IsPure]
 @[simp] theorem not_isPure_set (env : Environment) (next : Result α) :
     ¬ IsPure (.set env next) := by simp [IsPure]
+
+@[simp] theorem not_isPure_nativeGet (next : Environment → Result α) :
+    ¬ IsPure (.nativeGet next) := by simp [IsPure]
+@[simp] theorem not_isPure_nativeSet (env : Environment) (next : Result α) :
+    ¬ IsPure (.nativeSet env next) := by simp [IsPure]
+@[simp] theorem not_isPure_wait (poll : Environment → Option (β × Environment)) (next : β → Result α) :
+    ¬ IsPure (.wait poll next) := by simp [IsPure]
 
 @[simp] theorem not_isPure_schedule (options : SpawnOptions) (child : Result Term)
     (next : PID → Result α) :
@@ -619,7 +655,7 @@ or make unresolved calls. Every environment read must eventually terminate. -/
   | .ok value => .ok value
   | .error exception => .error exception
   | .get next => toExceptRead (next env) env (readOnly env)
-  | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. =>
+  | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. | .nativeGet .. | .nativeSet .. =>
       False.elim readOnly
 
 @[simp] theorem ok_bind (value : α) (next : α → Result β) :
@@ -633,6 +669,16 @@ or make unresolved calls. Every environment read must eventually terminate. -/
 @[simp] theorem set_bind (env : Environment) (continuation : Result α)
     (next : α → Result β) :
     (Result.set env continuation >>= next) = .set env (continuation >>= next) := by rfl
+@[simp] theorem nativeGet_bind (continuation : Environment → Result α) (next : α → Result β) :
+    (Result.nativeGet continuation >>= next) =
+      .nativeGet (fun env => continuation env >>= next) := rfl
+@[simp] theorem nativeSet_bind (env : Environment) (continuation : Result α)
+    (next : α → Result β) :
+    (Result.nativeSet env continuation >>= next) = .nativeSet env (continuation >>= next) := rfl
+@[simp] theorem wait_bind (poll : Environment → Option (γ × Environment))
+    (continuation : γ → Result α) (next : α → Result β) :
+    (Result.wait poll continuation >>= next) = .wait poll (fun value => continuation value >>= next) := rfl
+
 @[simp] theorem schedule_bind (options : SpawnOptions) (child : Result Term)
     (continuation : PID → Result α) (next : α → Result β) :
     (Result.schedule options child continuation >>= next) =
@@ -727,7 +773,7 @@ namespace Lynx.Result
   match computation with
   | .ok value => .ok value
   | .error exception => .error exception
-  | .get .. | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. => False.elim pure
+  | .get .. | .set .. | .schedule .. | .send .. | .receive .. | .request .. | .wait .. | .nativeGet .. | .nativeSet .. => False.elim pure
 
 /-- Read-only evaluation agrees with pure extraction when there are no reads. -/
 @[simp] public theorem toExceptRead_pure (computation : Result α) (env : Environment)

@@ -14,12 +14,12 @@ namespace Lynx.Result
 establish what the tag certifies; this primitive does not validate native memory,
 FFI or cleanup behavior. Invalid identities exhaust verification. -/
 @[expose] def consumeNativeCapability (typeName : String) (identity : Nat) : Result Unit :=
-  .get fun env =>
-    if identity = 0 ∨ env.refCounter < identity then .error .exhausted else
+  .nativeGet fun env =>
+    if identity = 0 ∨ env.nativeRefCounter < identity then .error .exhausted else
     match env.nativeHeap.filter (fun cell => cell.1 == identity) with
     | [(_,storedType,.atom "live")] =>
       if storedType == typeName then
-        .set {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != identity)} (.ok ())
+        .nativeSet {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != identity)} (.ok ())
       else .error .exhausted
     | _ => .error .exhausted
 

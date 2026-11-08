@@ -42,15 +42,15 @@ theorem seek_next (file : NativeFile) (offset : U64) (env : Environment)
     (notBlocked : blocked before = false)
     (step : seekStep before (.start offset) = some (reply, after))
     (next : core.result.Result U64 NativeIoError × NativeFile → NativeM α) :
-    (io_core.seek_to file offset >>= next) (fileEnv env file before frame) =
-      next (reply, file) (fileEnv env file after frame) := by
+    (io_core.seek_to file offset >>= next).run (fileEnv env file before frame) =
+      (next (reply, file)).run (fileEnv env file after frame) := by
   have ready : pollSeek file (.start offset) (fileEnv env file before frame) =
       some (.ok (reply, file), fileEnv env file after frame) := by
     simp [pollSeek, lookup_at env file before frame separate valid, notBlocked,
       step, store_at env file before after frame separate]
   simp only [io_core.seek_to, io_core.seek_from, Recovery.Extraction.FileModel.seek,
     monadLift_self, NativeFile.seek, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  rw [Result.wait_ready_run _ _ _ _ _ ready]
   simp [Result.ok_bind]
 
 /-- The actual recovery caller first seeks to zero, even if its incoming offset
@@ -65,7 +65,7 @@ theorem recover_success (file : NativeFile) (env : Environment)
     (accepted0 : persist before.durable before.visible seekMask = some durable0)
     (accepted1 : persist durable0 before.visible mask1 = some durable1)
     (accepted2 : persist durable1 before.visible mask2 = some durable2) :
-    recover_word file (fileEnv env file before frame) =
+    (recover_word file).run (fileEnv env file before frame) =
       (.ok (.Ok (some (word (byteValue low) (byteValue high))), file), fileEnv env file
         (readState (readState (sought before 0 durable0
           (outcome "read" true 1 mask1 (outcome "read" true 1 mask2 rest)))
@@ -99,31 +99,34 @@ theorem stable_image (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (state : State) (mask : ByteArray) (image : Image)
     (separate : Separate file frame) (valid : Valid state) (stable : state.durable = state.visible)
     (captured : crashImage file mask (fileEnv env file state frame) = some image) :
-    image.bytes = state.visible ∧ image.highWater = (fileEnv env file state frame).refCounter := by
+    image.bytes = state.visible ∧ image.highWater = (fileEnv env file state frame).nativeRefCounter := by
   unfold crashImage at captured
   rw [lookup_at env file state frame separate valid] at captured
   change (persist state.durable state.visible mask).bind (fun durable =>
-    some (⟨durable, (fileEnv env file state frame).refCounter⟩ : Image)) = some image at captured
+    some (⟨durable, (fileEnv env file state frame).nativeRefCounter⟩ : Image)) = some image at captured
   obtain ⟨durable, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj record
   exact ⟨persist_same state.visible mask durable (stable ▸ accepted), rfl⟩
 
 @[expose] def restarted (image : Image) (script : Term) : Environment := {
-  refCounter := image.highWater + 1
+  nativeRefCounter := image.highWater + 1
   nativeHeap := [(image.highWater + 1, typeName, encode ⟨image.bytes, image.bytes, 0, script⟩)] }
 
 theorem restart_state (image : Image) (script : Term) (bounded : image.bytes.size ≤ limit) :
     restart image script = some (⟨image.highWater + 1⟩, restarted image script) := by
   simp [restart, not_lt.mpr bounded, restarted]
 
-/-- The restart discards VM messages, dictionaries, registrations, other native
-cells, process state and scheduler choices rather than reusing the old machine. -/
+/-- Restart admits one empty root process and no other live processes. Scheduler
+choices belong to each subsequent run, rather than the persisted image. -/
 theorem restart_volatile (image : Image) (script : Term) :
-    (restarted image script).currentProcess = ({} : ProcessState) ∧
-    (restarted image script).processes = [] ∧
-    (restarted image script).nativeResourceTypes = [] ∧
-    (restarted image script).schedule = [] := by
-  repeat constructor
+    (Concurrent.State.initial (restarted image script)).processes [] =
+      some ({} : Concurrent.ProcessState) ∧
+    (∀ pid, pid ≠ [] →
+      (Concurrent.State.initial (restarted image script)).processes pid = none) ∧
+    (restarted image script).nativeResourceTypes = [] := by
+  refine ⟨rfl, ?_, rfl⟩
+  intro pid different
+  simp [Concurrent.State.initial, restarted, different]
 
 /-- Ghost freshness prevents an old native file capability accessing the new
 file even when a physical descriptor number might be reused by the OS. -/
@@ -241,7 +244,7 @@ theorem recover_seek_error (file : NativeFile) (env : Environment)
     (separate : Separate file frame) (valid : Valid before)
     (notBlocked : blocked before = false)
     (step : seekStep before (.start 0#u64) = some (.Err error, after)) :
-    recover_word file (fileEnv env file before frame) =
+    (recover_word file).run (fileEnv env file before frame) =
       (.ok (.Err error, file), fileEnv env file after frame) := by
   simp only [recover_word, monadLift_self]
   rw [seek_next file 0#u64 env frame before after (.Err error) separate valid notBlocked step]

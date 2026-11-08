@@ -18,7 +18,7 @@ theorem adapter_prefix (pid : PID) (first : Bool) (available : List String)
     (contents : Term) (state : State) :
     Result.RegisteredPrefix pid
       (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0)
-        (.reference 6) (.integer (if first then 13 else 19)))
+        (.nativeReference 6) (.integer (if first then 13 else 19)))
       (shared (beforeCounter first) (beforeFrame first) contents state) available
       (.wait (NativeMutex.pollLock (⟨1⟩ : NativeMutex NativeFile)) (resume first (recordValue first)))
       (shared (beforeCounter first + 1) (decodedOwners first) contents state) resourceTypes := by
@@ -44,34 +44,33 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
     (seek2 : seekStep committed1 (.end_ 0#i64) = some (.Ok position2, sought2))
     (write2 : writeStep sought2 (payload 19#u16) = some (.Ok 4#usize, written2))
     (sync2 : syncStep written2 = some (.Ok (), committed2)) :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 19)
-    (Result.schedule child (fun _ => parent))
-      {refCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) before).2,
-        schedule := [.current, .swap 2]} =
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 19)
+    (Result.schedule {} child (fun _ => parent)).run
+      {nativeRefCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) before).2} [.current, .swap [1]] =
       (.ok Term.true, {
-        pidCounter := 2, refCounter := 10, nativeResourceTypes := resourceTypes,
+        nativeRefCounter := 10, nativeResourceTypes := resourceTypes,
         nativeHeap := (shared 10 pinnedFrame (Record.FramedLogProperties.free false) committed2).2}) := by
   dsimp only
-  let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 13)
-  let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 19)
-  obtain ⟨childRead, childEq⟩ : ∃ read : Environment → Result Term, child = .get read := ⟨_, rfl⟩
+  let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 13)
+  let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 19)
+  obtain ⟨childRead, childEq⟩ : ∃ read : Environment → Result Term, child = .nativeGet read := ⟨_, rfl⟩
   let free := Record.FramedLogProperties.free false
-  let held1 := NativeMutex.lockedContents 1 8 false (⟨2⟩ : NativeFile)
-  let held2 := NativeMutex.lockedContents 2 10 false (⟨2⟩ : NativeFile)
-  let guard1 : NativeGuard NativeFile := ⟨⟨1⟩, 8, 1, ⟨2⟩⟩
-  let guard2 : NativeGuard NativeFile := ⟨⟨1⟩, 10, 2, ⟨2⟩⟩
-  have parentPrefix := adapter_prefix 1 true [] rfl free before
-  have childPrefix := adapter_prefix 2 false resourceTypes
+  let held1 := NativeMutex.lockedContents [] 8 false (⟨2⟩ : NativeFile)
+  let held2 := NativeMutex.lockedContents [1] 10 false (⟨2⟩ : NativeFile)
+  let guard1 : NativeGuard NativeFile := ⟨⟨1⟩,8,[], ⟨2⟩⟩
+  let guard2 : NativeGuard NativeFile := ⟨⟨1⟩,10,[1], ⟨2⟩⟩
+  have parentPrefix := adapter_prefix [] true [] rfl free before
+  have childPrefix := adapter_prefix [1] false resourceTypes
     (by simp [resourceTypes, List.eraseDups_cons]) held1 before
-  change Result.RegisteredPrefix 2 child _ _ _ _ _ at childPrefix
+  change Result.RegisteredPrefix [1] child _ _ _ _ _ at childPrefix
   rw [childEq] at childPrefix
   have parentTrace := Rustler.executeNative_sharedSteps
-    (Record.ScheduledLogProperties.body_steps 1 true 9 8 (by decide)
+    (Record.ScheduledLogProperties.body_steps [] true 9 8 (by decide)
       before sought1 written1 committed1 13#u16 position1
       valid0 valid1 valid2 ready0 ready1 ready2 seek1 write1 sync1) Rustler.encodeBool
   have childTrace := Rustler.executeNative_sharedSteps
-    (Record.ScheduledLogProperties.body_steps 2 false 10 10 (by decide)
+    (Record.ScheduledLogProperties.body_steps [1] false 10 10 (by decide)
       committed1 sought2 written2 committed2 19#u16 position2
       valid3 valid4 valid5 ready3 ready4 ready5 seek2 write2 sync2) Rustler.encodeBool
   have run := Result.two_registered_interleave_steps parent childRead
@@ -87,8 +86,7 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
     ?_ ?_ ?_ ?_ ?_
   · simpa [parent, ← childEq, child, free, shared] using run
   · have acquired := Record.FramedLogProperties.lock_poll
-      ({pidCounter := 2, processes := [(2,{})], nativeResourceTypes := resourceTypes,
-        schedule := [.swap 2]} : Environment) 7 decodedFrame false before
+      ({  nativeResourceTypes := resourceTypes} : Environment) 7 decodedFrame false before
       (by decide) (by simp [Record.FramedLogProperties.Apart, decodedFrame, pinnedFrame, NativeResourceArc.vmCells])
       (by simp [decodedFrame, pinnedFrame, NativeResourceArc.vmCells])
     simpa [guard1, free, held1, shared, Record.FramedLogProperties.framedEnv,
@@ -99,7 +97,7 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
   · simp [NativeMutex.pollLock, shared, overlappingFrame, decodedFrame, pinnedFrame,
       NativeResourceArc.vmCells, held1, NativeMutex.lockedContents, NativeCodec.decode]
   · have acquired := Record.FramedLogProperties.lock_poll
-      ({currentPid := 2, pidCounter := 2, nativeResourceTypes := resourceTypes} : Environment)
+      ({currentPid := [1],  nativeResourceTypes := resourceTypes} : Environment)
       9 afterFirstFrame false committed1
       (by decide) (by simp [Record.FramedLogProperties.Apart, afterFirstFrame, overlappingFrame,
         decodedFrame, pinnedFrame, NativeResourceArc.vmCells])
@@ -111,13 +109,12 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
       Record.ScheduledLogProperties.afterFrame, Rustler.encodeBool, recoverGuard] using childTrace
 
 theorem contended_records :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.reference 6) (.integer 19)
-    (Result.schedule child (fun _ => parent))
-      {refCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) firstInput).2,
-        schedule := [.current, .swap 2]} =
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 19)
+    (Result.schedule {} child (fun _ => parent)).run
+      {nativeRefCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) firstInput).2} [.current, .swap [1]] =
       (.ok Term.true, {
-        pidCounter := 2, refCounter := 10, nativeResourceTypes := resourceTypes,
+        nativeRefCounter := 10, nativeResourceTypes := resourceTypes,
         nativeHeap := (shared 10 pinnedFrame (Record.FramedLogProperties.free false) complete).2}) := by
   have bytes13 : (bytes (payload 13#u16)).size = 4 := by
     simp [bytes_size, payload, Record.IntegrityProperties.layout]

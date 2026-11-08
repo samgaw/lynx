@@ -126,14 +126,14 @@ theorem reacquired_payload (guard : NativeGuard effects_core.Counter) (amount : 
     (owner : guard.ownerContext = env.currentPid)
     (heap : env.nativeHeap = [(guard.mutex.id, NativeMutex.typeName effects_core.Counter,
       NativeMutex.lockedContents guard.ownerContext guard.token false original)])
-    (fresh : env.refCounter + 1 ≠ guard.mutex.id) :
+    (fresh : env.nativeRefCounter + 1 ≠ guard.mutex.id) :
     ∃ changed updated,
       guard_update_reacquire guard guard.mutex amount env =
-        (.ok (changed, .Ok ⟨guard.mutex, env.refCounter + 1, env.currentPid, updated⟩),
+        (.ok (changed, .Ok ⟨guard.mutex, env.nativeRefCounter + 1, env.currentPid, updated⟩),
           { env with
-            refCounter := env.refCounter + 1
+            nativeRefCounter := env.nativeRefCounter + 1
             nativeHeap := [(guard.mutex.id, NativeMutex.typeName effects_core.Counter,
-              NativeMutex.lockedContents env.currentPid (env.refCounter + 1) false updated)] }) ∧
+              NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) false updated)] }) ∧
       (if changed then updated.value.val = guard.value.value.val + amount.val
        else updated = guard.value ∧ U64.max < guard.value.value.val + amount.val) := by
   obtain ⟨changed, updated, returned, property⟩ := increment_spec guard.value amount

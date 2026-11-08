@@ -57,7 +57,7 @@ theorem acquired_prefix (env : Environment) (state : State) (value : U16) :
     (Result.ReadyPrefix.refl (afterGuard ⟨3,7⟩ (guard env 7) value) (firstHeld env state))
 
 @[expose] def overlappingFrame : List (Nat × String × Term) :=
-  (9, NativeResourceArc.handleType shared_log.LogResource, .reference 3) ::
+  (9, NativeResourceArc.handleType shared_log.LogResource, .nativeReference 3) ::
     decodedFrame.map fun cell => if cell.1 == 3 then
       (3, NativeResourceArc.typeName shared_log.LogResource,
         .tuple #[.integer 3, NativeCodec.encode logPayload]) else cell
@@ -69,7 +69,7 @@ theorem acquired_prefix (env : Environment) (state : State) (value : U16) :
 still held. It changes resource metadata and the global counter, not the guard. -/
 theorem decode_while_held (env : Environment) (peer : PID) (state : State)
     (registered : NativeResourceArc.typeName shared_log.LogResource ∈ env.nativeResourceTypes) :
-    Result.ReadyPrefix (NativeResourceArc.decode (.reference 6))
+    Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 6))
       (framedEnv {env with currentPid := peer} 8 decodedFrame (held env 7 false) state)
       (.ok (⟨3,9⟩ : NativeResourceArc shared_log.LogResource)) (overlapping env peer state) := by
   have trace := NativeResourceArc.decode_live_prefix
@@ -211,7 +211,7 @@ theorem overlap_phases (env : Environment) (peer : PID)
     (sync : syncStep written = some (.Ok (), committed)) :
     Result.ReadyPrefix (__APPEND__ ⟨3,7⟩ value) (decoded env 7 before)
       (afterGuard ⟨3,7⟩ (guard env 7) value) (firstHeld env before) ∧
-    Result.ReadyPrefix (NativeResourceArc.decode (.reference 6))
+    Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 6))
       (framedEnv {env with currentPid := peer} 8 decodedFrame (held env 7 false) before)
       (.ok (⟨3,9⟩ : NativeResourceArc shared_log.LogResource)) (overlapping env peer before) ∧
     NativeMutex.pollLock (⟨1⟩ : NativeMutex NativeFile) (overlapping env peer before) = none ∧

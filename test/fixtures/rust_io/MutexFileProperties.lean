@@ -5,14 +5,14 @@ open Aeneas Aeneas.Std Lynx io_protocol
 namespace MutexFile.Properties
 
 @[expose] def live (file : NativeFile) (state : NativeFile.State) (poisoned : Bool) : Environment :=
-  {refCounter := file.id + 1, nativeHeap := [
+  {nativeRefCounter := file.id + 1, nativeHeap := [
     (file.id + 1, NativeMutex.typeName NativeFile,
       .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"),
         NativeCodec.encode file]),
     (file.id, NativeFile.typeName, NativeFile.encode state)]}
 
 @[expose] def closed (file : NativeFile) (state : NativeFile.State) : Environment :=
-  {refCounter := file.id + 1, nativeHeap := [
+  {nativeRefCounter := file.id + 1, nativeHeap := [
     (file.id, NativeFile.closedTypeName, NativeFile.encode state)]}
 
 theorem consuming (file : NativeFile) (before after : NativeFile.State)
@@ -54,7 +54,7 @@ theorem implicit_consuming (mutex : NativeMutex NativeFile) :
     implicit_file_mutex mutex = consume_file_mutex mutex := by rfl
 
 @[expose] def initial (file : NativeFile) (state : NativeFile.State) : Environment :=
-  {refCounter := file.id, nativeHeap := [(file.id, NativeFile.typeName, NativeFile.encode state)]}
+  {nativeRefCounter := file.id, nativeHeap := [(file.id, NativeFile.typeName, NativeFile.encode state)]}
 
 theorem cycle (file : NativeFile) (before after : NativeFile.State)
     (visible : before.visible.size ≤ NativeFile.limit)
@@ -94,9 +94,9 @@ theorem crash_after_cleanup :
 
 /-- A malformed locked owner cannot silently discard the file or mutex cell. -/
 theorem locked_rejected (state : NativeFile.State) :
-    let env : Environment := {refCounter := 2, nativeHeap := [
+    let env : Environment := {nativeRefCounter := 2, nativeHeap := [
       (2, NativeMutex.typeName NativeFile,
-        .tuple #[.atom "locked", .atom "unpoisoned", .reference 1]),
+        .tuple #[.atom "locked", .atom "unpoisoned", .nativeReference 1]),
       (1, NativeFile.typeName, NativeFile.encode state)]}
     consume_file_mutex ⟨2⟩ env = (.error .exhausted, env) := by
   have different : (Term.atom "locked").compare (.atom "unlocked") ≠ .eq := by

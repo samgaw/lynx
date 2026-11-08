@@ -23,7 +23,7 @@ theorem write_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (bef
     (next : Term → Result α)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__WRITE__ owner value) Rustler.encodeBool
       next result) (pinnedEnv env before counter ns) =
     next (Rustler.encodeBool (count = 2#usize)) (pinnedEnv env after (counter + 1) ns) := by
@@ -74,16 +74,16 @@ theorem write_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (bef
 theorem write_env {ns : NamespaceSnapshot} {α : Type} (before after : State) (valid : Valid before)
     (ready : blocked before = false) (value : U16) (count : Usize)
     (step : writeStep before (wire value) = some (.Ok count,after)) (next : Term → Result α)
-    (env : Environment) (bounded : 6 ≤ env.refCounter)
+    (env : Environment) (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before ns)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__WRITE__ owner value) Rustler.encodeBool
       next result) env = next (Rustler.encodeBool (count = 2#usize))
-        (pinnedEnv env after (env.refCounter + 1) ns) := by
+        (pinnedEnv env after (env.nativeRefCounter + 1) ns) := by
   simpa only [pinnedEnv,← heap] using
-    write_next (ns := ns) env before after env.refCounter bounded valid ready value count step next registered
+    write_next (ns := ns) env before after env.nativeRefCounter bounded valid ready value count step next registered
 
 @[expose] def writeChoice (count : Nat) : Term :=
   .cons (.tuple #[.atom "write",.atom "ok",.integer count,.bitstring ByteArray.empty 0]) (syncChoice .nil)
@@ -166,7 +166,7 @@ theorem short_not_acknowledged (env : Environment) (value : U16)
       (.ok Term.false,pinnedEnv env (partialWritten value) 7) := by
   rw [create_next (rest := .nil) env partialBefore.script _ registered]
   change (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__WRITE__ owner value) Rustler.encodeBool)
     (pinnedEnv env partialBefore 6) = _
   have valid : Valid partialBefore := by simp [Valid,partialBefore,limit,← ByteArray.size_data]

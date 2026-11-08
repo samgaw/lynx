@@ -20,7 +20,7 @@ open FileResource.Recovery (one path_bytes)
 @[expose] def opening (script : Term) : Term :=
   .cons (.tuple #[.atom "open",.bitstring Creation.path 0,.atom "ok",.integer 0,script]) .nil
 @[expose] def boot (a b c d : U8) (generation : Nat) (script : Term) : Environment :=
-  {refCounter := generation,nativeHeap := [
+  {nativeRefCounter := generation,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],opening script⟩),
     (1,inodeTypeName,encode ⟨data a b c d,data a b c d,0,.nil⟩)]}
 
@@ -307,7 +307,7 @@ theorem error_crash_witness (value : U16) (generation : Nat) (valid : 1 ≤ gene
 /-- A durable checkpoint without an open descriptor. The script describes
 namespace operations, not a fabricated file resource. -/
 @[expose] def checkpoint (contents : ByteArray) (generation : Nat) (script : Term) : Environment :=
-  {refCounter := generation,nativeHeap := [
+  {nativeRefCounter := generation,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],script⟩),
     (1,inodeTypeName,encode ⟨contents,contents,0,.nil⟩)]}
 @[expose] def openingFailure (error : Nat) : Term :=

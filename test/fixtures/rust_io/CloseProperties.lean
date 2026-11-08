@@ -16,10 +16,10 @@ theorem action_outcome (operation : String) (success : Bool) (value : Nat)
   cases success <;> simp [action, outcome]
 
 @[expose] def live (file : NativeFile) (state : State) : Environment :=
-  {refCounter := file.id, nativeHeap := [(file.id, typeName, encode state)]}
+  {nativeRefCounter := file.id, nativeHeap := [(file.id, typeName, encode state)]}
 
 @[expose] def closed (file : NativeFile) (state : State) : Environment :=
-  {refCounter := file.id, nativeHeap := [(file.id, closedTypeName, encode state)]}
+  {nativeRefCounter := file.id, nativeHeap := [(file.id, closedTypeName, encode state)]}
 
 @[expose] def Valid (state : State) : Prop :=
   state.visible.size ≤ limit ∧ state.durable.size ≤ limit ∧ state.position ≤ limit
@@ -138,7 +138,7 @@ theorem reopen_closed (file : NativeFile) (state : State) (valid : Valid state)
     (bounded : durable.size ≤ limit) (script : Term) :
     (crashImage file mask (closed file state)).bind (fun image => restart image script) =
       some (⟨file.id + 1⟩, {
-        refCounter := file.id + 1
+        nativeRefCounter := file.id + 1
         nativeHeap := [(file.id + 1, typeName, encode ⟨durable, durable, 0, script⟩)] }) := by
   rw [closed_crash file state valid mask durable accepted]
   simp [restart, not_lt.mpr bounded]
@@ -160,7 +160,7 @@ theorem close_lifecycle (file : NativeFile) (before : State) (valid : Valid befo
     (crashImage file crashMask (closed file {before with durable := durable, script := rest})).bind
       (fun image => restart image reopenScript) =
       some (⟨file.id + 1⟩, {
-        refCounter := file.id + 1
+        nativeRefCounter := file.id + 1
         nativeHeap := [(file.id + 1, typeName, encode ⟨recovered, recovered, 0, reopenScript⟩)] }) := by
   refine ⟨explicit_close file before valid success value mask durable rest script status accepted,
     (closed_capability file _).1, ?_⟩

@@ -160,7 +160,7 @@ defmodule Lynx.Rust.OwnedResourceTest do
     wrong =
       String.replace(
         original,
-        "next () {env with refCounter := counter, nativeHeap := []}",
+        "next () {env with nativeRefCounter := counter, nativeHeap := []}",
         "next () (live env value token counter)"
       )
 

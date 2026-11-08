@@ -7,21 +7,21 @@ namespace Publish.Native
 
 /-- The compiled Rustler entry calls the extracted first-party protocol. -/
 theorem facade_prefix (value : U16) (env : Environment)
-    (counter : env.refCounter = Publish.Commit.initial.refCounter)
+    (counter : env.nativeRefCounter = Publish.Commit.initial.nativeRefCounter)
     (heap : env.nativeHeap = Publish.Commit.initial.nativeHeap) :
     Result.ReadyPrefix (__COMMIT__ value) env (.ok true)
-      {env with refCounter := (Publish.Commit.done value).refCounter, nativeHeap := (Publish.Commit.done value).nativeHeap} := by
+      {env with nativeRefCounter := (Publish.Commit.done value).nativeRefCounter, nativeHeap := (Publish.Commit.done value).nativeHeap} := by
   simpa [__COMMIT__,monadLift_self] using
     Publish.Commit.Framed.acknowledged_prefix value env counter heap
 
 /-- Encoding and native exception conversion preserve the actual publication prefix. -/
 theorem adapter_continuation {β : Type} (value : U16) (next : Term → Result β)
     (env : Environment)
-    (counter : env.refCounter = Publish.Commit.initial.refCounter)
+    (counter : env.nativeRefCounter = Publish.Commit.initial.nativeRefCounter)
     (heap : env.nativeHeap = Publish.Commit.initial.nativeHeap) :
     (Rustler.executeNative (__COMMIT__ value)
       Rustler.encodeBool >>= next) env =
-    next Term.true {env with refCounter := (Publish.Commit.done value).refCounter, nativeHeap := (Publish.Commit.done value).nativeHeap} := by
+    next Term.true {env with nativeRefCounter := (Publish.Commit.done value).nativeRefCounter, nativeHeap := (Publish.Commit.done value).nativeHeap} := by
   have trace := Rustler.executeNative_readyPrefix (facade_prefix value env counter heap) Rustler.encodeBool
   simpa [Rustler.encodeBool] using (trace.bind next).apply
 
@@ -29,7 +29,7 @@ theorem adapter_continuation {β : Type} (value : U16) (next : Term → Result �
 
 /-- Failure consumes the admitted error before returning through the compiled facade. -/
 theorem rejected_facade_prefix (value : U16) (env : Environment)
-    (counter : env.refCounter = Publish.IoErrors.rejected.refCounter)
+    (counter : env.nativeRefCounter = Publish.IoErrors.rejected.nativeRefCounter)
     (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
     Result.ReadyPrefix (__COMMIT__ value) env (.ok false)
       {env with nativeHeap := Publish.IoErrors.disposed.nativeHeap} := by
@@ -39,7 +39,7 @@ theorem rejected_facade_prefix (value : U16) (env : Environment)
 /-- The Elixir continuation receives false after actual native error destruction. -/
 theorem rejected_adapter_continuation {β : Type} (value : U16) (next : Term → Result β)
     (env : Environment)
-    (counter : env.refCounter = Publish.IoErrors.rejected.refCounter)
+    (counter : env.nativeRefCounter = Publish.IoErrors.rejected.nativeRefCounter)
     (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
     (Rustler.executeNative (__COMMIT__ value) Rustler.encodeBool >>= next) env =
     next Term.false {env with nativeHeap := Publish.IoErrors.disposed.nativeHeap} := by
@@ -50,7 +50,7 @@ theorem rejected_adapter_continuation {β : Type} (value : U16) (next : Term →
 theorem rejected_handler_prefix {β γ : Type} (value : U16)
     (tail : Term → Result β) (next : β → Result γ) (handler : Exception → Result γ)
     (env : Environment)
-    (counter : env.refCounter = Publish.IoErrors.rejected.refCounter)
+    (counter : env.nativeRefCounter = Publish.IoErrors.rejected.nativeRefCounter)
     (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
     Result.tryWith (Rustler.executeNative (__COMMIT__ value) Rustler.encodeBool >>= tail)
       next handler env =

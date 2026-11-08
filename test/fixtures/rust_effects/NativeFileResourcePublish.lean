@@ -19,7 +19,7 @@ open NativeFile FileResource.Creation FileResource.CreatedCalls
 @[expose] def directoryEnv (env : Environment) (state : State) (counter : Nat)
     (committed closed : Bool) (script : Term) : Environment :=
   {decodedEnv env state counter (namespaceAfter committed) with
-    refCounter := counter + 2
+    nativeRefCounter := counter + 2
     nativeHeap := (counter + 2,(if closed then closedDirectoryTypeName else directoryTypeName),.tuple #[script]) ::
       (decodedEnv env state counter (namespaceAfter committed)).nativeHeap}
 
@@ -99,17 +99,17 @@ theorem directory_prefix (env : Environment) (state : State) (counter : Nat) (bo
     (Result.ok (.Ok () : core.result.Result Unit NativeIoError)) (directoryEnv env state counter true true .nil)
 
 @[expose] def committedEnv (env : Environment) (state : State) (counter : Nat) : Environment :=
-  {env with refCounter := counter + 2, nativeHeap :=
+  {env with nativeRefCounter := counter + 2, nativeHeap :=
     (counter + 2,closedDirectoryTypeName,.tuple #[.nil]) ::
       NativeResourceArc.vmCells payload 3 5 6 ++ frame state (namespaceAfter true)}
 
 private theorem directory_owner (env : Environment) (state : State) (counter : Nat) (bounded : 6 ≤ counter) :
     (directoryEnv env state counter true true .nil).nativeHeap.filter (fun cell => cell.1 == counter + 1) =
-      [(counter + 1,NativeResourceArc.handleType effects_native.FileResource,.reference 3)] ∧
+      [(counter + 1,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3)] ∧
     (directoryEnv env state counter true true .nil).nativeHeap.filter (fun cell => cell.1 == 3) =
       [(3,NativeResourceArc.typeName effects_native.FileResource,.tuple #[.integer 2,NativeCodec.encode payload])] ∧
     ((directoryEnv env state counter true true .nil).nativeHeap.filter (fun cell =>
-      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .reference 3)).length = 2 := by
+      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .nativeReference 3)).length = 2 := by
   have b0 : (counter == 0) = false := by simp; omega
   have b1 : (counter == 1) = false := by simp; omega
   have b2 : (counter == 2) = false := by simp; omega
@@ -145,7 +145,7 @@ theorem commit_next_state {α : Type} (env : Environment) (before after : State)
     (step : syncStep before = some (.Ok (),after)) (next : Term → Result α)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
       next result) (pinnedEnv env before counter namespaceBefore) =
       next Term.true (committedEnv env after counter) := by
@@ -172,7 +172,7 @@ theorem commit_next {α : Type} (env : Environment) (value : U16) (counter : Nat
     (bounded : 6 ≤ counter) (next : Term → Result α)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
       next result) (pinnedEnv env (Write.written value) counter namespaceBefore) =
       next Term.true (committedEnv env (Write.synced value) counter) := by
@@ -183,44 +183,44 @@ theorem commit_next {α : Type} (env : Environment) (value : U16) (counter : Nat
 theorem commit_env_state {α : Type} (before after : State)
     (valid : Valid before) (ready : blocked before = false)
     (step : syncStep before = some (.Ok (),after)) (next : Term → Result α) (env : Environment)
-    (bounded : 6 ≤ env.refCounter)
+    (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before namespaceBefore)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
-      next result) env = next Term.true (committedEnv env after env.refCounter) := by
-  simpa only [pinnedEnv,← heap] using commit_next_state env before after env.refCounter bounded valid ready step next registered
+      next result) env = next Term.true (committedEnv env after env.nativeRefCounter) := by
+  simpa only [pinnedEnv,← heap] using commit_next_state env before after env.nativeRefCounter bounded valid ready step next registered
 
 theorem commit_env {α : Type} (value : U16) (next : Term → Result α) (env : Environment)
-    (bounded : 6 ≤ env.refCounter)
+    (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame (Write.written value) namespaceBefore)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
-      next result) env = next Term.true (committedEnv env (Write.synced value) env.refCounter) := by
-  simpa only [pinnedEnv,← heap] using commit_next env value env.refCounter bounded next registered
+      next result) env = next Term.true (committedEnv env (Write.synced value) env.nativeRefCounter) := by
+  simpa only [pinnedEnv,← heap] using commit_next env value env.nativeRefCounter bounded next registered
 
 theorem commit_run_state (before after : State) (valid : Valid before)
     (ready : blocked before = false) (step : syncStep before = some (.Ok (),after))
-    (env : Environment) (bounded : 6 ≤ env.refCounter)
+    (env : Environment) (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before namespaceBefore)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool) env =
-      (.ok Term.true,committedEnv env after env.refCounter) := by
+      (.ok Term.true,committedEnv env after env.nativeRefCounter) := by
   simpa only [Result.bind_ok,Result.ok_apply] using
     commit_env_state before after valid ready step Result.ok env bounded heap registered
 
-theorem commit_run (value : U16) (env : Environment) (bounded : 6 ≤ env.refCounter)
+theorem commit_run (value : U16) (env : Environment) (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame (Write.written value) namespaceBefore)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool) env =
-      (.ok Term.true,committedEnv env (Write.synced value) env.refCounter) := by
+      (.ok Term.true,committedEnv env (Write.synced value) env.nativeRefCounter) := by
   simpa only [Result.bind_ok,Result.ok_apply] using commit_env value Result.ok env bounded heap registered
 
 @[expose] def seed : Environment := initial {} Write.before.script opening
@@ -456,7 +456,7 @@ theorem crash_shape (env : Environment) (state : State) (published : Bool) (scri
     (accepted : filesystemCrashImage chosen masks env = some image) :
     ∃ mask contents, masks = [(1,mask)] ∧
       persist state.durable state.visible mask = some contents ∧
-      image.inodes = [(1,contents)] ∧ image.highWater = env.refCounter ∧
+      image.inodes = [(1,contents)] ∧ image.highWater = env.nativeRefCounter ∧
       (image.names = [] ∨ image.names = names) ∧
       (published = true → image.names = names) := by
   simp only [filesystemCrashImage,snapshot,Bind.bind,Option.bind_some,Option.bind_eq_some_iff] at accepted

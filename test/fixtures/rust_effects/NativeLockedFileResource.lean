@@ -44,15 +44,15 @@ theorem final_release_next {α : Type} (before after : State) (env : Environment
     using released
 
 @[expose] def aliased (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 5, nativeHeap := [
-    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
-    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
+  {env with nativeRefCounter := 5, nativeHeap := [
+    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
+    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
     (3, NativeResourceArc.typeName effects_native.LockedFileResource,
       .tuple #[.integer 2, NativeCodec.encode payload]), mutexCell, fileCell state]}
 
 @[expose] def retained (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 5, nativeHeap := [
-    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
+  {env with nativeRefCounter := 5, nativeHeap := [
+    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
     (3, NativeResourceArc.typeName effects_native.LockedFileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), mutexCell, fileCell state]}
 
@@ -79,8 +79,8 @@ theorem retained_release_next {α : Type} (state : State) (env : Environment)
     List.filter, List.map] using released
 
 @[expose] def retainedCleaned (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 5, nativeHeap := [
-    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
+  {env with nativeRefCounter := 5, nativeHeap := [
+    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
     (3, NativeResourceArc.typeName effects_native.LockedFileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), closedCell state]}
 
@@ -125,8 +125,8 @@ theorem complete_cycle (before after : State) (env : Environment)
   simpa [NativeM.ok] using retained_final_release_next before after env valid ready step Result.ok
 
 @[expose] def held (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 5, nativeHeap := [
-    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
+  {env with nativeRefCounter := 5, nativeHeap := [
+    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
     (3, NativeResourceArc.typeName effects_native.LockedFileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]),
     (2, NativeMutex.typeName NativeFile, NativeMutex.lockedContents env.currentPid 5 false (⟨1⟩ : NativeFile)),
@@ -138,7 +138,7 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
     (step : syncStep before = some (reply, after))
     (next : core.result.Result Unit NativeIoError → NativeM α) :
     (locked_file_resource_sync ⟨3,4⟩ >>= next) (live env before) =
-      next reply {live env after with refCounter := 5} := by
+      next reply {live env after with nativeRefCounter := 5} := by
   simp only [locked_file_resource_sync, monadLift_self, bind_assoc]
   rw [NativeResourceArc.deref_single_next
     (⟨3,4⟩ : NativeResourceArc effects_native.LockedFileResource) payload _ (live env before)
@@ -152,10 +152,10 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
   simp only [Bool.false_eq_true, if_false, NativeM.ok, Result.ok_bind, bind_assoc]
   have environment :
       ({live env before with
-        refCounter := (live env before).refCounter + 1
+        nativeRefCounter := (live env before).nativeRefCounter + 1
         nativeHeap := (live env before).nativeHeap.map fun cell =>
         if cell.1 == 2 then (2, NativeMutex.typeName NativeFile,
-          NativeMutex.lockedContents (live env before).currentPid ((live env before).refCounter + 1) false (⟨1⟩ : NativeFile))
+          NativeMutex.lockedContents (live env before).currentPid ((live env before).nativeRefCounter + 1) false (⟨1⟩ : NativeFile))
         else cell} : Environment) = held env before := by
     simp [NativeCodec.typeName,NativeMutex.typeName, NativeFile.typeName, NativeFile.closedTypeName,live, held, mutexCell, fileCell]
   rw [environment]
@@ -200,7 +200,7 @@ theorem unregistered_cleanup (before after : State) (env : Environment)
     (step : closeStep before = some after) :
     locked_file_resource_new ⟨1⟩ (initial env before) =
       (.error (.error (.atom "rust_panicked")), retired env after 2) := by
-  let wrapped : Environment := {env with refCounter := 2, nativeHeap := [mutexCell, fileCell before]}
+  let wrapped : Environment := {env with nativeRefCounter := 2, nativeHeap := [mutexCell, fileCell before]}
   have poll : pollClose ⟨1⟩ wrapped = some (.ok (), retire ⟨1⟩ after wrapped) := by
     simp [pollClose, lookup, wrapped, mutexCell, fileCell, decode_valid before valid, ready, step]
   have cleanup := cleanup_ready payload ⟨1⟩ false wrapped (retire ⟨1⟩ after wrapped)

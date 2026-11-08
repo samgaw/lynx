@@ -19,11 +19,11 @@ open FileResource.Recovery (one path_bytes)
 
 variable (a b c d : U8) (generation : Nat)
 @[expose] def boot : Environment :=
-  {refCounter := generation,nativeHeap := [
+  {nativeRefCounter := generation,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],openingScript⟩),
     (1,inodeTypeName,encode ⟨data a b c d,data a b c d,0,.nil⟩)]}
 @[expose] def scan (position : Nat) (script : Term) (closed : Bool := false) : Environment :=
-  {refCounter := generation + 1,nativeHeap := [
+  {nativeRefCounter := generation + 1,nativeHeap := [
     (generation + 1,(if closed then closedHandleTypeName else handleTypeName),encodeHandle ⟨1,position,script⟩),
     (0,namespaceTypeName,encodeNamespace ⟨Publish.names,Publish.names,[],.nil⟩),
     (1,inodeTypeName,encode ⟨data a b c d,data a b c d,0,.nil⟩)]}

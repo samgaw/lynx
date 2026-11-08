@@ -107,7 +107,7 @@ private theorem stable_crash (env : Environment) (bytes : ByteArray) (script : T
     (file : inode 1 env = some ⟨bytes,bytes,0,.nil⟩)
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
     (accepted : filesystemCrashImage chosen masks env = some image) :
-    image = ⟨Publish.names,[(1,bytes)],env.refCounter⟩ := by
+    image = ⟨Publish.names,[(1,bytes)],env.nativeRefCounter⟩ := by
   simp only [filesystemCrashImage,snapshot,
     Bind.bind,Option.bind_some,Option.bind_eq_some_iff] at accepted
   rcases accepted with ⟨selected,table,accepted⟩

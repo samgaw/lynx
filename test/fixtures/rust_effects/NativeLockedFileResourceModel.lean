@@ -17,25 +17,25 @@ theorem decode_valid (state : State) (valid : Valid state) :
 @[expose] def fileCell (state : State) : Nat × String × Term := (1, typeName, encode state)
 @[expose] def closedCell (state : State) : Nat × String × Term := (1, closedTypeName, encode state)
 @[expose] def mutexCell : Nat × String × Term :=
-  (2, NativeMutex.typeName NativeFile, .tuple #[.atom "unlocked", .atom "unpoisoned", .reference 1])
+  (2, NativeMutex.typeName NativeFile, .tuple #[.atom "unlocked", .atom "unpoisoned", .nativeReference 1])
 
 @[expose] def initial (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 1, nativeHeap := [fileCell state]}
+  {env with nativeRefCounter := 1, nativeHeap := [fileCell state]}
 
 @[expose] def live (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 4, nativeHeap := [
-    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
+  {env with nativeRefCounter := 4, nativeHeap := [
+    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
     (3, NativeResourceArc.typeName effects_native.LockedFileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), mutexCell, fileCell state]}
 
 @[expose] def cleaned (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 4, nativeHeap := [
-    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
+  {env with nativeRefCounter := 4, nativeHeap := [
+    (4, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
     (3, NativeResourceArc.typeName effects_native.LockedFileResource,
       .tuple #[.integer 1, NativeCodec.encode payload]), closedCell state]}
 
 @[expose] def retired (env : Environment) (state : State) (counter : Nat := 4) : Environment :=
-  {env with refCounter := counter, nativeHeap := [closedCell state]}
+  {env with nativeRefCounter := counter, nativeHeap := [closedCell state]}
 
 /-- The actual compiler destructor calls the owning Mutex<File> primitive. -/
 theorem cleanup_contract (value : effects_native.LockedFileResource) :

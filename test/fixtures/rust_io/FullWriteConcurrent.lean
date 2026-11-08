@@ -18,7 +18,7 @@ open Record.InterruptedProperties (blocked_prefix)
 @[expose] def pending (data : ByteArray) (value : U16) (durable : ByteArray) (rest : Term) : State :=
   ⟨overwrite data data.size (bytes (payload value)) 4, durable, data.size + 4, .cons (.atom "blocked") rest⟩
 
-private theorem full_trace (pid peer token counter : Nat) (different : pid ≠ peer)
+private theorem full_trace (pid peer : PID) (token counter : Nat) (different : pid ≠ peer)
     (fresh : 2 ≤ counter) (data : ByteArray) (value : U16) (position : Nat)
     (mask durable : ByteArray) (rest : Term) (fits : data.size + 4 ≤ limit)
     (offset : position ≤ limit)
@@ -46,7 +46,7 @@ private theorem full_trace (pid peer token counter : Nat) (different : pid ≠ p
   · simp only [afterWrite, NativeFile.syncAll, Result.wait_bind]
     refine .blocked _ _ _ ?_ ?_
     · intro env owner count heap
-      change env.refCounter = counter at count
+      change env.nativeRefCounter = counter at count
       change env.nativeHeap = (shared counter (owned pid token) (pending data value durable rest)).2 at heap
       have found : lookup (⟨2⟩ : NativeFile) env = some (pending data value durable rest) := by
         simp [lookup, count, heap, shared, decode_encode (pending data value durable rest) valid2]
@@ -67,27 +67,27 @@ theorem full_write_stalls (data : ByteArray) (first second : U16) (position : Na
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
-        (.deadlock, shared 3 (owned 1 3) (pending data first firstDurable rest)) ∨
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
-        (.deadlock, shared 3 (owned 2 3) (pending data second secondDurable rest)) := by
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
+    (observed.1, observed.2.nativeRefCounter, observed.2.nativeHeap) =
+        (.deadlock, shared 3 (owned [] 3) (pending data first firstDurable rest)) ∨
+    (observed.1, observed.2.nativeRefCounter, observed.2.nativeHeap) =
+        (.deadlock, shared 3 (owned [1] 3) (pending data second secondDurable rest)) := by
   have result := Result.two_wait_blocked_orders
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
     (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩))
     (shared 2 free (input data position mask rest))
-    (shared 3 (owned 1 3) (input data position mask rest)) (shared 3 (owned 1 3) (pending data first firstDurable rest))
-    (shared 3 (owned 2 3) (input data position mask rest)) (shared 3 (owned 2 3) (pending data second secondDurable rest))
-    (lock_poll 1 2 _ (by decide)) (lock_poll 2 2 _ (by decide))
-    (full_trace 1 2 3 3 (by decide) (by decide) data first position mask firstDurable rest fits offset firstWrite)
-    (full_trace 2 1 3 3 (by decide) (by decide) data second position mask secondDurable rest fits offset secondWrite) choices
+    (shared 3 (owned [] 3) (input data position mask rest)) (shared 3 (owned [] 3) (pending data first firstDurable rest))
+    (shared 3 (owned [1] 3) (input data position mask rest)) (shared 3 (owned [1] 3) (pending data second secondDurable rest))
+    (lock_poll [] 2 _ (by decide)) (lock_poll [1] 2 _ (by decide))
+    (full_trace [] [1] 3 3 (by decide) (by decide) data first position mask firstDurable rest fits offset firstWrite)
+    (full_trace [1] [] 3 3 (by decide) (by decide) data second position mask secondDurable rest fits offset secondWrite) choices
   simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared] using result
 
-private theorem capture_append (env : Environment) (pid : Nat) (values : List U16) (value : U16)
+private theorem capture_append (env : Environment) (pid : PID) (values : List U16) (value : U16)
     (state : State) (mask : ByteArray) (image : Image)
-    (fits : (disk (logBytes values)).size + 4 ≤ limit) (counter : env.refCounter = 3)
+    (fits : (disk (logBytes values)).size + 4 ≤ limit) (counter : env.nativeRefCounter = 3)
     (heap : env.nativeHeap = (shared 3 (owned pid 3) state).2)
     (offset : state.position ≤ limit) (visible : AppendImage values value state.visible)
     (durable : AppendImage values value state.durable)
@@ -100,7 +100,7 @@ private theorem capture_append (env : Environment) (pid : Nat) (values : List U1
   unfold crashImage at captured
   rw [found] at captured
   change (persist state.durable state.visible mask).bind
-    (fun bytes => some (⟨bytes, env.refCounter⟩ : Image)) = some image at captured
+    (fun bytes => some (⟨bytes, env.nativeRefCounter⟩ : Image)) = some image at captured
   obtain ⟨bytes, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj record
   exact persist_append_image values value _ _ _ _ durable visible accepted
@@ -122,8 +122,8 @@ theorem full_write_crash_repair (values : List U16) (first second : U16) (positi
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
     crashImage ⟨2⟩ mask observed.2 = some image →
     observed.1 = .deadlock ∧ ∃ value : U16, (value = first ∨ value = second) ∧
       ∃ recovered : alloc.vec.Vec U16,
@@ -162,8 +162,8 @@ private theorem written_encoded (value : U16) :
   rw [payload_bytes, overwrite_empty]
   simp [crop, encoded, fourBytes]
 
-private theorem capture_complete (env : Environment) (pid : Nat) (value : U16) (rest : Term)
-    (counter : env.refCounter = 3)
+private theorem capture_complete (env : Environment) (pid : PID) (value : U16) (rest : Term)
+    (counter : env.nativeRefCounter = 3)
     (heap : env.nativeHeap = (shared 3 (owned pid 3) (pending ByteArray.empty value (encoded value) rest)).2) :
     crashImage ⟨2⟩ (zeroMask (encoded value)) env = some (⟨encoded value, 3⟩ : Image) := by
   have valid : Admitted (pending ByteArray.empty value (encoded value) rest) := by
@@ -182,8 +182,8 @@ theorem surviving_full_record (value : U16) (rest : Term) (choices : List Schedu
     let worker := (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule worker .ok; worker : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    let observed := (do let _ ← Result.schedule {} worker .ok; worker : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
     observed.1 = .deadlock ∧
     crashImage ⟨2⟩ (zeroMask (encoded value)) observed.2 = some (⟨encoded value, 3⟩ : Image) ∧
     ∃ script : Term,

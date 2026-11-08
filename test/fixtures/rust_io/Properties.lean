@@ -27,7 +27,7 @@ theorem decode_encode (state : State) (valid : Valid state) :
 @[expose] def fileEnv (env : Environment) (file : NativeFile) (state : State)
     (frame : List (Nat × String × Term)) : Environment :=
   { env with
-    refCounter := Nat.max env.refCounter file.id
+    nativeRefCounter := Nat.max env.nativeRefCounter file.id
     nativeHeap := (file.id, typeName, encode state) :: frame }
 
 @[expose] def Separate (file : NativeFile) (frame : List (Nat × String × Term)) : Prop :=
@@ -182,10 +182,11 @@ theorem protocol_ready (file : NativeFile) (data : Slice U8)
       syncReady, store_at env file middle after frame separate]
   rw [cross_contract]
   unfold NativeFile.write
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ first]
+  try dsimp only
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ first]
   simp only [Result.ok_bind]
   unfold NativeFile.syncAll
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ second]
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ second]
   simp [Result.ok_bind, Result.ok_apply]
 
 /-- Every acknowledged prefix is synchronized by the actual Rust caller. The
@@ -239,7 +240,8 @@ theorem protocol_write_error (file : NativeFile) (data : Slice U8)
       store_at env file before _ frame separate]
   rw [cross_contract]
   unfold NativeFile.write
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  try dsimp only
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ ready]
   simp [Result.ok_bind, Result.ok_apply]
 
 /-- A sync error is propagated, retaining the visible prefix but making no full
@@ -264,10 +266,11 @@ theorem protocol_sync_error (file : NativeFile) (data : Slice U8)
       syncReady, store_at env file middle after frame separate]
   rw [cross_contract]
   unfold NativeFile.write
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ first]
+  try dsimp only
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ first]
   simp only [Result.ok_bind]
   unfold NativeFile.syncAll
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ second]
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ second]
   simp [Result.ok_bind, Result.ok_apply]
 
 /-- Unlike synchronization, the low-level Rust write alone may leave durability
@@ -287,7 +290,7 @@ theorem write_alone (file : NativeFile) (data : Slice U8)
       ready, store_at env file before after frame separate]
   unfold io_core.write_once NativeFile.write
   simp only [monadLift_self]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.ok_apply]
 
 end Disk.Properties

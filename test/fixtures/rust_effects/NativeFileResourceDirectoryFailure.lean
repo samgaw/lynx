@@ -26,18 +26,18 @@ inductive Failure where
 /-- The unique callback-free OS error is host-admitted, as in the file-fsync
 failure proof. Native error allocation and reclamation remain trusted. -/
 @[expose] def initial (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool) : Environment :=
-  {env with refCounter := 10,nativeHeap := CommitFailure.errorCell ::
+  {env with nativeRefCounter := 10,nativeHeap := CommitFailure.errorCell ::
     NativeResourceArc.vmCells payload 3 5 6 ++ frame (Record.written value) (namespaceBefore failure closeFailed)}
 @[expose] def owned (env : Environment) (state : State) (ns : NamespaceSnapshot) : Environment :=
-  {env with refCounter := 11,nativeHeap := [
-    (11,NativeResourceArc.handleType effects_native.FileResource,.reference 3),CommitFailure.errorCell,
-    (6,NativeResourceArc.termType effects_native.FileResource,.tuple #[.reference 3,.reference 5]),
-    (5,NativeResourceArc.handleType effects_native.FileResource,.reference 3),
+  {env with nativeRefCounter := 11,nativeHeap := [
+    (11,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3),CommitFailure.errorCell,
+    (6,NativeResourceArc.termType effects_native.FileResource,.tuple #[.nativeReference 3,.nativeReference 5]),
+    (5,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3),
     (3,NativeResourceArc.typeName effects_native.FileResource,.tuple #[.integer 2,NativeCodec.encode payload])]
       ++ frame state ns}
 @[expose] def directory (env : Environment) (value : U16) (closed : Bool) (script : Term) : Environment :=
   {owned env (Record.synced value) (Publish.namespaceAfter false) with
-    refCounter := 12
+    nativeRefCounter := 12
     nativeHeap := (12,(if closed then closedDirectoryTypeName else directoryTypeName),.tuple #[script]) ::
       (owned env (Record.synced value) (Publish.namespaceAfter false)).nativeHeap}
 @[expose] def nativeDone (env : Environment) (value : U16) : Failure → Environment
@@ -48,10 +48,10 @@ failure proof. Native error allocation and reclamation remain trusted. -/
   | .opening => []
   | .synchronization => [(12,closedDirectoryTypeName,.tuple #[.nil])]
 @[expose] def released (env : Environment) (value : U16) (failure : Failure) : Environment :=
-  {env with refCounter := water failure,nativeHeap := tombstone failure ++ CommitFailure.errorCell ::
+  {env with nativeRefCounter := water failure,nativeHeap := tombstone failure ++ CommitFailure.errorCell ::
     NativeResourceArc.vmCells payload 3 5 6 ++ frame (Record.synced value) (Publish.namespaceAfter false)}
 @[expose] def done (env : Environment) (value : U16) (failure : Failure) : Environment :=
-  {env with refCounter := water failure,nativeHeap := tombstone failure ++
+  {env with nativeRefCounter := water failure,nativeHeap := tombstone failure ++
     NativeResourceArc.vmCells payload 3 5 6 ++ frame (Record.synced value) (Publish.namespaceAfter false)}
 
 private theorem pinned (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool) :
@@ -71,7 +71,7 @@ private theorem pinned (env : Environment) (value : U16) (failure : Failure) (cl
 
 theorem decode_prefix (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
-    Result.ReadyPrefix (NativeResourceArc.decode (.reference 6)) (initial env value failure closeFailed)
+    Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 6)) (initial env value failure closeFailed)
       (.ok (⟨3,11⟩ : NativeResourceArc effects_native.FileResource))
       (owned env (Record.written value) (namespaceBefore failure closeFailed)) := by
   simpa [initial,owned,NativeResourceArc.vmCells,frame,CommitFailure.errorCell,List.map] using
@@ -186,11 +186,11 @@ theorem error_prefix (env : Environment) (value : U16) (failure : Failure) :
     Result.ReadyPrefix (NativeOwnedDrop.drop (⟨10⟩ : NativeIoError)) (released env value failure) (.ok ())
       (done env value failure) := by
   simp only [NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability]
-  apply Result.ReadyPrefix.get
+  apply Result.ReadyPrefix.nativeGet
   cases failure <;>
     simp [released,done,water,tombstone,CommitFailure.errorCell,frame,
       NativeResourceArc.vmCells,List.filter,NativeIoError.typeName]
-  all_goals apply Result.ReadyPrefix.set
+  all_goals apply Result.ReadyPrefix.nativeSet
   all_goals exact .refl _ _
 
 /-- The actual compiled facade returns false for either directory failure,
@@ -213,7 +213,7 @@ facade, resource decoding, native effects, ownership cleanup and result encoding
 theorem call_prefix (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (initial env value failure closeFailed) (.ok Term.false) (done env value failure) := by
   apply ((decode_prefix env value failure closeFailed registered).bind _).trans
@@ -226,26 +226,26 @@ failed namespace synchronization remain distinct in their terminal environment. 
 theorem call_run (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool) (initial env value failure closeFailed) =
       (.ok Term.false,done env value failure) := by
   simpa only [Result.ok_apply] using (call_prefix env value failure closeFailed registered).apply
 
 theorem failure_env {α : Type} (value : U16) (failure : Failure) (closeFailed : Bool)
     (next : Term → Result α) (env : Environment)
-    (counter : env.refCounter = 10)
+    (counter : env.nativeRefCounter = 10)
     (heap : env.nativeHeap = CommitFailure.errorCell :: NativeResourceArc.vmCells payload 3 5 6 ++
       frame (Record.written value) (namespaceBefore failure closeFailed))
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
       next result) env = next Term.false (done env value failure) := by
   have trace := ((call_prefix env value failure closeFailed registered).bind next).apply
   simpa only [Result.ok_bind,initial,← heap,← counter,bind_assoc] using trace
 
 @[expose] def seed (failure : Failure) (closeFailed : Bool) : Environment :=
-  initial (({} : Environment).setPdict [(.atom "resource",.reference 6)]) 4660#u16 failure closeFailed
+  initial (({} : Environment).setPdict [(.atom "resource",.nativeReference 6)]) 4660#u16 failure closeFailed
 @[simp,expose] def seedOpening : Environment := seed .opening false
 @[simp,expose] def seedSynchronization : Environment := seed .synchronization false
 @[simp,expose] def seedCloseError : Environment := seed .synchronization true
@@ -296,7 +296,7 @@ theorem failure_recovery (env : Environment) (value : U16) (failure : Failure) (
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage) (error : Nat)
     (accepted : filesystemCrashImage chosen masks (done env value failure) = some image) :
     Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (initial env value failure closeFailed) (.ok Term.false) (done env value failure) ∧
     ∃ script before after result,
@@ -332,7 +332,7 @@ concrete admitted lost-name crash, even when all record bytes are durable. -/
 theorem lost_name_witness (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (initial env value failure closeFailed) (.ok Term.false) (done env value failure) ∧
     filesystemCrashImage [] [(1,RecordRecovery.tearingMask true true true true)] (done env value failure) =

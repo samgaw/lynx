@@ -31,11 +31,11 @@ theorem create_continuation {β : Type} (value : U64) (next : Term → Result β
       let term ← NativeResourceArc.encode owner
       NativeResourceArc.release owner
       Result.ok term) id >>= next) env =
-    next (.reference (env.refCounter + 4)) {env with refCounter := env.refCounter + 4, nativeHeap := [
-      (env.refCounter + 4, NativeResourceArc.termType ScalarResource,
-        .tuple #[.reference (env.refCounter + 1), .reference (env.refCounter + 3)]),
-      (env.refCounter + 3, NativeResourceArc.handleType ScalarResource, .reference (env.refCounter + 1)),
-      (env.refCounter + 1, NativeResourceArc.typeName ScalarResource,
+    next (.nativeReference (env.nativeRefCounter + 4)) {env with nativeRefCounter := env.nativeRefCounter + 4, nativeHeap := [
+      (env.nativeRefCounter + 4, NativeResourceArc.termType ScalarResource,
+        .tuple #[.nativeReference (env.nativeRefCounter + 1), .nativeReference (env.nativeRefCounter + 3)]),
+      (env.nativeRefCounter + 3, NativeResourceArc.handleType ScalarResource, .nativeReference (env.nativeRefCounter + 1)),
+      (env.nativeRefCounter + 1, NativeResourceArc.typeName ScalarResource,
         .tuple #[.integer 1, NativeCodec.encode (ScalarResource.mk (effects_core.Counter.mk value))])] } := by
   have model := NativeResourceArc.new_encode_release_handled_next
     (ScalarResource.mk (effects_core.Counter.mk value))
@@ -49,17 +49,17 @@ theorem create_continuation {β : Type} (value : U64) (next : Term → Result β
 
 theorem read_continuation {β : Type} (value : U64) (next : Term → Result β)
     (env : Environment) (id pin term : Nat)
-    (ordered : id < pin ∧ pin < term ∧ term ≤ env.refCounter)
+    (ordered : id < pin ∧ pin < term ∧ term ≤ env.nativeRefCounter)
     (stored : env.nativeHeap = [
-      (term, NativeResourceArc.termType ScalarResource, .tuple #[.reference id, .reference pin]),
-      (pin, NativeResourceArc.handleType ScalarResource, .reference id),
+      (term, NativeResourceArc.termType ScalarResource, .tuple #[.nativeReference id, .nativeReference pin]),
+      (pin, NativeResourceArc.handleType ScalarResource, .nativeReference id),
       (id, NativeResourceArc.typeName ScalarResource,
         .tuple #[.integer 1, NativeCodec.encode (ScalarResource.mk (effects_core.Counter.mk value))])])
     (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (α := ScalarResource) (.reference term)
+      let owner ← NativeResourceArc.decode (α := ScalarResource) (.nativeReference term)
       let result ← Rustler.executeNative (__READ__ owner) Rustler.encodeUnsigned
-      next result) env = next (.integer value.val) {env with refCounter := env.refCounter + 1} := by
+      next result) env = next (.integer value.val) {env with nativeRefCounter := env.nativeRefCounter + 1} := by
   have model := NativeResourceArc.decode_read_release_handled_next
     (ScalarResource.mk (effects_core.Counter.mk value))
     (fun resource => Result.ok (Rustler.encodeUnsigned resource.counter.value))
@@ -73,16 +73,16 @@ theorem read_continuation {β : Type} (value : U64) (next : Term → Result β)
 
 theorem create_framed_continuation {β : Type} (value : U64) (next : Term → Result β)
     (env : Environment) (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes)
-    (frame : NativeResourceArc.FrameBelow ScalarResource env.refCounter env.nativeHeap) :
+    (frame : NativeResourceArc.FrameBelow ScalarResource env.nativeRefCounter env.nativeHeap) :
     (Rustler.executeNative (do
       let owner ← __CREATE__ value
       let term ← NativeResourceArc.encode owner
       NativeResourceArc.release owner
       Result.ok term) id >>= next) env =
-    next (.reference (env.refCounter + 4)) {env with
-      refCounter := env.refCounter + 4
+    next (.nativeReference (env.nativeRefCounter + 4)) {env with
+      nativeRefCounter := env.nativeRefCounter + 4
       nativeHeap := NativeResourceArc.vmCells (ScalarResource.mk (effects_core.Counter.mk value))
-        (env.refCounter + 1) (env.refCounter + 3) (env.refCounter + 4) ++ env.nativeHeap} := by
+        (env.nativeRefCounter + 1) (env.nativeRefCounter + 3) (env.nativeRefCounter + 4) ++ env.nativeHeap} := by
   have model := NativeResourceArc.new_encode_release_framed_next
     (ScalarResource.mk (effects_core.Counter.mk value))
     (fun error => match error with
@@ -98,9 +98,9 @@ theorem read_pinned_continuation {β : Type} (value : U64) (next : Term → Resu
     (pinned : NativeResourceArc.Pinned (ScalarResource.mk (effects_core.Counter.mk value)) id pin term env)
     (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (α := ScalarResource) (.reference term)
+      let owner ← NativeResourceArc.decode (α := ScalarResource) (.nativeReference term)
       let result ← Rustler.executeNative (__READ__ owner) Rustler.encodeUnsigned
-      next result) env = next (.integer value.val) {env with refCounter := env.refCounter + 1} := by
+      next result) env = next (.integer value.val) {env with nativeRefCounter := env.nativeRefCounter + 1} := by
   have model := NativeResourceArc.decode_read_pinned_next
     (ScalarResource.mk (effects_core.Counter.mk value))
     (fun resource => Result.ok (Rustler.encodeUnsigned resource.counter.value))

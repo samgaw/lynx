@@ -33,44 +33,44 @@ theorem result_constructors :
 theorem nativeHeap_pdict (env : Environment) (dictionary : List (Term × Term)) :
     (env.setPdict dictionary).nativeHeap = env.nativeHeap := rfl
 
-private def publishNativeCell : Result := .get fun env =>
-  .set { env with nativeHeap := [(1, "counter", .integer 7)] }
-    (.get fun env => .set (env.setPdict [(.atom "worker", .atom "only")]) (.ok .nil))
+private def publishNativeCell : Result := .nativeGet fun env =>
+  .nativeSet { env with nativeHeap := [(1, "counter", .integer 7)] }
+    (.nativeGet fun env => .nativeSet (env.setPdict [(.atom "worker", .atom "only")]) (.ok .nil))
 
 private def nativeCellExchange : Result :=
-  .schedule publishNativeCell fun _ => .get fun env => .ok (.integer env.nativeHeap.length)
+  .schedule {} publishNativeCell fun _ => .nativeGet fun env => .ok (.integer env.nativeHeap.length)
 
 /-- The child and parent share native storage, while process dictionaries remain local.
 These concrete schedules exercise scheduler save/activate and process completion. -/
 theorem nativeHeap_shared_processes :
-    (nativeCellExchange.run { schedule := [.swap 2] }) =
-      (.ok (.integer 1), { pidCounter := 2, nativeHeap := [(1, "counter", .integer 7)] }) ∧
-    (nativeCellExchange.run { schedule := [.current] }) =
-      (.ok (.integer 0), { pidCounter := 2, nativeHeap := [(1, "counter", .integer 7)] }) := by
+    (nativeCellExchange.run {} [.swap [1]]) =
+      (.ok (.integer 1), { nativeHeap := [(1, "counter", .integer 7)] }) ∧
+    (nativeCellExchange.run {} [.current]) =
+      (.ok (.integer 0), { nativeHeap := [(1, "counter", .integer 7)] }) := by
   cbv
   constructor <;> rfl
 
 /-- A failure preserves the shared heap accumulated before the exception. -/
 theorem nativeHeap_before_failure (env : Environment) :
-    (Result.set { env with nativeHeap := [(1, "counter", .integer 7)] }
+    (Result.nativeSet { env with nativeHeap := [(1, "counter", .integer 7)] }
       (.error (.throw (.atom "failed"))) : Result) env =
       (.error (.throw (.atom "failed")),
         { env with nativeHeap := [(1, "counter", .integer 7)] }) := by
   rfl
 
-private def incrementSharedCell : Result := .get fun env =>
-  .set {env with refCounter := env.refCounter + 1, nativeHeap := [(1, "counter", .integer (env.refCounter + 1))]}
-    (.wait (fun env => some ((), env)) (fun _ => .get fun env => .ok (.integer env.refCounter)))
+private def incrementSharedCell : Result := .nativeGet fun env =>
+  .nativeSet {env with nativeRefCounter := env.nativeRefCounter + 1, nativeHeap := [(1, "counter", .integer (env.nativeRefCounter + 1))]}
+    (.wait (fun env => some ((), env)) (fun _ => .nativeGet fun env => .ok (.integer env.nativeRefCounter)))
 
 private def counterShared (counter : Nat) : Nat × List (Nat × String × Term) :=
   (counter, [(1, "counter", .integer counter)])
 
-private theorem incrementSharedTrace (pid counter : Nat) (heap : List (Nat × String × Term)) :
+private theorem incrementSharedTrace (pid : PID) (counter : Nat) (heap : List (Nat × String × Term)) :
     Result.SharedSteps pid incrementSharedCell (counter, heap) (.integer (counter + 1))
       (counterShared (counter + 1)) := by
   unfold incrementSharedCell
   refine .update _
-    (.wait (fun env => some ((), env)) (fun _ => .get fun env => .ok (.integer env.refCounter)))
+    (.wait (fun env => some ((), env)) (fun _ => .nativeGet fun env => .ok (.integer env.nativeRefCounter)))
     _ (counterShared (counter + 1)) _ _ ?_ ?_
   · intro env _ count _
     simp [counterShared, count]
@@ -83,28 +83,28 @@ private theorem incrementSharedTrace (pid counter : Nat) (heap : List (Nat × St
       simp [counterShared] at count
       simp [count]
 
-/-- The complete scheduled computations retain their get/set and wait nodes.
+/-- The complete scheduled computations retain their native read/write and wait nodes.
 The root observes its increment, then the child advances the shared cell. -/
 theorem scheduled_shared_read_write_wait :
-    (Result.schedule incrementSharedCell (fun _ => incrementSharedCell)) {} =
-      (.ok (.integer 1), {pidCounter := 2, refCounter := 2, nativeHeap := [(1, "counter", .integer 2)]}) := by
+    (Result.schedule {} incrementSharedCell (fun _ => incrementSharedCell)) {} =
+      (.ok (.integer 1), { nativeRefCounter := 2, nativeHeap := [(1, "counter", .integer 2)]}) := by
   simpa [counterShared] using Result.two_shared_serial_steps incrementSharedCell incrementSharedCell
     (.integer 1) (.integer 2) (0, []) (counterShared 1) (counterShared 2)
-    (incrementSharedTrace 1 0 []) (incrementSharedTrace 2 1 (counterShared 1).2)
+    (incrementSharedTrace [] 0 []) (incrementSharedTrace [1] 1 (counterShared 1).2)
 
 /-- The swap is consumed at the wait, after the parent's local read/write.
 The child advances the shared counter before the parent observes it again. -/
 theorem shared_wait_preserves_local_steps :
-    (Result.schedule incrementSharedCell (fun _ => incrementSharedCell))
-      {schedule := [.current, .swap 2]} =
-      (.ok (.integer 2), {pidCounter := 2, refCounter := 2, nativeHeap := [(1, "counter", .integer 2)]}) := by
+    (Result.schedule {} incrementSharedCell (fun _ => incrementSharedCell)).run
+      {} [.current, .swap [1]] =
+      (.ok (.integer 2), { nativeRefCounter := 2, nativeHeap := [(1, "counter", .integer 2)]}) := by
   cbv
 
 private def registeredIncrement : Result := Rustler.withResourceTypes ["counter"]
-  (.get fun env => if "counter" ∈ env.nativeResourceTypes then incrementSharedCell
+  (.nativeGet fun env => if "counter" ∈ env.nativeResourceTypes then incrementSharedCell
     else .error (.error (.atom "badarg")))
 
-private theorem registeredIncrementPrefix (pid counter : Nat)
+private theorem registeredIncrementPrefix (pid : PID) (counter : Nat)
     (heap : List (Nat × String × Term)) (types : List String)
     (same : (types ++ ["counter"]).eraseDups = ["counter"]) :
     Result.RegisteredPrefix pid registeredIncrement (counter, heap) types
@@ -117,7 +117,7 @@ private theorem registeredIncrementPrefix (pid counter : Nat)
   intro env _ _ _ registered
   simp [registered]
 
-private theorem registeredIncrementTrace (pid counter : Nat)
+private theorem registeredIncrementTrace (pid : PID) (counter : Nat)
     (heap : List (Nat × String × Term)) (types : List String)
     (same : (types ++ ["counter"]).eraseDups = ["counter"]) :
     Result.RegisteredSteps pid registeredIncrement (counter, heap) types
@@ -129,14 +129,14 @@ private theorem registeredIncrementTrace (pid counter : Nat)
 second registration's duplicate elimination; the conditional read sees the
 registered type and the native computation retains its wait. -/
 theorem scheduled_registered_read_write_wait :
-    (Result.schedule registeredIncrement (fun _ => registeredIncrement)) {} =
+    (Result.schedule {} registeredIncrement (fun _ => registeredIncrement)) {} =
       (.ok (.integer 1), {
-        pidCounter := 2, refCounter := 2, nativeHeap := [(1, "counter", .integer 2)], nativeResourceTypes := ["counter"]}) := by
+         nativeRefCounter := 2, nativeHeap := [(1, "counter", .integer 2)], nativeResourceTypes := ["counter"]}) := by
   simpa [counterShared] using Result.two_registered_serial_steps registeredIncrement registeredIncrement
     (.integer 1) (.integer 2) (0, []) (counterShared 1) (counterShared 2)
     [] ["counter"] ["counter"]
-    (registeredIncrementTrace 1 0 [] [] rfl)
-    (registeredIncrementTrace 2 1 (counterShared 1).2 ["counter"] rfl)
+    (registeredIncrementTrace [] 0 [] [] rfl)
+    (registeredIncrementTrace [1] 1 (counterShared 1).2 ["counter"] rfl)
 
 end LynxTest.Term
 

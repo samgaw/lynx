@@ -10,14 +10,14 @@ attribute [local simp] NativeCodec.typeName NativeCodec.encode NativeMutex.typeN
   NativeFile.typeName NativeFile.closedTypeName List.filter
 
 @[expose] def pinnedEnv (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 6, nativeHeap :=
+  {env with nativeRefCounter := 6, nativeHeap :=
     NativeResourceArc.vmCells payload 3 5 6 ++ [mutexCell, fileCell state]}
 
 @[expose] def decodedEnv (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 7, nativeHeap := [
-    (7, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
-    (6, NativeResourceArc.termType effects_native.LockedFileResource, .tuple #[.reference 3, .reference 5]),
-    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .reference 3),
+  {env with nativeRefCounter := 7, nativeHeap := [
+    (7, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
+    (6, NativeResourceArc.termType effects_native.LockedFileResource, .tuple #[.nativeReference 3, .nativeReference 5]),
+    (5, NativeResourceArc.handleType effects_native.LockedFileResource, .nativeReference 3),
     (3, NativeResourceArc.typeName effects_native.LockedFileResource,
       .tuple #[.integer 2, NativeCodec.encode payload]), mutexCell, fileCell state]}
 
@@ -38,7 +38,7 @@ theorem pin (env : Environment) (state : State) :
 theorem decode_next {α : Type} (env : Environment) (state : State)
     (next : NativeResourceArc effects_native.LockedFileResource → NativeM α)
     (registered : NativeResourceArc.typeName effects_native.LockedFileResource ∈ env.nativeResourceTypes) :
-    (NativeResourceArc.decode (.reference 6) >>= next) (pinnedEnv env state) =
+    (NativeResourceArc.decode (.nativeReference 6) >>= next) (pinnedEnv env state) =
       next ⟨3,7⟩ (decodedEnv env state) := by
   have decoded := NativeResourceArc.decode_pinned_next payload next (pinnedEnv env state)
     3 5 6 (pin env state) registered
@@ -49,9 +49,9 @@ keeps the file open, and no close outcome is consumed. Rust unit encodes as {}. 
 theorem release_call (env : Environment) (state : State)
     (registered : NativeResourceArc.typeName effects_native.LockedFileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__RELEASE__ owner) (fun _ => .tuple #[])) (pinnedEnv env state) =
-      (.ok (.tuple #[]), {pinnedEnv env state with refCounter := 7}) := by
+      (.ok (.tuple #[]), {pinnedEnv env state with nativeRefCounter := 7}) := by
   rw [decode_next env state _ registered]
   simp only [__RELEASE__, locked_file_resource_release, monadLift_self, NativeOwnedDrop.drop,
     Rustler.executeNative]
@@ -73,11 +73,11 @@ theorem release_call (env : Environment) (state : State)
 theorem release_preserves_file (env : Environment) (state : State) (valid : Valid state)
     (registered : NativeResourceArc.typeName effects_native.LockedFileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__RELEASE__ owner) (fun _ => .tuple #[])) (pinnedEnv env state) =
-      (.ok (.tuple #[]), {pinnedEnv env state with refCounter := 7}) ∧
-    lookup ⟨1⟩ {pinnedEnv env state with refCounter := 7} = some state ∧
-    ({pinnedEnv env state with refCounter := 7} : Environment).nativeHeap.filter
+      (.ok (.tuple #[]), {pinnedEnv env state with nativeRefCounter := 7}) ∧
+    lookup ⟨1⟩ {pinnedEnv env state with nativeRefCounter := 7} = some state ∧
+    ({pinnedEnv env state with nativeRefCounter := 7} : Environment).nativeHeap.filter
       (fun cell => cell.1 == 2) = [mutexCell] := by
   refine ⟨release_call env state registered, ?_, ?_⟩
   all_goals simp [lookup, pinnedEnv, NativeResourceArc.vmCells, mutexCell, fileCell, decode_valid state valid]

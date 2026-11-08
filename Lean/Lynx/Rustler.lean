@@ -10,8 +10,8 @@ namespace Lynx.Rustler
 This models registration availability; native loader and FFI execution remain
 trusted. Existing resource contents and other runtime state are preserved. -/
 @[expose] def withResourceTypes {α : Type} (types : List String) (computation : Result α) :
-    Result α := .get fun env =>
-  .set { env with nativeResourceTypes := (env.nativeResourceTypes ++ types).eraseDups }
+    Result α := .nativeGet fun env =>
+  .nativeSet { env with nativeResourceTypes := (env.nativeResourceTypes ++ types).eraseDups }
     computation
 
 @[simp] theorem withResourceTypes_apply {α : Type} (types : List String)

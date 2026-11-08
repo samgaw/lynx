@@ -13,14 +13,14 @@ attribute [local simp] NativeCodec.typeName NativeCodec.encode NativeMutex.typeN
 
 @[expose] def payload : shared_log.LogResource := Record.ConstructorLogProperties.payload
 @[expose] def owners (decoded : Bool) : List (Nat × String × Term) :=
-  if decoded then (9,NativeResourceArc.handleType shared_log.LogResource,.reference 5) ::
+  if decoded then (9,NativeResourceArc.handleType shared_log.LogResource,.nativeReference 5) ::
     (NativeResourceArc.vmCells payload 5 7 8).map fun cell => if cell.1 == 5 then
       (5,NativeResourceArc.typeName shared_log.LogResource,.tuple #[.integer 2,NativeCodec.encode payload]) else cell
   else NativeResourceArc.vmCells payload 5 7 8
-@[expose] def free : Term := .tuple #[.atom "unlocked",.atom "unpoisoned",.reference 2]
+@[expose] def free : Term := .tuple #[.atom "unlocked",.atom "unpoisoned",.nativeReference 2]
 @[expose] def held (env : Environment) : Term := NativeMutex.lockedContents env.currentPid 10 false (⟨2⟩ : NativeFile)
 @[expose] def world (env : Environment) (counter : Nat) (decoded : Bool) (mutex : Term) (state : State) : Environment :=
-  {env with refCounter := counter, nativeHeap := owners decoded ++ [
+  {env with nativeRefCounter := counter, nativeHeap := owners decoded ++ [
     (4,NativeMutex.typeName NativeFile,mutex),
     (3,closedDirectoryTypeName,.tuple #[.nil]),
     (2,writableHandleTypeName,encodeHandle ⟨1,state.position,state.script⟩),
@@ -161,7 +161,7 @@ theorem append_prefix (env : Environment) (before sought written committed : Sta
 separate manually initialized resource exists. -/
 theorem decoded_prefix (env : Environment) (script : Term)
     (registered : NativeResourceArc.typeName shared_log.LogResource ∈ env.nativeResourceTypes) :
-    Result.ReadyPrefix (NativeResourceArc.decode (.reference 8))
+    Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 8))
       (Record.ConstructorLogProperties.constructed env script) (.ok (⟨5,9⟩ : NativeResourceArc shared_log.LogResource))
       (decoded env ⟨ByteArray.empty,ByteArray.empty,0,script⟩) := by
   have head := NativeResourceArc.decode_pinned_prefix Record.ConstructorLogProperties.payload

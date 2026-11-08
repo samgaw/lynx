@@ -483,7 +483,10 @@ defmodule Lynx.Rustler.FileResourceTest do
       end
     end
 
-    File.write!(property, String.replace(source, "next (.reference 6)", "next (.reference 7)"))
+    File.write!(
+      property,
+      String.replace(source, "next (.nativeReference 6)", "next (.nativeReference 7)")
+    )
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rustler.prepare!(options)
@@ -1017,8 +1020,8 @@ defmodule Lynx.Rustler.FileResourceTest do
           String.replace(recovery_source, "(.ok (.Ok (some value))", "(.ok (.Ok none)"),
           String.replace(
             recovery_source,
-            "refCounter := generation + 1",
-            "refCounter := generation"
+            "nativeRefCounter := generation + 1",
+            "nativeRefCounter := generation"
           ),
           String.replace(
             recovery_source,
@@ -1472,7 +1475,7 @@ defmodule Lynx.Rustler.FileResourceTest do
     call_source = File.read!(call_property)
 
     for wrong <- [
-          String.replace(call_source, ".reference 6", ".reference 5"),
+          String.replace(call_source, ".nativeReference 6", ".nativeReference 5"),
           String.replace(
             call_source,
             "(Record.done env value)",

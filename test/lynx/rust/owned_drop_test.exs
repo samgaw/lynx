@@ -100,8 +100,8 @@ defmodule Lynx.Rust.OwnedDropTest do
       property,
       String.replace(
         original,
-        "refCounter := env.refCounter + 1",
-        "refCounter := env.refCounter + 2"
+        "nativeRefCounter := env.nativeRefCounter + 1",
+        "nativeRefCounter := env.nativeRefCounter + 2"
       )
     )
 

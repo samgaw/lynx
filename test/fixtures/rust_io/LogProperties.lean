@@ -37,8 +37,8 @@ theorem record_step_next (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before after : State) (value : U16)
     (separate : Separate file frame) (step : RecordStep before after value)
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_record file >>= next) (fileEnv env file before frame) =
-      next (.Ok (some value), file) (fileEnv env file after frame) := by
+    (read_record file >>= next).run (fileEnv env file before frame) =
+      (next (.Ok (some value), file)).run (fileEnv env file after frame) := by
   obtain ⟨s1, s2, s3, v0, v1, v2, v3, n0, n1, n2, n3, r0, r1, r2, r3⟩ := step
   exact record_next file env frame before s1 s2 s3 after value separate
     v0 v1 v2 v3 n0 n1 n2 n3 r0 r1 r2 r3 next
@@ -80,7 +80,7 @@ theorem loop_records (file : NativeFile) (env : Environment)
         omega
       rw [NativeM.loopFuel]
       simp only [recover_log_loop.body, monadLift_self, go, ite_true, bind_assoc]
-      change (read_record file >>= _) _ = _
+      change (read_record file >>= _).run _ = _
       rw [record_step_next file env frame before middle value separate step]
       simp only [NativeM.ok]
       rw [push_from accumulated value (by simp only [List.length_cons] at count; omega)]

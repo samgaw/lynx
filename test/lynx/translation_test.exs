@@ -241,8 +241,7 @@ defmodule Lynx.TranslationTest do
       for purity <- [:sequential, :concurrent] do
         effect =
           if purity == :sequential,
-            do:
-              ".set { env with currentProcess := { env.currentProcess with pdict := [(input, input)] } } (.ok input)",
+            do: ".set { env with pdict := [(input, input)] } (.ok input)",
             else: ".send env.currentPid input (.ok input)"
 
         [file] = base.files

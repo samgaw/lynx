@@ -83,7 +83,7 @@ theorem malformed_at (file : NativeFile) (env : Environment)
     (remaining : head.length + 4 ≤ stop)
     (bad : word a b ^^^ word c d ≠ core.num.U16.MAX)
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
-    (read_record file >>= next)
+    (read_record file >>= next).run
       (fileEnv env file (planned (disk (head ++ [a,b,c,d] ++ tail)) rest stop head.length) frame) =
       next (.Ok none, file)
         (fileEnv env file (planned (disk (head ++ [a,b,c,d] ++ tail)) rest stop (head.length + 4)) frame) := by
@@ -97,7 +97,7 @@ theorem malformed_at (file : NativeFile) (env : Environment)
   have slice (n : Nat) : data.data.toList.drop (head.length + n) =
       (([a,b,c,d] ++ tail).map rawByte).drop n := by
     simpa only [data, List.append_assoc] using disk_suffix head ([a,b,c,d] ++ tail) n
-  change (read_record file >>= next) (fileEnv env file (planned data rest stop head.length) frame) = _
+  change (read_record file >>= next).run (fileEnv env file (planned data rest stop head.length) frame) = _
   simp only [read_record, monadLift_self, bind_assoc]
   rw [word_next file env frame _ (planned data rest stop (head.length + 1))
     (planned data rest stop (head.length + 2)) a b separate
@@ -145,7 +145,7 @@ theorem loop_malformed_next (file : NativeFile) (env : Environment)
     (bad : word a b ^^^ word c d ≠ core.num.U16.MAX) (valid : values.length ≤ Usize.max)
     (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
     (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-      fuel (file, alloc.vec.Vec.from values valid) >>= next)
+      fuel (file, alloc.vec.Vec.from values valid) >>= next).run
       (fileEnv env file (planned (disk (logBytes values ++ suffixBytes a b c d tail)) rest
         (4 * values.length + 4) (4 * values.length)) frame) =
       next (.Ok (alloc.vec.Vec.from values valid), file)
@@ -159,7 +159,7 @@ theorem loop_malformed_next (file : NativeFile) (env : Environment)
         Usize.ofNatCore, UScalar.ofNatCore_val_eq] using more
     rw [NativeM.loopFuel]
     simp only [recover_log_loop.body, monadLift_self, go, ite_true, bind_assoc]
-    change (read_record file >>= _) _ = _
+    change (read_record file >>= _).run _ = _
     have malformed := malformed_at (α := α) file env frame (logBytes values) tail a b c d rest
       (4 * values.length + 4) separate
       (by simpa only [suffixBytes, List.append_assoc] using bounded)
@@ -179,7 +179,7 @@ theorem recover_malformed_next (file : NativeFile) (env : Environment)
     (offset : position ≤ limit) (more : values.length < maxRecords.val)
     (bad : word a b ^^^ word c d ≠ core.num.U16.MAX)
     (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α) :
-    (recover_log file maxRecords >>= next) (fileEnv env file
+    (recover_log file maxRecords >>= next).run (fileEnv env file
       ⟨disk (logBytes values ++ suffixBytes a b c d tail), disk (logBytes values ++ suffixBytes a b c d tail), position,
         outcome "seek" true 0 (zeroMask (disk (logBytes values ++ suffixBytes a b c d tail)))
           (planned (disk (logBytes values ++ suffixBytes a b c d tail)) rest (4 * values.length + 4) 0).script⟩ frame) =

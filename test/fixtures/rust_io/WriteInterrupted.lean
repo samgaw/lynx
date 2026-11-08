@@ -20,7 +20,7 @@ open Record.TornConcurrent (overwrite_log_image crash_shared_image tail_write ta
   ⟨overwrite data data.size (bytes (payload value)) amount,
     durable, data.size + amount, .cons (.atom "blocked") rest⟩
 
-private theorem before_resize_trace (pid peer token counter : Nat) (different : pid ≠ peer)
+private theorem before_resize_trace (pid peer : PID) (token counter : Nat) (different : pid ≠ peer)
     (fresh : 2 ≤ counter) (data : ByteArray) (value : U16) (position amount : Nat)
     (mask durable : ByteArray) (rest : Term) (fits : data.size + 4 ≤ limit)
     (offset : position ≤ limit) (short : amount < 4)
@@ -57,7 +57,7 @@ private theorem before_resize_trace (pid peer token counter : Nat) (different : 
     refine .blocked _ _ _ ?_ ?_
     · intro env owner count heap
       have found : lookup (⟨2⟩ : NativeFile) env = some (pending data value durable amount rest) := by
-        change env.refCounter = counter at count
+        change env.nativeRefCounter = counter at count
         simp [lookup, count, heap, shared,
           decode_encode (pending data value durable amount rest) valid2]
         omega
@@ -77,25 +77,25 @@ theorem before_resize_stalls (data : ByteArray) (first second : U16)
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
-        (.deadlock, shared 3 (owned 1 3) (pending data first firstDurable amount rest)) ∨
-    (observed.1, observed.2.refCounter, observed.2.nativeHeap) =
-        (.deadlock, shared 3 (owned 2 3) (pending data second secondDurable amount rest)) := by
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
+    (observed.1, observed.2.nativeRefCounter, observed.2.nativeHeap) =
+        (.deadlock, shared 3 (owned [] 3) (pending data first firstDurable amount rest)) ∨
+    (observed.1, observed.2.nativeRefCounter, observed.2.nativeHeap) =
+        (.deadlock, shared 3 (owned [1] 3) (pending data second secondDurable amount rest)) := by
   have result := Result.two_wait_blocked_orders
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
     (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩))
     (shared 2 free (input data position amount mask rest))
-    (shared 3 (owned 1 3) (input data position amount mask rest))
-    (shared 3 (owned 1 3) (pending data first firstDurable amount rest))
-    (shared 3 (owned 2 3) (input data position amount mask rest))
-    (shared 3 (owned 2 3) (pending data second secondDurable amount rest))
-    (lock_poll 1 2 _ (by decide)) (lock_poll 2 2 _ (by decide))
-    (before_resize_trace 1 2 3 3 (by decide) (by decide) data first position amount mask firstDurable rest
+    (shared 3 (owned [] 3) (input data position amount mask rest))
+    (shared 3 (owned [] 3) (pending data first firstDurable amount rest))
+    (shared 3 (owned [1] 3) (input data position amount mask rest))
+    (shared 3 (owned [1] 3) (pending data second secondDurable amount rest))
+    (lock_poll [] 2 _ (by decide)) (lock_poll [1] 2 _ (by decide))
+    (before_resize_trace [] [1] 3 3 (by decide) (by decide) data first position amount mask firstDurable rest
       fits offset short firstWrite)
-    (before_resize_trace 2 1 3 3 (by decide) (by decide) data second position amount mask secondDurable rest
+    (before_resize_trace [1] [] 3 3 (by decide) (by decide) data second position amount mask secondDurable rest
       fits offset short secondWrite) choices
   simpa only [worker_wait, Result.schedule_bind, Result.ok_bind, shared] using result
 
@@ -119,8 +119,8 @@ theorem before_resize_crash_repair (values : List U16) (first second : U16)
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
     crashImage ⟨2⟩ mask observed.2 = some image →
     observed.1 = .deadlock ∧ LogImage values image.bytes ∧
     repair_log ⟨image.highWater + 1⟩ maxRecords
@@ -151,8 +151,8 @@ theorem before_resize_crash_repair (values : List U16) (first second : U16)
       (by first | exact firstImage | exact secondImage) captured
     exact ⟨fields.1, shape.1, restart_repair values image recoveryRest maxRecords shape.1 shape.2 more⟩
 
-private theorem capture_written_tail (env : Environment) (pid : Nat) (value : U16) (rest : Term)
-    (counter : env.refCounter = 3)
+private theorem capture_written_tail (env : Environment) (pid : PID) (value : U16) (rest : Term)
+    (counter : env.nativeRefCounter = 3)
     (heap : env.nativeHeap =
       (shared 3 (owned pid 3) (pending ByteArray.empty value (crop (encoded value) 2) 2 rest)).2) :
     crashImage ⟨2⟩ ⟨#[0, 0]⟩ env = some (⟨crop (encoded value) 2, 3⟩ : Image) := by
@@ -174,8 +174,8 @@ theorem before_resize_images (first second : U16) (rest : Term) (choices : List 
     let worker := fun value : U16 => (do
       let reply ← locked_append_or_rollback ⟨1⟩ value
       finish reply : Result Term)
-    let observed := (do let _ ← Result.schedule (worker second) .ok; worker first : Result Term)
-      {refCounter := 2, nativeHeap := (shared 2 free before).2, schedule := choices}
+    let observed := (do let _ ← Result.schedule {} (worker second) .ok; worker first : Result Term).run
+      {nativeRefCounter := 2, nativeHeap := (shared 2 free before).2} choices
     (observed.1, crashImage ⟨2⟩ ⟨#[0, 0]⟩ observed.2) =
         (.deadlock, some (⟨crop (encoded first) 2, 3⟩ : Image)) ∨
     (observed.1, crashImage ⟨2⟩ ⟨#[0, 0]⟩ observed.2) =
@@ -188,10 +188,10 @@ theorem before_resize_images (first second : U16) (rest : Term) (choices : List 
   · left
     have fields := Prod.mk.inj equal
     have sharedFields := Prod.mk.inj fields.2
-    exact Prod.ext fields.1 (capture_written_tail _ 1 first rest sharedFields.1 sharedFields.2)
+    exact Prod.ext fields.1 (capture_written_tail _ [] first rest sharedFields.1 sharedFields.2)
   · right
     have fields := Prod.mk.inj equal
     have sharedFields := Prod.mk.inj fields.2
-    exact Prod.ext fields.1 (capture_written_tail _ 2 second rest sharedFields.1 sharedFields.2)
+    exact Prod.ext fields.1 (capture_written_tail _ [1] second rest sharedFields.1 sharedFields.2)
 
 end Record.WriteInterrupted

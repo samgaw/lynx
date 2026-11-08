@@ -7,7 +7,7 @@ open NativeIoError
 
 /-- Actual explicit Rust error destruction consumes exactly the admitted identity. -/
 theorem explicit_cleanup (error : NativeIoError) (env : Environment)
-    (nonzero : error.identity ≠ 0) (bounded : error.identity ≤ env.refCounter)
+    (nonzero : error.identity ≠ 0) (bounded : error.identity ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == error.identity) =
       [(error.identity,NativeIoError.typeName,.atom "live")]) :
     io_core.discard_io_error error env = (.ok (),
@@ -17,7 +17,7 @@ theorem explicit_cleanup (error : NativeIoError) (env : Environment)
 
 /-- The compiler-generated implicit cleanup has the same consuming behavior. -/
 theorem implicit_cleanup (error : NativeIoError) (env : Environment)
-    (nonzero : error.identity ≠ 0) (bounded : error.identity ≤ env.refCounter)
+    (nonzero : error.identity ≠ 0) (bounded : error.identity ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == error.identity) =
       [(error.identity,NativeIoError.typeName,.atom "live")]) :
     io_core.discard_io_error_implicit error env = (.ok (),
@@ -110,16 +110,16 @@ theorem acknowledged (value : U16) :
   simp [NativeM.ok]
 
 @[expose] def rejected : Environment :=
-  {refCounter := 1,nativeHeap := [
+  {nativeRefCounter := 1,nativeHeap := [
     (1,NativeIoError.typeName,.atom "live"),
     (0,namespaceTypeName,encodeNamespace ⟨[],[],[],
       .cons (.tuple #[.atom "create_new",.bitstring a 0,.atom "error",.integer 1,.nil]) .nil⟩)]}
 @[expose] def returned : Environment :=
-  {refCounter := 1,nativeHeap := [
+  {nativeRefCounter := 1,nativeHeap := [
     (1,NativeIoError.typeName,.atom "live"),
     (0,namespaceTypeName,encodeNamespace ⟨[],[],[],.nil⟩)]}
 @[expose] def disposed : Environment :=
-  {refCounter := 1,nativeHeap := [(0,namespaceTypeName,encodeNamespace ⟨[],[],[],.nil⟩)]}
+  {nativeRefCounter := 1,nativeHeap := [(0,namespaceTypeName,encodeNamespace ⟨[],[],[],.nil⟩)]}
 
 theorem creation_error : pollCreateNew source rejected = some (.ok (.Err ⟨1⟩),returned) := by
   simp [pollCreateNew,source_bytes,valid_a,rejected,returned,pathChoice,
@@ -130,7 +130,8 @@ theorem creation_error : pollCreateNew source rejected = some (.ok (.Err ⟨1⟩
 theorem rejected_ack (value : U16) : commit_ack value rejected = (.ok false,disposed) := by
   simp only [commit_ack,source_literal,target_literal,commit_word,io_core.create_new_file,monadLift_self,
     createNew,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ creation_error]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ creation_error]
   simp only [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,
     core.result.Result.Insts.CoreOpsTry_traitFromResidualResult.from_residual,
     core.convert.FromSame,NativeM.monadLift_eq,NativeM.fromRust_ok]

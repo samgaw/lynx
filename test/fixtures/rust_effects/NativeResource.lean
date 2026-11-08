@@ -18,7 +18,7 @@ theorem retained_value (value : U64) (env : Environment)
     (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes)
     (empty : env.nativeHeap = []) :
     scalar_resource_cycle value env =
-      (.ok value, { env with refCounter := env.refCounter + 3 }) := by
+      (.ok value, { env with nativeRefCounter := env.nativeRefCounter + 3 }) := by
   have cycle := NativeResourceArc.clone_release_cycle_next
     (ScalarResource.mk (effects_core.Counter.mk value))
     (fun resource => Result.ok resource.counter.value) env registered empty
@@ -36,7 +36,7 @@ theorem scope_value (value : U64) (env : Environment)
     (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes)
     (empty : env.nativeHeap = []) :
     scalar_resource_scope value env =
-      (.ok value, { env with refCounter := env.refCounter + 3 }) := by
+      (.ok value, { env with nativeRefCounter := env.nativeRefCounter + 3 }) := by
   simpa [scalar_resource_scope, scalar_resource_cycle] using
     retained_value value env registered empty
 
@@ -56,12 +56,12 @@ theorem vm_owned_roundtrip (value : U64) (env : Environment)
       let observed ← scalar_resource_read decoded
       NativeResourceArc.release decoded
       Result.ok (observed, term == again)) env =
-      (.ok (value, true), { env with refCounter := env.refCounter + 5, nativeHeap := [
-        (env.refCounter + 4, NativeResourceArc.termType ScalarResource,
-          .tuple #[.reference (env.refCounter + 1), .reference (env.refCounter + 3)]),
-        (env.refCounter + 3, NativeResourceArc.handleType ScalarResource,
-          .reference (env.refCounter + 1)),
-        (env.refCounter + 1, NativeResourceArc.typeName ScalarResource,
+      (.ok (value, true), { env with nativeRefCounter := env.nativeRefCounter + 5, nativeHeap := [
+        (env.nativeRefCounter + 4, NativeResourceArc.termType ScalarResource,
+          .tuple #[.nativeReference (env.nativeRefCounter + 1), .nativeReference (env.nativeRefCounter + 3)]),
+        (env.nativeRefCounter + 3, NativeResourceArc.handleType ScalarResource,
+          .nativeReference (env.nativeRefCounter + 1)),
+        (env.nativeRefCounter + 1, NativeResourceArc.typeName ScalarResource,
           .tuple #[.integer 1, NativeCodec.encode (ScalarResource.mk (effects_core.Counter.mk value))])] }) := by
   have cycle := NativeResourceArc.vm_roundtrip_next
     (ScalarResource.mk (effects_core.Counter.mk value))

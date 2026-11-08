@@ -31,7 +31,7 @@ theorem driver_contract (value : U64) (cancel : Bool) (context : NativeTaskConte
 
 theorem driver_next {α : Type} (value : U64) (cancel : Bool) (context : NativeTaskContext)
     (next : (Option U64 × NativeTaskContext) → NativeM α) (env : Environment)
-    (bounded : context.waker.id ≤ env.refCounter)
+    (bounded : context.waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) =
       [(context.waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : context.waker.isNoop = false) :
@@ -44,7 +44,7 @@ theorem driver_next {α : Type} (value : U64) (cancel : Bool) (context : NativeT
     NativeWaker.wakeByRef_registered_next context.waker _ env bounded stored callback
 
 theorem completion (value : U64) (context : NativeTaskContext) (env : Environment)
-    (bounded : context.waker.id ≤ env.refCounter)
+    (bounded : context.waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) =
       [(context.waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : context.waker.isNoop = false) :
@@ -57,7 +57,7 @@ theorem completion (value : U64) (context : NativeTaskContext) (env : Environmen
   · simp
 
 theorem cancellation (value : U64) (context : NativeTaskContext) (env : Environment)
-    (bounded : context.waker.id ≤ env.refCounter)
+    (bounded : context.waker.id ≤ env.nativeRefCounter)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == context.waker.id) =
       [(context.waker.id, NativeWaker.typeName, .atom "idle")])
     (callback : context.waker.isNoop = false) :

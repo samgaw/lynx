@@ -72,13 +72,20 @@ defmodule Lynx.Rust.ResourceTest do
     assert status == 0, output
 
     original = File.read!(property)
-    File.write!(property, String.replace(original, "env.refCounter + 3", "env.refCounter + 2"))
+
+    File.write!(
+      property,
+      String.replace(original, "env.nativeRefCounter + 3", "env.nativeRefCounter + 2")
+    )
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rust.Project.build!(project, ["Resource.Properties"])
     end
 
-    File.write!(property, String.replace(original, "env.refCounter + 5", "env.refCounter + 4"))
+    File.write!(
+      property,
+      String.replace(original, "env.nativeRefCounter + 5", "env.nativeRefCounter + 4")
+    )
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rust.Project.build!(project, ["Resource.Properties"])

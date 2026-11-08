@@ -62,7 +62,7 @@ private theorem lift_decode (env : Environment) (value : U16) (mask : ByteArray)
     (trace : Result.ReadyPrefix (__COMMIT__ ⟨3,11⟩) (CommitFailure.decoded env (CommitFailure.before value mask rest))
       remaining after) :
     ∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (CommitFailure.initial env (CommitFailure.before value mask rest)) residual after := by
   refine ⟨Rustler.executeNative remaining Rustler.encodeBool,?_⟩
@@ -73,13 +73,13 @@ theorem boundary_prefix (env : Environment) (value : U16) (mask saved : ByteArra
     (persisted : persist ByteArray.empty (Record.content value) mask = some saved) (rest : Term) (boundary : Boundary)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     ∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (CommitFailure.initial env (CommitFailure.before value mask rest)) residual (boundaryEnv env value mask saved rest boundary) := by
   cases boundary with
   | beforeDecode =>
     refine ⟨(do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool),?_⟩
     exact .refl _ _
   | beforeFileSync =>
@@ -122,7 +122,7 @@ private theorem inode_cells (env : Environment) (value : U16) (mask saved : Byte
       writableHandleTypeName,inodeTypeName,namespaceTypeName]
 
 private theorem water_view (env : Environment) (value : U16) (mask saved : ByteArray) (rest : Term) (boundary : Boundary) :
-    (boundaryEnv env value mask saved rest boundary).refCounter = boundaryWater boundary := by cases boundary <;> rfl
+    (boundaryEnv env value mask saved rest boundary).nativeRefCounter = boundaryWater boundary := by cases boundary <;> rfl
 
 /-- The crash step starts from the actual saved image after failed fsync,
 not the empty acquisition image. Additional permitted persistence is retained. -/
@@ -149,7 +149,7 @@ theorem boundary_recovery (env : Environment) (value : U16) (mask saved : ByteAr
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage) (error : Nat)
     (accepted : filesystemCrashImage chosen masks (boundaryEnv env value mask saved rest boundary) = some image) :
     (∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (CommitFailure.initial env (CommitFailure.before value mask rest)) residual (boundaryEnv env value mask saved rest boundary)) ∧
     ∃ script before after result,
@@ -190,7 +190,7 @@ theorem boundary_witness (env : Environment) (value : U16) (mask saved : ByteArr
     (retainName : Bool)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (CommitFailure.initial env (CommitFailure.before value mask rest)) residual (boundaryEnv env value mask saved rest boundary)) ∧
     filesystemCrashImage (if retainName then Publish.names else [])
@@ -230,7 +230,7 @@ theorem finite_background_recovery (env : Environment) (value : U16) (mask saved
       (if afterFailure boundary then saved else ByteArray.empty) history = some contents)
     (retainName : Bool) (error : Nat) :
     (∃ residual, Result.ReadyPrefix (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool)
       (CommitFailure.initial env (CommitFailure.before value mask rest)) residual (boundaryEnv env value mask saved rest boundary)) ∧
     ∃ combined script before after result,

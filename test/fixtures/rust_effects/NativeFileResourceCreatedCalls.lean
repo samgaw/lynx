@@ -16,13 +16,13 @@ open NativeFile FileResource.Creation
   (0,namespaceTypeName,encodeNamespace ns)]
 
 @[expose] def pinnedEnv (env : Environment) (state : State) (counter : Nat) (ns : NamespaceSnapshot := pendingNamespace) : Environment :=
-  {env with refCounter := counter, nativeHeap := NativeResourceArc.vmCells payload 3 5 6 ++ frame state ns}
+  {env with nativeRefCounter := counter, nativeHeap := NativeResourceArc.vmCells payload 3 5 6 ++ frame state ns}
 
 @[expose] def decodedEnv (env : Environment) (state : State) (counter : Nat) (ns : NamespaceSnapshot := pendingNamespace) : Environment :=
-  {env with refCounter := counter + 1, nativeHeap := [
-    (counter + 1,NativeResourceArc.handleType effects_native.FileResource,.reference 3),
-    (6,NativeResourceArc.termType effects_native.FileResource,.tuple #[.reference 3,.reference 5]),
-    (5,NativeResourceArc.handleType effects_native.FileResource,.reference 3),
+  {env with nativeRefCounter := counter + 1, nativeHeap := [
+    (counter + 1,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3),
+    (6,NativeResourceArc.termType effects_native.FileResource,.tuple #[.nativeReference 3,.nativeReference 5]),
+    (5,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3),
     (3,NativeResourceArc.typeName effects_native.FileResource,.tuple #[.integer 2,NativeCodec.encode payload])] ++ frame state ns}
 
 theorem pin {ns : NamespaceSnapshot} (env : Environment) (state : State) (counter : Nat) (bounded : 6 ≤ counter) :
@@ -43,7 +43,7 @@ theorem pin {ns : NamespaceSnapshot} (env : Environment) (state : State) (counte
 theorem decode_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (state : State) (counter : Nat)
     (bounded : 6 ≤ counter) (next : NativeResourceArc effects_native.FileResource → NativeM α)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
-    (NativeResourceArc.decode (.reference 6) >>= next) (pinnedEnv env state counter ns) =
+    (NativeResourceArc.decode (.nativeReference 6) >>= next) (pinnedEnv env state counter ns) =
       next ⟨3,counter + 1⟩ (decodedEnv env state counter ns) := by
   simpa [pinnedEnv,decodedEnv,NativeResourceArc.vmCells,frame,List.map] using
     NativeResourceArc.decode_pinned_next payload next (pinnedEnv env state counter ns)
@@ -53,7 +53,7 @@ theorem decode_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (st
 theorem decode_prefix {ns : NamespaceSnapshot} (env : Environment) (state : State) (counter : Nat)
     (bounded : 6 ≤ counter)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
-    Result.ReadyPrefix (NativeResourceArc.decode (.reference 6)) (pinnedEnv env state counter ns)
+    Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 6)) (pinnedEnv env state counter ns)
       (.ok (⟨3,counter + 1⟩ : NativeResourceArc effects_native.FileResource))
       (decodedEnv env state counter ns) := by
   simpa [pinnedEnv,decodedEnv,NativeResourceArc.vmCells,frame,List.map] using
@@ -62,11 +62,11 @@ theorem decode_prefix {ns : NamespaceSnapshot} (env : Environment) (state : Stat
 
 private theorem decoded_views {ns : NamespaceSnapshot} (env : Environment) (state : State) (counter : Nat) (bounded : 6 ≤ counter) :
     (decodedEnv env state counter ns).nativeHeap.filter (fun cell => cell.1 == counter + 1) =
-      [(counter + 1,NativeResourceArc.handleType effects_native.FileResource,.reference 3)] ∧
+      [(counter + 1,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3)] ∧
     (decodedEnv env state counter ns).nativeHeap.filter (fun cell => cell.1 == 3) =
       [(3,NativeResourceArc.typeName effects_native.FileResource,.tuple #[.integer 2,NativeCodec.encode payload])] ∧
     ((decodedEnv env state counter ns).nativeHeap.filter (fun cell =>
-      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .reference 3)).length = 2 := by
+      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .nativeReference 3)).length = 2 := by
   have b0 : (counter == 0) = false := by simp; omega
   have b1 : (counter == 1) = false := by simp; omega
   have b2 : (counter == 2) = false := by simp; omega
@@ -100,7 +100,7 @@ theorem borrowed_next {ns : NamespaceSnapshot} {α β : Type}
     (handler : Exception → NativeM α) (next : α → NativeM β)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Result.handle (do
         let resource ← NativeResourceArc.deref owner
         finish owner resource) handler
@@ -120,7 +120,7 @@ theorem retained_effect_next {ns : NamespaceSnapshot} {α β γ : Type} (env : E
     (trace : Result.ReadyPrefix (body payload) (decodedEnv env before counter ns)
       (.ok reply) (decodedEnv env after counter ns)) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Result.handle (do
         let resource ← NativeResourceArc.deref owner
         let value ← body resource
@@ -142,7 +142,7 @@ theorem release_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (s
     (bounded : 6 ≤ counter) (next : Term → Result α)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__RELEASE__ owner) (fun _ => .tuple #[])
       next result) (pinnedEnv env state counter ns) =
       next (.tuple #[]) (pinnedEnv env state (counter + 1) ns) := by
@@ -209,7 +209,7 @@ theorem sync_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (befo
     (step : syncStep before = some (.Ok (),after)) (next : Term → Result α)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__SYNC__ owner) Rustler.encodeBool
       next result) (pinnedEnv env before counter ns) =
     next Term.true (pinnedEnv env after (counter + 1) ns) := by
@@ -234,36 +234,36 @@ theorem sync_next {ns : NamespaceSnapshot} {α : Type} (env : Environment) (befo
 
 
 theorem release_env {ns : NamespaceSnapshot} {α : Type} (state : State) (next : Term → Result α) (env : Environment)
-    (bounded : 6 ≤ env.refCounter)
+    (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame state ns)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__RELEASE__ owner) (fun _ => .tuple #[])
-      next result) env = next (.tuple #[]) {env with refCounter := env.refCounter + 1} := by
-  simpa only [pinnedEnv,← heap] using release_next (ns := ns) env state env.refCounter bounded next registered
+      next result) env = next (.tuple #[]) {env with nativeRefCounter := env.nativeRefCounter + 1} := by
+  simpa only [pinnedEnv,← heap] using release_next (ns := ns) env state env.nativeRefCounter bounded next registered
 
 theorem sync_env {ns : NamespaceSnapshot} {α : Type} (before after : State) (valid : Valid before)
     (ready : blocked before = false) (step : syncStep before = some (.Ok (),after))
-    (next : Term → Result α) (env : Environment) (bounded : 6 ≤ env.refCounter)
+    (next : Term → Result α) (env : Environment) (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before ns)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__SYNC__ owner) Rustler.encodeBool
-      next result) env = next Term.true (pinnedEnv env after (env.refCounter + 1) ns) := by
+      next result) env = next Term.true (pinnedEnv env after (env.nativeRefCounter + 1) ns) := by
   simpa only [pinnedEnv,← heap] using
-    sync_next (ns := ns) env before after env.refCounter bounded valid ready step next registered
+    sync_next (ns := ns) env before after env.nativeRefCounter bounded valid ready step next registered
 
 theorem sync_run {ns : NamespaceSnapshot} (before after : State) (valid : Valid before)
     (ready : blocked before = false) (step : syncStep before = some (.Ok (),after))
-    (env : Environment) (bounded : 6 ≤ env.refCounter)
+    (env : Environment) (bounded : 6 ≤ env.nativeRefCounter)
     (heap : env.nativeHeap = NativeResourceArc.vmCells payload 3 5 6 ++ frame before ns)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__SYNC__ owner) Rustler.encodeBool) env =
-        (.ok Term.true,pinnedEnv env after (env.refCounter + 1) ns) := by
+        (.ok Term.true,pinnedEnv env after (env.nativeRefCounter + 1) ns) := by
   simpa only [Result.bind_ok,Result.ok_apply] using
     sync_env (ns := ns) before after valid ready step Result.ok env bounded heap registered
 

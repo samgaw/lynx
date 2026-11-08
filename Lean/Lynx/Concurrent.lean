@@ -93,6 +93,9 @@ deriving Repr
 structure State where
   /-- Live processes. Terminated and unknown PIDs have no state. -/
   processes : PID → Option ProcessState := fun _ => none
+  nativeRefCounter : Nat := 0
+  nativeHeap : List (Nat × String × Term) := []
+  nativeResourceTypes : List String := []
   /-- Timers yet to fire, in the order of their references. -/
   timers : List Timer := []
   /-- Signals in transit, oldest first within each pair of processes, and
@@ -134,6 +137,18 @@ and its reference counter never goes back, so references stay unique. -/
 @[expose] def State.store (state : State) (processId : PID) (env : Environment) : State :=
   state.modify processId fun process =>
     { process with pdict := env.pdict, refCounter := max process.refCounter env.refCounter }
+
+/-- Native effects observe the shared heap and the calling process's environment. -/
+@[expose] def State.nativeView (state : State) (processId : PID) : Environment :=
+  { state.view processId with
+    nativeRefCounter := state.nativeRefCounter
+    nativeHeap := state.nativeHeap, nativeResourceTypes := state.nativeResourceTypes }
+
+/-- Store native effects without replacing unrelated processes or pending signals. -/
+@[expose] def State.storeNative (state : State) (processId : PID) (env : Environment) : State :=
+  { state.store processId env with
+    nativeRefCounter := env.nativeRefCounter
+    nativeHeap := env.nativeHeap, nativeResourceTypes := env.nativeResourceTypes }
 
 /-- Append a message to a live mailbox. -/
 @[expose] def State.append (state : State) (processId : PID) (message : Term) : State :=
@@ -374,7 +389,9 @@ time elapsed when timers are canceled. -/
       if candidate = env.currentPid then
         some { pdict := env.pdict, refCounter := env.refCounter }
       else none
-    elapsed }
+    elapsed
+    nativeRefCounter := env.nativeRefCounter
+    nativeHeap := env.nativeHeap, nativeResourceTypes := env.nativeResourceTypes }
 
 /-- Allocate the next child of a process, which starts with an empty record. -/
 @[expose] def State.spawn (state : State) (processId : PID) : PID × State :=
@@ -525,6 +542,14 @@ receive without a match and with a timeout steps by timing out. -/
         (.atom "normal") (.ok value)]
     | .error exception => [Task.ended finish (.exit processId (exitReason exception)) state processId
         (exitReason exception) (.error exception)]
+    | .nativeGet next => [proceed (.internal processId) state (next (state.nativeView processId))]
+    | .nativeSet updated next =>
+        [proceed (.internal processId) (state.storeNative processId updated) next]
+    | .wait poll next =>
+        match poll (state.nativeView processId) with
+        | none => []
+        | some (value, updated) =>
+            [proceed (.internal processId) (state.storeNative processId updated) (next value)]
     | .get next => [proceed (.internal processId) state (next view)]
     | .set updated next => [proceed (.internal processId) (state.store processId updated) next]
     | Result.schedule options child next =>
@@ -577,8 +602,9 @@ receive without a match and with a timeout steps by timing out. -/
   task.own state processId ++ task.deliveries state processId
 
 /-- Whether a computation starts with a process request, which hands it to the scheduler. -/
-@[expose] def isRequest : Result α → Bool
+@[expose] def isRequest (env : Environment) : Result α → Bool
   | Result.schedule .. | .send .. | .receive .. | .request .. => true
+  | .wait poll _ => (poll env).isNone
   | _ => false
 
 /-- A state of a run. -/
@@ -629,10 +655,17 @@ signal reaching a process that is not live, or a timer firing. -/
 @[expose] def Config.successors : Config α → List (Event × Config α)
   | .start env computation elapsed =>
       match computation with
-      | .get next => [(.internal env.currentPid, .start env (next env) elapsed)]
-      | .set updated next => [(.internal env.currentPid, .start updated next elapsed)]
+      | .get next | .nativeGet next =>
+          [(.internal env.currentPid, .start env (next env) elapsed)]
+      | .set updated next | .nativeSet updated next =>
+          [(.internal env.currentPid, .start updated next elapsed)]
+      | .wait poll next =>
+          match poll env with
+          | some (value, updated) => [(.internal env.currentPid, .start updated (next value) elapsed)]
+          | none => [(.internal env.currentPid, .running (State.initial env elapsed)
+              [(env.currentPid, Task.root (.wait poll next))] none false)]
       | computation =>
-          if isRequest computation then
+          if isRequest env computation then
             [(.internal env.currentPid, .running (State.initial env elapsed)
               [(env.currentPid, Task.root computation)] none false)]
           else []

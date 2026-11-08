@@ -46,44 +46,44 @@ theorem stable (value : U16) : persist (content value) (content value) ⟨#[0,0]
 @[expose] def initial : Environment :=
   {nativeHeap := [(0,namespaceTypeName,encodeNamespace ⟨[],[],[],createChoice (writeChoice 2 syncScript)⟩)]}
 @[expose] def created : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,writableHandleTypeName,encodeHandle ⟨1,0,writeChoice 2 syncScript⟩),
     (1,inodeTypeName,encode ⟨ByteArray.empty,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,[],[oldNames],renameScript⟩)]}
 @[expose] def written (value : U16) : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,writableHandleTypeName,encodeHandle ⟨1,2,syncScript⟩),
     (1,inodeTypeName,encode ⟨content value,ByteArray.empty,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,[],[oldNames],renameScript⟩)]}
 @[expose] def synced (value : U16) : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,writableHandleTypeName,encodeHandle ⟨1,2,actionOk "close" ⟨#[0,0]⟩ .nil⟩),
     (1,inodeTypeName,encode ⟨content value,content value,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,[],[oldNames],renameScript⟩)]}
 @[expose] def closed (value : U16) : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,closedHandleTypeName,encodeHandle ⟨1,2,.nil⟩),
     (1,inodeTypeName,encode ⟨content value,content value,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨oldNames,[],[oldNames],renameScript⟩)]}
 @[expose] def renamed (value : U16) : Environment :=
-  {refCounter := 2,nativeHeap := [
+  {nativeRefCounter := 2,nativeHeap := [
     (2,closedHandleTypeName,encodeHandle ⟨1,2,.nil⟩),
     (1,inodeTypeName,encode ⟨content value,content value,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,[],[oldNames,newNames],opening⟩)]}
 @[expose] def opened (value : U16) : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,directoryTypeName,.tuple #[dirScript]),
     (2,closedHandleTypeName,encodeHandle ⟨1,2,.nil⟩),
     (1,inodeTypeName,encode ⟨content value,content value,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,[],[oldNames,newNames],.nil⟩)]}
 @[expose] def checkpointed (value : U16) : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,directoryTypeName,.tuple #[actionOk "close_dir" ByteArray.empty .nil]),
     (2,closedHandleTypeName,encodeHandle ⟨1,2,.nil⟩),
     (1,inodeTypeName,encode ⟨content value,content value,0,.nil⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],.nil⟩)]}
 @[expose] def done (value : U16) : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (3,closedDirectoryTypeName,.tuple #[.nil]),
     (2,closedHandleTypeName,encodeHandle ⟨1,2,.nil⟩),
     (1,inodeTypeName,encode ⟨content value,content value,0,.nil⟩),
@@ -189,49 +189,63 @@ theorem publish_written (value : U16) :
   simp only [publish_file,synchronize_then_close,sync_directory,io_core.synchronize,
     io_core.rename_file,io_core.open_readonly,monadLift_self,NativeOwnedDrop.drop,
     syncAll,close,NativeFile.rename,openReadOnly,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (sync_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (sync_poll value)]
   simp only [Result.ok_bind,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (close_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (close_poll value)]
   simp only [Result.ok_bind,NativeM.ok,core.result.Result.Insts.CoreOpsTry.branch,
     NativeM.monadLift_eq,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (rename_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (rename_poll value)]
   simp only [Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (open_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (open_poll value)]
   simp only [Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (dir_sync_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (dir_sync_poll value)]
   simp only [Result.ok_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (dir_close_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (dir_close_poll value)]
   simp []
 
 /-- Every u16 value is encoded, fully written and durably published by the extracted Rust. -/
 theorem commit_contract (value : U16) :
     commit_word source target value initial = (.ok (.Ok true),done value) := by
   simp only [commit_word,io_core.create_new_file,monadLift_self,createNew,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ create_poll]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ create_poll]
   simp only [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,
     NativeM.monadLift_eq,NativeM.fromRust_ok]
   simp only [NativeM.lift,Result.ok_bind]
   simp only [io_core.write_once,monadLift_self,write,Result.wait_bind]
   have wrote := write_poll value
   unfold wire at wrote
-  rw [Result.wait_ready_apply _ _ _ _ _ wrote]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ wrote]
   simp only [Result.ok_bind]
   simp only [show (2#usize).val = 2 from rfl]
   simp only [publish_file,synchronize_then_close,sync_directory,io_core.synchronize,
     io_core.rename_file,io_core.open_readonly,monadLift_self,NativeOwnedDrop.drop,
     syncAll,close,NativeFile.rename,openReadOnly,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (sync_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (sync_poll value)]
   simp only [Result.ok_bind,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (close_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (close_poll value)]
   simp only [bind_assoc,Result.wait_bind,Result.ok_bind,NativeM.ok,core.result.Result.Insts.CoreOpsTry.branch,
     NativeM.monadLift_eq,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (rename_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (rename_poll value)]
   simp only [bind_assoc,Result.wait_bind,Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (open_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (open_poll value)]
   simp only [bind_assoc,Result.wait_bind,Result.ok_bind,NativeM.fromRust_ok]
-  rw [Result.wait_ready_apply _ _ _ _ _ (dir_sync_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (dir_sync_poll value)]
   simp only [Result.ok_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (dir_close_poll value)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (dir_close_poll value)]
   simp []
 
 /-- The unsynchronized written state is a prefix of the actual Rust execution. -/

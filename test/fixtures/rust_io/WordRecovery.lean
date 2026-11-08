@@ -47,11 +47,11 @@ theorem stable_bytes : persist (wordBytes low high) (wordBytes low high) ⟨#[0,
   simpa only [mask] using Payload.persist_zero (wordBytes low high)
 
 @[expose] def boot : Environment :=
-  {refCounter := 3,nativeHeap := [
+  {nativeRefCounter := 3,nativeHeap := [
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],openingScript⟩),
     (1,inodeTypeName,encode ⟨(wordBytes low high),(wordBytes low high),0,.nil⟩)]}
 @[expose] def scan (position : Nat) (script : Term) (closed : Bool := false) : Environment :=
-  {refCounter := 4,nativeHeap := [
+  {nativeRefCounter := 4,nativeHeap := [
     (4,(if closed then closedHandleTypeName else handleTypeName),encodeHandle ⟨1,position,script⟩),
     (0,namespaceTypeName,encodeNamespace ⟨newNames,newNames,[],.nil⟩),
     (1,inodeTypeName,encode ⟨(wordBytes low high),(wordBytes low high),0,.nil⟩)]}
@@ -97,9 +97,9 @@ theorem parsed_word : read_word ⟨4⟩ (scan low high 0 readScript) =
     (.ok (.Ok (some (word low high)),⟨4⟩),scan low high 2 closeScript) := by
   simp only [read_word,NativeM.lift,monadLift_self,Result.ok_bind,
     Array.to_slice_mut,Array.to_slice,Array.make_val]
-  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
   rw [read_next _ _ _ _ _ (first_poll low high)]
-  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+  change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
   rw [read_next _ _ _ _ _ (second_poll low high)]
   simp [word,NativeM.ok,NativeM.lift,Array.from_slice,Array.to_slice_mut,
     one,Array.make_val,Array.index_usize,NativeM.monadLift_eq,NativeM.fromRust,
@@ -109,14 +109,14 @@ theorem parsed_word : read_word ⟨4⟩ (scan low high 0 readScript) =
 theorem parse_and_close : read_and_close_word ⟨4⟩ (scan low high 0 readScript) =
     (.ok (.Ok (some (word low high))),scan low high 2 .nil true) := by
   have parser {α : Type} (next : _ → NativeM α) :
-      (read_word ⟨4⟩ >>= next) (scan low high 0 readScript) =
+      (read_word ⟨4⟩ >>= next).run (scan low high 0 readScript) =
         next (.Ok (some (word low high)),⟨4⟩) (scan low high 2 closeScript) := by
     simp only [read_word,NativeM.lift,monadLift_self,Result.ok_bind,
       Array.to_slice_mut,Array.to_slice,Array.make_val,bind_assoc]
-    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
     rw [read_next _ _ _ _ _ (first_poll low high)]
     simp [bind_assoc]
-    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _) _ = _
+    change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _
     rw [read_next _ _ _ _ _ (second_poll low high)]
     simp [word,NativeM.ok,NativeM.lift,Array.from_slice,Array.to_slice_mut,
       one,Array.make_val,Array.index_usize,NativeM.monadLift_eq,NativeM.fromRust,
@@ -124,14 +124,16 @@ theorem parse_and_close : read_and_close_word ⟨4⟩ (scan low high 0 readScrip
   simp only [read_and_close_word,monadLift_self]
   rw [parser]
   simp only [NativeOwnedDrop.drop,close,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (close_poll low high)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (close_poll low high)]
   simp [NativeM.ok]
 
 /-- Opening, decoding and scope cleanup use extracted first-party Rust code. -/
 theorem recover_word : recover_named_word target (boot low high) =
     (.ok (.Ok (some (word low high))),scan low high 2 .nil true) := by
   simp only [recover_named_word,io_core.open_readonly,monadLift_self,openReadOnly,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ (open_poll low high)]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (open_poll low high)]
   simp only [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,
     NativeM.monadLift_eq,NativeM.fromRust_ok]
   exact parse_and_close low high

@@ -16,20 +16,20 @@ failure. This is not a proof of native error allocation or reclamation. -/
   ⟨Record.content value,saved,4,rest⟩
 
 @[expose] def initial (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 10,nativeHeap := errorCell ::
+  {env with nativeRefCounter := 10,nativeHeap := errorCell ::
     NativeResourceArc.vmCells payload 3 5 6 ++ frame state Publish.namespaceBefore}
 @[expose] def decoded (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 11,nativeHeap := [
-    (11,NativeResourceArc.handleType effects_native.FileResource,.reference 3),errorCell,
-    (6,NativeResourceArc.termType effects_native.FileResource,.tuple #[.reference 3,.reference 5]),
-    (5,NativeResourceArc.handleType effects_native.FileResource,.reference 3),
+  {env with nativeRefCounter := 11,nativeHeap := [
+    (11,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3),errorCell,
+    (6,NativeResourceArc.termType effects_native.FileResource,.tuple #[.nativeReference 3,.nativeReference 5]),
+    (5,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3),
     (3,NativeResourceArc.typeName effects_native.FileResource,.tuple #[.integer 2,NativeCodec.encode payload])]
       ++ frame state Publish.namespaceBefore}
 @[expose] def released (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 11,nativeHeap := errorCell ::
+  {env with nativeRefCounter := 11,nativeHeap := errorCell ::
     NativeResourceArc.vmCells payload 3 5 6 ++ frame state Publish.namespaceBefore}
 @[expose] def done (env : Environment) (state : State) : Environment :=
-  {env with refCounter := 11,nativeHeap :=
+  {env with nativeRefCounter := 11,nativeHeap :=
     NativeResourceArc.vmCells payload 3 5 6 ++ frame state Publish.namespaceBefore}
 
 private theorem pinned (env : Environment) (state : State) :
@@ -49,18 +49,18 @@ private theorem pinned (env : Environment) (state : State) :
 
 theorem decode_prefix (env : Environment) (state : State)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
-    Result.ReadyPrefix (NativeResourceArc.decode (.reference 6)) (initial env state)
+    Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 6)) (initial env state)
       (.ok (⟨3,11⟩ : NativeResourceArc effects_native.FileResource)) (decoded env state) := by
   simpa [initial,decoded,NativeResourceArc.vmCells,frame,errorCell,List.map] using
     NativeResourceArc.decode_pinned_prefix payload (initial env state) 3 5 6 (pinned env state) registered
 
 private theorem views (env : Environment) (state : State) :
     (decoded env state).nativeHeap.filter (fun cell => cell.1 == 11) =
-      [(11,NativeResourceArc.handleType effects_native.FileResource,.reference 3)] ∧
+      [(11,NativeResourceArc.handleType effects_native.FileResource,.nativeReference 3)] ∧
     (decoded env state).nativeHeap.filter (fun cell => cell.1 == 3) =
       [(3,NativeResourceArc.typeName effects_native.FileResource,.tuple #[.integer 2,NativeCodec.encode payload])] ∧
     ((decoded env state).nativeHeap.filter (fun cell =>
-      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .reference 3)).length = 2 := by
+      cell.2.1 == NativeResourceArc.handleType effects_native.FileResource && cell.2.2 == .nativeReference 3)).length = 2 := by
   simp [decoded,errorCell,frame,List.filter,NativeIoError.typeName,
     NativeResourceArc.typeName,NativeResourceArc.handleType,NativeResourceArc.termType,
     writableHandleTypeName,inodeTypeName,namespaceTypeName]
@@ -113,9 +113,9 @@ theorem error_prefix (env : Environment) (state : State) :
     Result.ReadyPrefix (NativeOwnedDrop.drop (⟨10⟩ : NativeIoError)) (released env state)
       (.ok ()) (done env state) := by
   simp only [NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability]
-  apply Result.ReadyPrefix.get
+  apply Result.ReadyPrefix.nativeGet
   simp [released,done,errorCell,frame,NativeResourceArc.vmCells,List.filter,NativeIoError.typeName]
-  apply Result.ReadyPrefix.set
+  apply Result.ReadyPrefix.nativeSet
   exact .refl _ _
 
 /-- Actual compiled Rustler failure handling releases its resource owner,
@@ -134,7 +134,7 @@ theorem facade_prefix (env : Environment) (value : U16) (mask saved : ByteArray)
   exact .refl _ _
 
 @[expose] def invoke : Result := do
-  let owner ← NativeResourceArc.decode (.reference 6)
+  let owner ← NativeResourceArc.decode (.nativeReference 6)
   Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
 
 /-- The modeled remote invocation returns Elixir false while the VM resource
@@ -157,7 +157,7 @@ theorem call_run (env : Environment) (value : U16) (mask saved : ByteArray)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes)
     (rest : Term := .nil) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool) (initial env (before value mask rest)) =
       (.ok Term.false,done env (after value saved rest)) := by
   simpa only [invoke,Result.ok_apply] using (invocation_prefix env value mask saved persisted registered rest).apply
@@ -166,12 +166,12 @@ theorem call_run (env : Environment) (value : U16) (mask saved : ByteArray)
 state, rather than an acquisition snapshot or a silently consumed VM pin. -/
 theorem failure_env {α : Type} (value : U16) (mask saved : ByteArray)
     (persisted : persist ByteArray.empty (Record.content value) mask = some saved)
-    (rest : Term) (next : Term → Result α) (env : Environment) (counter : env.refCounter = 10)
+    (rest : Term) (next : Term → Result α) (env : Environment) (counter : env.nativeRefCounter = 10)
     (heap : env.nativeHeap = errorCell :: NativeResourceArc.vmCells payload 3 5 6 ++
       frame (before value mask rest) Publish.namespaceBefore)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let result ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
       next result) env = next Term.false (done env (after value saved rest)) := by
   have trace := ((invocation_prefix env value mask saved persisted registered rest).bind next).apply
@@ -194,9 +194,9 @@ theorem retry_run (env : Environment) (value : U16) (mask saved : ByteArray)
     (persisted : persist ByteArray.empty (Record.content value) mask = some saved)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     (do
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let first ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
-      let owner ← NativeResourceArc.decode (.reference 6)
+      let owner ← NativeResourceArc.decode (.nativeReference 6)
       let second ← Rustler.executeNative (__COMMIT__ owner) Rustler.encodeBool
       Result.ok (first,second)) (initial env (before value mask (syncChoice .nil))) =
       (.ok (Term.false,Term.true),Publish.committedEnv env (Record.synced value) 11) := by
@@ -216,7 +216,7 @@ theorem zero_saved (value : U16) :
     RecordRecovery.persist_torn value false false false false
 
 @[expose] def seed : Environment :=
-  initial (({} : Environment).setPdict [(.atom "resource",.reference 6)])
+  initial (({} : Environment).setPdict [(.atom "resource",.nativeReference 6)])
     (before 4660#u16 ⟨#[0,0,0,0]⟩ (syncChoice .nil))
 
 end FileResource.CommitFailure

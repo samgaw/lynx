@@ -15,46 +15,46 @@ attribute [local simp] NativeCodec.typeName NativeCodec.encode NativeMutex.typeN
   (counter, frame ++ [(2, NativeFile.typeName, encode state), (1, NativeMutex.typeName NativeFile, contents)])
 
 private theorem framed_eq (env : Environment) (counter : Nat) (frame : List (Nat × String × Term))
-    (contents : Term) (state : State) (count : env.refCounter = counter)
+    (contents : Term) (state : State) (count : env.nativeRefCounter = counter)
     (heap : env.nativeHeap = (shared counter frame contents state).2) :
     framedEnv env counter frame contents state = env := by
   cases env
   simp_all [shared, framedEnv]
 
-private theorem seek_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+private theorem seek_ready (pid : PID) (counter : Nat) (frame : List (Nat × String × Term))
     (contents : Term) (before after : State) (position : U64)
     (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
     (ready : blocked before = false)
     (step : seekStep before (.end_ 0#i64) = some (.Ok position, after))
     (env : Environment) (_owner : env.currentPid = pid)
-    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    (count : env.nativeRefCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
     pollSeek ⟨2⟩ (.end_ 0#i64) env = some (.ok (.Ok position, ⟨2⟩),
-      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+      {env with nativeRefCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
   have found := seek_poll env counter frame contents before after position apart bound valid ready step
   rw [framed_eq env counter frame contents before count heap] at found
   exact found
 
-private theorem write_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+private theorem write_ready (pid : PID) (counter : Nat) (frame : List (Nat × String × Term))
     (contents : Term) (before after : State) (value : U16)
     (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
     (ready : blocked before = false)
     (step : writeStep before (payload value) = some (.Ok 4#usize, after))
     (env : Environment) (_owner : env.currentPid = pid)
-    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    (count : env.nativeRefCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
     pollWrite ⟨2⟩ (payload value) env = some (.ok (.Ok 4#usize, ⟨2⟩),
-      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+      {env with nativeRefCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
   have found := write_poll env counter frame contents before after value apart bound valid ready step
   rw [framed_eq env counter frame contents before count heap] at found
   exact found
 
-private theorem sync_ready (pid counter : Nat) (frame : List (Nat × String × Term))
+private theorem sync_ready (pid : PID) (counter : Nat) (frame : List (Nat × String × Term))
     (contents : Term) (before after : State)
     (apart : Apart 2 frame) (bound : 2 ≤ counter) (valid : Record.Properties.Valid before)
     (ready : blocked before = false) (step : syncStep before = some (.Ok (), after))
     (env : Environment) (_owner : env.currentPid = pid)
-    (count : env.refCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
+    (count : env.nativeRefCounter = counter) (heap : env.nativeHeap = (shared counter frame contents before).2) :
     pollSync ⟨2⟩ env = some (.ok (.Ok ()),
-      {env with refCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
+      {env with nativeRefCounter := counter, nativeHeap := (shared counter frame contents after).2}) := by
   have found := sync_poll env counter frame contents before after apart bound valid ready step
   rw [framed_eq env counter frame contents before count heap] at found
   exact found
@@ -195,13 +195,13 @@ theorem scheduled_calls (before sought1 written1 committed1 sought2 written2 com
     (sync2 : syncStep written2 = some (.Ok (), committed2)) :
     let parent := Rustler.executeNative (__APPEND__ (owner true) first) Rustler.encodeBool
     let child := Rustler.executeNative (__APPEND__ (owner false) second) Rustler.encodeBool
-    (Result.schedule child (fun _ => parent))
-      {refCounter := 9, nativeHeap := (shared 9 overlappingFrame (Record.FramedLogProperties.free false) before).2} =
-      (.ok Term.true, {pidCounter := 2, refCounter := 11, nativeHeap := (shared 11 pinnedFrame (Record.FramedLogProperties.free false) committed2).2}) := by
+    (Result.schedule {} child (fun _ => parent))
+      {nativeRefCounter := 9, nativeHeap := (shared 9 overlappingFrame (Record.FramedLogProperties.free false) before).2} =
+      (.ok Term.true, { nativeRefCounter := 11, nativeHeap := (shared 11 pinnedFrame (Record.FramedLogProperties.free false) committed2).2}) := by
   dsimp only
-  have parent := call_steps 1 true before sought1 written1 committed1 first position1
+  have parent := call_steps [] true before sought1 written1 committed1 first position1
     valid0 valid1 valid2 ready0 ready1 ready2 seek1 write1 sync1
-  have child := call_steps 2 false committed1 sought2 written2 committed2 second position2
+  have child := call_steps [1] false committed1 sought2 written2 committed2 second position2
     valid3 valid4 valid5 ready3 ready4 ready5 seek2 write2 sync2
   have encodedParent := Rustler.executeNative_sharedSteps parent Rustler.encodeBool
   have encodedChild := Rustler.executeNative_sharedSteps child Rustler.encodeBool
@@ -227,9 +227,9 @@ native calls, rather than relying on potentially inconsistent poll hypotheses. -
 theorem scheduled_records :
     let parent := Rustler.executeNative (__APPEND__ ⟨3,7⟩ 13#u16) Rustler.encodeBool
     let child := Rustler.executeNative (__APPEND__ ⟨3,9⟩ 19#u16) Rustler.encodeBool
-    (Result.schedule child (fun _ => parent))
-      {refCounter := 9, nativeHeap := (shared 9 overlappingFrame (Record.FramedLogProperties.free false) firstInput).2} =
-      (.ok Term.true, {pidCounter := 2, refCounter := 11, nativeHeap := (shared 11 pinnedFrame (Record.FramedLogProperties.free false) complete).2}) := by
+    (Result.schedule {} child (fun _ => parent))
+      {nativeRefCounter := 9, nativeHeap := (shared 9 overlappingFrame (Record.FramedLogProperties.free false) firstInput).2} =
+      (.ok Term.true, { nativeRefCounter := 11, nativeHeap := (shared 11 pinnedFrame (Record.FramedLogProperties.free false) complete).2}) := by
   have bytes13 : (bytes (payload 13#u16)).size = 4 := by
     simp [bytes_size, payload, Record.IntegrityProperties.layout]
   have bytes19 : (bytes (payload 19#u16)).size = 4 := by
