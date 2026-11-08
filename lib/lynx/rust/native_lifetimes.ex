@@ -5,7 +5,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   # Track consuming ownership on every branch. Potential failure with a live
   # owner requires supported cleanup; borrowed calls need checked nonpanicking
   # bodies. Whole single-field enum payloads may transfer their ownership.
-  def audit!(functions, models, translated, refs) do
+  def audit!(functions, models, translated, refs, drop_audit \\ nil) do
     native_types =
       for type <- translated["type_decls"],
           type &&
@@ -103,6 +103,7 @@ defmodule Lynx.Rust.NativeLifetimes do
         context = %{
           owners: owners,
           borrowed: borrowed,
+          erased_drops: MapSet.new((drop_audit && drop_audit.sites[function["def_id"]]) || []),
           frames: frames,
           native: native_types,
           coroutines: coroutines,
@@ -354,24 +355,81 @@ defmodule Lynx.Rust.NativeLifetimes do
 
   defp resolve_place(_, _), do: {nil, []}
 
-  defp block!(block, live, ctx), do: block_state!(block, %{live: live, known: %{}}, ctx)
+  defp block!(block, live, ctx) do
+    case block_state!(block, %{live: live, known: %{}, exits: []}, ctx) do
+      {:terminal, []} -> :terminal
+      other -> other
+    end
+  end
 
   defp block_state!(%{"statements" => statements}, state, ctx) do
     Enum.reduce_while(statements, state, fn statement, state ->
-      case statement["kind"] do
-        %{"Switch" => switch} ->
-          case switch!(switch, state, ctx) do
-            :terminal -> {:halt, :terminal}
-            state -> {:cont, state}
-          end
+      result =
+        case statement["kind"] do
+          %{"Loop" => body} ->
+            loop!(body, state, ctx)
 
-        kind ->
-          case statement!(kind, state.live, Map.put(ctx, :known, state.known)) do
-            :terminal -> {:halt, :terminal}
-            live -> {:cont, %{live: live, known: known_after(kind, state.known, ctx)}}
-          end
+          %{"Switch" => switch} ->
+            switch!(switch, state, ctx)
+
+          %{"Break" => target} ->
+            loop_edge!(:break, target, state, ctx)
+
+          %{"Continue" => target} ->
+            loop_edge!(:continue, target, state, ctx)
+
+          kind ->
+            case statement!(kind, state.live, Map.put(ctx, :known, state.known)) do
+              :terminal -> {:terminal, state.exits}
+              live -> %{state | live: live, known: known_after(kind, state.known, ctx)}
+            end
+        end
+
+      case result do
+        {:terminal, _} -> {:halt, result}
+        state -> {:cont, state}
       end
     end)
+  end
+
+  defp loop!(body, state, ctx) do
+    borrowed_only!(state.live, ctx)
+    loop_ctx = Map.put(ctx, :loop_depth, Map.get(ctx, :loop_depth, 0) + 1)
+
+    # Initial branch and alias facts are not invariants of later iterations.
+    # Native owners may leave on a break, but none may cross a backedge.
+    exits =
+      case block_state!(body, %{state | known: %{}, exits: []}, loop_ctx) do
+        {:terminal, exits} ->
+          exits
+
+        following ->
+          borrowed_only!(following.live, ctx)
+          following.exits
+      end
+
+    following = for {:break, 0, edge} <- exits, do: edge
+    outer = for {kind, target, edge} <- exits, target > 0, do: {kind, target - 1, edge}
+    join_states(following, state.exits ++ outer, ctx)
+  end
+
+  defp loop_edge!(kind, target, state, ctx) do
+    unless is_integer(target) and target >= 0 and target < Map.get(ctx, :loop_depth, 0),
+      do: reject!(ctx)
+
+    if kind == :continue, do: borrowed_only!(state.live, ctx)
+    edge = %{state | exits: []}
+    {:terminal, state.exits ++ [{kind, target, edge}]}
+  end
+
+  defp borrowed_only!(live, ctx) do
+    unless MapSet.subset?(live, ctx.borrowed),
+      do:
+        LLBC.failure!(
+          ctx.function,
+          ctx.translated,
+          "native owner lifetime cannot carry an owned native value across a loop header or backedge; consume it before entering or continuing the loop"
+        )
   end
 
   defp switch!(%{"data" => data, "branches" => branches}, state, ctx) do
@@ -389,44 +447,49 @@ defmodule Lynx.Rust.NativeLifetimes do
 
       block_state!(Enum.fetch!(branches, index), state, ctx)
     else
-      states =
+      results =
         Enum.with_index(branches)
         |> Enum.map(fn {branch, index} ->
+          branch_state = %{state | exits: []}
+
           block_state!(
             branch,
-            refine_coroutine(data, index, refine_enum(data, index, state, ctx), ctx),
+            refine_coroutine(data, index, refine_enum(data, index, branch_state, ctx), ctx),
             ctx
           )
         end)
-        |> Enum.reject(&(&1 == :terminal))
 
-      case states do
-        [] ->
-          :terminal
+      states = for result <- results, is_map(result), do: result
 
-        [first | rest] ->
-          unless Enum.all?(
-                   rest,
-                   &MapSet.equal?(
-                     MapSet.difference(MapSet.delete(&1.live, 0), ctx.borrowed),
-                     MapSet.difference(MapSet.delete(first.live, 0), ctx.borrowed)
-                   )
-                 ),
-                 do: reject!(ctx)
+      exits =
+        Enum.flat_map(results, fn
+          {:terminal, exits} -> exits
+          state -> state.exits
+        end)
 
-          # Return variants may contain different native owners. Keep the union
-          # for subsequent failure checks; only Return may finally transfer slot 0.
-          # Every other local still requires identical ownership at the join.
-          live = Enum.reduce(rest, first.live, &MapSet.union(&1.live, &2))
-
-          known =
-            Map.filter(first.known, fn {id, value} ->
-              Enum.all?(rest, &(&1.known[id] == value))
-            end)
-
-          %{first | known: known, live: live}
-      end
+      join_states(states, state.exits ++ exits, ctx)
     end
+  end
+
+  defp join_states([], exits, _ctx), do: {:terminal, exits}
+
+  defp join_states([first | rest], exits, ctx) do
+    unless Enum.all?(
+             rest,
+             &MapSet.equal?(
+               MapSet.difference(MapSet.delete(&1.live, 0), ctx.borrowed),
+               MapSet.difference(MapSet.delete(first.live, 0), ctx.borrowed)
+             )
+           ),
+           do: reject!(ctx)
+
+    # Only the return slot may hold different native variants at a join.
+    live = Enum.reduce(rest, first.live, &MapSet.union(&1.live, &2))
+
+    known =
+      Map.filter(first.known, fn {id, value} -> Enum.all?(rest, &(&1.known[id] == value)) end)
+
+    %{first | live: live, known: known, exits: exits}
   end
 
   # A Result error (or another empty enum variant) does not own the native
@@ -894,6 +957,19 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp statement!("UndefinedBehavior", _live, %{cutoff_undefined: true}), do: :terminal
+
+  defp statement!(
+         %{"Drop" => %{"fn_ptr" => %{"kind" => %{"Fun" => id}}, "place" => place}},
+         live,
+         ctx
+       ) do
+    # The whole-function structural audit already checked this exact site's
+    # type, allocator and compiler destructor. Native owners are never erased.
+    unless MapSet.member?(ctx.erased_drops, id) and not nested_owner?(place, ctx),
+      do: reject!(ctx)
+
+    live
+  end
 
   defp statement!(kind, live, ctx) do
     if MapSet.size(live) > 0 or nested_owner?(kind, ctx), do: reject!(ctx)
