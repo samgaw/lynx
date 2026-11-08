@@ -926,7 +926,9 @@ defmodule Lynx.Rustler.FileResourceTest do
         FileResource.Write.write_next FileResource.Publish.directory_prefix
         FileResource.Publish.commit_next FileResource.Publish.acknowledged_crash
         FileResource.Recovery.recover_admitted FileResource.Recovery.commit_recovery
-        FileResource.Recovery.read_error_cleanup)
+        FileResource.Recovery.read_error_cleanup FileResource.Recovery.phase_prefix
+        FileResource.Recovery.phase_retry FileResource.Recovery.finite_retries
+        FileResource.Recovery.nonempty_retry FileResource.Recovery.committed_retries)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
@@ -993,12 +995,26 @@ defmodule Lynx.Rustler.FileResourceTest do
     File.write!(property, source)
     recovery_property = Path.join(project, "FileResource/Recovery.lean")
     recovery_source = File.read!(recovery_property)
-    false_recovery = String.replace(recovery_source, "(.ok (.Ok (some value))", "(.ok (.Ok none)")
-    assert false_recovery != recovery_source
-    File.write!(recovery_property, false_recovery)
 
-    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Rustler.prepare!(options)
+    for false_recovery <- [
+          String.replace(recovery_source, "(.ok (.Ok (some value))", "(.ok (.Ok none)"),
+          String.replace(
+            recovery_source,
+            "refCounter := generation + 1",
+            "refCounter := generation"
+          ),
+          String.replace(
+            recovery_source,
+            "| .beforeSecondRead => scan low high generation 1",
+            "| .beforeSecondRead => scan low high generation 2"
+          )
+        ] do
+      assert false_recovery != recovery_source
+      File.write!(recovery_property, false_recovery)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
     end
 
     File.write!(recovery_property, recovery_source)
