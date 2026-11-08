@@ -95,15 +95,60 @@ theorem lock_poll (base : Environment) (counter : Nat) (frame : List (Nat × Str
     (by simp [framedEnv, fresh]; omega)
   simpa [framedEnv, held, guard, map_apart 1 _ frame apart] using acquired
 
+/-- A held guard retains its acquisition token when another caller allocates
+resource owners and advances the shared reference counter. -/
+theorem release_framed (base : Environment) (counter token : Nat)
+    (frame : List (Nat × String × Term))
+    (poisoned : Bool) (state : State) (apart : Apart 1 frame) :
+    NativeGuard.pollRelease (⟨⟨1⟩, token, base.currentPid, ⟨2⟩⟩ : NativeGuard NativeFile)
+      (framedEnv base counter frame (NativeMutex.lockedContents base.currentPid token poisoned
+        (⟨2⟩ : NativeFile)) state) =
+      some (.ok (), framedEnv base counter frame (free poisoned) state) := by
+  cases poisoned <;>
+    simp [NativeGuard.pollRelease, framedEnv, free,
+      filter_apart 1 frame apart, map_apart 1 _ frame apart, NativeMutex.lockedContents,
+      NativeCodec.encode, NativeCodec.decode]
+
 theorem release_poll (base : Environment) (counter : Nat) (frame : List (Nat × String × Term))
     (poisoned : Bool) (state : State) (apart : Apart 1 frame) :
     NativeGuard.pollRelease (guard base counter)
       (framedEnv base (counter + 1) frame (held base counter poisoned) state) =
       some (.ok (), framedEnv base (counter + 1) frame (free poisoned) state) := by
-  cases poisoned <;>
-    simp [NativeGuard.pollRelease, framedEnv, held, guard, free,
-      filter_apart 1 frame apart, map_apart 1 _ frame apart, NativeMutex.lockedContents,
-      NativeCodec.encode, NativeCodec.decode]
+  exact release_framed base (counter + 1) (counter + 1) frame poisoned state apart
+
+/-- Resume the actual append body with its original guard, independently of
+allocations performed by other callers since acquisition. -/
+theorem guarded_prefix (base : Environment) (counter token : Nat)
+    (frame : List (Nat × String × Term)) (poisoned : Bool)
+    (before sought written committed : State) (value : U16) (position : U64)
+    (bound : 2 ≤ counter) (mutexApart : Apart 1 frame) (fileApart : Apart 2 frame)
+    (valid0 : Valid before) (valid1 : Valid sought) (valid2 : Valid written)
+    (ready0 : blocked before = false) (ready1 : blocked sought = false) (ready2 : blocked written = false)
+    (seek : seekStep before (.end_ 0#i64) = some (.Ok position, sought))
+    (write : writeStep sought (payload value) = some (.Ok 4#usize, written))
+    (sync : syncStep written = some (.Ok (), committed)) :
+    let heldGuard : NativeGuard NativeFile := ⟨⟨1⟩, token, base.currentPid, ⟨2⟩⟩
+    Result.ReadyPrefix (do
+      let (reply, file) ← append_record_or_rollback heldGuard.value value
+      NativeGuard.release {heldGuard with value := file}
+      NativeM.ok reply)
+      (framedEnv base counter frame (NativeMutex.lockedContents base.currentPid token poisoned
+        (⟨2⟩ : NativeFile)) before) (.ok (.Ok true))
+      (framedEnv base counter frame (free poisoned) committed) := by
+  dsimp only
+  rw [Record.RollbackProperties.append_contract]
+  simp only [bind_assoc, NativeFile.seek, Result.wait_bind]
+  refine .wait _ _ _ _ _ _ _
+    (seek_poll base counter frame _ before sought position fileApart bound valid0 ready0 seek) ?_
+  simp only [Result.ok_bind, NativeFile.write, Result.wait_bind]
+  refine .wait _ _ _ _ _ _ _
+    (write_poll base counter frame _ sought written value fileApart bound valid1 ready1 write) ?_
+  simp only [Result.ok_bind, NativeFile.syncAll, Result.wait_bind]
+  refine .wait _ _ _ _ _ _ _
+    (sync_poll base counter frame _ written committed fileApart bound valid2 ready2 sync) ?_
+  simp only [Result.ok_bind, NativeM.ok, NativeGuard.release, Result.wait_bind]
+  exact .wait _ _ _ _ _ _ _ (release_framed base counter token frame poisoned committed mutexApart)
+    (.refl _ _)
 
 /-- The actual cross-crate critical section preserves every unrelated heap
 cell, including Rustler owner tokens and the resource allocation. -/
