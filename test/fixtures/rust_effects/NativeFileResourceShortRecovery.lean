@@ -402,6 +402,43 @@ theorem complete_mask (value : U16) (mask data : ByteArray)
   rw [maskEq,RecordRecovery.persist_torn] at found
   exact ⟨x,y,z,w,maskEq,Option.some.inj found.symm⟩
 
+/-- Persisted fresh-record bytes have a verified recovery for any valid restart
+watermark, independently of the resource or directory phase that produced them. -/
+theorem persisted_image_recovery (value : U16) (mask data : ByteArray)
+    (accepted : persist ByteArray.empty (Record.content value) mask = some data)
+    (generation : Nat) (validGeneration : 1 ≤ generation) :
+    ∃ script before after result,
+      restartFilesystem ⟨Publish.names,[(1,data)],generation⟩ script = some before ∧
+      recover_file_record (toStr "resource") before = (.ok (.Ok result),after) ∧
+      (result = none ∨ result = some value) := by
+  have bound := fresh_image_size value mask data accepted
+  by_cases short : data.size < 4
+  · exact ⟨openingScript (contents data),boot (contents data) generation,scan (contents data) generation data.size .nil true,
+      none,
+      restart_image data short generation validGeneration,recover_bytes data short generation validGeneration,Or.inl rfl⟩
+  · have full : data.size = 4 := by omega
+    obtain ⟨x,y,z,w,maskEq,dataEq⟩ := complete_mask value mask data accepted full
+    let a := Record.selected x (Record.low value)
+    let b := Record.selected y (Record.high value)
+    let c := Record.selected z (Record.low (~~~value))
+    let d := Record.selected w (Record.high (~~~value))
+    have restarted : restartFilesystem ⟨Publish.names,[(1,data)],generation⟩ RecordRecovery.openingScript =
+        some (RecordRecovery.boot a b c d generation) := by
+      rw [dataEq]
+      exact RecordRecovery.restart_image a b c d generation validGeneration
+    have outcomes := RecordRecovery.torn_recovery value x y z w generation validGeneration
+    change recover_file_record (toStr "resource") (RecordRecovery.boot a b c d generation) =
+      (.ok (.Ok none),RecordRecovery.scan a b c d generation 4 .nil true) ∨
+      recover_file_record (toStr "resource") (RecordRecovery.boot a b c d generation) =
+      (.ok (.Ok (some value)),RecordRecovery.scan a b c d generation 4 .nil true) at outcomes
+    rcases outcomes with rejected | recovered
+    · exact ⟨RecordRecovery.openingScript,RecordRecovery.boot a b c d generation,
+        RecordRecovery.scan a b c d generation 4 .nil true,none,
+        restarted,rejected,Or.inl rfl⟩
+    · exact ⟨RecordRecovery.openingScript,RecordRecovery.boot a b c d generation,
+        RecordRecovery.scan a b c d generation 4 .nil true,some value,
+        restarted,recovered,Or.inr rfl⟩
+
 /-- Every admitted named image after the actual write has a consistent ready
 recovery execution that rejects or returns the original value. -/
 theorem named_image_recovery (env : Environment) (value : U16) (mask data : ByteArray)
@@ -413,33 +450,10 @@ theorem named_image_recovery (env : Environment) (value : U16) (mask data : Byte
       restartFilesystem ⟨Publish.names,[(1,data)],7⟩ script = some before ∧
       recover_file_record (toStr "resource") before = (.ok (.Ok result),after) ∧
       (result = none ∨ result = some value) := by
-  have bound := fresh_image_size value mask data accepted
-  by_cases short : data.size < 4
-  · exact ⟨openingScript (contents data),boot (contents data) 7,scan (contents data) 7 data.size .nil true,
-      none,RecordRecovery.write_image_of_persist env value mask data accepted,
-      restart_image data short 7 (by decide +kernel),recover_bytes data short 7 (by decide +kernel),Or.inl rfl⟩
-  · have full : data.size = 4 := by omega
-    obtain ⟨x,y,z,w,maskEq,dataEq⟩ := complete_mask value mask data accepted full
-    let a := Record.selected x (Record.low value)
-    let b := Record.selected y (Record.high value)
-    let c := Record.selected z (Record.low (~~~value))
-    let d := Record.selected w (Record.high (~~~value))
-    have restarted : restartFilesystem ⟨Publish.names,[(1,data)],7⟩ RecordRecovery.openingScript =
-        some (RecordRecovery.boot a b c d 7) := by
-      rw [dataEq]
-      exact RecordRecovery.restart_image a b c d 7 (by decide +kernel)
-    have outcomes := RecordRecovery.torn_recovery value x y z w 7 (by decide +kernel)
-    change recover_file_record (toStr "resource") (RecordRecovery.boot a b c d 7) =
-      (.ok (.Ok none),RecordRecovery.scan a b c d 7 4 .nil true) ∨
-      recover_file_record (toStr "resource") (RecordRecovery.boot a b c d 7) =
-      (.ok (.Ok (some value)),RecordRecovery.scan a b c d 7 4 .nil true) at outcomes
-    rcases outcomes with rejected | recovered
-    · exact ⟨RecordRecovery.openingScript,RecordRecovery.boot a b c d 7,
-        RecordRecovery.scan a b c d 7 4 .nil true,none,
-        RecordRecovery.write_image_of_persist env value mask data accepted,restarted,rejected,Or.inl rfl⟩
-    · exact ⟨RecordRecovery.openingScript,RecordRecovery.boot a b c d 7,
-        RecordRecovery.scan a b c d 7 4 .nil true,some value,
-        RecordRecovery.write_image_of_persist env value mask data accepted,restarted,recovered,Or.inr rfl⟩
+  obtain ⟨script,before,after,result,restarted,recovered,allowed⟩ :=
+    persisted_image_recovery value mask data accepted 7 (by decide +kernel)
+  exact ⟨script,before,after,result,RecordRecovery.write_image_of_persist env value mask data accepted,
+    restarted,recovered,allowed⟩
 
 private theorem pending_names (selected : Names)
     (unique : (selected.map (fun entry => entry.1.data)).eraseDups.length = selected.length)
