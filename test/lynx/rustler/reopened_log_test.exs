@@ -28,6 +28,10 @@ defmodule Lynx.Rustler.ReopenedLogTest do
     source =
       File.read!(Path.join(@fixture, "ReopenedLogProperties.lean"))
       |> String.replace("__REOPEN__", binding["lean_name"])
+      |> String.replace(
+        "__APPEND__",
+        Enum.find(prepared.bindings.bindings, &(&1["name"] == "log_append"))["lean_name"]
+      )
 
     File.write!(property, source)
 
@@ -36,15 +40,27 @@ defmodule Lynx.Rustler.ReopenedLogTest do
       |> Keyword.update!(:proof_modules, &(&1 ++ ["Record.ReopenedLogProperties"]))
       |> Keyword.update!(
         :required_properties,
-        &(&1 ++ ["Record.ReopenedLogProperties.reopened_checked"])
+        &(&1 ++
+            Enum.map(~w(reopened_checked append_checked short_checked), fn name ->
+              "Record.ReopenedLogProperties." <> name
+            end))
       )
 
     prepared = Lynx.Rustler.prepare!(options)
 
-    assert Enum.any?(
-             prepared.verification.guarantees,
-             &(Map.get(&1, :theorem) == "Record.ReopenedLogProperties.reopened_checked")
-           )
+    for theorem <- ~w(reopened_checked append_checked short_checked) do
+      assert Enum.any?(prepared.verification.guarantees, fn evidence ->
+               evidence.kind == :cross_crate_contract &&
+                 evidence.theorem == "Record.ReopenedLogProperties." <> theorem
+             end)
+    end
+
+    for theorem <- ~w(append_checked short_checked) do
+      assert Enum.any?(prepared.verification.guarantees, fn evidence ->
+               evidence.theorem == "Record.ReopenedLogProperties." <> theorem &&
+                 "Record.OverlappingLogProperties.caller_contract" in evidence.contracts_used
+             end)
+    end
 
     calibrate(prepared.library, tmp)
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
@@ -71,6 +87,43 @@ defmodule Lynx.Rustler.ReopenedLogTest do
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
 
+    for {module, append_beam} <- Code.compile_file(Path.join(@fixture, "ReopenedAppendLaws.exs")) do
+      environment =
+        case module do
+          LynxIoFixture.ReopenedAppendLaws -> "appendInitial"
+          LynxIoFixture.ReopenedRollbackLaws -> "shortInitial"
+        end
+
+      append_options =
+        Keyword.put(
+          law_options,
+          :initial_environment,
+          "Record.ReopenedLogProperties." <> environment
+        )
+
+      append_export = Path.join(tmp, environment <> ".export")
+
+      reports =
+        Lynx.Laws.verify([append_beam], Keyword.put(append_options, :export, append_export))
+
+      assert Enum.all?(reports, &(&1.status == :ok)),
+             inspect(
+               for report <- reports,
+                   report.status != :ok,
+                   do: Map.take(report, [:module, :diagnostics])
+             )
+
+      assert Enum.all?(
+               Lynx.Laws.verify([append_beam], append_options),
+               &(&1.status == :ok and &1.cached)
+             )
+
+      {status, output} =
+        Lynx.Commands.lake(project, ["check", "--from-export", append_export] ++ sandbox)
+
+      assert status == 0, output
+    end
+
     for extra <- [
           "private axiom reopenTrust : False",
           "private theorem unfinishedReopen : True := by sorry"
@@ -80,6 +133,13 @@ defmodule Lynx.Rustler.ReopenedLogTest do
       assert error.message =~ "audit"
     end
 
+    wrong_result =
+      String.replace(source, "(appendAccepted true) 768", "(appendAccepted false) 768")
+
+    refute wrong_result == source
+    File.write!(property, wrong_result)
+    error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+    assert error.message =~ "ReopenedLogProperties.lean:"
     File.write!(property, source)
 
     protocol = Path.join(workspace, "protocol/src/lib.rs")
@@ -105,6 +165,18 @@ defmodule Lynx.Rustler.ReopenedLogTest do
     File.write!(native, changed)
     error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
     assert error.message =~ "ReopenedLogProperties.lean:"
+
+    changed =
+      String.replace(
+        original,
+        "let result = append(&resource, value);",
+        "let result = append(&resource, 0);"
+      )
+
+    refute changed == original
+    File.write!(native, changed)
+    error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+    assert error.message =~ ".lean:"
     File.write!(native, original)
     assert %{verification: %{guarantees: [_ | _]}} = Lynx.Rustler.prepare!(options)
   end
