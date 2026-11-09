@@ -122,14 +122,28 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
 
     path = Path.join(tmp, "laws.ex")
     laws = File.read!(Path.join(@fixture, "shared_resource_laws.ex"))
-    File.write!(path, laws)
-    [{_, beam}] = Code.compile_file(path)
 
-    reports =
-      Lynx.Laws.verify([beam],
-        native: {Lynx.Rustler, options},
-        debug_dir: Path.join(tmp, "lean-debug")
-      )
+    dispatched_laws =
+      String.replace(laws, "ensures/0» [])", "ensures/0» Erlang.program.fun_table)")
+
+    refute dispatched_laws == laws
+    File.write!(path, dispatched_laws)
+    [{_, beam}] = Code.compile_file(path)
+    concurrent_path = Path.join(tmp, "concurrent_laws.ex")
+    concurrent_laws = File.read!(Path.join(@fixture, "concurrent_resource_laws.ex"))
+    File.write!(concurrent_path, concurrent_laws)
+    [{_, concurrent_beam}] = Code.compile_file(concurrent_path)
+    assert apply(LynxEffectsFixture.ConcurrentResourceLaws, :concurrent_update, [])
+    beams = [beam, concurrent_beam]
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      options: [maxHeartbeats: 16_000_000, maxRecDepth: 4096],
+      debug_dir: Path.join(tmp, "lean-debug")
+    ]
+
+    export = Path.join(tmp, "shared-resource.export")
+    reports = Lynx.Laws.verify(beams, Keyword.put(law_options, :export, export))
 
     assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
     guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
@@ -138,15 +152,8 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
         do: assert(Enum.any?(guarantees, &(&1.kind == kind)))
 
     assert Enum.all?(
-             Lynx.Laws.verify([beam], native: {Lynx.Rustler, options}),
+             Lynx.Laws.verify(beams, law_options),
              &(&1.status == :ok and &1.cached)
-           )
-
-    export = Path.join(tmp, "shared-resource.export")
-
-    assert Enum.all?(
-             Lynx.Laws.verify([beam], native: {Lynx.Rustler, options}, export: export),
-             &(&1.status == :ok)
            )
 
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
@@ -169,10 +176,42 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     refute wrong == laws
     [{_, wrong_beam}] = Code.compile_string(wrong, path)
 
+    wrong_reports = Lynx.Laws.verify([wrong_beam], law_options)
+
+    assert %{status: :error, diagnostics: wrong_diagnostics} =
+             Enum.find(wrong_reports, &(&1.module == "Elixir.LynxEffectsFixture.SharedLaws.laws"))
+
     assert Enum.any?(
-             Lynx.Laws.verify([wrong_beam], native: {Lynx.Rustler, options}),
-             &(&1.status == :error)
+             wrong_diagnostics,
+             &match?(%{severity: :error, declaration: "shared_update/0"}, &1)
            )
+
+    refute Enum.any?(wrong_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
+
+    wrong_concurrent =
+      String.replace(
+        concurrent_laws,
+        "counter_value(resource) == 13",
+        "counter_value(resource) == 14"
+      )
+
+    refute wrong_concurrent == concurrent_laws
+    [{_, wrong_concurrent_beam}] = Code.compile_string(wrong_concurrent, concurrent_path)
+
+    wrong_reports = Lynx.Laws.verify([wrong_concurrent_beam], law_options)
+
+    assert %{status: :error, diagnostics: wrong_diagnostics} =
+             Enum.find(
+               wrong_reports,
+               &(&1.module == "Elixir.LynxEffectsFixture.ConcurrentResourceLaws.laws")
+             )
+
+    assert Enum.any?(
+             wrong_diagnostics,
+             &match?(%{severity: :error, declaration: "concurrent_update/0"}, &1)
+           )
+
+    refute Enum.any?(wrong_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
 
     core = Path.join(workspace, "core/src/lib.rs")
     original = File.read!(core)
@@ -188,7 +227,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     File.write!(core, changed)
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Laws.verify([beam], native: {Lynx.Rustler, options})
+      Lynx.Laws.verify(beams, law_options)
     end
 
     File.write!(core, original)
