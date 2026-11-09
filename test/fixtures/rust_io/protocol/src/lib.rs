@@ -169,7 +169,10 @@ pub fn repair_log(file: &mut File, max_records: usize) -> io::Result<Option<Vec<
             if values.len() == max_records {
                 return Ok(None);
             }
-            let valid_bytes = (values.len() as u64) * 4;
+            let valid_bytes = match (values.len() as u64).checked_mul(4) {
+                Some(bytes) => bytes,
+                None => return Ok(None),
+            };
             match resize_then_sync(file, valid_bytes) {
                 Err(error) => Err(error),
                 Ok(()) => Ok(Some(values)),

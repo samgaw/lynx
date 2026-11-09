@@ -83,6 +83,52 @@ defmodule Lynx.Rust.NativeBorrowsTest do
     end
   end
 
+  test "integer casts are nonpanicking without admitting pointer or floating casts" do
+    integer = fn sign, width -> %{"Scalar" => %{"Integer" => %{sign => width}}} end
+    u64 = integer.("Unsigned", "U64")
+
+    for {source, target, expected} <- [
+          {integer.("Unsigned", "Usize"), u64, true},
+          {integer.("Signed", "I128"), integer.("Unsigned", "U8"), true},
+          {integer.("Unsigned", "U64"), integer.("Signed", "I8"), true},
+          {%{"Scalar" => "Bool"}, u64, false},
+          {%{"Scalar" => %{"Float" => "F64"}}, u64, false},
+          {%{"Ref" => ["Static", u64, "Shared"]}, u64, false},
+          {%{"Deduplicated" => 91}, u64, false},
+          {u64, %{"Scalar" => "Bool"}, false}
+        ] do
+      %{"Scalar" => target} = target
+
+      function = %{
+        "def_id" => 1,
+        "body" => %{
+          "Structured" => %{
+            "body" => %{
+              "statements" => [
+                %{
+                  "kind" => %{
+                    "Assign" => [
+                      %{},
+                      %{
+                        "UnaryOp" => [
+                          %{"Cast" => %{"Scalar" => target}},
+                          %{"Move" => %{"ty" => source}}
+                        ]
+                      }
+                    ]
+                  }
+                },
+                %{"kind" => "Return"}
+              ]
+            }
+          }
+        }
+      }
+
+      assert MapSet.member?(NativeBorrows.nonpanicking_calls([function], %{}), 1) == expected
+    end
+  end
+
   test "checks loop safety without assuming termination or accepting invalid exits" do
     statement = &%{"kind" => &1}
     loop = fn kinds -> %{"Loop" => %{"statements" => Enum.map(kinds, statement)}} end

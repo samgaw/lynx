@@ -229,7 +229,10 @@ defmodule Lynx.Rust.ResultModels do
   # Calls retain their definition IDs, signatures, arguments and source spans;
   # reports retain the original Rust name. No first-party body is replaced.
   def lower_native_names!(document, models) do
-    selected = Map.filter(models, fn {_, model} -> model[:native_expect_ok] == true end)
+    selected =
+      Map.filter(models, fn {_, model} ->
+        model[:native_expect_ok] == true or model[:native_expect_some] == true
+      end)
 
     {functions, found} =
       Enum.map_reduce(document["translated"]["fun_decls"], [], fn function, found ->

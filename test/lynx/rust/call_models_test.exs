@@ -46,7 +46,7 @@ defmodule Lynx.Rust.CallModelsTest do
            } = resolve(slice_length())
   end
 
-  test "checked u64 addition preserves the actual Option identity and rejects inconsistent layouts" do
+  test "checked u64 arithmetic preserves the actual Option identity and rejects inconsistent layouts" do
     u64 = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
     path = fn parts -> Enum.map(parts, &%{"Ident" => [&1, 0]}) end
 
@@ -94,26 +94,33 @@ defmodule Lynx.Rust.CallModelsTest do
         }
       })
 
-    assert %{
-             7 => %{
-               builtin: true,
-               implementation_verified: false,
-               lean: "Aeneas.Std.U64.checked_add"
-             }
-           } = CallModels.resolve([function], %{"type_decls" => [option]}, %{}, [])
+    for operation <- ~w(checked_add checked_mul) do
+      lean = "Aeneas.Std.U64.#{operation}"
 
-    for broken <- [
-          put_in(option, ["kind", "Enum"], []),
-          put_in(option, ["item_meta", "name"], path.(~w(fake Option)))
-        ] do
-      assert %{} == CallModels.resolve([function], %{"type_decls" => [broken]}, %{}, [])
-    end
+      function =
+        put_in(function, ["item_meta", "name", Access.at(-1)], %{"Ident" => [operation, 0]})
 
-    for broken <- [
-          put_in(function, ["signature", "is_unsafe"], true),
-          put_in(function, ["signature", "output"], u64)
-        ] do
-      assert %{} == CallModels.resolve([broken], %{"type_decls" => [option]}, %{}, [])
+      assert %{
+               7 => %{
+                 builtin: true,
+                 implementation_verified: false,
+                 lean: ^lean
+               }
+             } = CallModels.resolve([function], %{"type_decls" => [option]}, %{}, [])
+
+      for broken <- [
+            put_in(option, ["kind", "Enum"], []),
+            put_in(option, ["item_meta", "name"], path.(~w(fake Option)))
+          ] do
+        assert %{} == CallModels.resolve([function], %{"type_decls" => [broken]}, %{}, [])
+      end
+
+      for broken <- [
+            put_in(function, ["signature", "is_unsafe"], true),
+            put_in(function, ["signature", "output"], u64)
+          ] do
+        assert %{} == CallModels.resolve([broken], %{"type_decls" => [option]}, %{}, [])
+      end
     end
   end
 
