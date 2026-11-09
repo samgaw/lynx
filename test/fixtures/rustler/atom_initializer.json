@@ -1,0 +1,1029 @@
+{
+  "functions": [
+    {
+      "body": {
+        "Structured": {
+          "body": {
+            "statements": [
+              {
+                "id": 295,
+                "kind": {
+                  "StorageLive": 0
+                }
+              },
+              {
+                "id": 296,
+                "kind": {
+                  "StorageLive": 3
+                }
+              },
+              {
+                "id": 297,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 3
+                      }
+                    },
+                    {
+                      "Use": [
+                        {
+                          "Move": {
+                            "kind": {
+                              "Projection": [
+                                {
+                                  "kind": {
+                                    "Local": 2
+                                  }
+                                },
+                                {
+                                  "Field": [
+                                    null,
+                                    0
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "No"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 298,
+                "kind": {
+                  "StorageLive": 4
+                }
+              },
+              {
+                "id": 299,
+                "kind": {
+                  "StorageLive": 5
+                }
+              },
+              {
+                "id": 300,
+                "kind": {
+                  "StorageLive": 6
+                }
+              },
+              {
+                "id": 301,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 6
+                      }
+                    },
+                    {
+                      "Use": [
+                        {
+                          "Copy": {
+                            "kind": {
+                              "Local": 3
+                            }
+                          }
+                        },
+                        "Yes"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 302,
+                "kind": {
+                  "StorageLive": 7
+                }
+              },
+              {
+                "id": 303,
+                "kind": {
+                  "StorageLive": 8
+                }
+              },
+              {
+                "id": 305,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 8
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Global": {
+                              "id": 16
+                            }
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 306,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 7
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Projection": [
+                              {
+                                "kind": {
+                                  "Local": 8
+                                }
+                              },
+                              "Deref"
+                            ]
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 311,
+                "kind": {
+                  "Call": {
+                    "call": {
+                      "func": {
+                        "Regular": {
+                          "kind": {
+                            "Fun": 41
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 6
+                            }
+                          }
+                        },
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 7
+                            }
+                          }
+                        }
+                      ],
+                      "safety": "Inherit"
+                    },
+                    "dest": {
+                      "kind": {
+                        "Local": 5
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": 312,
+                "kind": {
+                  "StorageDead": 7
+                }
+              },
+              {
+                "id": 313,
+                "kind": {
+                  "StorageDead": 6
+                }
+              },
+              {
+                "id": 314,
+                "kind": {
+                  "StorageLive": 9
+                }
+              },
+              {
+                "id": 315,
+                "kind": {
+                  "StorageLive": 10
+                }
+              },
+              {
+                "id": 317,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 10
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Global": {
+                              "id": 17
+                            }
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 318,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 9
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Projection": [
+                              {
+                                "kind": {
+                                  "Local": 10
+                                }
+                              },
+                              "Deref"
+                            ]
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 328,
+                "kind": {
+                  "Call": {
+                    "call": {
+                      "func": {
+                        "Regular": {
+                          "kind": {
+                            "Fun": 42
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 5
+                            }
+                          }
+                        },
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 9
+                            }
+                          }
+                        }
+                      ],
+                      "safety": "Inherit"
+                    },
+                    "dest": {
+                      "kind": {
+                        "Local": 4
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": 329,
+                "kind": {
+                  "StorageDead": 9
+                }
+              },
+              {
+                "id": 330,
+                "kind": {
+                  "StorageDead": 5
+                }
+              },
+              {
+                "id": 331,
+                "kind": {
+                  "StorageLive": 11
+                }
+              },
+              {
+                "id": 332,
+                "kind": {
+                  "StorageLive": 12
+                }
+              },
+              {
+                "id": 333,
+                "kind": {
+                  "StorageLive": 13
+                }
+              },
+              {
+                "id": 334,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 13
+                      }
+                    },
+                    {
+                      "Use": [
+                        {
+                          "Copy": {
+                            "kind": {
+                              "Local": 3
+                            }
+                          }
+                        },
+                        "Yes"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 335,
+                "kind": {
+                  "StorageLive": 14
+                }
+              },
+              {
+                "id": 336,
+                "kind": {
+                  "StorageLive": 15
+                }
+              },
+              {
+                "id": 338,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 15
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Global": {
+                              "id": 18
+                            }
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 339,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 14
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Projection": [
+                              {
+                                "kind": {
+                                  "Local": 15
+                                }
+                              },
+                              "Deref"
+                            ]
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 344,
+                "kind": {
+                  "Call": {
+                    "call": {
+                      "func": {
+                        "Regular": {
+                          "kind": {
+                            "Fun": 41
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 13
+                            }
+                          }
+                        },
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 14
+                            }
+                          }
+                        }
+                      ],
+                      "safety": "Inherit"
+                    },
+                    "dest": {
+                      "kind": {
+                        "Local": 12
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": 345,
+                "kind": {
+                  "StorageDead": 14
+                }
+              },
+              {
+                "id": 346,
+                "kind": {
+                  "StorageDead": 13
+                }
+              },
+              {
+                "id": 347,
+                "kind": {
+                  "StorageLive": 16
+                }
+              },
+              {
+                "id": 348,
+                "kind": {
+                  "StorageLive": 17
+                }
+              },
+              {
+                "id": 350,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 17
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Global": {
+                              "id": 19
+                            }
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 351,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 16
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Projection": [
+                              {
+                                "kind": {
+                                  "Local": 17
+                                }
+                              },
+                              "Deref"
+                            ]
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 361,
+                "kind": {
+                  "Call": {
+                    "call": {
+                      "func": {
+                        "Regular": {
+                          "kind": {
+                            "Fun": 42
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 12
+                            }
+                          }
+                        },
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 16
+                            }
+                          }
+                        }
+                      ],
+                      "safety": "Inherit"
+                    },
+                    "dest": {
+                      "kind": {
+                        "Local": 11
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": 362,
+                "kind": {
+                  "StorageDead": 16
+                }
+              },
+              {
+                "id": 363,
+                "kind": {
+                  "StorageDead": 12
+                }
+              },
+              {
+                "id": 364,
+                "kind": {
+                  "StorageLive": 18
+                }
+              },
+              {
+                "id": 365,
+                "kind": {
+                  "StorageLive": 19
+                }
+              },
+              {
+                "id": 366,
+                "kind": {
+                  "StorageLive": 20
+                }
+              },
+              {
+                "id": 367,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 20
+                      }
+                    },
+                    {
+                      "Use": [
+                        {
+                          "Copy": {
+                            "kind": {
+                              "Local": 3
+                            }
+                          }
+                        },
+                        "Yes"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 368,
+                "kind": {
+                  "StorageLive": 21
+                }
+              },
+              {
+                "id": 369,
+                "kind": {
+                  "StorageLive": 22
+                }
+              },
+              {
+                "id": 371,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 22
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Global": {
+                              "id": 20
+                            }
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 372,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 21
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Projection": [
+                              {
+                                "kind": {
+                                  "Local": 22
+                                }
+                              },
+                              "Deref"
+                            ]
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 377,
+                "kind": {
+                  "Call": {
+                    "call": {
+                      "func": {
+                        "Regular": {
+                          "kind": {
+                            "Fun": 41
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 20
+                            }
+                          }
+                        },
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 21
+                            }
+                          }
+                        }
+                      ],
+                      "safety": "Inherit"
+                    },
+                    "dest": {
+                      "kind": {
+                        "Local": 19
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": 378,
+                "kind": {
+                  "StorageDead": 21
+                }
+              },
+              {
+                "id": 379,
+                "kind": {
+                  "StorageDead": 20
+                }
+              },
+              {
+                "id": 380,
+                "kind": {
+                  "StorageLive": 23
+                }
+              },
+              {
+                "id": 381,
+                "kind": {
+                  "StorageLive": 24
+                }
+              },
+              {
+                "id": 383,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 24
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Global": {
+                              "id": 21
+                            }
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 384,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 23
+                      }
+                    },
+                    {
+                      "Ref": {
+                        "place": {
+                          "kind": {
+                            "Projection": [
+                              {
+                                "kind": {
+                                  "Local": 24
+                                }
+                              },
+                              "Deref"
+                            ]
+                          }
+                        },
+                        "kind": "Shared"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 394,
+                "kind": {
+                  "Call": {
+                    "call": {
+                      "func": {
+                        "Regular": {
+                          "kind": {
+                            "Fun": 42
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 19
+                            }
+                          }
+                        },
+                        {
+                          "Move": {
+                            "kind": {
+                              "Local": 23
+                            }
+                          }
+                        }
+                      ],
+                      "safety": "Inherit"
+                    },
+                    "dest": {
+                      "kind": {
+                        "Local": 18
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": 395,
+                "kind": {
+                  "StorageDead": 23
+                }
+              },
+              {
+                "id": 396,
+                "kind": {
+                  "StorageDead": 19
+                }
+              },
+              {
+                "id": 397,
+                "kind": {
+                  "Assign": [
+                    {
+                      "kind": {
+                        "Local": 0
+                      }
+                    },
+                    {
+                      "Aggregate": [
+                        {
+                          "Adt": [
+                            {
+                              "id": 11,
+                              "builtin": null
+                            },
+                            null,
+                            null
+                          ]
+                        },
+                        [
+                          {
+                            "Move": {
+                              "kind": {
+                                "Local": 4
+                              }
+                            }
+                          },
+                          {
+                            "Move": {
+                              "kind": {
+                                "Local": 11
+                              }
+                            }
+                          },
+                          {
+                            "Move": {
+                              "kind": {
+                                "Local": 18
+                              }
+                            }
+                          }
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "id": 398,
+                "kind": {
+                  "StorageDead": 18
+                }
+              },
+              {
+                "id": 399,
+                "kind": {
+                  "StorageDead": 11
+                }
+              },
+              {
+                "id": 400,
+                "kind": {
+                  "StorageDead": 4
+                }
+              },
+              {
+                "id": 401,
+                "kind": {
+                  "StorageDead": 24
+                }
+              },
+              {
+                "id": 402,
+                "kind": {
+                  "StorageDead": 22
+                }
+              },
+              {
+                "id": 403,
+                "kind": {
+                  "StorageDead": 17
+                }
+              },
+              {
+                "id": 404,
+                "kind": {
+                  "StorageDead": 15
+                }
+              },
+              {
+                "id": 405,
+                "kind": {
+                  "StorageDead": 10
+                }
+              },
+              {
+                "id": 406,
+                "kind": {
+                  "StorageDead": 8
+                }
+              },
+              {
+                "id": 407,
+                "kind": {
+                  "StorageDead": 3
+                }
+              },
+              {
+                "id": 408,
+                "kind": {
+                  "StorageDead": 2
+                }
+              },
+              {
+                "id": 409,
+                "kind": {
+                  "StorageDead": 1
+                }
+              },
+              {
+                "id": 410,
+                "kind": "Return"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "type_id": 11,
+  "fields": [
+    {
+      "name": "atom_ordered"
+    },
+    {
+      "name": "atom_empty"
+    },
+    {
+      "name": "atom_equal"
+    }
+  ],
+  "literals": {
+    "16": "ordered",
+    "17": "rustler::atoms!: bad atom string",
+    "18": "empty",
+    "19": "rustler::atoms!: bad atom string",
+    "20": "equal",
+    "21": "rustler::atoms!: bad atom string"
+  },
+  "constructors": [
+    41
+  ],
+  "expects": [
+    42
+  ]
+}
