@@ -95,6 +95,7 @@ git -C "$aeneas_source" apply "$script_dir/patches/aeneas-undefined-behavior.pat
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-lean-back-projections.patch"
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-native-loops.patch"
 git -C "$aeneas_source" apply "$script_dir/patches/aeneas-effectful-calls.patch"
+git -C "$aeneas_source" apply "$script_dir/patches/aeneas-partial-discriminants.patch"
 ln -s "$source_dir" "$aeneas_source/charon"
 cp "$script_dir/aeneas.opam.locked" "$aeneas_source/src/aeneas.opam.locked"
 # Keep compiler packages and configuration inside this installation.
@@ -103,7 +104,7 @@ opam init --root="$opam_root" --bare --no-setup --yes
 opam switch create --root="$opam_root" lynx-aeneas ocaml-base-compiler.5.3.0 --yes
 opam install --root="$opam_root" --switch=lynx-aeneas \
   "$aeneas_source/src" --deps-only --locked --yes
-aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+native-loops-v1+effectful-calls-v1
+aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+native-loops-v1+effectful-calls-v1+partial-discriminants-v1
 AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aeneas -- \
   dune build --root "$aeneas_source/src" main.exe
 cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
@@ -113,5 +114,6 @@ printf '%s\n' "aeneas=$aeneas_version" \
   'aeneas_lean=tuple-back-projections-v1' \
   'aeneas_loops=native-loops-v1' \
   'aeneas_effects=effectful-calls-v1' \
+  'aeneas_discriminants=partial-discriminants-v1' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"
