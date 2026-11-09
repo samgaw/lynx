@@ -1,6 +1,47 @@
 defmodule Lynx.Rust.RootSelectionTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case
   alias Lynx.Rust.RootSelection
+
+  test "invalid options fail while another process holds the preparation lock" do
+    owner = self()
+
+    holder =
+      Task.async(fn ->
+        Lynx.External.with_preparation_lock(fn ->
+          send(owner, :preparation_locked)
+
+          receive do
+            :release -> :ok
+          end
+        end)
+      end)
+
+    try do
+      assert_receive :preparation_locked, 5_000
+
+      checking =
+        Task.async(fn ->
+          for options <- [[root_attribute: true], [unknown_option: true]] do
+            assert_raise ArgumentError, fn ->
+              Lynx.Rust.verify!("/unused", "unused", options)
+            end
+
+            assert_raise ArgumentError, fn ->
+              Lynx.Rustler.prepare!("/unused", "unused", options)
+            end
+          end
+        end)
+
+      try do
+        Task.await(checking, 2_000)
+      after
+        Task.shutdown(checking, :brutal_kill)
+      end
+    after
+      send(holder.pid, :release)
+      Task.shutdown(holder, 2_000)
+    end
+  end
 
   test "attributes are literal qualified Rust paths and invalid values fail before building" do
     assert RootSelection.attribute!(nil) == nil

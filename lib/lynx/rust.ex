@@ -367,10 +367,12 @@ defmodule Lynx.Rust do
   Unsupported recursive/trait combinations fail elaboration.
   """
   def verify!(workspace, package, opts) do
+    validate_options!(opts)
     Lynx.External.with_preparation_lock(fn -> do_verify!(workspace, package, opts) end)
   end
 
-  defp do_verify!(workspace, package, opts) do
+  # Invalid options do not need to wait for an active proof build.
+  defp validate_options!(opts) do
     allowed = [
       :roots,
       :root_attribute,
@@ -393,6 +395,9 @@ defmodule Lynx.Rust do
         do: raise(ArgumentError, "unknown Rust verification option: #{key}")
 
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
+  end
+
+  defp do_verify!(workspace, package, opts) do
     roots = Keyword.fetch!(opts, :roots)
     tools = opts[:tools] || System.fetch_env!("LYNX_AENEAS_DIR")
     prefix = Keyword.get(opts, :module_prefix, "Native.Extraction")
