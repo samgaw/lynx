@@ -88,3 +88,8 @@ pub fn optional_flag(value: Option<bool>) -> bool {
 pub fn replace_first_i64(input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
     experiment_core::collections::replace_first_i64(input, value)
 }
+
+/// Uses the core ordering policy across the workspace boundary.
+pub fn order_pair(left: u64, right: u64) -> (u64, u64) {
+    experiment_core::order_pair(left, right)
+}

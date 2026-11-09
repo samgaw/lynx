@@ -5,6 +5,54 @@ defmodule Lynx.Rustler.EncoderModels do
   def resolve(
         %{
           "body" => "Opaque",
+          "src" => "Normal",
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["rustler", 0]},
+              %{"Ident" => ["types", 0]},
+              %{"Ident" => ["tuple", 0]},
+              %{"Ident" => ["make_tuple", 0]}
+            ]
+          }
+        } = function,
+        translated,
+        refs
+      ) do
+    ctx = context(translated, refs)
+    params = expand(function["generics"], ctx)
+    signature = expand(function["signature"], ctx)
+
+    with %{"Adt" => _} = env <- named(ctx, ~w(rustler env Env), [region(0)], []),
+         %{"Adt" => _} = input_term <- named(ctx, ~w(rustler term Term), [region(2)], []),
+         %{"Adt" => _} = output_term <- named(ctx, ~w(rustler term Term), [region(0)], []),
+         true <- Enum.map(params["regions"], & &1["index"]) == [0, 1, 2],
+         true <-
+           params["types"] == [] and params["const_generics"] == [] and
+             params["trait_clauses"] == [] and params["trait_type_constraints"] == [],
+         true <- params["outlives"] == [outlives(region(2), region(1))],
+         true <-
+           signature["abi"] == "Rust" and signature["is_unsafe"] == false and
+             signature["is_variadic"] == false,
+         true <-
+           signature["inputs"] == [env, reference(region(1), %{"Slice" => [input_term, nil]})],
+         true <- signature["output"] == output_term do
+      %{
+        rust_name: "rustler::types::tuple::make_tuple",
+        lean: "Lynx.Rustler.Encoding.makeTuple",
+        builtin: false,
+        can_fail: true,
+        lift: false,
+        label:
+          "Rustler tuple construction FFI model: ordered term slice and 16777215-field verification limit; native environment, handles, allocation and Rustler implementation unverified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  def resolve(
+        %{
+          "body" => "Opaque",
           "item_meta" => %{
             "name" =>
               [

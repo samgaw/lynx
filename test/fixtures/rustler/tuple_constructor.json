@@ -1,0 +1,212 @@
+{
+  "function": {
+    "def_id": 22,
+    "body": "Opaque",
+    "src": "Normal",
+    "generics": {
+      "regions": [
+        {
+          "index": 0,
+          "name": "'a",
+          "variance": "Invariant",
+          "mutability": "Unknown",
+          "late_bound": true
+        },
+        {
+          "index": 1,
+          "name": null,
+          "variance": "Covariant",
+          "mutability": "Unknown",
+          "late_bound": true
+        },
+        {
+          "index": 2,
+          "name": null,
+          "variance": "Invariant",
+          "mutability": "Unknown",
+          "late_bound": true
+        }
+      ],
+      "types": [],
+      "const_generics": [],
+      "trait_clauses": [],
+      "outlives": [
+        {
+          "regions": [],
+          "outlives": [],
+          "skip_binder": [
+            {
+              "Var": {
+                "Free": 2
+              }
+            },
+            {
+              "Var": {
+                "Free": 1
+              }
+            }
+          ]
+        }
+      ],
+      "trait_type_constraints": []
+    },
+    "signature": {
+      "is_unsafe": false,
+      "abi": "Rust",
+      "is_variadic": false,
+      "inputs": [
+        {
+          "Adt": {
+            "id": 7,
+            "generics": {
+              "regions": [
+                {
+                  "Var": {
+                    "Free": 0
+                  }
+                }
+              ],
+              "types": [],
+              "const_generics": [],
+              "trait_refs": []
+            },
+            "builtin": null
+          }
+        },
+        {
+          "Ref": [
+            {
+              "Var": {
+                "Free": 1
+              }
+            },
+            {
+              "Slice": [
+                {
+                  "Adt": {
+                    "id": 8,
+                    "generics": {
+                      "regions": [
+                        {
+                          "Var": {
+                            "Free": 2
+                          }
+                        }
+                      ],
+                      "types": [],
+                      "const_generics": [],
+                      "trait_refs": []
+                    },
+                    "builtin": null
+                  }
+                },
+                null
+              ]
+            },
+            "Shared"
+          ]
+        }
+      ],
+      "output": {
+        "Adt": {
+          "id": 8,
+          "generics": {
+            "regions": [
+              {
+                "Var": {
+                  "Free": 0
+                }
+              }
+            ],
+            "types": [],
+            "const_generics": [],
+            "trait_refs": []
+          },
+          "builtin": null
+        }
+      }
+    },
+    "item_meta": {
+      "name": [
+        {
+          "Ident": [
+            "rustler",
+            0
+          ]
+        },
+        {
+          "Ident": [
+            "types",
+            0
+          ]
+        },
+        {
+          "Ident": [
+            "tuple",
+            0
+          ]
+        },
+        {
+          "Ident": [
+            "make_tuple",
+            0
+          ]
+        }
+      ]
+    }
+  },
+  "translated": {
+    "type_decls": [
+      {
+        "def_id": 7,
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "rustler",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "env",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Env",
+                0
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "def_id": 8,
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "rustler",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "term",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Term",
+                0
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
