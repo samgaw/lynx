@@ -131,6 +131,18 @@ pub fn recover_log(file: &mut File, max_records: usize) -> io::Result<Vec<u16>> 
     }
 }
 
+/// Reopens a named log, recovers its bounded prefix and closes the owned file.
+///
+/// # Errors
+/// Propagates opening, seeking and reading errors. Closing does not acknowledge
+/// durability or repair an invalid suffix.
+pub fn reopen_then_recover(path: &str, max_records: usize) -> io::Result<Vec<u16>> {
+    let mut file = open_readwrite(path)?;
+    let result = recover_log(&mut file, max_records);
+    drop(file);
+    result
+}
+
 /// Changes file length and acknowledges it only after successful synchronization.
 ///
 /// # Errors

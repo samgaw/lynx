@@ -83,6 +83,37 @@ defmodule Lynx.Rust.NativeBorrowsTest do
     end
   end
 
+  test "checks loop safety without assuming termination or accepting invalid exits" do
+    statement = &%{"kind" => &1}
+    loop = fn kinds -> %{"Loop" => %{"statements" => Enum.map(kinds, statement)}} end
+    panic = %{"Panic" => %{}}
+    call = %{"Call" => %{"call" => %{"func" => %{"Regular" => %{"kind" => %{"Fun" => 2}}}}}}
+
+    function = fn id, kinds ->
+      %{
+        "def_id" => id,
+        "body" => %{"Structured" => %{"body" => %{"statements" => Enum.map(kinds, statement)}}}
+      }
+    end
+
+    for {kinds, expected} <- [
+          {[loop.([%{"Continue" => 0}])], true},
+          {[loop.([%{"Break" => 0}]), "Return"], true},
+          {[loop.([loop.([%{"Break" => 1}])]), "Return"], true},
+          {[loop.([%{"Break" => 1}])], false},
+          {[loop.([%{"Continue" => -1}])], false},
+          {[%{"Break" => 0}], false},
+          {[loop.([panic])], false},
+          {[loop.([%{"Continue" => 0}]), panic], false},
+          {[loop.([%{"Drop" => %{}}])], false},
+          {[loop.([call])], false}
+        ] do
+      # A callee cannot inherit permission to break out of its caller's loop.
+      functions = [function.(1, kinds), function.(2, [%{"Break" => 0}])]
+      assert MapSet.member?(NativeBorrows.nonpanicking_calls(functions, %{}), 1) == expected
+    end
+  end
+
   test "ignores only unreachable tails after returns on every structured branch" do
     returned = %{"statements" => [%{"kind" => "Return"}]}
     fallthrough = %{"statements" => [%{"kind" => %{"StorageDead" => 0}}]}

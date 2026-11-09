@@ -62,4 +62,80 @@ theorem caller_every_run
     (terminal : Concurrent.Terminal last outcome) : retained last = true :=
   Concurrent.checkPost_sound caller_checked run terminal
 
+@[expose] def scanScript : Term := action "seek" 0 zeros4
+  (action "read" 1 zeros4 (action "read" 1 zeros4
+    (action "read" 1 zeros4 (action "read" 1 zeros4
+      (action "read" 0 zeros4 (action "close" 0 zeros4 .nil))))))
+@[expose] def scanInitial : Environment := {
+  nativeRefCounter := 1
+  nativeHeap := [
+    (0,namespaceTypeName,encodeNamespace ⟨names,names,[],opening scanScript⟩),
+    (1,inodeTypeName,encode ⟨before,before,0,.nil⟩)] }
+
+/-- Recovery must return the decoded record and close its owned descriptor
+without changing either visible or durable bytes. -/
+@[expose] def recovered
+    (config : Concurrent.Config (core.result.Result (alloc.vec.Vec U16) NativeIoError)) : Bool :=
+  match config.outcome with
+  | .ok (.Ok values) =>
+    let env := match config with
+      | .start env _ => env
+      | .running state .. => state.nativeView []
+    match inode 1 env with
+    | some file =>
+      values.val == [13#u16] && file.visible.data == before.data &&
+      file.durable.data == before.data && env.nativeRefCounter == 2 &&
+      (lookup ⟨2⟩ env).isNone
+    | none => false
+  | _ => false
+
+set_option maxRecDepth 8192 in
+set_option maxHeartbeats 8000000 in
+theorem recovery_checked : Concurrent.checkPost recovered 256
+    (.start scanInitial (reopen_then_recover (toStr "journal") 2#usize)) = true := by
+  set_option cbv.maxSteps 8000000 in cbv
+
+theorem recovery_every_run
+    (run : Concurrent.Run
+      (.start scanInitial (reopen_then_recover (toStr "journal") 2#usize)) events last)
+    (terminal : Concurrent.Terminal last outcome) : recovered last = true :=
+  Concurrent.checkPost_sound recovery_checked run terminal
+
+@[expose] def readFailureScript : Term := action "seek" 0 zeros4
+  (.cons (.tuple #[.atom "read",.atom "error",.integer 7,.bitstring zeros4 0])
+    (action "close" 0 zeros4 .nil))
+@[expose] def failureInitial : Environment := {
+  nativeRefCounter := 1
+  nativeHeap := [
+    (0,namespaceTypeName,encodeNamespace ⟨names,names,[],opening readFailureScript⟩),
+    (1,inodeTypeName,encode ⟨before,before,0,.nil⟩)] }
+
+/-- A real parser error must propagate after closing the caller's file. -/
+@[expose] def rejected
+    (config : Concurrent.Config (core.result.Result (alloc.vec.Vec U16) NativeIoError)) : Bool :=
+  match config.outcome with
+  | .ok (.Err error) =>
+    let env := match config with
+      | .start env _ => env
+      | .running state .. => state.nativeView []
+    match inode 1 env with
+    | some file =>
+      error.identity == 7 && file.visible.data == before.data &&
+      file.durable.data == before.data && env.nativeRefCounter == 2 &&
+      (lookup ⟨2⟩ env).isNone
+    | none => false
+  | _ => false
+
+set_option maxRecDepth 8192 in
+set_option maxHeartbeats 8000000 in
+theorem failure_checked : Concurrent.checkPost rejected 256
+    (.start failureInitial (reopen_then_recover (toStr "journal") 2#usize)) = true := by
+  set_option cbv.maxSteps 8000000 in cbv
+
+theorem failure_every_run
+    (run : Concurrent.Run
+      (.start failureInitial (reopen_then_recover (toStr "journal") 2#usize)) events last)
+    (terminal : Concurrent.Terminal last outcome) : rejected last = true :=
+  Concurrent.checkPost_sound failure_checked run terminal
+
 end Record.OpenOptionsProperties

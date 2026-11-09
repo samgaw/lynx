@@ -60,6 +60,7 @@ defmodule Lynx.Rust.CollectionModels do
         vec_owned_method: method,
         can_fail: method == "push",
         lift: method == "push",
+        native_cutoff_only: method == "push",
         label:
           "Aeneas logical Vec::#{method} model; push verifies at most 262144 scalar elements; exceeding this is verification exhaustion, not Rust rejection; capacity observation, allocation failures and native allocator correctness unverified"
       }
@@ -110,6 +111,27 @@ defmodule Lynx.Rust.CollectionModels do
       theorem push_cutoff {α : Type} (values : alloc.vec.Vec α) (value : α)
           (outside : ¬values.val.length < 262144) : push values value = RustM.fail .undef := by
         simp only [push, if_neg outside]
+      @[cbv_eval] theorem push_eq {α : Type} (values : alloc.vec.Vec α) (value : α) :
+          push values value =
+            if bounded : values.val.length < 262144 then
+              RustM.ok (alloc.vec.Vec.from (values.val ++ [value]) (by
+                simp only [List.length_append, List.length_singleton]
+                scalar_tac))
+            else RustM.fail .undef := by
+        split
+        · rename_i bounded
+          have capacity : values.val.length + 1 ≤ U32.max := by scalar_tac
+          simp [push, alloc.vec.Vec.push, bounded, capacity]
+        · rename_i outside
+          exact push_cutoff values value outside
+      theorem push_outcome {α : Type} (values : alloc.vec.Vec α) (value : α) :
+          (∃ next, push values value = RustM.ok next) ∨
+            push values value = RustM.fail .undef := by
+        by_cases bounded : values.val.length < 262144
+        · have capacity : values.val.length + 1 ≤ U32.max := by scalar_tac
+          left
+          simp [push, alloc.vec.Vec.push, bounded, capacity]
+        · exact Or.inr (push_cutoff values value bounded)
       end #{module}
       """)
 
