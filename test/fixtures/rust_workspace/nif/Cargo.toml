@@ -20,6 +20,7 @@ protocol = ["binary"]
 collections = []
 unsupported-binary-method = ["binary"]
 custom-encoder = []
+custom-decoder = []
 
 [dependencies]
 experiment-analysis = { path = "../analysis" }

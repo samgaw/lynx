@@ -5,7 +5,13 @@ defmodule Lynx.Rust.CallModels do
   # models, never proofs of foreign function implementations.
   def resolve(functions, translated, refs, enabled, execution \\ :pure) do
     for key <- enabled,
-        key not in [:rustler_binary_as_slice, :rustler_encoders, :native_wakers, :native_files],
+        key not in [
+          :rustler_binary_as_slice,
+          :rustler_encoders,
+          :rustler_decoders,
+          :native_wakers,
+          :native_files
+        ],
         do: raise(ArgumentError, "unknown external Rust call model: #{inspect(key)}")
 
     for function <- functions,
@@ -42,6 +48,9 @@ defmodule Lynx.Rust.CallModels do
             Lynx.Rust.FormatModels.resolve(function, translated, refs) ||
             if(:rustler_encoders in enabled,
               do: Lynx.Rustler.EncoderModels.resolve(function, translated, refs)
+            ) ||
+            if(:rustler_decoders in enabled,
+              do: Lynx.Rustler.DecoderModels.resolve(function, translated, refs)
             ) ||
             match_function(function, translated, refs, enabled),
         model != nil,
