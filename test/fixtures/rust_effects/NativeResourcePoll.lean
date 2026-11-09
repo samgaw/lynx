@@ -17,7 +17,7 @@ theorem ready_drop (amount : U64) :
 
 /-- This compiled Rustler function constructs its own standard Context and
 completes the actual compiler future, including its real destructor. -/
-theorem add_contract (resource : NativeResourceArc CounterResource) (amount : U64) :
+@[cbv_eval] theorem add_contract (resource : NativeResourceArc CounterResource) (amount : U64) :
     __ADD__ resource amount = (do
       let changed ← resource_locked_increment resource amount
       resource_release resource
@@ -81,7 +81,7 @@ theorem finish_contract (resource : NativeResourceArc CounterResource) (amount :
 
 /-- Compiled immediate and twice-polled exports have the same shared-state effect
 under their actual standard no-op contexts. This is not an executor progress law. -/
-theorem resume_contract (resource : NativeResourceArc CounterResource) (amount : U64) :
+@[cbv_eval] theorem resume_contract (resource : NativeResourceArc CounterResource) (amount : U64) :
     __RESUME__ resource amount = __ADD__ resource amount := by
   rw [add_contract]
   simp only [__RESUME__, finish_contract, NativeM.ok, monadLift_self,
