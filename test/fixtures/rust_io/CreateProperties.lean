@@ -38,7 +38,7 @@ theorem create_next {α : Type} (script rest : Term)
       encodeNamespace,encodeNames,storeNamespace,created,names,
       namespaceTypeName,writableHandleTypeName,inodeTypeName,encodeHandle]
   simp only [create_fresh,io_core.create_new_file,monadLift_self,createNew,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.ok_bind]
 
 theorem pending_name (script rest : Term) :
@@ -73,7 +73,7 @@ theorem existing_success_exhausts (script rest : Term) :
       encodeNamespace,encodeNames,names,List.eraseDups_cons,
       namespaceTypeName,inodeTypeName]
   simp only [create_fresh,io_core.create_new_file,monadLift_self,createNew]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.error_apply]
 
 /-- An admitted exclusive-creation error preserves the pre-existing inode and
@@ -89,7 +89,7 @@ theorem existing_error (error : Nat) (rest : Term) :
       encodeNamespace,encodeNames,replaceNamespaceScript,names,List.eraseDups_cons,
       namespaceTypeName,inodeTypeName]
   simp only [create_fresh,io_core.create_new_file,monadLift_self,createNew]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.ok_apply]
 
 /-- The newly allocated read/write capability is usable by the actual low-level
@@ -111,7 +111,7 @@ theorem write_created_next {α : Type} (data : Slice U8) (script rest : Term)
       some (.ok (.Ok count,⟨2⟩), store ⟨2⟩ after (created script rest)) := by
     simp [-getHandle,pollWrite,found,ready,step,writable]
   simp only [io_core.write_once,monadLift_self,NativeFile.write,Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.ok_bind]
 
 /-- The namespace capacity is a verification cutoff, not an invented OS error. -/
@@ -124,7 +124,7 @@ theorem namespace_bound (entries : Array Term) (script : Term) (large : 1024 < e
     simp [env,pollCreateNew,path_bytes,valid_name,namespaceSnapshot,namespaceTable,
       namespaceTypeName,large]
   simp only [create_fresh,io_core.create_new_file,monadLift_self,createNew]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.error_apply]
 
 end Create.Properties
