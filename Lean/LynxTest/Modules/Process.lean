@@ -88,6 +88,8 @@ theorem reference_type_guard (input : Term) :
     «is_reference/1» input = .ok Term.true ↔ ∃ id, input = .reference id := by
   cases input <;> simp [«is_reference/1», Term.true, Term.false]
 
+example (id : Nat) : «is_reference/1» (.nativeReference id) = .ok Term.true := by rfl
+
 theorem make_ref_is_effectful :
     ¬ Result.IsReadOnly («make_ref/0» noFunctions) ∧ ¬ Result.IsPure («make_ref/0» noFunctions) := by
   constructor

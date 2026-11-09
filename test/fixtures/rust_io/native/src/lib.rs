@@ -26,6 +26,43 @@ pub mod shared_log {
     #[rustler::resource_impl]
     impl rustler::Resource for LogResource {}
 
+    /// Recover and synchronize the existing log before returning a writable resource.
+    ///
+    /// # Errors
+    /// Propagates opening, reading, truncation and synchronization errors.
+    ///
+    /// # Panics
+    /// Panics if Rustler has not registered the resource type.
+    pub fn reopen(max_records: usize) -> io::Result<Option<rustler::ResourceArc<LogResource>>> {
+        let mut file = io_protocol::open_readwrite("journal")?;
+        let ready = match io_protocol::repair_log(&mut file, max_records) {
+            Ok(Some(_values)) => true,
+            Ok(None) => false,
+            Err(error) => {
+                drop(file);
+                return Err(error);
+            }
+        };
+        if ready {
+            Ok(Some(rustler::ResourceArc::new(LogResource {
+                file: Mutex::new(file),
+            })))
+        } else {
+            drop(file);
+            Ok(None)
+        }
+    }
+    /// Reopen and repair a log before exposing its shared writable resource.
+    ///
+    /// # Panics
+    /// Panics on I/O failure, the record limit, or an unregistered resource type.
+    #[rustler::nif(name = "log_reopen", schedule = "DirtyIo")]
+    pub fn reopen_nif(max_records: u32) -> rustler::ResourceArc<LogResource> {
+        reopen(max_records as usize)
+            .expect("repair existing log")
+            .expect("recovery record limit reached")
+    }
+
     /// Append under the shared mutex, including any required short-write rollback.
     ///
     /// # Errors
