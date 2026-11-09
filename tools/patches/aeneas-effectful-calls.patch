@@ -1,30 +1,15 @@
 --- a/src/Config.ml
 +++ b/src/Config.ml
-@@ -24,6 +24,12 @@
+@@ -24,6 +24,9 @@
  (** Optional result monad for effectful Lean models. The target module provides
      [ok], [fail], [massert] and [lift]; standard RustM calls require a MonadLift. *)
  let lean_result_monad : string option ref = ref None
 +
 +(** Stateful result monads cannot share or discard effectful computations. *)
-+let preserve_effectful_calls = ref false
-+
-+let effectful_result_monad () =
-+  !preserve_effectful_calls || Option.is_some !lean_result_monad
++let effectful_result_monad () = Option.is_some !lean_result_monad
  
  let set_lean_result_monad (name : string) : unit =
    let identifier part =
---- a/src/Main.ml
-+++ b/src/Main.ml
-@@ -100,6 +100,9 @@
-       ( "-assertion-unwind-input",
-         Arg.Set assertion_unwind_input,
-         "Accept explicit Aeneas-compatible flags with assertion resugaring disabled" );
-+      ( "-preserve-effectful-calls",
-+        Arg.Set preserve_effectful_calls,
-+        " Preserve repeated and unused monadic computations for stateful models" );
-       ( "-lean-result-monad",
-         Arg.String set_lean_result_monad,
-         " Select the result monad namespace for the Lean backend" );
 --- a/src/pure/PureMicroPasses.ml
 +++ b/src/pure/PureMicroPasses.ml
 @@ -56,7 +56,9 @@
