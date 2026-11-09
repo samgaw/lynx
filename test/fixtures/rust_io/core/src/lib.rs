@@ -78,6 +78,17 @@ pub fn open_readonly(path: &str) -> io::Result<File> {
     File::open(path)
 }
 
+/// Opens an existing log for recovery and subsequent writes without truncation.
+///
+/// # Errors
+/// Propagates pathname, permission and operating-system errors.
+pub fn open_readwrite(path: &str) -> io::Result<File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+}
+
 /// Creates a fresh readable and writable file without replacing an existing name.
 /// # Errors
 /// Propagates the operating system's exclusive-creation error.

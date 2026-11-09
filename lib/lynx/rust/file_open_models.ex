@@ -5,7 +5,55 @@ defmodule Lynx.Rust.FileOpenModels do
   # Erasing AsRef is justified only by the concrete standard &str dictionary.
   # Custom conversions, owned paths and generic unresolved callers stay closed.
   def resolve(f, t, refs),
-    do: opening(f, t, refs) || renaming(f, t, refs) || conversion(f, t, refs)
+    do:
+      builder(f, t, refs) || opening(f, t, refs) || renaming(f, t, refs) || conversion(f, t, refs)
+
+  defp options(t) do
+    case named(t, "type_decls", ~w(std fs OpenOptions)) do
+      %{"src" => "Normal", "kind" => "Opaque", "needs_drop" => false} = type ->
+        if params?(type["generics"], 0, 0, 0), do: type
+
+      _ ->
+        nil
+    end
+  end
+
+  defp builder(f, t, refs) do
+    with %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false} = sig
+         } <- f,
+         %{"def_id" => id} <- options(t),
+         [a, b, %{"Impl" => %{"Ty" => parent}}, %{"Ident" => [operation, 0]}] <-
+           f["item_meta"]["name"],
+         true <- [a, b] == name(~w(std fs)),
+         true <- parent["kind"] == "InherentImplBlock" and params?(parent["params"], 0, 0, 0),
+         true <- CallModels.expand(parent["skip_binder"], refs) == adt(id),
+         true <- f["generics"]["outlives"] == [],
+         input = CallModels.expand(sig["inputs"], refs),
+         output = CallModels.expand(sig["output"], refs),
+         true <-
+           (operation == "new" and params?(f["generics"], 0, 0, 0) and input == [] and
+              output == adt(id)) or
+             (operation in ["read", "write"] and params?(f["generics"], 1, 0, 0) and
+                input == [mutable(0, adt(id)), %{"Scalar" => "Bool"}] and
+                output == mutable(0, adt(id))) do
+      %{
+        rust_name: "std::fs::{std::fs::OpenOptions}::" <> operation,
+        lean: "Lynx.NativeFile.OpenOptions." <> operation,
+        builtin: false,
+        can_fail: false,
+        lift: false,
+        native_cutoff_only: true,
+        native_open_options_type: id,
+        label:
+          "Standard drop-free OpenOptions builder: new starts with read/write disabled; setters preserve the mutable self borrow and actual boolean flags; only locally constructed builders and read-only/read-write existing-file opens admitted; other flags, OS extensions and incoming builder arguments rejected; std/OS/FFI correspondence unverified"
+      }
+    else
+      _ -> nil
+    end
+  end
 
   defp renaming(f, t, refs) do
     with %{
@@ -68,35 +116,62 @@ defmodule Lynx.Rust.FileOpenModels do
          trait when not is_nil(trait) <- named(t, "trait_decls", ~w(core convert AsRef)),
          true <- params?(trait["generics"], 0, 2, 0),
          true <- trait["types"] == [] and trait["consts"] == [] and length(trait["methods"]) == 1,
-         true <- params?(p, 0, 1, 1) and p["outlives"] == [],
          [clause] <- p["trait_clauses"],
          true <- clause?(clause, trait["def_id"], [variable(0), adt(path["def_id"])], refs),
          [a, b, %{"Impl" => %{"Ty" => parent}}, %{"Ident" => [operation, 0]}] <-
            f["item_meta"]["name"],
-         true <- operation in ["open", "create_new"],
          true <- [a, b] == name(~w(std fs)),
          true <- parent["kind"] == "InherentImplBlock" and params?(parent["params"], 0, 0, 0),
-         true <- CallModels.expand(parent["skip_binder"], refs) == adt(file),
-         true <- CallModels.expand(sig["inputs"], refs) == [variable(0)],
+         receiver = CallModels.expand(parent["skip_binder"], refs),
+         builder = options(t),
+         builder? = builder != nil and receiver == adt(builder["def_id"]),
+         true <-
+           if(builder?,
+             do:
+               operation == "open" and params?(p, 1, 1, 1) and
+                 CallModels.expand(sig["inputs"], refs) == [reference(0, receiver), variable(0)],
+             else:
+               operation in ["open", "create_new"] and receiver == adt(file) and
+                 params?(p, 0, 1, 1) and CallModels.expand(sig["inputs"], refs) == [variable(0)]
+           ),
+         true <- p["outlives"] == [],
          %{"Adt" => %{"id" => result, "builtin" => nil, "generics" => out}} <-
            CallModels.expand(sig["output"], refs),
          true <- out == args([adt(file), adt(error["def_id"])]),
          true <- LLBC.result_type?(result, %{translated: t, references: refs}) do
-      %{
-        rust_name: "std::fs::{std::fs::File}::" <> operation,
+      model = %{
+        rust_name:
+          "std::fs::{std::fs::" <>
+            if(builder?, do: "OpenOptions", else: "File") <> "}::" <> operation,
         lean:
-          "Lynx.NativeFile." <> if(operation == "open", do: "openReadOnly", else: "createNew"),
+          "Lynx.NativeFile." <>
+            if(builder?,
+              do: "OpenOptions.openFile",
+              else: if(operation == "open", do: "openReadOnly", else: "createNew")
+            ),
         builtin: false,
         can_fail: true,
         lift: true,
         keep_params: [false],
         keep_trait_clauses: [false],
         native_file_open: {path["def_id"], trait["def_id"]},
+        native_file_open_regions: if(builder?, do: 1, else: 0),
         native_file_types: {file, error["def_id"]},
         native_cutoff_only: true,
         label:
           "Bounded File::#{operation}<&str> model (1024 names and pending namespace snapshots): concrete standard AsRef<Path> dictionaries validated before erasure; shared inode contents and independent handle offsets; open grants read-only access to regular files or a separate current-directory capability for the literal dot path; exclusive creation grants read/write access to a fresh empty inode and records a pending, unsynchronized namespace change; failed exclusive creation leaves namespace/inode contents unchanged (std/OS model assumption); explicit namespace and OS outcomes; std/path/OS/FFI correspondence unverified; custom AsRef, symlinks and unsupported path forms rejected"
       }
+
+      if builder? do
+        model
+        |> Map.put(:native_open_options_type, builder["def_id"])
+        |> Map.put(
+          :label,
+          "Bounded OpenOptions::open<&str> model: concrete standard AsRef<Path> dictionaries and locally constructed drop-free builder validated; read-only mode preserves the existing opener semantics; read/write opens an existing regular inode with both permissions without creating or truncating it; independent cursor and shared inode bytes; failed opens preserve inode and namespace contents; write-only and other flags exhaust or reject verification; std/path/permissions/OS/FFI correspondence unverified"
+        )
+      else
+        model
+      end
     else
       _ -> nil
     end
@@ -107,6 +182,7 @@ defmodule Lynx.Rust.FileOpenModels do
 
     Enum.reduce_while(functions, {:ok, %{}}, fn f, {:ok, found} ->
       try do
+        reject_incoming_options!(f, models, t, refs)
         deps = calls!(f["body"], models, t, refs, traits)
         {:cont, {:ok, merge(found, deps)}}
       rescue
@@ -116,17 +192,66 @@ defmodule Lynx.Rust.FileOpenModels do
   end
 
   def type_models(calls, prefix) do
-    if Enum.any?(calls, fn {_, m} -> m[:native_file_open] || m[:native_file_rename] end),
-      do: [
-        %{
-          rust: "std::path::Path",
-          lean: "Aeneas.Std.Str",
-          import: hd(String.split(prefix, ".")) <> ".NativeRuntime",
-          label:
-            "Standard UTF-8 str-backed Path view; only validated standard AsRef<Path> chains may be erased; OS pathname correspondence unverified"
-        }
-      ],
-      else: []
+    paths =
+      if Enum.any?(calls, fn {_, m} -> m[:native_file_open] || m[:native_file_rename] end),
+        do: [
+          %{
+            rust: "std::path::Path",
+            lean: "Aeneas.Std.Str",
+            import: hd(String.split(prefix, ".")) <> ".NativeRuntime",
+            label:
+              "Standard UTF-8 str-backed Path view; only validated standard AsRef<Path> chains may be erased; OS pathname correspondence unverified"
+          }
+        ],
+        else: []
+
+    builders =
+      if Enum.any?(calls, fn {_, m} -> m[:native_open_options_type] end) do
+        [
+          %{
+            rust: "std::fs::OpenOptions",
+            lean: "Lynx.NativeFile.OpenOptions",
+            import: hd(String.split(prefix, ".")) <> ".NativeRuntime",
+            label:
+              "Locally constructed, compiler-confirmed drop-free standard OpenOptions; only read/write flags represented; no incoming builders, custom flags or other opening modes admitted"
+          }
+        ]
+      else
+        []
+      end
+
+    paths ++ builders
+  end
+
+  defp reject_incoming_options!(f, models, t, refs) do
+    ids = for {_, m} <- models, id = m[:native_open_options_type], is_integer(id), do: id
+
+    if ids != [] and
+         Enum.any?(f["signature"]["inputs"], &contains_options?(&1, ids, t, refs, MapSet.new())) do
+      raise ArgumentError,
+            "OpenOptions must be constructed locally; incoming builders and containers holding builders are unsupported"
+    end
+  end
+
+  defp contains_options?(node, ids, t, refs, seen) do
+    case CallModels.expand(node, refs) do
+      %{"Adt" => %{"id" => id, "generics" => g} = adt} ->
+        (adt["builtin"] == nil and id in ids) or contains_options?(g, ids, t, refs, seen) or
+          (adt["builtin"] == nil and not MapSet.member?(seen, id) and
+             case find(t["type_decls"], id) do
+               nil -> false
+               type -> contains_options?(type["kind"], ids, t, refs, MapSet.put(seen, id))
+             end)
+
+      map when is_map(map) ->
+        Enum.any?(Map.values(map), &contains_options?(&1, ids, t, refs, seen))
+
+      list when is_list(list) ->
+        Enum.any?(list, &contains_options?(&1, ids, t, refs, seen))
+
+      _ ->
+        false
+    end
   end
 
   defp calls!(
@@ -163,8 +288,13 @@ defmodule Lynx.Rust.FileOpenModels do
             raise ArgumentError, "rename requires two concrete standard &str path arguments"
         end
 
-      %{native_file_open: {path, trait}} ->
-        case call?(g, path, trait, t, refs, traits) do
+      %{native_file_open: {path, trait}} = model ->
+        regions = Map.get(model, :native_file_open_regions, 0)
+
+        unless is_list(g["regions"]) and length(g["regions"]) == regions,
+          do: raise(ArgumentError, "file opening region argument mismatch")
+
+        case call?(%{g | "regions" => []}, path, trait, t, refs, traits) do
           {:ok, ids} ->
             %{id => ids}
 
@@ -361,6 +491,7 @@ defmodule Lynx.Rust.FileOpenModels do
   defp params?(p, regions, types, clauses),
     do:
       is_map(p) and is_list(p["regions"]) and length(p["regions"]) == regions and
+        Enum.map(p["regions"], & &1["index"]) == Enum.to_list(0..(regions - 1)//1) and
         is_list(p["types"]) and
         Enum.map(p["types"], & &1["index"]) == Enum.to_list(0..(types - 1)//1) and
         p["const_generics"] == [] and is_list(p["trait_clauses"]) and
@@ -392,4 +523,5 @@ defmodule Lynx.Rust.FileOpenModels do
   defp adt(id), do: %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args([])}}
   defp variable(i), do: %{"TypeVar" => %{"Free" => i}}
   defp reference(i, ty), do: %{"Ref" => [%{"Var" => %{"Free" => i}}, ty, "Shared"]}
+  defp mutable(i, ty), do: %{"Ref" => [%{"Var" => %{"Free" => i}}, ty, "Mut"]}
 end
