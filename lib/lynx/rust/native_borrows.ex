@@ -363,6 +363,38 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp statement?(%{"Assign" => [_, %{"UnaryOp" => ["Not", _]}]}, _, _, _), do: true
 
+  # Integer `as` casts truncate or extend bits; they do not raise overflow
+  # panics. Keep their actual typed operation in the extracted implementation.
+  defp statement?(
+         %{
+           "Assign" => [
+             _,
+             %{"UnaryOp" => [%{"Cast" => %{"Scalar" => %{"Integer" => _} = target}}, operand]}
+           ]
+         },
+         functions,
+         _,
+         _
+       ) do
+    source =
+      case operand do
+        %{"Move" => %{"ty" => type}} -> type
+        %{"Copy" => %{"ty" => type}} -> type
+        _ -> nil
+      end
+
+    refs = get_in(functions, [:context, :references]) || %{}
+
+    case CallModels.expand(source, refs) do
+      %{"Scalar" => %{"Integer" => _}} = source ->
+        Lynx.Rust.DropModels.primitive_scalar?(source) and
+          Lynx.Rust.DropModels.primitive_scalar?(%{"Scalar" => target})
+
+      _ ->
+        false
+    end
+  end
+
   defp statement?(%{"Assign" => [_, value]}, _, _, _),
     do: Enum.any?(~w(Use Ref Aggregate Discriminant Len), &Map.has_key?(value, &1))
 

@@ -255,12 +255,10 @@ theorem repair_malformed (file : NativeFile) (env : Environment)
     omega
   rw [cast]
   simp only [Result.ok_bind]
-  have multiply : (U64.ofNatCore values.length (by simp only [UScalarTy.numBits]; omega) * 4#u64 : RustM U64) =
-      RustM.ok (U64.ofNatCore (4 * values.length) (by simp only [UScalarTy.numBits]; omega)) := by
-    have productBound : 4 * values.length < 18446744073709551616 := by omega
-    change UScalar.mul _ _ = _
-    simp [UScalar.mul, UScalar.tryMk, UScalar.tryMkOpt, UScalar.check_bounds,
-      U64.ofNatCore, productBound, RustM.ofOption, Nat.mul_comm]
+  have multiply : U64.checked_mul (U64.ofNatCore values.length (by simp only [UScalarTy.numBits]; omega)) 4#u64 =
+      some (U64.ofNatCore (4 * values.length) (by simp only [UScalarTy.numBits]; omega)) := by
+    apply NativeM.checkedMulU64_of_val
+    simp [U64.ofNatCore, Nat.mul_comm]
   rw [multiply]
   simp only [NativeM.monadLift_eq, NativeM.fromRust_ok, Result.ok_bind]
   have resizedBytes : resize data (4 * values.length) = disk (logBytes values) := by

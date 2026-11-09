@@ -70,6 +70,58 @@ destruction and unwind require separate models before that path is supported. -/
 @[simp] theorem expectOk_error {T E : Type} (error : E) (message : Str) :
     expectOk (.Err error : core.result.Result T E) message = .error .exhausted := rfl
 
+/-- Successful Option extraction transfers its actual payload. None cannot
+establish a Rust outcome while panic formatting, hooks and unwind are unsupported. -/
+@[expose] def expectSome {T : Type} (value : Option T) (_message : Str) : NativeM T :=
+  match value with
+  | some value => .ok value
+  | none => .error .exhausted
+
+@[simp] theorem expectSome_some {T : Type} (value : T) (message : Str) :
+    expectSome (some value) message = .ok value := rfl
+
+@[simp] theorem expectSome_none {T : Type} (message : Str) :
+    expectSome (none : Option T) message = .error .exhausted := rfl
+
+@[cbv_eval] theorem castU32Usize_eq (value : U32) : UScalar.cast .Usize value =
+    Usize.ofNatCore value.val (by cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits] <;> scalar_tac) := by
+  apply UScalar.eq_of_val_eq
+  cases System.Platform.numBits_eq <;> simp_all [UScalar.cast_val_eq, UScalarTy.numBits]
+  all_goals scalar_tac
+@[cbv_eval] theorem castUsizeU64_eq (value : Usize) : UScalar.cast .U64 value =
+    U64.ofNatCore value.val (by
+      have bound := value.hmax
+      cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits] <;> omega) := by
+  apply UScalar.eq_of_val_eq
+  have bound := value.hmax
+  simp only [UScalar.cast_val_eq]
+  cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits]
+  all_goals omega
+theorem checkedMulU64_of_val (left right result : U64)
+    (value : result.val = left.val * right.val) :
+    U64.checked_mul left right = some result := by
+  have spec := U64.checked_mul_bv_spec left right
+  cases outcome : U64.checked_mul left right with
+  | none => simp only [outcome] at spec; scalar_tac
+  | some actual =>
+    simp only [outcome] at spec
+    congr 1
+    apply UScalar.eq_of_val_eq
+    exact spec.2.1.trans value.symm
+@[cbv_eval] theorem checkedMulU64_eq (left right : U64) : U64.checked_mul left right =
+    if bounded : left.val * right.val < 18446744073709551616 then
+      some (U64.ofNatCore (left.val * right.val) bounded)
+    else none := by
+  split
+  · apply checkedMulU64_of_val
+    rfl
+  · rename_i outside
+    have spec := U64.checked_mul_bv_spec left right
+    cases outcome : U64.checked_mul left right with
+    | none => rfl
+    | some actual => simp only [outcome] at spec; scalar_tac
+
+
 @[expose] def massert (condition : Prop) [Decidable condition] : NativeM Unit :=
   if condition then Result.ok () else fail .panic
 

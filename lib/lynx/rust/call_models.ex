@@ -13,6 +13,7 @@ defmodule Lynx.Rust.CallModels do
           if(execution == :runtime,
             do:
               Lynx.Rust.ResultModels.resolve_native_expect(function, translated, refs) ||
+                Lynx.Rust.OptionModels.resolve(function, translated, refs) ||
                 if(:native_wakers in enabled,
                   do: Lynx.Rust.FutureModels.resolve(function, translated, refs)
                 ) ||
@@ -91,8 +92,9 @@ defmodule Lynx.Rust.CallModels do
            %{"Ident" => ["core", 0]},
            %{"Ident" => ["num", 0]},
            %{"Impl" => %{"Ty" => %{"skip_binder" => parent}}},
-           %{"Ident" => ["checked_add", 0]}
-         ], [scalar, scalar], %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}} ->
+           %{"Ident" => [operation, 0]}
+         ], [scalar, scalar], %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}}
+        when operation in ["checked_add", "checked_mul"] ->
           if scalar == %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}} and
                parent_type(parent, refs) == scalar and generic_shape?(generics, 0, 0) and
                args == %{
@@ -133,13 +135,13 @@ defmodule Lynx.Rust.CallModels do
                    }
                end) do
             %{
-              rust_name: "core::num::{u64}::checked_add",
-              lean: "Aeneas.Std.U64.checked_add",
+              rust_name: "core::num::{u64}::#{operation}",
+              lean: "Aeneas.Std.U64.#{operation}",
               builtin: true,
               can_fail: false,
               lift: true,
               label:
-                "Aeneas u64 checked addition model; overflow returns None; Rust core implementation not verified"
+                "Aeneas u64 #{operation} model; overflow returns None; Rust core implementation not verified"
             }
           end
 
@@ -235,7 +237,7 @@ defmodule Lynx.Rust.CallModels do
          ],
          _
        )
-       when operation in ["saturating_add", "checked_add"],
+       when operation in ["saturating_add", "checked_add", "checked_mul"],
        do: true
 
   defp candidate?(
