@@ -2,7 +2,7 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct Scratch(PathBuf);
 
@@ -13,16 +13,19 @@ impl Drop for Scratch {
 }
 
 fn scratch() -> io::Result<Scratch> {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("test clock must be after the Unix epoch")
-        .as_nanos();
-    let scratch = Scratch(std::env::temp_dir().join(format!(
-        "lynx-resource-recovery-{}-{nonce}",
-        std::process::id()
-    )));
-    fs::create_dir(&scratch.0)?;
-    Ok(scratch)
+    static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let nonce = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "lynx-resource-recovery-{}-{nonce}",
+            std::process::id()
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(Scratch(path)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[test]
