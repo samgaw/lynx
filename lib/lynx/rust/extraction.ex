@@ -248,7 +248,8 @@ defmodule Lynx.Rust.Extraction do
         rustler_atom_caches: {caches, module}
       )
 
-    Lynx.Rust.FormatModels.validate_library!(audit.external_calls, tools)
+    audit = Lynx.Rust.FormatModels.scope(audit, module)
+    formatting_modules = Lynx.Rust.FormatModels.install!(audit.external_calls, output, module)
 
     models =
       models ++
@@ -256,7 +257,8 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.LockModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.ResourceModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.FileModels.type_models(audit.external_calls, module) ++
-        Lynx.Rust.FileOpenModels.type_models(audit.external_calls, module)
+        Lynx.Rust.FileOpenModels.type_models(audit.external_calls, module) ++
+        Lynx.Rust.FormatModels.type_models(audit.external_calls, module)
 
     if Enum.any?(audit.external_calls, fn {_, m} -> m[:native_resource_type] end) do
       unless File.read!(Path.join(tools, "lynx-toolchain")) =~ "global-names-v1",
@@ -301,8 +303,11 @@ defmodule Lynx.Rust.Extraction do
     {backend_document, native_expect_aliases} =
       Lynx.Rust.ResultModels.lower_native_names!(backend_document, backend_calls)
 
+    {backend_document, formatting_aliases} =
+      Lynx.Rust.FormatModels.lower_names!(backend_document, audit)
+
     backend_llbc =
-      if compiler_drop_queries == [] and native_guard_storage == [] and
+      if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
            native_expect_aliases == [] do
         backend_llbc
       else
@@ -327,7 +332,7 @@ defmodule Lynx.Rust.Extraction do
                   Enum.map(
                     models,
                     &%{
-                      "rust_pattern" => &1.rust,
+                      "rust_pattern" => &1[:backend_rust_name] || &1.rust,
                       "extract_name" => &1.lean
                     }
                   ),
@@ -351,10 +356,14 @@ defmodule Lynx.Rust.Extraction do
                     )
                   )
               },
-              Map.merge(
+              [
                 Lynx.Rustler.EncoderModels.external_names(audit.external_calls),
-                Lynx.Rust.ResourceModels.external_names(audit.external_calls)
-              )
+                Lynx.Rust.ResourceModels.external_names(audit.external_calls),
+                Lynx.Rust.FormatModels.external_names(audit.external_calls)
+              ]
+              |> Enum.reduce(%{}, fn names, combined ->
+                Map.merge(combined, names, fn _key, left, right -> left ++ right end)
+              end)
             )
           )
         )
@@ -392,7 +401,13 @@ defmodule Lynx.Rust.Extraction do
     )
 
     translation_bytes = File.read!(Path.join(output, "translation.json"))
-    translation = JSON.decode!(translation_bytes)
+
+    translation =
+      JSON.decode!(translation_bytes)
+      |> Lynx.Rust.FormatModels.restore_report_names(formatting_aliases)
+
+    translation_bytes =
+      if formatting_aliases == [], do: translation_bytes, else: JSON.encode!(translation)
 
     implementations =
       Lynx.Rust.LLBC.link!(audit, translation,
@@ -410,10 +425,15 @@ defmodule Lynx.Rust.Extraction do
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
 
     codec_hashes =
-      Enum.map([module <> ".Funs" | codec_modules ++ operation_modules], fn name ->
-        {name,
-         Lynx.Rust.Fingerprint.file!(Path.join(output, String.replace(name, ".", "/") <> ".lean"))}
-      end)
+      Enum.map(
+        [module <> ".Funs" | formatting_modules ++ codec_modules ++ operation_modules],
+        fn name ->
+          {name,
+           Lynx.Rust.Fingerprint.file!(
+             Path.join(output, String.replace(name, ".", "/") <> ".lean")
+           )}
+        end
+      )
 
     # Keep per-root metadata, since several extractions can share one Lean package.
     File.write!(
@@ -425,6 +445,7 @@ defmodule Lynx.Rust.Extraction do
       audit: audit,
       compiler_drop_queries: compiler_drop_queries,
       native_expect_aliases: native_expect_aliases,
+      formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
       owned_drops: Keyword.get(opts, :owned_drops, false),
       resource_cleanup:
@@ -471,6 +492,7 @@ defmodule Lynx.Rust.Extraction do
         Enum.uniq(
           [module <> ".Types", module <> ".Funs"] ++
             runtime_modules ++
+            formatting_modules ++
             codec_modules ++ operation_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
         )
     }

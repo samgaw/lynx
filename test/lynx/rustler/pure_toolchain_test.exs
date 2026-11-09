@@ -159,13 +159,13 @@ defmodule Lynx.Rustler.PureToolchainTest do
       String.replace(
         native_source,
         "experiment_analysis::twice_plus_one(value)",
-        "let _message = value.to_string(); experiment_analysis::twice_plus_one(value)"
+        ~s|let _message = format!("{value:?}"); experiment_analysis::twice_plus_one(value)|
       )
 
     refute changed == native_source
     File.write!(native, changed)
 
-    assert_raise ArgumentError, ~r/bounded formatting library/, fn ->
+    assert_raise CompileError, fn ->
       Lynx.Rustler.prepare!(options)
     end
 

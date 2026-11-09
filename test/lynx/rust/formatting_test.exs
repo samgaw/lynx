@@ -22,6 +22,12 @@ defmodule Lynx.Rust.FormattingTest do
       File.ln_s!(packages, Path.join(project, ".lake/packages"))
     end
 
+    Lynx.Rust.FormatModels.install!(
+      %{0 => %{bounded_formatting: true}},
+      project,
+      "RustWorkspace.Extraction"
+    )
+
     Lynx.Rust.Project.ensure!(project, "RustWorkspace.Formatting", @tools)
     Lynx.Rust.Project.build!(project, ["RustWorkspace.Formatting"])
     source = File.read!(path)
@@ -29,13 +35,12 @@ defmodule Lynx.Rust.FormattingTest do
     file = %{
       "module" => "RustWorkspace.Formatting",
       "file" => path,
-      "imports" => ["Aeneas.Std.Core.Fmt", "Aeneas.Std.Scalar.Display"],
+      "imports" => ["RustWorkspace.NativeFormatting"],
       "contents" => [],
       "preludes" => [%{"source" => source, "file" => path, "span" => [1], "indentation" => 0}],
       "audit_modules" => [
         "RustWorkspace.Formatting",
-        "Aeneas.Std.Core.Fmt",
-        "Aeneas.Std.Scalar.Display"
+        "RustWorkspace.NativeFormatting"
       ]
     }
 

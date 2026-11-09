@@ -82,22 +82,22 @@ defmodule Lynx.Rust.DisplayTest do
     namespace DisplayProofs
     theorem flag_spec (value : Bool) (initial : String) :
         format_analysis.format_base.Flag.Insts.CoreFmtDisplay.fmt value initial =
-          if value then Formatting.append initial "enabled" else Formatting.append initial "disabled" := by
+          if value then Lynx.RustFormatting.Formatting.append initial "enabled" else Lynx.RustFormatting.Formatting.append initial "disabled" := by
       have yes : String.fromUTF8?
-          ⟨(Formatting.bytes (toStr "enabled").val).toList.toArray⟩ = some "enabled" := by decide +kernel
+          ⟨(Lynx.RustFormatting.Formatting.bytes (toStr "enabled").val).toList.toArray⟩ = some "enabled" := by decide +kernel
       have no : String.fromUTF8?
-          ⟨(Formatting.bytes (toStr "disabled").val).toList.toArray⟩ = some "disabled" := by decide +kernel
+          ⟨(Lynx.RustFormatting.Formatting.bytes (toStr "disabled").val).toList.toArray⟩ = some "disabled" := by decide +kernel
       cases value <;> simp [format_analysis.format_base.Flag.Insts.CoreFmtDisplay.fmt,
-        core.fmt.Formatter.write_str, Formatting.writeBytes, yes, no]
+        Lynx.RustFormatting.core.fmt.Formatter.write_str, Lynx.RustFormatting.Formatting.writeBytes, yes, no]
     theorem describe_spec (value : Bool) :
         format_analysis.describe value = RustM.ok (if value then "enabled" else "disabled") := by
       have yes : "enabled".utf8ByteSize = 7 := by decide +kernel
       have no : "disabled".utf8ByteSize = 8 := by decide +kernel
-      cases value <;> simp [format_analysis.describe, alloc.string.ToString.to_string,
-        format_analysis.format_base.Flag.Insts.CoreFmtDisplay, flag_spec, Formatting.append, yes, no]
+      cases value <;> simp [format_analysis.describe, Lynx.RustFormatting.alloc.string.ToString.to_string,
+        format_analysis.format_base.Flag.Insts.CoreFmtDisplay, flag_spec, Lynx.RustFormatting.Formatting.append, yes, no]
     theorem fault_spec (value : Bool) :
         format_analysis.fault value = RustM.fail .panic := by
-      cases value <;> simp [format_analysis.fault, alloc.string.ToString.to_string,
+      cases value <;> simp [format_analysis.fault, Lynx.RustFormatting.alloc.string.ToString.to_string,
         format_analysis.format_base.Fault.Insts.CoreFmtDisplay,
         format_analysis.format_base.Fault.Insts.CoreFmtDisplay.fmt, massert]
     end DisplayProofs
