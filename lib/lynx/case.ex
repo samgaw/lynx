@@ -30,7 +30,8 @@ defmodule Lynx.Case do
 
   Set `LYNX_EXPORT=dir` to write each group's elaborated declarations to
   `dir/<test module>/<group>.ndjson` for independent kernel checks, as
-  described in `Lynx`. Exporting bypasses the verification cache.
+  described in `Lynx`. Exports freshly verify every module and populate audited
+  cache entries for later runs, unless `LYNX_CACHE=0`.
 
   Lean's own environment variables reach the Lean processes that verify each group.
   For example, set `LEAN_NUM_THREADS=n` to elaborate the proofs of a translated
@@ -527,8 +528,8 @@ defmodule Lynx.Case do
         dir -> [export: Path.join(group_path(dir, module, name)) <> ".ndjson"]
       end
 
-    # Cached modules are not elaborated, so exports always verify from scratch.
-    cache = export == [] and System.get_env("LYNX_CACHE") != "0"
+    # The runner freshly checks exports while retaining successful audited artifacts.
+    cache = System.get_env("LYNX_CACHE") != "0"
 
     debug =
       case System.get_env("LYNX_DEBUG", "") do

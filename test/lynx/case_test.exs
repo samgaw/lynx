@@ -19,6 +19,52 @@ defmodule Lynx.CaseTest do
     on_exit(fn -> ExUnit.configure(old_opts) end)
   end
 
+  @tag :tmp_dir
+  test "exported law groups warm the cache and respect explicit cache disabling", %{tmp_dir: tmp} do
+    previous = Map.new(~w(LYNX_EXPORT LYNX_CACHE LYNX_DEBUG), &{&1, System.get_env(&1)})
+
+    on_exit(fn ->
+      for {name, value} <- previous do
+        if value, do: System.put_env(name, value), else: System.delete_env(name)
+      end
+    end)
+
+    System.put_env("LYNX_DEBUG", "lean")
+    System.put_env("LYNX_CACHE", "1")
+    System.put_env("LYNX_EXPORT", tmp)
+    nonce = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+    [{module, _}] =
+      Code.compile_string(
+        """
+        defmodule Lynx.CaseTest.ExportCache do
+          use ExUnit.Case, register: false
+          use Lynx.Case
+          laws "cache" do
+            law checked, expects: true, proof: ~LEAN"rfl -- #{nonce}"
+          end
+        end
+        """,
+        Path.join(tmp, nonce <> ".exs")
+      )
+
+    run = fn ->
+      capture_io(fn ->
+        assert ExUnit.run([module]) == %{failures: 0, skipped: 0, total: 1, excluded: 0}
+      end)
+    end
+
+    refute run.() =~ ", cached"
+    assert [_] = Path.wildcard(Path.join(tmp, "**/*.ndjson"))
+    System.delete_env("LYNX_EXPORT")
+    assert run.() =~ ", cached"
+    System.put_env("LYNX_EXPORT", tmp)
+    refute run.() =~ ", cached"
+    System.delete_env("LYNX_EXPORT")
+    System.put_env("LYNX_CACHE", "0")
+    refute run.() =~ ", cached"
+  end
+
   test "cutoffs allow unreachable dependencies but cannot prove a reached call returns" do
     defmodule Cutoffs do
       use ExUnit.Case, register: false
