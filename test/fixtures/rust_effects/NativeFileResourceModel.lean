@@ -49,7 +49,7 @@ theorem cleanup_ready {α : Type} (value : effects_native.FileResource) (env : E
     simp [pollClose, registered, ready, step]
   rw [cleanup_contract]
   simp only [close, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
-  simp [Result.ok_bind]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
+  simp only [Result.ok_bind]
 
 end FileResource.Properties
