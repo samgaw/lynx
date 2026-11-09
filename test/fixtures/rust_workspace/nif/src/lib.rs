@@ -308,6 +308,37 @@ fn checked_analyse(value: i64) -> Option<i64> {
     experiment_analysis::analyse(value)
 }
 
+/// A protocol flag decoded by an actual first-party Decoder implementation.
+#[cfg(feature = "custom-decoder")]
+struct ProtocolFlag {
+    enabled: bool,
+}
+
+#[cfg(feature = "custom-decoder")]
+impl<'a> rustler::Decoder<'a> for ProtocolFlag {
+    fn decode(term: rustler::Term<'a>) -> rustler::NifResult<Self> {
+        match <u64 as rustler::Decoder<'a>>::decode(term) {
+            Ok(value) => Ok(Self {
+                enabled: value != 0,
+            }),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// Restores the decoded flag through both ordinary workspace library crates.
+///
+/// # Panics
+/// Panics when the explicit failure flag is set, after argument decoding.
+#[cfg(feature = "custom-decoder")]
+#[rustler::nif]
+fn decoded_flag(input: ProtocolFlag, should_panic: bool) -> bool {
+    if should_panic {
+        panic!();
+    }
+    experiment_analysis::restore(input.enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -325,6 +356,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
+                + usize::from(cfg!(feature = "custom-decoder"))
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
@@ -431,6 +463,13 @@ mod tests {
         if cfg!(feature = "derived-list") {
             expected.push((
                 "derived_list".to_owned(),
+                2,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "custom-decoder") {
+            expected.push((
+                "decoded_flag".to_owned(),
                 2,
                 rustler::SchedulerFlags::Normal as u32,
             ));

@@ -48,6 +48,9 @@ defmodule Lynx.Rust do
   implementation patterns continue to use path selection. This can be used with
   release binaries without Lynx's nested-function selection patch.
 
+  Optional `:mir` selects `:promoted`, `:elaborated` or `:optimized` compiler MIR
+  for pure extraction. It cannot override runtime or owned-drop extraction.
+
   `:proof_modules` lists Lean modules containing properties; `:required_properties`
   can require particular theorem names, rejecting missing or unrelated theorems. Every supplied module is audited
   in full, including private and unused declarations.
@@ -376,6 +379,7 @@ defmodule Lynx.Rust do
     allowed = [
       :roots,
       :root_attribute,
+      :mir,
       :proof_modules,
       :required_properties,
       :lean_project,
@@ -395,6 +399,7 @@ defmodule Lynx.Rust do
         do: raise(ArgumentError, "unknown Rust verification option: #{key}")
 
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
+    Lynx.Rust.Mir.validate!(opts)
   end
 
   defp do_verify!(workspace, package, opts) do
@@ -415,6 +420,7 @@ defmodule Lynx.Rust do
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         root_attribute: opts[:root_attribute],
+        mir: opts[:mir],
         execution: Keyword.get(opts, :execution, :pure),
         unwind: Keyword.get(opts, :unwind, :reject),
         futures: Keyword.get(opts, :futures, :reject),

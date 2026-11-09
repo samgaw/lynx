@@ -25,14 +25,33 @@ defmodule Lynx.Rustler.Bindings do
         function = function!(audit, binding)
         signature = function["signature"]
 
-        unless Enum.map(signature["inputs"], &LLBC.nif_type!(&1, audit)) == binding["arguments"],
-          do: raise(ArgumentError, "Rustler and compiled argument signatures differ")
+        unless length(signature["inputs"]) == length(binding["arguments"]),
+          do: raise(ArgumentError, "Rustler and compiled argument counts differ")
 
-        Map.put(
-          binding,
-          "result",
-          result!(binding["result"], signature["output"], audit, :discover, nil)
-        )
+        arguments =
+          Enum.zip_with(binding["arguments"], signature["inputs"], fn
+            %{"native" => hint}, type ->
+              {_id, path} = native!(hint, type, audit, :discover)
+              %{"native" => path}
+
+            hint, type ->
+              if custom?(hint),
+                do:
+                  raise(
+                    ArgumentError,
+                    "nested custom input codecs require an extracted top-level Decoder"
+                  )
+
+              unless LLBC.nif_type!(type, audit) == hint,
+                do: raise(ArgumentError, "Rustler and compiled argument signatures differ")
+
+              hint
+          end)
+
+        Map.merge(binding, %{
+          "arguments" => arguments,
+          "result" => result!(binding["result"], signature["output"], audit, :discover, nil)
+        })
       end
 
     %{manifest | bindings: bindings}
@@ -43,6 +62,13 @@ defmodule Lynx.Rustler.Bindings do
     |> Enum.flat_map(&native_types(&1["result"]))
     |> Enum.uniq()
     |> Enum.map(&("{impl rustler::Encoder for " <> Enum.join(&1, "::") <> "}::encode"))
+  end
+
+  def decoder_roots(manifest) do
+    manifest.bindings
+    |> Enum.flat_map(&native_types(&1["arguments"]))
+    |> Enum.uniq()
+    |> Enum.map(&("{impl rustler::Decoder for " <> Enum.join(&1, "::") <> "}::decode"))
   end
 
   defp native_types(%{"native" => name}), do: [name]
@@ -96,6 +122,11 @@ defmodule Lynx.Rustler.Bindings do
   defp argument!(%{"resource" => _} = hint, type, audit, _translation, resources),
     do: resource!(hint, type, audit, resources)
 
+  defp argument!(%{"native" => hint}, type, audit, translation, _resources) do
+    {id, path} = native!(hint, type, audit, :link)
+    Map.merge(%{"native" => path}, Lynx.Rustler.DecoderModels.binding!(id, audit, translation))
+  end
+
   defp argument!(hint, type, audit, _translation, _resources) do
     unless LLBC.nif_type!(type, audit) == hint,
       do: raise(ArgumentError, "Rustler and LLBC argument signatures differ")
@@ -125,30 +156,15 @@ defmodule Lynx.Rustler.Bindings do
   end
 
   defp result!(%{"native" => hint}, type, audit, mode, translation) do
-    resolved = Lynx.Rust.CallModels.expand(type, audit.references)
+    {id, path} = native!(hint, type, audit, mode)
 
-    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => generics}} <- resolved,
-         true <- Lynx.Rust.Constants.empty_arguments?(generics),
-         %{"item_meta" => %{"name" => name}, "kind" => kind, "generics" => params} <-
-           Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id)),
-         true <- is_map(kind) and (Map.has_key?(kind, "Struct") or Map.has_key?(kind, "Enum")),
-         true <- Enum.all?(Map.values(params), &(&1 == [])),
-         true <- Enum.all?(name, &match?(%{"Ident" => [_, 0]}, &1)),
-         path = Enum.map(name, fn %{"Ident" => [part, 0]} -> part end),
-         true <- hd(path) in audit.first_party,
-         true <- mode == :discover or hint == path do
-      if mode == :discover,
-        do: %{"native" => path},
-        else:
-          Map.merge(
-            %{"native" => path},
-            Lynx.Rustler.EncoderModels.binding!(id, audit, translation)
-          )
-    else
-      _ ->
-        raise ArgumentError,
-              "custom NIF result requires its actual monomorphic first-party struct/enum and matching extracted Encoder"
-    end
+    if mode == :discover,
+      do: %{"native" => path},
+      else:
+        Map.merge(
+          %{"native" => path},
+          Lynx.Rustler.EncoderModels.binding!(id, audit, translation)
+        )
   end
 
   defp result!(%{"option" => inner}, type, audit, mode, translation) do
@@ -230,6 +246,27 @@ defmodule Lynx.Rustler.Bindings do
       do: raise(ArgumentError, "Rustler and LLBC signatures differ: result type")
 
     schema
+  end
+
+  defp native!(hint, type, audit, mode) do
+    resolved = Lynx.Rust.CallModels.expand(type, audit.references)
+
+    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => generics}} <- resolved,
+         true <- Lynx.Rust.Constants.empty_arguments?(generics),
+         %{"item_meta" => %{"name" => name}, "kind" => kind, "generics" => params} <-
+           Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id)),
+         true <- is_map(kind) and (Map.has_key?(kind, "Struct") or Map.has_key?(kind, "Enum")),
+         true <- Enum.all?(Map.values(params), &(&1 == [])),
+         true <- Enum.all?(name, &match?(%{"Ident" => [_, 0]}, &1)),
+         path = Enum.map(name, fn %{"Ident" => [part, 0]} -> part end),
+         true <- hd(path) in audit.first_party,
+         true <- mode == :discover or hint == path do
+      {id, path}
+    else
+      _ ->
+        raise ArgumentError,
+              "custom NIF result requires its actual monomorphic first-party struct/enum and matching extracted Encoder or Decoder"
+    end
   end
 
   defp function!(audit, binding) do

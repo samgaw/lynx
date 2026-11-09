@@ -524,6 +524,39 @@ cutoff and cannot establish a successful return. -/
   | .vis (.fail .panic) _ => .error (.error (.atom "nif_panicked"))
   | _ => .error .exhausted
 
+/-- Opaque conversion outcome for errors returned by supported primitive
+decoders. Error construction, payload access and dynamic Encoders are not
+admitted. This does not identify every Rustler Error with BadArg. -/
+@[expose] abbrev DecoderError := Except Exception Term
+
+namespace Decoding
+
+@[expose] def u64 (term : NativeTerm) : RustM (core.result.Result U64 DecoderError) :=
+  .ok (match decodeUnsigned .U64 64 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+/-- Rustler can return or raise from a decoding error before later arguments
+or the NIF body execute. Observe the actual extracted Decoder, including panic
+and verification exhaustion, then continue only on successful decoding. -/
+@[expose] def withDecoded {α : Type}
+    (computation : RustM (core.result.Result α DecoderError))
+    (continuation : α → Except Exception Term) : Except Exception Term :=
+  match computation.match with
+  | .ok (.Ok value) => continuation value
+  | .ok (.Err returned) => returned
+  | .vis (.fail .panic) _ => .error (.error (.atom "nif_panicked"))
+  | _ => .error .exhausted
+
+theorem withDecoded_ok {α : Type} (value : α) (continuation : α → Except Exception Term) :
+    withDecoded (RustM.ok (.Ok value)) continuation = continuation value := by simp [withDecoded]
+
+theorem withDecoded_error {α : Type} (returned : DecoderError)
+    (continuation : α → Except Exception Term) :
+    withDecoded (RustM.ok (.Err returned)) continuation = returned := by simp [withDecoded]
+
+end Decoding
+
 @[simp] theorem execute_ok {α : Type} (value : α) (encode : α → Term) :
     execute (RustM.ok value) encode = .ok (encode value) := by
   simp [execute]

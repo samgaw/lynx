@@ -4,10 +4,13 @@ defmodule Lynx.Rust.Extraction do
   # Extraction is independent of Rustler. This result is not a proof report;
   # clients must kernel-check their properties and audit the generated modules.
   def run!(context, tools, roots, output, module, opts \\ []) do
+    Lynx.Rust.Mir.validate!(opts)
+
     for key <- Keyword.keys(opts),
         key not in [
           :external_types,
           :root_attribute,
+          :mir,
           :external_calls,
           :rustler_atoms,
           :execution,
@@ -42,8 +45,11 @@ defmodule Lynx.Rust.Extraction do
     if unwind != :reject and Keyword.get(opts, :execution, :pure) != :runtime,
       do: raise(ArgumentError, "assertion unwind requires runtime execution")
 
-    if :rustler_encoders in Keyword.get(opts, :external_calls, []),
-      do: Lynx.Rustler.require_rustler!(context)
+    if Enum.any?(
+         [:rustler_encoders, :rustler_decoders],
+         &(&1 in Keyword.get(opts, :external_calls, []))
+       ),
+       do: Lynx.Rustler.require_rustler!(context)
 
     discovery =
       describe!(
@@ -52,7 +58,14 @@ defmodule Lynx.Rust.Extraction do
         roots,
         output,
         module,
-        Keyword.take(opts, [:external_types, :root_attribute, :unwind, :futures, :owned_drops])
+        Keyword.take(opts, [
+          :external_types,
+          :root_attribute,
+          :mir,
+          :unwind,
+          :futures,
+          :owned_drops
+        ])
       )
 
     {discovery, caches} =
@@ -87,6 +100,7 @@ defmodule Lynx.Rust.Extraction do
              Keyword.take(opts, [
                :external_types,
                :root_attribute,
+               :mir,
                :unwind,
                :futures,
                :owned_drops
@@ -104,7 +118,14 @@ defmodule Lynx.Rust.Extraction do
           Enum.uniq(roots ++ ["core::mem::drop"]),
           output,
           module,
-          Keyword.take(opts, [:external_types, :root_attribute, :unwind, :futures, :owned_drops]),
+          Keyword.take(opts, [
+            :external_types,
+            :root_attribute,
+            :mir,
+            :unwind,
+            :futures,
+            :owned_drops
+          ]),
           Enum.map(caches, & &1.opaque_pattern)
         )
       else
@@ -514,6 +535,7 @@ defmodule Lynx.Rust.Extraction do
         key not in [
           :external_types,
           :root_attribute,
+          :mir,
           :unwind,
           :futures,
           :owned_drops,
@@ -582,12 +604,7 @@ defmodule Lynx.Rust.Extraction do
       ["rustc", "--sysroot", "default"] ++
         Lynx.Rust.Futures.arguments!(Keyword.get(opts, :futures, :reject), tools) ++
         Lynx.Rust.NativeOwnedDrops.arguments!(Keyword.get(opts, :owned_drops, false), tools) ++
-        if(
-          Keyword.get(opts, :owned_drops, false) and
-            Keyword.get(opts, :futures, :reject) != :cancelling,
-          do: ["--mir", "optimized"],
-          else: []
-        ) ++
+        Lynx.Rust.Mir.arguments!(opts) ++
         Lynx.Rust.NativeUnwind.charon_arguments(Keyword.get(opts, :unwind, :reject)) ++
         [
           "--opaque",

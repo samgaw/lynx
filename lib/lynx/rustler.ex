@@ -108,6 +108,12 @@ defmodule Lynx.Rustler do
       release Charon binaries without the nested-function selection patch. Register
       the tool attribute on the pinned nightly compiler, preferably only for the
       verification build.
+    * `:mir` — pure extraction MIR stage: `:promoted`, `:elaborated` or
+      `:optimized`. Custom input Decoders default to `:elaborated`, retaining
+      compiler drop elaboration. Their actual first-party bodies are extracted;
+      the initial primitive model admits u64 decoding and opaque forwarding of
+      its error. Constructing or inspecting Rustler errors, dynamic payloads and
+      runtime custom Decoders are unsupported and rejected.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
@@ -175,6 +181,7 @@ defmodule Lynx.Rustler do
       :proof_modules,
       :proof_roots,
       :root_attribute,
+      :mir,
       :required_properties,
       :execution,
       :futures,
@@ -188,6 +195,7 @@ defmodule Lynx.Rustler do
         do: raise(ArgumentError, "unknown Rustler verification option: #{key}")
 
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
+    Lynx.Rust.Mir.validate!(opts)
     proof_roots = Keyword.get(opts, :proof_roots, [])
 
     unless is_list(proof_roots) and
@@ -265,6 +273,12 @@ defmodule Lynx.Rustler do
       )
 
     custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
+    decoders? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["arguments"]))
+    codecs? = custom? or decoders?
+    mir = if(decoders?, do: Keyword.get(opts, :mir, :elaborated), else: opts[:mir])
+
+    if execution == :runtime and decoders?,
+      do: raise(ArgumentError, "runtime Rustler custom decoders are unsupported")
 
     if execution == :runtime and custom?,
       do: raise(ArgumentError, "runtime Rustler custom encoders are unsupported")
@@ -285,11 +299,12 @@ defmodule Lynx.Rustler do
       end
 
     {discovered, roots, models} =
-      if custom? do
+      if codecs? do
         raw =
           Lynx.Rust.Extraction.describe!(context, tools, roots, project, prefix <> ".Discovery",
             external_types: models,
-            root_attribute: opts[:root_attribute]
+            root_attribute: opts[:root_attribute],
+            mir: mir
           )
 
         resolved =
@@ -309,7 +324,23 @@ defmodule Lynx.Rustler do
                   "Stateless Rustler term-construction FFI model; handles, allocation and native runtime unverified"
               }
 
-        {resolved, roots ++ Lynx.Rustler.Bindings.encoder_roots(resolved), models ++ codecs}
+        errors =
+          if decoders?,
+            do: [
+              %{
+                rust: "rustler::error::Error",
+                lean: "Lynx.Rustler.DecoderError",
+                import: bridge,
+                label:
+                  "Opaque Rustler Error conversion outcome for supported primitive decoders; only forwarding is admitted; construction, inspection and dynamic payloads unsupported"
+              }
+            ],
+            else: []
+
+        {resolved,
+         roots ++
+           Lynx.Rustler.Bindings.encoder_roots(resolved) ++
+           Lynx.Rustler.Bindings.decoder_roots(resolved), models ++ codecs ++ errors}
       else
         {discovered, roots, models}
       end
@@ -318,6 +349,7 @@ defmodule Lynx.Rustler do
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         execution: execution,
         root_attribute: opts[:root_attribute],
+        mir: mir,
         futures: Keyword.get(opts, :futures, :reject),
         files: Keyword.get(opts, :files, :reject),
         owned_drops: Keyword.get(opts, :owned_drops, false),
@@ -325,7 +357,8 @@ defmodule Lynx.Rustler do
         external_types: models,
         external_calls:
           if(binary?, do: [:rustler_binary_as_slice], else: []) ++
-            if(custom?, do: [:rustler_encoders], else: []),
+            if(custom?, do: [:rustler_encoders], else: []) ++
+            if(decoders?, do: [:rustler_decoders], else: []),
         rustler_atoms: if(custom?, do: :discover, else: [])
       )
 

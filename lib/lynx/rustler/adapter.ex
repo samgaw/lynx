@@ -97,7 +97,7 @@ defmodule Lynx.Rustler.Adapter do
     decoded = Enum.map(args, &("decoded_" <> &1))
     types = Enum.map(binding["arguments"], &type!/1)
 
-    if Enum.any?(types, &is_nil(&1.decode)),
+    if Enum.any?(types, &(is_nil(&1.decode) and is_nil(&1[:decode_m]))),
       do: raise(ArgumentError, "custom Rustler decoders are unsupported")
 
     if execution_model != :runtime and
@@ -127,7 +127,7 @@ defmodule Lynx.Rustler.Adapter do
     decode =
       Enum.with_index(Enum.zip([args, decoded, types]))
       |> Enum.map_join("\n", fn {{arg, value, type}, index} ->
-        decoder = "#{type.decode} #{arg}"
+        decoder = if(type[:decode_m], do: "", else: "#{type.decode} #{arg}")
 
         decoder =
           if runtime? and !type[:resource], do: "Lynx.Result.ofExcept (#{decoder})", else: decoder
@@ -162,8 +162,16 @@ defmodule Lynx.Rustler.Adapter do
     wrapper_call =
       Enum.join([wrapper | if(runtime?, do: ["_dispatcher" | args], else: args)], " ")
 
-    body = "do\n#{decode}\n  #{execute(invocation, result, execution_model, release)}"
-    direct_body = "do\n#{decode}\n  #{execute(direct, result, execution_model, release)}"
+    {body, direct_body} =
+      if Enum.any?(types, & &1[:decode_m]) do
+        if runtime?, do: raise(ArgumentError, "runtime Rustler custom decoders are unsupported")
+
+        {decode_body(args, decoded, types, execute(invocation, result, execution_model, release)),
+         decode_body(args, decoded, types, execute(direct, result, execution_model, release))}
+      else
+        {"do\n#{decode}\n  #{execute(invocation, result, execution_model, release)}",
+         "do\n#{decode}\n  #{execute(direct, result, execution_model, release)}"}
+      end
 
     registry =
       if resources == [], do: "", else: "Lynx.Rustler.withResourceTypes #{lean_list(resources)} "
@@ -176,6 +184,18 @@ defmodule Lynx.Rustler.Adapter do
     theorem #{adapter_theorem} #{dispatcher} #{term_params} :
         #{wrapper_call} = #{registry}(#{direct_body}) := rfl
     """
+  end
+
+  defp decode_body(args, decoded, types, continuation) do
+    Enum.zip([args, decoded, types])
+    |> Enum.reverse()
+    |> Enum.reduce(continuation, fn {arg, value, type}, rest ->
+      if decoder = type[:decode_m] do
+        "Lynx.Rustler.Decoding.withDecoded (#{decoder} #{arg}) (fun #{value} => (#{rest}))"
+      else
+        "do\n  let #{value} ← #{type.decode} #{arg}\n  #{rest}"
+      end
+    end)
   end
 
   defp lean_list(strings), do: "[" <> Enum.map_join(strings, ", ", &JSON.encode!/1) <> "]"
@@ -209,6 +229,10 @@ defmodule Lynx.Rustler.Adapter do
       decode: "Lynx.NativeResourceArc.decode (α := #{payload})",
       encode: nil
     }
+  end
+
+  defp type!(%{"native" => _, "lean" => lean, "decoder" => decoder}) do
+    %{lean: identifier!(lean), decode: nil, decode_m: identifier!(decoder), encode: nil}
   end
 
   defp type!(%{"native" => _, "lean" => lean, "encoder" => encoder}) do

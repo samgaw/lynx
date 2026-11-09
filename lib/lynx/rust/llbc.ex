@@ -124,6 +124,13 @@ defmodule Lynx.Rust.LLBC do
       )
       |> Map.merge(cache_models)
 
+    if :rustler_decoders in Keyword.get(opts, :external_calls, []) do
+      case Lynx.Rustler.DecoderModels.audit(functions, translated, refs) do
+        {:ok, _} -> :ok
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+    end
+
     direct_calls = Enum.flat_map(functions, &calls(&1["body"]))
 
     modelled =
