@@ -41,9 +41,15 @@ defmodule Lynx.Rust do
   @doc """
   Builds, extracts and kernel-checks workspace properties.
 
-  Required option `:roots` lists Rust paths. `:proof_modules` lists Lean modules
-  containing properties; `:required_properties` can require particular theorem
-  names, rejecting missing or unrelated theorems. Every supplied module is audited
+  Required option `:roots` lists Rust paths. Optional `:root_attribute` selects
+  annotated local implementations and their reachable dependencies using Charon's
+  attribute selector, avoiding its nested-path resolver. Every requested literal
+  local path must still resolve to one extracted body. Ordinary trait
+  implementation patterns continue to use path selection. This can be used with
+  release binaries without Lynx's nested-function selection patch.
+
+  `:proof_modules` lists Lean modules containing properties; `:required_properties`
+  can require particular theorem names, rejecting missing or unrelated theorems. Every supplied module is audited
   in full, including private and unused declarations.
 
   `:lean_project` defaults to `lynx-proofs` in the workspace and is initialized
@@ -367,6 +373,7 @@ defmodule Lynx.Rust do
   defp do_verify!(workspace, package, opts) do
     allowed = [
       :roots,
+      :root_attribute,
       :proof_modules,
       :required_properties,
       :lean_project,
@@ -385,6 +392,7 @@ defmodule Lynx.Rust do
         key not in allowed,
         do: raise(ArgumentError, "unknown Rust verification option: #{key}")
 
+    Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     roots = Keyword.fetch!(opts, :roots)
     tools = opts[:tools] || System.fetch_env!("LYNX_AENEAS_DIR")
     prefix = Keyword.get(opts, :module_prefix, "Native.Extraction")
@@ -401,6 +409,7 @@ defmodule Lynx.Rust do
 
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
+        root_attribute: opts[:root_attribute],
         execution: Keyword.get(opts, :execution, :pure),
         unwind: Keyword.get(opts, :unwind, :reject),
         futures: Keyword.get(opts, :futures, :reject),

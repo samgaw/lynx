@@ -7,6 +7,7 @@ defmodule Lynx.Rust.Extraction do
     for key <- Keyword.keys(opts),
         key not in [
           :external_types,
+          :root_attribute,
           :external_calls,
           :rustler_atoms,
           :execution,
@@ -51,7 +52,7 @@ defmodule Lynx.Rust.Extraction do
         roots,
         output,
         module,
-        Keyword.take(opts, [:external_types, :unwind, :futures, :owned_drops])
+        Keyword.take(opts, [:external_types, :root_attribute, :unwind, :futures, :owned_drops])
       )
 
     {discovery, caches} =
@@ -83,7 +84,13 @@ defmodule Lynx.Rust.Extraction do
              roots,
              output,
              module,
-             Keyword.take(opts, [:external_types, :unwind, :futures, :owned_drops]),
+             Keyword.take(opts, [
+               :external_types,
+               :root_attribute,
+               :unwind,
+               :futures,
+               :owned_drops
+             ]),
              opaque
            ), caches}
       end
@@ -97,7 +104,7 @@ defmodule Lynx.Rust.Extraction do
           Enum.uniq(roots ++ ["core::mem::drop"]),
           output,
           module,
-          Keyword.take(opts, [:external_types, :unwind, :futures, :owned_drops]),
+          Keyword.take(opts, [:external_types, :root_attribute, :unwind, :futures, :owned_drops]),
           Enum.map(caches, & &1.opaque_pattern)
         )
       else
@@ -504,7 +511,14 @@ defmodule Lynx.Rust.Extraction do
   @doc false
   def describe!(context, tools, roots, output, module, opts \\ []) do
     for key <- Keyword.keys(opts),
-        key not in [:external_types, :unwind, :futures, :owned_drops, :opaque_functions],
+        key not in [
+          :external_types,
+          :root_attribute,
+          :unwind,
+          :futures,
+          :owned_drops,
+          :opaque_functions
+        ],
         do: raise(ArgumentError, "unknown Rust discovery option: #{key}")
 
     opaque = Keyword.get(opts, :opaque_functions, [])
@@ -556,7 +570,11 @@ defmodule Lynx.Rust.Extraction do
     unless length(models) == MapSet.size(MapSet.new(models, & &1.rust)),
       do: raise(ArgumentError, "duplicate external Rust type model")
 
-    root_args = Enum.flat_map(roots, &["--start-from", &1])
+    attribute = Lynx.Rust.RootSelection.attribute!(Keyword.get(opts, :root_attribute))
+
+    root_args =
+      Lynx.Rust.RootSelection.arguments(roots, attribute, [context.artifact["target"]["name"]])
+
     includes = Enum.flat_map(first_party, &["--include", &1])
     llbc = Path.join(output, String.replace(module, ".", "_") <> ".llbc")
 
@@ -608,6 +626,10 @@ defmodule Lynx.Rust.Extraction do
 
     document = read_llbc!(llbc, diagnostics)
     validate_target!(document)
+
+    Lynx.Rust.RootSelection.validate!(document, roots, attribute, [
+      context.artifact["target"]["name"]
+    ])
 
     models =
       models ++

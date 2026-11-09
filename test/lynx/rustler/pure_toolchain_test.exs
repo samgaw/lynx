@@ -1,11 +1,20 @@
 defmodule Lynx.Rustler.PureToolchainTest do
   use ExUnit.Case
   @fixture Path.expand("../../fixtures/rust_workspace", __DIR__)
-  @tools System.get_env("LYNX_PURE_AENEAS_DIR")
+  @unpatched System.get_env("LYNX_UNPATCHED_AENEAS_DIR")
+  @tools @unpatched || System.get_env("LYNX_PURE_AENEAS_DIR")
+  @root_attribute if(@unpatched, do: "verify::start_from")
   @moduletag timeout: 1_200_000
   unless @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
-           String.contains?(File.read!(Path.join(@tools, "lynx-toolchain")), "profile=pure"),
-         do: @moduletag(skip: "set LYNX_PURE_AENEAS_DIR to a pure installation")
+           String.contains?(
+             File.read!(Path.join(@tools, "lynx-toolchain")),
+             if(@unpatched, do: "profile=unpatched", else: "profile=pure")
+           ),
+         do:
+           @moduletag(
+             skip:
+               "set LYNX_PURE_AENEAS_DIR or LYNX_UNPATCHED_AENEAS_DIR to the matching installation"
+           )
 
   @tag :tmp_dir
   test "proves compiled workspace NIFs with unmodified Aeneas and rejects unsupported semantics",
@@ -20,6 +29,23 @@ defmodule Lynx.Rustler.PureToolchainTest do
 
     native = Path.join(workspace, "nif/src/lib.rs")
     native_source = File.read!(native) |> String.replace("LynxRustFixture", "LynxPureFixture")
+
+    native_source =
+      if @unpatched do
+        annotations = "#![feature(register_tool)]\n#![register_tool(verify)]\n"
+
+        source =
+          Regex.replace(
+            ~r/(^#\[rustler::nif[^\n]*\]\n)/m,
+            native_source,
+            "\\1#[verify::start_from]\n"
+          )
+
+        annotations <> source
+      else
+        native_source
+      end
+
     File.write!(native, native_source)
 
     for name <- ~w(native.ex laws.ex) do
@@ -29,6 +55,13 @@ defmodule Lynx.Rustler.PureToolchainTest do
 
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "RustWorkspace"))
+
+    packages = Path.join(@fixture, "proofs/.lake/packages")
+
+    if File.dir?(packages) do
+      File.mkdir_p!(Path.join(project, ".lake"))
+      File.ln_s!(packages, Path.join(project, ".lake/packages"))
+    end
 
     for name <- ~w(Native BridgeTests),
         do:
@@ -41,6 +74,7 @@ defmodule Lynx.Rustler.PureToolchainTest do
       workspace: workspace,
       package: "experiment-nif",
       tools: @tools,
+      root_attribute: @root_attribute,
       build_dir: Path.join(tmp, "build"),
       lean_project: project,
       module_prefix: "RustWorkspace.Facade",
@@ -51,6 +85,14 @@ defmodule Lynx.Rustler.PureToolchainTest do
           &("RustWorkspace.Native." <> &1)
         ) ++ ["RustWorkspace.BridgeTests.overflow_is_panic"]
     ]
+
+    if @unpatched do
+      for missing <- ["verify::not_selected", "verify::start_from_missing"] do
+        assert_raise ArgumentError, ~r/missing, ambiguous or opaque Rust root/, fn ->
+          Lynx.Rustler.prepare!(Keyword.put(options, :root_attribute, missing))
+        end
+      end
+    end
 
     prepared = Lynx.Rustler.prepare!(options)
 
@@ -171,6 +213,27 @@ defmodule Lynx.Rustler.PureToolchainTest do
 
     File.write!(native, native_source)
     assert %{verification: %{guarantees: [_ | _]}} = Lynx.Rustler.prepare!(options)
+
+    if @unpatched do
+      missing =
+        String.replace(
+          native_source,
+          "#[verify::start_from]\nfn native_restore",
+          "fn native_restore"
+        )
+
+      refute missing == native_source
+      File.write!(native, missing)
+
+      assert_raise ArgumentError,
+                   ~r/missing, ambiguous or opaque Rust root.*native_restore/,
+                   fn ->
+                     Lynx.Rustler.prepare!(options)
+                   end
+
+      File.write!(native, native_source)
+      assert %{verification: %{guarantees: [_ | _]}} = Lynx.Rustler.prepare!(options)
+    end
   end
 
   defp assert_verified(reports) do
