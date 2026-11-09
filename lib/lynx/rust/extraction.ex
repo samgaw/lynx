@@ -248,6 +248,8 @@ defmodule Lynx.Rust.Extraction do
         rustler_atom_caches: {caches, module}
       )
 
+    Lynx.Rust.FormatModels.validate_library!(audit.external_calls, tools)
+
     models =
       models ++
         Lynx.Rust.MutexModels.type_models(audit.external_calls, module) ++

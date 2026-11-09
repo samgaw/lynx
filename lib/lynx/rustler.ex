@@ -26,6 +26,13 @@ defmodule Lynx.Rustler do
   atom caches currently must be in the facade crate's expanded source.
   Rustler 0.38.0 or 0.39.0 and the pinned
   Charon/Aeneas toolchain are required; install with `tools/setup-rust-verification.sh`.
+  For stateless scalar verification, `tools/setup-rust-verification.sh --pure NEW_DIRECTORY`
+  installs the hax-supported Aeneas release and Lean library without local patches
+  or an OCaml/opam build. Charon carries only the nested-function resolver fix
+  needed to select actual Rustler macro bodies. Select that directory with `:tools`
+  or `LYNX_AENEAS_DIR`. This profile does not provide the custom bounded formatting
+  library or native runtime extensions; those require the default installation.
+  The execution model still defaults to `:pure` with either installation.
 
   `prepare!/3` builds the selected library, discovers its compiled exports,
   extracts the original Rust bodies and their first-party dependencies, and

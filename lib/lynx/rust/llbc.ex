@@ -290,6 +290,7 @@ defmodule Lynx.Rust.LLBC do
 
     unless translation["charon_version"] == "0.1.304" && translation["crate"] == audit.crate &&
              translation["aeneas_version"] in [
+               "build-2b9e3ea",
                "nightly-2026.11.04-2b9e3ea",
                "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1",
                "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1",
