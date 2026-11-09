@@ -5,11 +5,12 @@ set -eu
 verification_profile=pure
 case "${1-}" in
   --pure) shift ;;
+  --unpatched) verification_profile=unpatched; shift ;;
   --runtime) verification_profile=runtime; shift ;;
-  -*) echo "usage: $0 [--pure|--runtime] NEW_INSTALL_DIRECTORY" >&2; exit 1 ;;
+  -*) echo "usage: $0 [--pure|--unpatched|--runtime] NEW_INSTALL_DIRECTORY" >&2; exit 1 ;;
 esac
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 [--pure|--runtime] NEW_INSTALL_DIRECTORY" >&2
+  echo "usage: $0 [--pure|--unpatched|--runtime] NEW_INSTALL_DIRECTORY" >&2
   exit 1
 fi
 if [ "$verification_profile" = runtime ] && ! command -v opam >/dev/null 2>&1; then
@@ -37,7 +38,7 @@ case "$(uname -s):$(uname -m)" in
   *) echo "no pinned Aeneas binary for this platform" >&2; exit 1 ;;
 esac
 release_tag=nightly-2026.11.04-2b9e3ea
-if [ "$verification_profile" = pure ]; then
+if [ "$verification_profile" != runtime ]; then
   release_tag=build-2b9e3ea
   checksum=$pure_checksum
 fi
@@ -55,6 +56,15 @@ if [ "$actual" != "$checksum" ]; then
   exit 1
 fi
 tar -xzf "$archive" -C "$install_dir"
+rustup toolchain install nightly-2026-09-17 --profile minimal \
+  --component rustc-dev --component llvm-tools --component rust-src --component miri
+if [ "$verification_profile" = unpatched ]; then
+  printf '%s\n' 'profile=unpatched' 'aeneas=build-2b9e3ea' \
+    'charon=build-2b9e3ea-release' 'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
+  echo "Installed release binaries without Lynx patches. Set LYNX_AENEAS_DIR to $install_dir"
+  echo "Nested NIF roots require root_attribute selection and annotated Rust functions."
+  exit 0
+fi
 source_dir="$install_dir/charon-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/charon "$source_dir"
 git -C "$source_dir" checkout --detach 7b462d9159db2ed3015162352183906a30bfafc6
@@ -71,8 +81,6 @@ if [ "$verification_profile" = runtime ]; then
   git -C "$source_dir" apply "$script_dir/patches/charon-pin-macro.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-pin-as-mut.patch"
 fi
-rustup toolchain install nightly-2026-09-17 --profile minimal \
-  --component rustc-dev --component llvm-tools --component rust-src --component miri
 cd "$source_dir/charon"
 rustup run nightly-2026-09-17 cargo build --locked --release \
   --no-default-features --features rustc --bin charon --bin charon-driver
