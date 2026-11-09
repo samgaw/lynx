@@ -46,80 +46,82 @@ defmodule Lynx.Rust.CallModelsTest do
            } = resolve(slice_length())
   end
 
-  test "checked u64 arithmetic preserves the actual Option identity and rejects inconsistent layouts" do
-    u64 = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
-    path = fn parts -> Enum.map(parts, &%{"Ident" => [&1, 0]}) end
+  test "checked signed/unsigned 64-bit arithmetic preserves the actual Option identity and rejects inconsistent layouts" do
+    for {sign, width} <- [{"Unsigned", "U64"}, {"Signed", "I64"}] do
+      scalar = %{"Scalar" => %{"Integer" => %{sign => width}}}
+      path = fn parts -> Enum.map(parts, &%{"Ident" => [&1, 0]}) end
 
-    option = %{
-      "def_id" => 3,
-      "item_meta" => %{"name" => path.(~w(core option Option))},
-      "kind" => %{
-        "Enum" => [
-          %{
-            "id" => 0,
-            "name" => "None",
-            "fields" => [],
-            "discriminant" => %{"Signed" => ["Isize", "0"]}
-          },
-          %{
-            "id" => 1,
-            "name" => "Some",
-            "fields" => [%{"ty" => %{"TypeVar" => %{"Free" => 0}}}],
-            "discriminant" => %{"Signed" => ["Isize", "1"]}
-          }
-        ]
-      }
-    }
-
-    function =
-      slice_length()
-      |> put_in(
-        ["item_meta", "name"],
-        path.(~w(core num)) ++
-          [%{"Impl" => %{"Ty" => %{"skip_binder" => u64}}}, %{"Ident" => ["checked_add", 0]}]
-      )
-      |> put_in(["generics", "regions"], [])
-      |> put_in(["generics", "types"], [])
-      |> put_in(["signature", "inputs"], [u64, u64])
-      |> put_in(["signature", "output"], %{
-        "Adt" => %{
-          "id" => 3,
-          "builtin" => nil,
-          "generics" => %{
-            "regions" => [],
-            "types" => [u64],
-            "const_generics" => [],
-            "trait_refs" => []
-          }
+      option = %{
+        "def_id" => 3,
+        "item_meta" => %{"name" => path.(~w(core option Option))},
+        "kind" => %{
+          "Enum" => [
+            %{
+              "id" => 0,
+              "name" => "None",
+              "fields" => [],
+              "discriminant" => %{"Signed" => ["Isize", "0"]}
+            },
+            %{
+              "id" => 1,
+              "name" => "Some",
+              "fields" => [%{"ty" => %{"TypeVar" => %{"Free" => 0}}}],
+              "discriminant" => %{"Signed" => ["Isize", "1"]}
+            }
+          ]
         }
-      })
-
-    for operation <- ~w(checked_add checked_mul) do
-      lean = "Aeneas.Std.U64.#{operation}"
+      }
 
       function =
-        put_in(function, ["item_meta", "name", Access.at(-1)], %{"Ident" => [operation, 0]})
+        slice_length()
+        |> put_in(
+          ["item_meta", "name"],
+          path.(~w(core num)) ++
+            [%{"Impl" => %{"Ty" => %{"skip_binder" => scalar}}}, %{"Ident" => ["checked_add", 0]}]
+        )
+        |> put_in(["generics", "regions"], [])
+        |> put_in(["generics", "types"], [])
+        |> put_in(["signature", "inputs"], [scalar, scalar])
+        |> put_in(["signature", "output"], %{
+          "Adt" => %{
+            "id" => 3,
+            "builtin" => nil,
+            "generics" => %{
+              "regions" => [],
+              "types" => [scalar],
+              "const_generics" => [],
+              "trait_refs" => []
+            }
+          }
+        })
 
-      assert %{
-               7 => %{
-                 builtin: true,
-                 implementation_verified: false,
-                 lean: ^lean
-               }
-             } = CallModels.resolve([function], %{"type_decls" => [option]}, %{}, [])
+      for operation <- ~w(checked_add checked_mul) do
+        lean = "Aeneas.Std.#{width}.#{operation}"
 
-      for broken <- [
-            put_in(option, ["kind", "Enum"], []),
-            put_in(option, ["item_meta", "name"], path.(~w(fake Option)))
-          ] do
-        assert %{} == CallModels.resolve([function], %{"type_decls" => [broken]}, %{}, [])
-      end
+        function =
+          put_in(function, ["item_meta", "name", Access.at(-1)], %{"Ident" => [operation, 0]})
 
-      for broken <- [
-            put_in(function, ["signature", "is_unsafe"], true),
-            put_in(function, ["signature", "output"], u64)
-          ] do
-        assert %{} == CallModels.resolve([broken], %{"type_decls" => [option]}, %{}, [])
+        assert %{
+                 7 => %{
+                   builtin: true,
+                   implementation_verified: false,
+                   lean: ^lean
+                 }
+               } = CallModels.resolve([function], %{"type_decls" => [option]}, %{}, [])
+
+        for broken <- [
+              put_in(option, ["kind", "Enum"], []),
+              put_in(option, ["item_meta", "name"], path.(~w(fake Option)))
+            ] do
+          assert %{} == CallModels.resolve([function], %{"type_decls" => [broken]}, %{}, [])
+        end
+
+        for broken <- [
+              put_in(function, ["signature", "is_unsafe"], true),
+              put_in(function, ["signature", "output"], scalar)
+            ] do
+          assert %{} == CallModels.resolve([broken], %{"type_decls" => [option]}, %{}, [])
+        end
       end
     end
   end

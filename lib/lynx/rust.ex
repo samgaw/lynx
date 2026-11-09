@@ -20,6 +20,14 @@ defmodule Lynx.Rust do
   byte-array width, compiler identity and safe Rust signature. Native-endian
   conversions are not included. These are reported standard-library models.
 
+  Signed/unsigned 64-bit `checked_add` and `checked_mul` reuse Aeneas's fixed-width
+  models: overflow returns `None`. Standard `Option` question-mark propagation
+  uses explicit, reported enum models for `Try::branch` and `FromResidual` over
+  `Option<Never>`. Exact enum layouts, signatures and trait identities are checked;
+  custom Try implementations and payload-bearing residual replacements are rejected.
+  Rust core's native implementation and invalid enum representations are outside
+  these models' verified boundary.
+
   Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
   Aeneas's value and borrow-update models. Owned primitive scalar vectors using
   the standard Global allocator support `new`, `len` and bounded `push`, with

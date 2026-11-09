@@ -5,6 +5,8 @@ defmodule Lynx.Rust.TryModels do
   # Reuse Aeneas's Result/Try primitives. The FromResidual callback is admitted
   # only with the concrete standard identity From dictionary at every call site.
   # No user conversion body is erased or replaced by an assumed identity.
+  # Option uses downstream total enum models over the exact Never residual.
+  # Invalid enum representations and custom Try implementations are not admitted.
   def resolve(f, t, refs) do
     with %{"body" => "Opaque", "src" => %{"TraitImpl" => src}, "signature" => sig} <- f,
          true <-
@@ -32,7 +34,7 @@ defmodule Lynx.Rust.TryModels do
         Map.merge(
           %{
             rust_name: rust,
-            lean: "Aeneas.Std." <> lean,
+            lean: if(String.starts_with?(lean, "Lynx."), do: lean, else: "Aeneas.Std." <> lean),
             builtin: true,
             can_fail: lean != "core.convert.FromSame.from",
             lift: false,
@@ -100,10 +102,59 @@ defmodule Lynx.Rust.TryModels do
           _ -> nil
         end
 
+      named?(f, impl, ~w(core option), "branch") and
+        f["src"]["TraitImpl"]["item_id"] == 1 and length(impl["methods"]) == 2 and
+        trait["item_meta"]["name"] == name(~w(core ops try_trait Try)) and
+        parameters?(trait["generics"], 1, 0) and
+        parameters?(f["generics"], 1, 0) and parameters?(impl["generics"], 1, 0) ->
+        with [option] <- input,
+             true <- option?(option, var(0), t, refs),
+             true <- implemented == args([option]),
+             %{"Adt" => %{"id" => flow, "builtin" => nil, "generics" => g}} <- output,
+             [residual, value] <- g["types"],
+             true <- g == args([residual, var(0)]) and value == var(0),
+             true <- option?(residual, "Never", t, refs),
+             true <- control_flow?(flow, t, refs) do
+          {"core::option::{core::ops::try_trait::Try<core::option::Option<@T>>}::branch",
+           "Lynx.Rust.Try.optionBranch", option_model()}
+        else
+          _ -> nil
+        end
+
+      named?(f, impl, ~w(core option), "from_residual") and
+        f["src"]["TraitImpl"]["item_id"] == 0 and length(impl["methods"]) == 1 and
+        trait["item_meta"]["name"] == name(~w(core ops try_trait FromResidual)) and
+        parameters?(trait["generics"], 2, 0) and
+        parameters?(f["generics"], 1, 0) and parameters?(impl["generics"], 1, 0) ->
+        with [residual] <- input,
+             true <- option?(residual, "Never", t, refs),
+             true <- option?(output, var(0), t, refs),
+             true <- implemented == args([output, residual]) do
+          {"core::option::{core::ops::try_trait::FromResidual<core::option::Option<@T>, core::option::Option<!>>}::from_residual",
+           "Lynx.Rust.Try.optionFromResidual", option_model()}
+        else
+          _ -> nil
+        end
+
       true ->
         nil
     end
   end
+
+  defp option_model do
+    %{
+      builtin: false,
+      can_fail: false,
+      lift: true,
+      label:
+        "Standard Option Try/FromResidual enum model: Some continues and None returns early; exact Option/ControlFlow and Never residual identities required; Rust core implementation not verified"
+    }
+  end
+
+  defp option?(%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => g}}, type, t, refs),
+    do: g == args([type]) and LLBC.option_type?(id, %{translated: t, references: refs})
+
+  defp option?(_, _, _, _), do: false
 
   def audit(functions, models, t, refs) do
     traits = ResourceModels.trait_references(t)
