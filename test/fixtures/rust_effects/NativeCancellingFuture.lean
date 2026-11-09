@@ -94,7 +94,7 @@ theorem first_pending_next {α : Type} (value : U64) (env : Environment)
   have ready : NativeWaker.pollWake ⟨0, false⟩ allocated = some (.ok (), retained env value) := by
     simp [NativeWaker.pollWake, allocated, retained]
   simp only [NativeWaker.wakeByRef, Bool.false_eq_true, ↓reduceIte]
-  rw [Result.wait_bind, Result.wait_ready_apply _ _ _ _ _ ready]
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ ready]
   simp [pending]
 
 theorem first_pending (value : U64) (env : Environment) :
