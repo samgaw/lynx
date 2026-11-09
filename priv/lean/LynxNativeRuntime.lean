@@ -2965,6 +2965,72 @@ never supplies the namespace synchronization guarantee of fsync. -/
     | .ok value => .ok value
     | .error exception => .error exception
 
+/-- Open an existing regular inode for reading and writing, preserving its bytes
+and namespace. The supplied open outcome is for the requested access mode;
+permission checks and native std/OS/FFI correspondence remain external boundaries.
+Directories, creation, append mode and truncation are outside this operation. -/
+@[expose] def pollOpenReadWrite (path : Str) (env : Environment) :
+    Option (Except Exception (core.result.Result NativeFile NativeIoError) × Environment) :=
+  let invalid := some (.error .exhausted, env)
+  let path := bytes path
+  if !supportedPath path then invalid else
+  match namespaceState env with
+  | none => invalid
+  | some (names, script) =>
+    if script matches .cons (.atom "blocked") _ then none else
+    match openChoice path script with
+    | none => invalid
+    | some (success, error, ioScript, rest) =>
+      if success then
+        if error != 0 then invalid else
+        match names.filter (fun entry => entry.1.data == path.data) with
+        | [(_, id)] =>
+          match inode id env with
+          | none => invalid
+          | some _ =>
+            let fresh := env.nativeRefCounter + 1
+            if env.nativeHeap.any (fun cell => cell.1 == fresh) then invalid else
+            let updated := replaceNamespaceScript rest env
+            some (.ok (.Ok ⟨fresh⟩), {updated with
+              nativeRefCounter := fresh
+              nativeHeap := (fresh, writableHandleTypeName, encodeHandle ⟨id,0,ioScript⟩) :: updated.nativeHeap})
+        | _ => invalid
+      else some (.ok (.Err ⟨error⟩), replaceNamespaceScript rest env)
+
+@[expose] def openReadWrite (path : Str) : NativeM (core.result.Result NativeFile NativeIoError) :=
+  .wait (pollOpenReadWrite path) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
+/-- The admitted standard builder contains only locally configured read/write
+flags. Other flags and caller-supplied builders are rejected during extraction. -/
+structure OpenOptions where
+  readEnabled : Bool := false
+  writeEnabled : Bool := false
+
+namespace OpenOptions
+
+@[expose] def new : OpenOptions := {}
+
+/-- Aeneas represents the returned mutable self borrow with its backward map. -/
+@[expose] def read (options : OpenOptions) (enabled : Bool) :
+    OpenOptions × (OpenOptions → OpenOptions) :=
+  ({options with readEnabled := enabled}, fun updated => updated)
+
+@[expose] def write (options : OpenOptions) (enabled : Bool) :
+    OpenOptions × (OpenOptions → OpenOptions) :=
+  ({options with writeEnabled := enabled}, fun updated => updated)
+
+/-- Only existing regular files with read access are admitted. Unsupported access
+modes exhaust verification rather than inventing a successful open or OS error. -/
+@[expose] def openFile (options : OpenOptions) (path : Str) :
+    NativeM (core.result.Result NativeFile NativeIoError) :=
+  if options.readEnabled then
+    if options.writeEnabled then openReadWrite path else openReadOnly path
+  else .error .exhausted
+
+end OpenOptions
+
 @[expose] def lookup (file : NativeFile) (env : Environment) : Option State :=
   if file.id ≤ env.nativeRefCounter then
     match env.nativeHeap.filter (fun cell => cell.1 == file.id) with

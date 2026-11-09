@@ -82,6 +82,17 @@ defmodule Lynx.Rust do
   namespace state and inconsistent outcomes exhaust verification. This verifies
   extracted opening/cleanup protocols against the model, not native pathname
   resolution or physical descriptor allocation.
+  Locally constructed `std::fs::OpenOptions` builders additionally support `new`,
+  `read`, `write` and `open<&str>`. Compiler metadata must confirm that the builder
+  needs no destruction. The setters preserve their mutable self borrow and boolean
+  arguments. Read/write mode opens an existing regular inode without creating or
+  truncating it; its cursor is independent and its contents remain shared. The
+  same standard path dictionaries are validated before erasure. Builders entering
+  through first-party function arguments, including nested containers, are rejected
+  because they could carry unmodelled flags. Append/create/truncate flags and OS
+  extensions are unsupported calls; write-only and no-access modes exhaust
+  verification. Standard builder semantics, permissions and std/OS/FFI
+  correspondence remain reported external boundaries.
   `File::create_new<&str>` grants a fresh empty inode and read/write handle only
   for an absent name. It preserves existing contents on admitted errors and rejects
   a contradictory success outcome for an existing name. Namespace admission

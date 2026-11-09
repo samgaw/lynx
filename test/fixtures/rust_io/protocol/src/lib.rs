@@ -285,6 +285,27 @@ pub fn create_fresh(path: &str) -> io::Result<File> {
     io_core::create_new_file(path)
 }
 
+/// Reopens an existing log while retaining read and write access to its inode.
+///
+/// # Errors
+/// Propagates opening errors without replacing or truncating the named file.
+pub fn open_readwrite(path: &str) -> io::Result<File> {
+    io_core::open_readwrite(path)
+}
+
+/// Reopens, durably appends and closes an existing log without replacing it.
+///
+/// Callers must serialize access and start from a complete record prefix.
+///
+/// # Errors
+/// Propagates opening and append errors; an error does not promise rollback.
+pub fn reopen_then_append(path: &str, value: u16) -> io::Result<bool> {
+    let mut file = io_core::open_readwrite(path)?;
+    let result = append_record_or_rollback(&mut file, value);
+    drop(file);
+    result
+}
+
 /// Renames a regular-file name through the low-level crate.
 /// # Errors
 /// Propagates the operating system's rename error.
