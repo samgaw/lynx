@@ -278,6 +278,29 @@ fn derived_list(left: u64, right: u64) -> OrderedList {
     OrderedList { values }
 }
 
+/// A derived protocol response with atom and tuple representations.
+#[cfg(feature = "derived-tagged")]
+#[derive(rustler::NifTaggedEnum)]
+enum OrderedReply {
+    Empty,
+    Equal(u64),
+    Ordered(u64, u64),
+}
+
+/// Classifies and orders fields through the ordinary workspace crates.
+#[cfg(feature = "derived-tagged")]
+#[rustler::nif(name = "tagged_reply", schedule = "DirtyCpu")]
+fn tagged_order(left: u64, right: u64) -> OrderedReply {
+    if left == 0 && right == 0 {
+        OrderedReply::Empty
+    } else if left == right {
+        OrderedReply::Equal(left)
+    } else {
+        let (low, high) = experiment_analysis::order_pair(left, right);
+        OrderedReply::Ordered(low, high)
+    }
+}
+
 /// Propagates checked arithmetic failure through the workspace's Option path.
 #[cfg(feature = "checked-option")]
 #[rustler::nif]
@@ -307,6 +330,7 @@ mod tests {
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
                 + usize::from(cfg!(feature = "derived-list"))
+                + usize::from(cfg!(feature = "derived-tagged"))
                 + usize::from(cfg!(feature = "checked-option"))
         );
         let mut metadata: Vec<_> = exports
@@ -409,6 +433,13 @@ mod tests {
                 "derived_list".to_owned(),
                 2,
                 rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "derived-tagged") {
+            expected.push((
+                "tagged_reply".to_owned(),
+                2,
+                rustler::SchedulerFlags::DirtyCpu as u32,
             ));
         }
         if cfg!(feature = "derived-tuple") {
