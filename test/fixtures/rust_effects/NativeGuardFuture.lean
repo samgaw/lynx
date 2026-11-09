@@ -110,7 +110,7 @@ theorem first_pending_next {α : Type} (value updated : effects_core.Counter) (a
   have wakeReady : NativeWaker.pollWake ⟨0, false⟩ acquired = some (.ok (), held env value poisoned) := by
     simp [NativeWaker.pollWake, acquired, start, registered, held]
   simp only [NativeWaker.wakeByRef, Bool.false_eq_true, ↓reduceIte, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ wakeReady]
+  rw [Result.wait_ready_run _ _ _ _ _ wakeReady]
   simp
 
 theorem cancel_pending_next {α : Type} (value updated : effects_core.Counter) (amount : U64)
