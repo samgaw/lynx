@@ -90,6 +90,19 @@ defmodule Lynx.Rust.LLBCTest do
                | "aeneas_version" => "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1"
              })
 
+    assert %{0 => %{"lean_name" => "first_party.compute"}} =
+             LLBC.link!(audit, %{translation() | "aeneas_version" => "build-2b9e3ea"})
+
+    unmodified =
+      translation()
+      |> Map.put("aeneas_version", "build-2b9e3ea")
+      |> Map.put("result_monad", "Lynx.NativeM")
+      |> Map.put("effectful_calls_preserved", true)
+
+    assert_raise ArgumentError, ~r/preserved call provenance/, fn ->
+      LLBC.link!(audit, unmodified, result_monad: "Lynx.NativeM")
+    end
+
     for version <- ["2b9e3ea4662b-dirty", "nightly-2026.11.04-2b9e3ea+unknown", nil] do
       assert_raise ArgumentError, ~r/does not match/, fn ->
         LLBC.link!(audit, %{translation() | "aeneas_version" => version})

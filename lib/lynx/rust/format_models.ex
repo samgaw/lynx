@@ -5,6 +5,17 @@ defmodule Lynx.Rust.FormatModels do
   # The bounded runtime is not permission to use arbitrary formatting operations.
   # Check default format constructors, writers and every concrete Display
   # dictionary. Debug, options and custom writers stay closed.
+  def validate_library!(models, tools) do
+    if Enum.any?(models, fn {_id, model} -> model[:bounded_formatting] end) and
+         not String.contains?(
+           File.read!(Path.join(tools, "lynx-toolchain")),
+           "aeneas_runtime=lynx-bounded-default-format-v2"
+         ) do
+      raise ArgumentError,
+            "Rust formatting requires the bounded formatting library; the pure toolchain does not model formatting"
+    end
+  end
+
   def resolve(function, translated, refs) do
     ctx = %{translated: translated, refs: refs, constants: constant_references(translated, %{})}
 
@@ -806,6 +817,7 @@ defmodule Lynx.Rust.FormatModels do
       builtin: builtin,
       can_fail: true,
       lift: false,
+      bounded_formatting: true,
       label: label
     }
 
