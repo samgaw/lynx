@@ -5,7 +5,7 @@ defmodule Lynx.Rustler.PureToolchainTest do
   @moduletag timeout: 1_200_000
   unless @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
            String.contains?(File.read!(Path.join(@tools, "lynx-toolchain")), "profile=pure"),
-         do: @moduletag(skip: "set LYNX_PURE_AENEAS_DIR to an installation made with --pure")
+         do: @moduletag(skip: "set LYNX_PURE_AENEAS_DIR to a pure installation")
 
   @tag :tmp_dir
   test "proves compiled workspace NIFs with unmodified Aeneas and rejects unsupported semantics",
