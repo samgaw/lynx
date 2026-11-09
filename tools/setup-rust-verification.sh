@@ -56,7 +56,6 @@ if [ "$actual" != "$checksum" ]; then
 fi
 tar -xzf "$archive" -C "$install_dir"
 if [ "$verification_profile" = runtime ]; then
-  git -C "$install_dir" apply "$script_dir/patches/aeneas-saturating-add-spec.patch"
   git -C "$install_dir" apply "$script_dir/patches/aeneas-bounded-formatting.patch"
 fi
 source_dir="$install_dir/charon-source"

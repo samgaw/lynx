@@ -450,22 +450,18 @@ defmodule Lynx.Rust.Extraction do
       fingerprint:
         Lynx.Rust.Fingerprint.extraction!(context, tools, llbc, translation_bytes, first_party)
         |> then(fn digest ->
-          if execution == :pure and models == [] and requested_calls == [] and
-               map_size(audit.external_calls) == 0,
-             do: digest,
-             else:
-               Lynx.Rust.Fingerprint.digest(
-                 :erlang.term_to_binary(
-                   {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
-                    Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
-                    requested_calls,
-                    audit.external_calls
-                    |> Map.values()
-                    |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
-                    |> Enum.sort()},
-                   [:deterministic]
-                 )
-               )
+          Lynx.Rust.Fingerprint.digest(
+            :erlang.term_to_binary(
+              {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
+               Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
+               requested_calls,
+               audit.external_calls
+               |> Map.values()
+               |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
+               |> Enum.sort()},
+              [:deterministic]
+            )
+          )
         end),
       llbc: llbc,
       backend_llbc: backend_llbc,

@@ -1,0 +1,35 @@
+module
+
+public import Aeneas
+-- Intentional implementation dependency: upstream keeps the arithmetic body private.
+-- Clients use the public theorem below through ordinary generated-module imports.
+import all Aeneas.Std.Scalar.SaturatingOps
+
+public section
+
+open Aeneas Aeneas.Std Aeneas.Std.ScalarElab
+
+namespace Lynx.Rust.Scalar
+
+/-- Mathematical value of upstream unsigned saturating addition. This downstream
+proof adds no arithmetic model and needs no modification of the Aeneas library. -/
+@[simp, scalar_tac_simps]
+theorem saturatingAdd_val_eq {ty : UScalarTy} (x y : UScalar ty) :
+    (UScalar.saturating_add x y).val = min (UScalar.max ty) (x.val + y.val) := by
+  simp only [UScalar.saturating_add, UScalar.val, BitVec.toNat_ofNat]
+  apply Nat.mod_eq_of_lt
+  have positive : 0 < 2 ^ ty.numBits := Nat.two_pow_pos _
+  have bound : UScalar.max ty < 2 ^ ty.numBits := by
+    simp only [UScalar.max]
+    omega
+  exact lt_of_le_of_lt (Nat.min_le_left _ _) bound
+
+
+-- Public specifications of upstream's generated fixed-width aliases.
+uscalar @[simp, scalar_tac_simps]
+theorem «%S».saturatingAdd_val_eq (x y : Aeneas.Std.«%S») :
+    (Aeneas.Std.core.num.«%S».saturating_add x y).val =
+      min (UScalar.max UScalarTy.«%S») (x.val + y.val) :=
+  Lynx.Rust.Scalar.saturatingAdd_val_eq x y
+
+end Lynx.Rust.Scalar
