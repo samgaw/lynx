@@ -467,9 +467,12 @@ defmodule Lynx.Rust.Extraction do
       backend_llbc: backend_llbc,
       output: output,
       module: module,
-      model_modules:
-        runtime_modules ++
-          codec_modules ++ operation_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
+      audit_modules:
+        Enum.uniq(
+          [module <> ".Types", module <> ".Funs"] ++
+            runtime_modules ++
+            codec_modules ++ operation_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
+        )
     }
   end
 

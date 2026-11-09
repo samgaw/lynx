@@ -9,6 +9,7 @@ defmodule Lynx.Rustler.DerivedTupleTest do
   for {version, shape} <- [{"0.39.0", :tuple}, {"0.38.0", :tuple}, {"0.39.0", :list}] do
     @tag :tmp_dir
     @tag shape: shape
+    @tag type_audit: version == "0.39.0" and shape == :tuple
     test "verifies the actual NifTuple #{shape} Encoder under Rustler #{version}", %{
       tmp_dir: tmp,
       shape: shape
@@ -112,6 +113,49 @@ defmodule Lynx.Rustler.DerivedTupleTest do
                        prepared.extraction.translation
                      )
                    end
+
+      if version == "0.39.0" and shape == :tuple do
+        types_module = "RustWorkspace.DerivedFacade.Types"
+        assert types_module in prepared.extraction.audit_modules
+        types_path = Path.join(project, "RustWorkspace/DerivedFacade/Types.lean")
+        original_types = File.read!(types_path)
+
+        files =
+          Lynx.Translation.new(externals: [prepared.external]) |> Lynx.Translation.assemble()
+
+        assert Enum.all?(Lynx.Commands.verify!(project, files), &(&1.status == :ok and &1.cached))
+
+        for extra <- [
+              "private axiom unusedNifTypeTrust : False",
+              "private theorem unfinishedNifType : True := by sorry"
+            ] do
+          File.write!(types_path, original_types <> "\n" <> extra <> "\n")
+
+          Lynx.Rust.Project.build!(project, [
+            "RustWorkspace.DerivedFacade.Funs",
+            "RustWorkspace.#{property_name}"
+          ])
+
+          reports = Lynx.Commands.verify!(project, files)
+          assert Enum.any?(reports, &(&1.status == :error and not &1.cached))
+
+          assert Enum.any?(reports, fn report ->
+                   Enum.any?(
+                     report.diagnostics,
+                     &String.contains?(&1.message, "unexpected axiom")
+                   )
+                 end)
+        end
+
+        File.write!(types_path, original_types)
+
+        Lynx.Rust.Project.build!(project, [
+          "RustWorkspace.DerivedFacade.Funs",
+          "RustWorkspace.#{property_name}"
+        ])
+
+        assert Enum.all?(Lynx.Commands.verify!(project, files), &(&1.status == :ok))
+      end
 
       File.mkdir_p!(Path.join(workspace, "priv"))
       File.cp!(prepared.library, Path.join(workspace, "priv/libexperiment_nif.so"))

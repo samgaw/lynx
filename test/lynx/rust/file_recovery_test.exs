@@ -71,7 +71,7 @@ defmodule Lynx.Rust.FileRecoveryTest do
 
     result = Lynx.Rust.verify!(workspace, "io-protocol", options)
     assert [%{status: :ok}] = result.reports
-    assert "Recovery.Extraction.FileModel" in result.extraction.model_modules
+    assert "Recovery.Extraction.FileModel" in result.extraction.audit_modules
 
     assert Enum.any?(
              result.verification.guarantees,

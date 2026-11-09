@@ -45,7 +45,7 @@ defmodule Lynx.Rust.ScalarSupportTest do
 
     result = Lynx.Rust.verify!(workspace, "effects-core", options)
     assert [%{status: :ok}] = result.reports
-    assert "Scalar.NativeScalars" in result.extraction.model_modules
+    assert "Scalar.NativeScalars" in result.extraction.audit_modules
 
     assert [%{status: :ok, cached: true}] =
              Lynx.Rust.verify!(workspace, "effects-core", options).reports
