@@ -39,7 +39,6 @@ defmodule Lynx.Rust.Runtime do
      [
        "-lean-result-monad",
        "Lynx.NativeM",
-       "-preserve-effectful-calls",
        "-loops-no-rec",
        "-extra-includes",
        Enum.join(modules, ",")
