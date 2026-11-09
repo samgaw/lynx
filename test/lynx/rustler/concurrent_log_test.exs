@@ -9,7 +9,20 @@ defmodule Lynx.Rustler.ConcurrentLogTest do
   @tag :tmp_dir
   test "checks acknowledged durable records under every modelled schedule", %{tmp_dir: tmp} do
     %{options: options, prepared: prepared, workspace: workspace, project: project} =
-      Lynx.Rust.IoFixture.prepare_shared!(tmp, @tools, ["ConcurrentStorageProperties"])
+      Lynx.Rust.IoFixture.prepare_shared!(tmp, @tools, [
+        "ConcurrentStorageProperties",
+        "SharedRecoveryProperties",
+        "ConcurrentRecoveryProperties"
+      ])
+
+    options =
+      Keyword.update!(options, :required_properties, fn properties ->
+        properties ++
+          [
+            "Record.SharedRecoveryProperties.constructed_log_recovery",
+            "Record.ConcurrentRecoveryProperties.checked_recovery"
+          ]
+      end)
 
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
     [{_, beam}] = Code.compile_file(Path.join(@fixture, "ConcurrentLogLaws.exs"))
@@ -51,7 +64,21 @@ defmodule Lynx.Rustler.ConcurrentLogTest do
 
     refute wrong == original
     File.write!(property, wrong)
-    wrong_reports = Lynx.Laws.verify([beam], law_options)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(property, original)
+
+    # The Elixir program's incorrect expectation must fail at its own law, even
+    # though all Rust implementations and recovery contracts still verify.
+    source = Path.join(@fixture, "ConcurrentLogLaws.exs")
+    law = File.read!(source)
+    wrong_law = String.replace(law, "appended and peer", "not (appended and peer)")
+    refute wrong_law == law
+    [{_, wrong_beam}] = Code.compile_string(wrong_law, source)
+    wrong_reports = Lynx.Laws.verify([wrong_beam], law_options)
 
     assert %{status: :error, diagnostics: diagnostics} =
              Enum.find(
@@ -65,6 +92,7 @@ defmodule Lynx.Rustler.ConcurrentLogTest do
            )
 
     refute Enum.any?(diagnostics, &String.contains?(&1.message, "Unknown identifier"))
+    Code.compile_string(law, source)
 
     for extra <- [
           "private axiom storageTrust : False",
