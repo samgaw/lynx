@@ -123,11 +123,11 @@ defmodule Lynx.Rustler.CustomTest do
               "Lynx.Rustler.Encoding.shared",
               "Lynx.Rustler.Encoding.atom",
               "Lynx.Rustler.Encoding.string",
-              "alloc.string.ToString.to_string",
-              "core.fmt.DisplayStr.fmt",
-              "core.fmt.Formatter.write_str",
-              "Formatting.writeBytes",
-              "Formatting.append"
+              "Lynx.RustFormatting.alloc.string.ToString.to_string",
+              "Lynx.RustFormatting.core.fmt.DisplayStr.fmt",
+              "Lynx.RustFormatting.core.fmt.Formatter.write_str",
+              "Lynx.RustFormatting.Formatting.writeBytes",
+              "Lynx.RustFormatting.Formatting.append"
             ],
           ", "
         )
@@ -151,7 +151,7 @@ defmodule Lynx.Rustler.CustomTest do
         simp [#{unfold}]
       theorem invalid : #{binding["lean_name"]} (⟨BitVec.ofNat 8 1⟩ : U8) = RustM.ok (.Err (.Invalid "custom error")) := by
         change #{binding["lean_name"]} 1#u8 = RustM.ok (.Err (.Invalid "custom error"))
-        have decoded : String.fromUTF8? ⟨(Formatting.bytes (toStr "custom error").val).toList.toArray⟩ =
+        have decoded : String.fromUTF8? ⟨(Lynx.RustFormatting.Formatting.bytes (toStr "custom error").val).toList.toArray⟩ =
             some "custom error" := by decide +kernel
         have bounded : "custom error".utf8ByteSize ≤ 4294967295 := by decide +kernel
         simp [#{unfold}, decoded, bounded]

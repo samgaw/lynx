@@ -55,9 +55,6 @@ if [ "$actual" != "$checksum" ]; then
   exit 1
 fi
 tar -xzf "$archive" -C "$install_dir"
-if [ "$verification_profile" = runtime ]; then
-  git -C "$install_dir" apply "$script_dir/patches/aeneas-bounded-formatting.patch"
-fi
 source_dir="$install_dir/charon-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/charon "$source_dir"
 git -C "$source_dir" checkout --detach 7b462d9159db2ed3015162352183906a30bfafc6
@@ -136,7 +133,6 @@ AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aen
 cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
 printf '%s\n' 'profile=runtime' "aeneas=$aeneas_version" \
   'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1+suspending-futures-v1+cancelling-futures-v1+owned-drops-v1+owned-captures-v1+safe-pin-new-v1+pin-macro-v1+pin-as-mut-v1' \
-  'aeneas_runtime=lynx-bounded-default-format-v2' \
   'aeneas_lean=tuple-back-projections-v1' \
   'aeneas_loops=native-loops-v1' \
   'aeneas_effects=effectful-calls-v1' \

@@ -98,6 +98,11 @@ defmodule Lynx.Rust.FormatArgumentsTest do
                "Arguments.renderer_spec" in row.contracts_used
            end)
 
+    assert "Arguments.NativeFormatting" in result.extraction.audit_modules
+
+    assert [%{status: :ok, cached: true}] =
+             Lynx.Rust.verify!(workspace, "argument-analysis", options).reports
+
     document = JSON.decode!(File.read!(result.extraction.llbc))
 
     for model <- Map.values(result.extraction.audit.external_calls) do
@@ -124,6 +129,22 @@ defmodule Lynx.Rust.FormatArgumentsTest do
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
 
+    model_path = Path.join(project, "Arguments/NativeFormatting.lean")
+    model_source = File.read!(model_path)
+
+    for extra <- [
+          "private axiom formattingTrust : False",
+          "private theorem unfinishedFormatting : True := by sorry"
+        ] do
+      File.write!(model_path, model_source <> "\n" <> extra <> "\n")
+      Lynx.Rust.Project.build!(project, ["Arguments.Properties"])
+      assert [%{status: :error, cached: false}] = Lynx.Commands.verify!(project, [file])
+    end
+
+    File.write!(model_path, model_source)
+    Lynx.Rust.Project.build!(project, ["Arguments.Properties"])
+    assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file])
+
     # The old theorem must fail when the real Rust formatter changes.
     File.write!(source, String.replace(original, "n={}", "m={}"))
 
@@ -136,5 +157,8 @@ defmodule Lynx.Rust.FormatArgumentsTest do
     assert_raise CompileError, fn ->
       Lynx.Rust.verify!(workspace, "argument-analysis", options)
     end
+
+    File.write!(source, original)
+    assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "argument-analysis", options).reports
   end
 end
