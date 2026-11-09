@@ -256,6 +256,28 @@ fn derived_pair(left: u64, right: u64) -> OrderedFields {
     OrderedFields { low, high }
 }
 
+/// A derived tuple containing an encoded list.
+#[cfg(feature = "derived-list")]
+#[derive(Debug, rustler::NifTuple)]
+struct OrderedList {
+    values: Vec<u64>,
+}
+
+/// Constructs a nested list using the actual workspace ordering algorithm.
+#[cfg(feature = "derived-list")]
+#[rustler::nif]
+#[expect(
+    clippy::vec_init_then_push,
+    reason = "Exercise the bounded Vec::push verification model"
+)]
+fn derived_list(left: u64, right: u64) -> OrderedList {
+    let (low, high) = experiment_analysis::order_pair(left, right);
+    let mut values = Vec::new();
+    values.push(low);
+    values.push(high);
+    OrderedList { values }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -277,6 +299,7 @@ mod tests {
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
+                + usize::from(cfg!(feature = "derived-list"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -365,6 +388,13 @@ mod tests {
             for name in ["echo_flags", "echo_signed_bytes"] {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
+        }
+        if cfg!(feature = "derived-list") {
+            expected.push((
+                "derived_list".to_owned(),
+                2,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
         }
         if cfg!(feature = "derived-tuple") {
             expected.push((
