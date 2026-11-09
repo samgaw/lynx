@@ -1,14 +1,15 @@
 #!/bin/sh
-# Install pinned extractors; --pure keeps Aeneas and its Lean library unmodified.
+# Install pinned extractors; --runtime opts into the patched native runtime stack.
 set -eu
 
-verification_profile=runtime
-if [ "${1-}" = --pure ]; then
-  verification_profile=pure
-  shift
-fi
+verification_profile=pure
+case "${1-}" in
+  --pure) shift ;;
+  --runtime) verification_profile=runtime; shift ;;
+  -*) echo "usage: $0 [--pure|--runtime] NEW_INSTALL_DIRECTORY" >&2; exit 1 ;;
+esac
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 [--pure] NEW_INSTALL_DIRECTORY" >&2
+  echo "usage: $0 [--pure|--runtime] NEW_INSTALL_DIRECTORY" >&2
   exit 1
 fi
 if [ "$verification_profile" = runtime ] && ! command -v opam >/dev/null 2>&1; then
