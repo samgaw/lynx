@@ -47,9 +47,10 @@ defmodule Lynx.Rustler.AtomCaches do
           _ -> fail!("cache is not a struct")
         end
 
-      unless Enum.map(fields, & &1["name"]) == Enum.map(cache["fields"], & &1["field"]) and
-               Enum.all?(fields, &(nominal(&1["ty"], types, refs) == ~w(rustler types atom Atom))),
-             do: fail!("cache fields do not have the resolved Rustler Atom type")
+      ordered_fields = ordered_fields!(fields, cache["fields"])
+
+      unless Enum.all?(fields, &(nominal(&1["ty"], types, refs) == ~w(rustler types atom Atom))),
+        do: fail!("cache fields do not have the resolved Rustler Atom type")
 
       factory =
         unique!(functions, fn function ->
@@ -120,7 +121,40 @@ defmodule Lynx.Rustler.AtomCaches do
           {~w(core result Result), "expect"}
         ])
 
-      unless calls == expected, do: fail!("cache uses unresolved or unsupported runtime calls")
+      result_drop = {~w(core result Result), "drop"}
+
+      unless (calls == expected or calls == MapSet.put(expected, result_drop)) and
+               Enum.all?(family, &result_drops?(&1["body"], by_id, types, refs)),
+             do: fail!("cache uses unresolved or unsupported runtime calls")
+
+      literals =
+        for global <- Enum.reject(translated["global_decls"], &is_nil/1),
+            global["global_kind"] == "AnonConst",
+            [%{"Str" => text}, _] <- [CallModels.expand(global["value"], refs)],
+            into: %{},
+            do: {global["def_id"], text}
+
+      constructor_ids =
+        for function <- functions,
+            resolved_call(function["item_meta"]["name"], types, refs) ==
+              {~w(rustler types atom Atom), "from_str"},
+            do: function["def_id"]
+
+      expect_ids =
+        for function <- functions,
+            resolved_call(function["item_meta"]["name"], types, refs) ==
+              {~w(core result Result), "expect"},
+            do: function["def_id"]
+
+      unless Lynx.Rustler.AtomInitializer.fields!(
+               family,
+               type_id,
+               fields,
+               literals,
+               constructor_ids,
+               expect_ids
+             ) == ordered_fields,
+             do: fail!("compiled initializer literals differ from the expanded cache")
 
       %{
         type_id: type_id,
@@ -129,7 +163,7 @@ defmodule Lynx.Rustler.AtomCaches do
         global_id: global["def_id"],
         factory_name: name,
         opaque_pattern: Enum.join([crate | cache["modules"]] ++ ["_", "get"], "::"),
-        fields: cache["fields"],
+        fields: ordered_fields,
         implementation_verified: false
       }
     end)
@@ -157,13 +191,13 @@ defmodule Lynx.Rustler.AtomCaches do
 
       unless type["item_meta"]["name"] == prefix ++ identifiers(["RustlerAtoms"]) and
                match?(%{"Struct" => _}, type["kind"]) and
-               Enum.map(type["kind"]["Struct"], & &1["name"]) ==
-                 Enum.map(cache.fields, & &1["field"]) and
                Enum.all?(
                  type["kind"]["Struct"],
                  &(nominal(&1["ty"], types, refs) == ~w(rustler types atom Atom))
                ),
              do: fail!("re-extracted cache type does not match the validated fields")
+
+      ordered_fields = ordered_fields!(type["kind"]["Struct"], cache.fields)
 
       function =
         unique!(Enum.reject(translated["fun_decls"], &is_nil/1), fn function ->
@@ -204,7 +238,7 @@ defmodule Lynx.Rustler.AtomCaches do
          implementation_verified: false,
          status: :modelled,
          cache_type_id: type_id,
-         cache_fields: cache.fields
+         cache_fields: ordered_fields
        }}
     end
   end
@@ -243,7 +277,43 @@ defmodule Lynx.Rustler.AtomCaches do
 
   def install!(_models, _translation, _output, _module), do: :ok
 
+  defp ordered_fields!(fields, bindings) do
+    names = Enum.map(fields, & &1["name"])
+    by_name = Map.new(bindings, &{&1["field"], &1})
+
+    unless length(names) == MapSet.size(MapSet.new(names)) and
+             length(bindings) == map_size(by_name) and
+             Enum.sort(names) == Enum.sort(Map.keys(by_name)),
+           do: fail!("cache field identities do not match the expanded cache")
+
+    Enum.map(names, &Map.fetch!(by_name, &1))
+  end
+
   defp identifiers(names), do: Enum.map(names, &%{"Ident" => [&1, 0]})
+
+  # MIR may retain cleanup for an intermediate Result during initialization.
+  # Only Rustler's Atom/Error result belongs to the declared initialization FFI
+  # boundary; a Result containing first-party state must not be hidden here.
+  defp result_drops?(%{"kind" => %{"Fun" => id}, "generics" => args}, functions, types, refs) do
+    case resolved_call(functions[id]["item_meta"]["name"], types, refs) do
+      {~w(core result Result), "drop"} ->
+        Enum.map(args["types"], &nominal(&1, types, refs)) ==
+          [~w(rustler types atom Atom), ~w(rustler error Error)] and
+          length(args["regions"]) == 1 and args["const_generics"] == [] and
+          args["trait_refs"] == []
+
+      _ ->
+        true
+    end
+  end
+
+  defp result_drops?(map, functions, types, refs) when is_map(map),
+    do: Enum.all?(Map.values(map), &result_drops?(&1, functions, types, refs))
+
+  defp result_drops?(list, functions, types, refs) when is_list(list),
+    do: Enum.all?(list, &result_drops?(&1, functions, types, refs))
+
+  defp result_drops?(_, _, _, _), do: true
 
   defp nominal(type, types, refs) do
     case CallModels.expand(type, refs) do
