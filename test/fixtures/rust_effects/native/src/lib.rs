@@ -1366,3 +1366,87 @@ pub fn cancel_guarded(
         std::task::Poll::Pending
     )
 }
+
+/// Completes an actual future that holds the shared mutex guard while Pending.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+#[cfg(feature = "guard-future-resource-handles")]
+#[rustler::nif(name = "counter_guard_finish", schedule = "DirtyCpu")]
+pub fn locked_resource_guard_finish(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match finish_guarded_resource(resource, amount, &mut context) {
+        std::task::Poll::Ready(changed) => changed,
+        std::task::Poll::Pending => false,
+    }
+}
+
+/// Cancels after the mutation, releasing the suspended frame before its owner.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+#[cfg(feature = "guard-future-resource-handles")]
+#[rustler::nif(name = "counter_guard_cancel", schedule = "DirtyCpu")]
+pub fn locked_resource_guard_cancel(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    cancel_guarded_resource(resource, amount, &mut context)
+}
+
+/// Holds both an owned resource and its mutated guard across actual suspension.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block; a caller waker may panic.
+#[expect(
+    clippy::await_holding_lock,
+    reason = "Verification fixture intentionally retains the guard across a Pending poll"
+)]
+pub async fn guarded_resource_suspending(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+) -> bool {
+    let mut guard = effects_core::recover_guard(resource.state.lock());
+    let changed = effects_core::increment_guard(&mut guard, amount);
+    let _progress = effects_core::paused_counter(amount).await;
+    effects_core::release_guard(guard);
+    resource_release(resource);
+    changed
+}
+
+/// Completes the owned guard-holding frame with two explicit polls.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block; a caller waker may panic.
+pub fn finish_guarded_resource(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+    context: &mut std::task::Context<'_>,
+) -> std::task::Poll<bool> {
+    use std::future::Future;
+    let mut future = std::pin::pin!(guarded_resource_suspending(resource, amount));
+    match future.as_mut().poll(context) {
+        std::task::Poll::Pending => future.as_mut().poll(context),
+        ready => ready,
+    }
+}
+
+/// Drops the actual frame after Pending, releasing the guard before its owner.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block; a caller waker may panic.
+pub fn cancel_guarded_resource(
+    resource: rustler::ResourceArc<CounterResource>,
+    amount: u64,
+    context: &mut std::task::Context<'_>,
+) -> bool {
+    use std::future::Future;
+    matches!(
+        std::pin::pin!(guarded_resource_suspending(resource, amount)).poll(context),
+        std::task::Poll::Pending
+    )
+}
