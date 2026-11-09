@@ -4,6 +4,8 @@ public import Aeneas
 -- Intentional implementation dependency: upstream keeps the arithmetic body private.
 -- Clients use the public theorem below through ordinary generated-module imports.
 import all Aeneas.Std.Scalar.SaturatingOps
+import all Aeneas.Std.Scalar.CheckedOps.Add
+import all Aeneas.Std.Scalar.CheckedOps.Mul
 
 public section
 
@@ -31,5 +33,41 @@ theorem «%S».saturatingAdd_val_eq (x y : Aeneas.Std.«%S») :
     (Aeneas.Std.core.num.«%S».saturating_add x y).val =
       min (UScalar.max UScalarTy.«%S») (x.val + y.val) :=
   Lynx.Rust.Scalar.saturatingAdd_val_eq x y
+
+/-- Integer-value specification of upstream's private checked-add alias. -/
+theorem checkedAddI64_spec (x y : Aeneas.Std.I64) :
+    match Aeneas.Std.I64.checked_add x y with
+    | some z => Aeneas.Std.I64.min ≤ x.val + y.val ∧
+        x.val + y.val ≤ Aeneas.Std.I64.max ∧ z.val = x.val + y.val
+    | none => ¬ (Aeneas.Std.I64.min ≤ x.val + y.val ∧ x.val + y.val ≤ Aeneas.Std.I64.max) := by
+  have spec := Aeneas.Std.I64.checked_add_bv_spec x y
+  change (match Aeneas.Std.I64.checked_add x y with
+    | some z => Aeneas.Std.I64.min ≤ x.val + y.val ∧
+        x.val + y.val ≤ Aeneas.Std.I64.max ∧ z.val = x.val + y.val ∧
+        Aeneas.Std.I64.bv z = Aeneas.Std.I64.bv x + Aeneas.Std.I64.bv y
+    | none => ¬ (Aeneas.Std.I64.min ≤ x.val + y.val ∧ x.val + y.val ≤ Aeneas.Std.I64.max)) at spec
+  cases result : Aeneas.Std.I64.checked_add x y with
+  | none => simpa only [result] using spec
+  | some z =>
+    simp only [result] at spec ⊢
+    exact ⟨spec.1, spec.2.1, spec.2.2.1⟩
+
+/-- Integer-value specification of upstream's private checked-mul alias. -/
+theorem checkedMulI64_spec (x y : Aeneas.Std.I64) :
+    match Aeneas.Std.I64.checked_mul x y with
+    | some z => Aeneas.Std.I64.min ≤ x.val * y.val ∧
+        x.val * y.val ≤ Aeneas.Std.I64.max ∧ z.val = x.val * y.val
+    | none => ¬ (Aeneas.Std.I64.min ≤ x.val * y.val ∧ x.val * y.val ≤ Aeneas.Std.I64.max) := by
+  have spec := Aeneas.Std.I64.checked_mul_bv_spec x y
+  change (match Aeneas.Std.I64.checked_mul x y with
+    | some z => Aeneas.Std.I64.min ≤ x.val * y.val ∧
+        x.val * y.val ≤ Aeneas.Std.I64.max ∧ z.val = x.val * y.val ∧
+        Aeneas.Std.I64.bv z = Aeneas.Std.I64.bv x * Aeneas.Std.I64.bv y
+    | none => ¬ (Aeneas.Std.I64.min ≤ x.val * y.val ∧ x.val * y.val ≤ Aeneas.Std.I64.max)) at spec
+  cases result : Aeneas.Std.I64.checked_mul x y with
+  | none => simpa only [result] using spec
+  | some z =>
+    simp only [result] at spec ⊢
+    exact ⟨spec.1, spec.2.1, spec.2.2.1⟩
 
 end Lynx.Rust.Scalar

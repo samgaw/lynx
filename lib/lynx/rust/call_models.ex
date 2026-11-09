@@ -95,8 +95,15 @@ defmodule Lynx.Rust.CallModels do
            %{"Ident" => [operation, 0]}
          ], [scalar, scalar], %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}}
         when operation in ["checked_add", "checked_mul"] ->
-          if scalar == %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}} and
-               parent_type(parent, refs) == scalar and generic_shape?(generics, 0, 0) and
+          width =
+            case scalar do
+              %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}} -> "U64"
+              %{"Scalar" => %{"Integer" => %{"Signed" => "I64"}}} -> "I64"
+              _ -> nil
+            end
+
+          if is_binary(width) and parent_type(parent, refs) == scalar and
+               generic_shape?(generics, 0, 0) and
                args == %{
                  "regions" => [],
                  "types" => [scalar],
@@ -135,13 +142,13 @@ defmodule Lynx.Rust.CallModels do
                    }
                end) do
             %{
-              rust_name: "core::num::{u64}::#{operation}",
-              lean: "Aeneas.Std.U64.#{operation}",
+              rust_name: "core::num::{#{String.downcase(width)}}::#{operation}",
+              lean: "Aeneas.Std.#{width}.#{operation}",
               builtin: true,
               can_fail: false,
               lift: true,
               label:
-                "Aeneas u64 #{operation} model; overflow returns None; Rust core implementation not verified"
+                "Aeneas #{String.downcase(width)} #{operation} model; overflow returns None; Rust core implementation not verified"
             }
           end
 
