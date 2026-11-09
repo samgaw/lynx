@@ -240,6 +240,22 @@ fn echo_signed_bytes(input: Vec<i8>) -> Vec<i8> {
     input
 }
 
+/// A protocol tuple encoded by the actual Rustler derive implementation.
+#[cfg(feature = "derived-tuple")]
+#[derive(Debug, rustler::NifTuple)]
+struct OrderedFields {
+    low: u64,
+    high: u64,
+}
+
+/// Returns ordered workspace fields through a derived Encoder.
+#[cfg(feature = "derived-tuple")]
+#[rustler::nif]
+fn derived_pair(left: u64, right: u64) -> OrderedFields {
+    let (low, high) = experiment_analysis::order_pair(left, right);
+    OrderedFields { low, high }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -260,6 +276,7 @@ mod tests {
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
+                + usize::from(cfg!(feature = "derived-tuple"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -348,6 +365,13 @@ mod tests {
             for name in ["echo_flags", "echo_signed_bytes"] {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
+        }
+        if cfg!(feature = "derived-tuple") {
+            expected.push((
+                "derived_pair".to_owned(),
+                2,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
         }
         if cfg!(feature = "collections") {
             expected.push((

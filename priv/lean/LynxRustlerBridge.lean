@@ -46,6 +46,21 @@ cutoff; successful allocation is assumed at this modelled FFI boundary. -/
   let right ← second.encode value.2 env
   .ok (.tuple #[left, right])
 
+/-- Rustler's safe tuple constructor delegates to the NIF API with a u32
+arity. The model also enforces the VM's 24-bit tuple-header limit. Native
+handles/environment agreement and allocation remain unverified. Larger slices
+exhaust verification instead of assuming a valid native tuple. -/
+@[expose] def makeTuple (_env : Env) (fields : Slice NativeTerm) : RustM NativeTerm :=
+  if fields.val.length ≤ 16777215 then .ok (.tuple fields.val.toArray) else .fail .undef
+
+theorem makeTuple_within (env : Env) (fields : Slice NativeTerm)
+    (bound : fields.val.length ≤ 16777215) :
+    makeTuple env fields = .ok (.tuple fields.val.toArray) := by simp [makeTuple, bound]
+
+theorem makeTuple_exhausted (env : Env) (fields : Slice NativeTerm)
+    (large : 16777215 < fields.val.length) :
+    makeTuple env fields = .fail .undef := by simp [makeTuple, Nat.not_le.mpr large]
+
 private def encodeList {T : Type} (encoder : Encoder T) (env : Env) :
     List T → RustM (List Term)
   | [] => .ok []

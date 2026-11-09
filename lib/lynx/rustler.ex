@@ -8,7 +8,10 @@ defmodule Lynx.Rustler do
   recognize `nil`; nested options therefore do not have an injective encoding.
   Return values can also contain monomorphic
   first-party structs/enums whose actual `Encoder` implementations can be
-  extracted. The compiler resolves their types, encoder roots and generated atom
+  extracted. Derived `NifTuple` return Encoders also use their actual expanded
+  Rust implementations, with an explicit tuple-construction FFI model. This does
+  not enable custom or derived argument Decoders.
+  The compiler resolves their types, encoder roots and generated atom
   caches automatically; no per-export Lean adapter or name mapping is required.
   Supported stateless runtime encoders include atoms, u64, strings, borrowed str,
   shared references, pairs and Vec. Custom arguments, `NifResult<T>` and other

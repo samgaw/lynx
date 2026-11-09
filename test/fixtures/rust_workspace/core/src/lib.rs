@@ -67,3 +67,12 @@ pub fn optional_flag(value: Option<bool>) -> bool {
         None => false,
     }
 }
+
+/// Orders two unsigned fields without arithmetic or allocation.
+pub fn order_pair(left: u64, right: u64) -> (u64, u64) {
+    if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
