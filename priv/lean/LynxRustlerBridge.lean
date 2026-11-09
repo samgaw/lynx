@@ -69,12 +69,41 @@ private def encodeList {T : Type} (encoder : Encoder T) (env : Env) :
     let rest ← encodeList encoder env tail
     .ok (encoded :: rest)
 
+/-- OTP's list constructor doubles an unsigned 32-bit element count before
+allocating list cells. Larger inputs are outside this verified FFI domain;
+allocation, handles and the native implementation remain unverified. -/
 def vec {T : Type} (encoder : Encoder T) (value : alloc.vec.Vec T) (env : Env) :
     RustM NativeTerm := do
-  if value.val.length ≤ 4294967295 then
+  if value.val.length ≤ 2147483647 then
     let encoded ← encodeList encoder env value.val
     .ok (Term.list encoded)
   else .fail .undef
+
+
+private theorem encodeList_values {T : Type} (encoder : Encoder T) (env : Env)
+    {values : List T} {terms : List Term}
+    (encoded : List.Forall₂ (fun value term => encoder.encode value env = .ok term) values terms) :
+    encodeList encoder env values = .ok terms := by
+  induction encoded with
+  | nil => rfl
+  | cons head tail ih => simp [encodeList, head, ih]
+
+/-- Composition with the actual supplied element Encoder, in list order. -/
+theorem vec_values {T : Type} (encoder : Encoder T) (value : alloc.vec.Vec T) (env : Env)
+    (terms : List Term) (bound : value.val.length ≤ 2147483647)
+    (encoded : List.Forall₂ (fun element term => encoder.encode element env = .ok term)
+      value.val terms) :
+    vec encoder value env = .ok (Term.list terms) := by
+  simp [vec, bound, encodeList_values encoder env encoded]
+
+theorem vec_exhausted {T : Type} (encoder : Encoder T) (value : alloc.vec.Vec T) (env : Env)
+    (large : 2147483647 < value.val.length) :
+    vec encoder value env = .fail .undef := by
+  simp [vec, Nat.not_le.mpr large]
+
+/-- Arithmetic correspondence required by OTP's unsigned `cnt * 2` allocation. -/
+theorem vec_allocation_size_safe (count : Nat) (bound : count ≤ 2147483647) :
+    count * 2 ≤ 4294967295 := by omega
 
 end Encoding
 

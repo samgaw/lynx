@@ -98,7 +98,12 @@ defmodule Lynx.Rustler.EncoderModels do
         encoder_regions: inherited + 2,
         encoder_standard: true,
         label:
-          "Stateless Rustler Encoder FFI model invoking audited nested encoders; native handles and allocation success assumed; Rustler implementation not verified"
+          "Stateless Rustler Encoder FFI model invoking audited nested encoders; native handles and allocation success assumed; Rustler implementation not verified" <>
+            if(kind == "vec",
+              do:
+                "; 2147483647-element verification limit preserves OTP unsigned allocation-count arithmetic",
+              else: ""
+            )
       }
     else
       _ -> nil
