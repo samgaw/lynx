@@ -31,9 +31,9 @@ defmodule Lynx.Rustler do
   decoder, including Rustler's signed narrowing behavior. Other vector elements
   and custom allocators remain unsupported.
   Native environment/term handles, allocation and atom-cache initialization are
-  explicitly reported FFI models. Strings and lists exceeding the supported
-  4,294,967,295 byte/element bound produce verification exhaustion. Generated
-  atom caches currently must be in the facade crate's expanded source.
+  explicitly reported FFI models. Strings longer than 4,294,967,295 bytes and
+  lists longer than 2,147,483,647 elements exhaust verification. Generated atom
+  caches currently must be in the facade crate's expanded source.
   Rustler 0.38.0 or 0.39.0 and the pinned
   Charon/Aeneas toolchain are required; install with `tools/setup-rust-verification.sh`.
   By default, `tools/setup-rust-verification.sh NEW_DIRECTORY`
