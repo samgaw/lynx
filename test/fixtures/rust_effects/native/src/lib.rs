@@ -1076,6 +1076,12 @@ pub fn file_resource_release(resource: rustler::ResourceArc<FileResource>) {
     drop(resource);
 }
 
+/// Acknowledges releasing a file owner without promising callback completion.
+pub fn file_resource_release_ack(resource: rustler::ResourceArc<FileResource>) -> bool {
+    file_resource_release(resource);
+    true
+}
+
 /// Retains another Rust token for the same file resource.
 pub fn file_resource_clone(
     resource: &rustler::ResourceArc<FileResource>,
