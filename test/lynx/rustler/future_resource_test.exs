@@ -11,116 +11,14 @@ defmodule Lynx.Rustler.FutureResourceTest do
   test "proves actual resource future completion and cancellation through Rustler and Elixir", %{
     tmp_dir: tmp
   } do
-    workspace = Path.join(tmp, "workspace")
-    File.mkdir_p!(workspace)
-
-    for path <- ~w(Cargo.toml Cargo.lock core native),
-        do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
-
-    project = Path.join(tmp, "proofs")
-    File.mkdir_p!(Path.join(project, "Shared"))
-    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
-
-    if File.dir?(packages) do
-      File.mkdir_p!(Path.join(project, ".lake"))
-      File.ln_s!(packages, Path.join(project, ".lake/packages"))
-    end
-
-    options = [
+    %{
+      options: options,
+      prepared: prepared,
       workspace: workspace,
-      package: "effects-native",
-      tools: @tools,
-      execution: :runtime,
-      futures: :cancelling,
-      owned_drops: true,
-      lean_project: project,
-      module_prefix: "Shared.Extraction",
-      build_dir: Path.join(tmp, "build"),
-      cargo: [features: ["future-resource-handles"]],
-      only: [
-        counter_new: 1,
-        counter_poll_add: 2,
-        counter_poll_cancel: 2,
-        counter_poll_resume: 2,
-        counter_value: 1
-      ]
-    ]
-
-    prepared = Lynx.Rustler.prepare!(options)
-    assert prepared.resource_registration.status == :validated_configuration
-    assert Enum.any?(prepared.extraction.native_unwind, &(&1.kind == :constant_cleanup_branch))
-    assert Enum.any?(prepared.verification.external_models, &String.contains?(&1, "Waker::noop"))
-
-    names = Map.new(prepared.bindings.bindings, &{&1["name"], &1["lean_name"]})
-
-    fill = fn source ->
-      Enum.reduce(
-        [
-          {"__CREATE__", "counter_new"},
-          {"__ADD__", "counter_poll_add"},
-          {"__CANCEL__", "counter_poll_cancel"},
-          {"__RESUME__", "counter_poll_resume"},
-          {"__READ__", "counter_value"}
-        ],
-        source,
-        fn {placeholder, name}, source ->
-          String.replace(source, placeholder, Map.fetch!(names, name))
-        end
-      )
-    end
-
-    File.cp!(
-      Path.join(@fixture, "NativeSharedResourceCritical.lean"),
-      Path.join(project, "Shared/Critical.lean")
-    )
-
-    future = fill.(File.read!(Path.join(@fixture, "NativeResourcePoll.lean")))
-    property = Path.join(project, "Shared/Future.lean")
-    File.write!(property, future)
-
-    shared =
-      File.read!(Path.join(@fixture, "NativeSharedResourceHandles.lean"))
-      |> String.replace(
-        "public import Shared.Critical",
-        "public import Shared.Critical\npublic import Shared.Future"
-      )
-      |> String.replace(
-        "Rustler.executeNative, __ADD__,",
-        "Rustler.executeNative, Shared.Future.add_contract,"
-      )
-      |> fill.()
-
-    File.write!(Path.join(project, "Shared/Properties.lean"), shared)
-
-    File.write!(
-      Path.join(project, "Shared/PollProperties.lean"),
-      fill.(File.read!(Path.join(@fixture, "NativeResourcePollHandles.lean")))
-    )
-
-    options =
-      options ++
-        [
-          proof_modules: [
-            "Shared.Critical",
-            "Shared.Future",
-            "Shared.Properties",
-            "Shared.PollProperties"
-          ],
-          required_properties:
-            Enum.map(
-              ~w(ready_poll ready_drop add_contract pending_poll pending_drop cancel_contract resumed_poll completed_drop finish_contract resume_contract),
-              &("Shared.Future." <> &1)
-            ) ++
-              [
-                "Shared.Critical.increment_spec",
-                "Shared.Critical.critical_state_handled_next",
-                "Shared.Critical.locked_read_handled_next",
-                "Shared.Properties.add_call_next",
-                "Shared.Properties.read_call_next",
-                "Shared.PollProperties.cancel_call_next",
-                "Shared.PollProperties.cancel_call_at"
-              ]
-        ]
+      project: project,
+      property: property,
+      future: future
+    } = prepare_fixture(tmp)
 
     load_native(prepared.library, tmp)
     native = LynxEffectsFixture.Native
@@ -242,6 +140,170 @@ defmodule Lynx.Rustler.FutureResourceTest do
              Lynx.Laws.verify(beams, native: {Lynx.Rustler, options}),
              &(&1.status == :ok)
            )
+  end
+
+  @tag :tmp_dir
+  test "proves concurrent complete future calls through compiled Rustler bindings", %{
+    tmp_dir: tmp
+  } do
+    %{options: options, prepared: prepared, project: project} = prepare_fixture(tmp)
+    load_native(prepared.library, tmp)
+
+    laws =
+      File.read!(Path.join(@fixture, "concurrent_resource_laws.ex"))
+      |> String.replace("ConcurrentResourceLaws", "ConcurrentFutureLaws")
+      |> String.replace("counter_add", "counter_poll_resume")
+
+    path = Path.join(tmp, "concurrent_future_laws.ex")
+    [{LynxEffectsFixture.ConcurrentFutureLaws, beam}] = Code.compile_string(laws, path)
+    assert apply(LynxEffectsFixture.ConcurrentFutureLaws, :concurrent_update, [])
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      options: [maxHeartbeats: 16_000_000, maxRecDepth: 4096],
+      debug_dir: Path.join(tmp, "lean-debug")
+    ]
+
+    export = Path.join(tmp, "concurrent-future.export")
+    reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+    guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
+
+    for kind <- [:rust_implementation, :cross_crate_contract, :nif_adapter, :elixir_law],
+        do: assert(Enum.any?(guarantees, &(&1.kind == kind)))
+
+    assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    wrong = String.replace(laws, "counter_value(resource) == 13", "counter_value(resource) == 14")
+    refute wrong == laws
+    [{_, wrong_beam}] = Code.compile_string(wrong, path)
+    assert Enum.any?(Lynx.Laws.verify([wrong_beam], law_options), &(&1.status == :error))
+  end
+
+  defp prepare_fixture(tmp) do
+    workspace = Path.join(tmp, "workspace")
+    File.mkdir_p!(workspace)
+
+    for path <- ~w(Cargo.toml Cargo.lock core native),
+        do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
+
+    project = Path.join(tmp, "proofs")
+    File.mkdir_p!(Path.join(project, "Shared"))
+    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
+
+    if File.dir?(packages) do
+      File.mkdir_p!(Path.join(project, ".lake"))
+      File.ln_s!(packages, Path.join(project, ".lake/packages"))
+    end
+
+    options = [
+      workspace: workspace,
+      package: "effects-native",
+      tools: @tools,
+      execution: :runtime,
+      futures: :cancelling,
+      owned_drops: true,
+      lean_project: project,
+      module_prefix: "Shared.Extraction",
+      build_dir: Path.join(tmp, "build"),
+      cargo: [features: ["future-resource-handles"]],
+      only: [
+        counter_new: 1,
+        counter_poll_add: 2,
+        counter_poll_cancel: 2,
+        counter_poll_resume: 2,
+        counter_value: 1
+      ]
+    ]
+
+    prepared = Lynx.Rustler.prepare!(options)
+    assert prepared.resource_registration.status == :validated_configuration
+    assert Enum.any?(prepared.extraction.native_unwind, &(&1.kind == :constant_cleanup_branch))
+    assert Enum.any?(prepared.verification.external_models, &String.contains?(&1, "Waker::noop"))
+
+    names = Map.new(prepared.bindings.bindings, &{&1["name"], &1["lean_name"]})
+
+    fill = fn source ->
+      Enum.reduce(
+        [
+          {"__CREATE__", "counter_new"},
+          {"__ADD__", "counter_poll_add"},
+          {"__CANCEL__", "counter_poll_cancel"},
+          {"__RESUME__", "counter_poll_resume"},
+          {"__READ__", "counter_value"}
+        ],
+        source,
+        fn {placeholder, name}, source ->
+          String.replace(source, placeholder, Map.fetch!(names, name))
+        end
+      )
+    end
+
+    File.cp!(
+      Path.join(@fixture, "NativeSharedResourceCritical.lean"),
+      Path.join(project, "Shared/Critical.lean")
+    )
+
+    future = fill.(File.read!(Path.join(@fixture, "NativeResourcePoll.lean")))
+    property = Path.join(project, "Shared/Future.lean")
+    File.write!(property, future)
+
+    shared =
+      File.read!(Path.join(@fixture, "NativeSharedResourceHandles.lean"))
+      |> String.replace(
+        "public import Shared.Critical",
+        "public import Shared.Critical\npublic import Shared.Future"
+      )
+      |> String.replace(
+        "Rustler.executeNative, __ADD__,",
+        "Rustler.executeNative, Shared.Future.add_contract,"
+      )
+      |> fill.()
+
+    File.write!(Path.join(project, "Shared/Properties.lean"), shared)
+
+    File.write!(
+      Path.join(project, "Shared/PollProperties.lean"),
+      fill.(File.read!(Path.join(@fixture, "NativeResourcePollHandles.lean")))
+    )
+
+    options =
+      options ++
+        [
+          proof_modules: [
+            "Shared.Critical",
+            "Shared.Future",
+            "Shared.Properties",
+            "Shared.PollProperties"
+          ],
+          required_properties:
+            Enum.map(
+              ~w(ready_poll ready_drop add_contract pending_poll pending_drop cancel_contract resumed_poll completed_drop finish_contract resume_contract),
+              &("Shared.Future." <> &1)
+            ) ++
+              [
+                "Shared.Critical.increment_spec",
+                "Shared.Critical.critical_state_handled_next",
+                "Shared.Critical.locked_read_handled_next",
+                "Shared.Properties.add_call_next",
+                "Shared.Properties.read_call_next",
+                "Shared.PollProperties.cancel_call_next",
+                "Shared.PollProperties.cancel_call_at"
+              ]
+        ]
+
+    %{
+      options: options,
+      prepared: prepared,
+      workspace: workspace,
+      project: project,
+      property: property,
+      future: future
+    }
   end
 
   defp load_native(artifact, tmp) do
