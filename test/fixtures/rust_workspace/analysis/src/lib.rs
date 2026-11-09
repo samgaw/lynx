@@ -83,3 +83,8 @@ pub fn replace_at(input: &mut [u8], position: usize, value: u8) {
 pub fn optional_flag(value: Option<bool>) -> bool {
     experiment_core::optional_flag(value)
 }
+
+/// Applies the core update policy to a batch of signed protocol fields.
+pub fn replace_first_i64(input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
+    experiment_core::collections::replace_first_i64(input, value)
+}

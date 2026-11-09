@@ -219,6 +219,27 @@ fn optional_bytes(value: Option<Vec<u8>>) -> Option<Vec<u8>> {
     value
 }
 
+/// Updates a signed field batch through two ordinary workspace crates.
+#[cfg(feature = "scalar-vec")]
+#[rustler::nif]
+fn replace_first_i64(input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
+    experiment_analysis::replace_first_i64(input, value)
+}
+
+/// Returns a batch of boolean fields using Rustler's ordinary list codec.
+#[cfg(feature = "scalar-vec")]
+#[rustler::nif]
+fn echo_flags(input: Vec<bool>) -> Vec<bool> {
+    input
+}
+
+/// Exercises Rustler's signed narrowing in a list element.
+#[cfg(feature = "scalar-vec")]
+#[rustler::nif]
+fn echo_signed_bytes(input: Vec<i8>) -> Vec<i8> {
+    input
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -238,6 +259,7 @@ mod tests {
                 + usize::from(cfg!(feature = "custom-encoder"))
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
+                + 3 * usize::from(cfg!(feature = "scalar-vec"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -314,6 +336,16 @@ mod tests {
                 "optional_pair",
                 "optional_bytes",
             ] {
+                expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
+            }
+        }
+        if cfg!(feature = "scalar-vec") {
+            expected.push((
+                "replace_first_i64".to_owned(),
+                2,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+            for name in ["echo_flags", "echo_signed_bytes"] {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
         }

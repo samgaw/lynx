@@ -240,6 +240,17 @@ defmodule Lynx.Rustler.Adapter do
       encode_m: "Lynx.Rustler.encodeByteVec"
     }
 
+  defp type!(%{"vec" => element}) when element in ~w(bool i8 i16 i32 i64 u16 u32 u64) do
+    scalar = type!(element)
+
+    %{
+      lean: "(alloc.vec.Vec #{scalar.lean})",
+      decode: "Lynx.Rustler.decodeScalarVec (#{scalar.decode})",
+      encode: nil,
+      encode_m: "Lynx.Rustler.encodeScalarVec (#{scalar.encode})"
+    }
+  end
+
   defp type!(<<sign, width::binary>> = type)
        when sign in [?i, ?u] and width in ["8", "16", "32", "64"] do
     signed = sign == ?i

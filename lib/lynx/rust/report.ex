@@ -276,6 +276,11 @@ defmodule Lynx.Rust.Report do
 
     byte_vec? = Enum.any?(bindings.bindings, &byte_vector?([&1["arguments"], &1["result"]]))
 
+    scalar_vec_model =
+      "Rustler #{version} scalar Vec codec model: sequential element decoding, proper-list encoding and improper-tail panic; bool and fixed-width integers through 64 bits; 1048576-element verification bound; allocation and FFI correctness unverified"
+
+    scalar_vec? = Enum.any?(bindings.bindings, &scalar_vector?([&1["arguments"], &1["result"]]))
+
     option_model =
       "Rustler #{version} Option codec model: payload-first decoding, nil fallback and untagged encoding; nested encodings may collide; native FFI correctness unverified"
 
@@ -304,6 +309,10 @@ defmodule Lynx.Rust.Report do
               do: [byte_vec_model],
               else: []
             ) ++
+              if(scalar_vector?([binding["arguments"], binding["result"]]),
+                do: [scalar_vec_model],
+                else: []
+              ) ++
               if(option?([binding["arguments"], binding["result"]]), do: [option_model], else: []) ++
               if(resource?([binding["arguments"], binding["result"]]),
                 do: [resource_model],
@@ -334,6 +343,7 @@ defmodule Lynx.Rust.Report do
         external_models:
           report.external_models ++
             if(byte_vec?, do: [byte_vec_model], else: []) ++
+            if(scalar_vec?, do: [scalar_vec_model], else: []) ++
             if(resource?, do: [resource_model], else: []) ++
             if(option?, do: [option_model], else: []),
         trusted_boundary:
@@ -356,6 +366,13 @@ defmodule Lynx.Rust.Report do
   defp resource?(map) when is_map(map), do: Enum.any?(Map.values(map), &resource?/1)
   defp resource?(list) when is_list(list), do: Enum.any?(list, &resource?/1)
   defp resource?(_), do: false
+
+  defp scalar_vector?(%{"vec" => element}) when element in ~w(bool i8 i16 i32 i64 u16 u32 u64),
+    do: true
+
+  defp scalar_vector?(map) when is_map(map), do: Enum.any?(Map.values(map), &scalar_vector?/1)
+  defp scalar_vector?(list) when is_list(list), do: Enum.any?(list, &scalar_vector?/1)
+  defp scalar_vector?(_), do: false
 
   defp byte_vector?(%{"vec" => "u8"}), do: true
   defp byte_vector?(map) when is_map(map), do: Enum.any?(Map.values(map), &byte_vector?/1)

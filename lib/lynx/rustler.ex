@@ -22,6 +22,11 @@ defmodule Lynx.Rustler do
   invalid element returns badarg first. Byte-vector codecs have an explicit
   1,048,576-element verification bound; larger values produce exhaustion, not a
   simulated native decoding error. Native allocation within the bound is trusted.
+  Scalar vectors also support bool and signed/unsigned fixed-width integers
+  through 64 bits, including tuple/result/option fields. They use the same element
+  budget and sequential list decoding; each element uses its ordinary scalar
+  decoder, including Rustler's signed narrowing behavior. Other vector elements
+  and custom allocators remain unsupported.
   Native environment/term handles, allocation and atom-cache initialization are
   explicitly reported FFI models. Strings and lists exceeding the supported
   4,294,967,295 byte/element bound produce verification exhaustion. Generated
