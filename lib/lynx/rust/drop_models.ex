@@ -9,6 +9,18 @@ defmodule Lynx.Rust.DropModels do
 
   def generated?(_), do: false
 
+  # Check one compiler destruction site without its unwind-only continuation.
+  # A successful structural erasure audit proves that this model has no
+  # observable destructor or panic; it does not certify native-owned payloads.
+  def nonpanicking_site?(drop, function, translated, refs) do
+    function =
+      put_in(function, ["body", "Structured", "body", "statements"], [
+        %{"kind" => %{"Drop" => Map.delete(drop, "on_unwind")}}
+      ])
+
+    match?({:ok, _}, audit([function], [], translated, refs, []))
+  end
+
   # Aeneas removes Destruct items and evaluates Drop as ownership removal. Admit
   # that erasure only after checking each actual compiler-generated body. This
   # does not implement general Drop or assume a first-party destructor contract.

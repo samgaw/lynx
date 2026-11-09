@@ -95,6 +95,7 @@ defmodule Lynx.Rust.NativeBorrows do
           end
 
         if owned and Enum.any?(functions, &(&1["def_id"] == function["def_id"])) do
+          models = Map.put(models, :drop_context, {function, translated, refs})
           {body, records} = prune(function["body"], safe, function["def_id"], models, records)
           {Map.put(function, "body", body), records}
         else
@@ -136,6 +137,32 @@ defmodule Lynx.Rust.NativeBorrows do
       }
 
       statement = put_in(statement, ["kind", "Call", "on_unwind", "statements"], [])
+      prune_children(statement, safe, caller, models, [record | records])
+    else
+      prune_children(statement, safe, caller, models, records)
+    end
+  end
+
+  defp prune(
+         %{"kind" => %{"Drop" => %{"on_unwind" => cleanup} = drop}} = statement,
+         safe,
+         caller,
+         models,
+         records
+       ) do
+    {function, translated, refs} = models.drop_context
+
+    if cleanup["statements"] != [] and
+         Lynx.Rust.DropModels.nonpanicking_site?(drop, function, translated, refs) do
+      record = %{
+        kind: :nonpanicking_structural_drop,
+        caller: caller,
+        statement: statement["id"],
+        function: get_in(drop, ["fn_ptr", "kind", "Fun"]),
+        cleanup_block: cleanup["id"]
+      }
+
+      statement = put_in(statement, ["kind", "Drop", "on_unwind", "statements"], [])
       prune_children(statement, safe, caller, models, [record | records])
     else
       prune_children(statement, safe, caller, models, records)
@@ -222,6 +249,22 @@ defmodule Lynx.Rust.NativeBorrows do
     functions
     |> Map.new(&{&1["def_id"], Map.get(available, &1["def_id"], &1)})
     |> Map.put(:context, context)
+    |> Map.put(
+      :erased_drop_bodies,
+      MapSet.new(
+        for function <- functions,
+            {:ok, _} <- [
+              Lynx.Rust.DropModels.audit(
+                [Map.get(available, function["def_id"], function)],
+                [],
+                expanded["translated"],
+                context.references,
+                []
+              )
+            ],
+            do: function["def_id"]
+      )
+    )
   end
 
   defp implementations(functions, _), do: Map.new(functions, &{&1["def_id"], &1})
@@ -239,8 +282,19 @@ defmodule Lynx.Rust.NativeBorrows do
 
       function = functions[id] ->
         case function["body"] do
-          %{"Structured" => %{"body" => body}} -> block?(body, functions, models, [id | seen])
-          _ -> false
+          %{"Structured" => %{"body" => body}} ->
+            context =
+              functions
+              |> Map.put(:loop_depth, 0)
+              |> Map.put(
+                :drop_safe,
+                MapSet.member?(functions[:erased_drop_bodies] || MapSet.new(), id)
+              )
+
+            block?(body, context, models, [id | seen])
+
+          _ ->
+            false
         end
 
       true ->
@@ -286,6 +340,21 @@ defmodule Lynx.Rust.NativeBorrows do
   defp statement?("Return", _, _, _), do: true
   defp statement?(%{"StorageLive" => _}, _, _, _), do: true
   defp statement?(%{"StorageDead" => _}, _, _, _), do: true
+
+  # Nonpanicking is a safety property, not termination. Check every loop body
+  # and its calls without assuming that a continue eventually becomes a break.
+  defp statement?(%{"Loop" => body}, functions, models, seen),
+    do: block?(body, Map.update(functions, :loop_depth, 1, &(&1 + 1)), models, seen)
+
+  for kind <- ["Break", "Continue"] do
+    defp statement?(%{unquote(kind) => depth}, functions, _, _)
+         when is_integer(depth) and depth >= 0,
+         do: depth < Map.get(functions, :loop_depth, 0)
+  end
+
+  # Reuse the structural destruction audit. Native owners and custom drops do
+  # not acquire this permission merely because their source is inside a loop.
+  defp statement?(%{"Drop" => _}, functions, _, _), do: functions[:drop_safe] == true
 
   # Primitive bitwise operations and comparisons cannot overflow or panic. Overloaded Rust
   # operators are calls and still require their actual nonpanicking bodies.

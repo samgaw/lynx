@@ -93,11 +93,15 @@ fn writable_reopen_retains_records_and_does_not_create_missing_files() -> io::Re
         expected,
         "reopen did not retain both records"
     );
+    assert_eq!(io_protocol::reopen_then_recover(path, 3)?, [13, 19]);
+    assert_eq!(io_protocol::reopen_then_recover(path, 1)?, [13]);
+    assert_eq!(fs::read(path)?, expected, "recovery changed the log");
 
     let missing = directory.0.join("missing");
     let missing_path = missing.to_str().expect("test temporary path must be UTF-8");
     assert!(io_protocol::open_readwrite(missing_path).is_err());
     assert!(io_protocol::reopen_then_append(missing_path, 19).is_err());
+    assert!(io_protocol::reopen_then_recover(missing_path, 3).is_err());
     assert!(
         !missing.exists(),
         "opening an existing log created a new file"

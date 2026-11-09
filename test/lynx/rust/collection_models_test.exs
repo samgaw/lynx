@@ -205,7 +205,14 @@ defmodule Lynx.Rust.CollectionModelsTest do
       {f, types} = owned_example(method)
       fail = method == "push"
 
-      assert %{1 => %{vec_owned_method: ^method, builtin: true, can_fail: ^fail}} =
+      assert %{
+               1 => %{
+                 vec_owned_method: ^method,
+                 builtin: true,
+                 can_fail: ^fail,
+                 native_cutoff_only: ^fail
+               }
+             } =
                CallModels.resolve([f], types, %{}, [])
 
       for bad <- [

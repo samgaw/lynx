@@ -106,6 +106,15 @@ defmodule Lynx.Rust.Extraction do
 
     %{document: document, llbc: llbc, first_party: first_party, models: models} = discovery
 
+    # Every surviving type use must retain its compiler identity even when its
+    # first serialized value occurs in cleanup removed by a later pass.
+    document =
+      if Keyword.get(opts, :execution, :pure) == :runtime,
+        do: Lynx.Rust.LLBCJson.restore_type_references!(document, document),
+        else: document
+
+    discovery = %{discovery | document: document}
+
     runtime_call_models =
       Keyword.get(opts, :external_calls, []) ++
         file_models ++

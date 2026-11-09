@@ -21,11 +21,13 @@ defmodule Lynx.Rust do
   conversions are not included. These are reported standard-library models.
 
   Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
-  Aeneas's value and borrow-update models. Owned byte vectors using the standard
-  Global allocator have an explicit logical deallocation model, including
-  compiler-emitted cleanup paths. Drop erasure for custom allocators or element
-  destructors is rejected. This does not admit vector growth or establish native
-  allocation, capacity or deallocation correctness.
+  Aeneas's value and borrow-update models. Owned primitive scalar vectors using
+  the standard Global allocator support `new`, `len` and bounded `push`, with
+  logical deallocation including compiler-emitted cleanup paths. Growth beyond
+  262144 elements exhausts verification. A kernel-checked model theorem rules
+  out catchable overflow panics within that bound. Drop erasure for custom
+  allocators or element destructors is rejected. Native allocation, capacity and
+  deallocation correctness remain unverified.
   """
 
   @doc """
@@ -263,7 +265,10 @@ defmodule Lynx.Rust do
   or async task/migration model. Shared/exclusive guard borrows use validated
   Deref models and Aeneas's mutable-borrow reconstruction, including first-party
   callees. Borrowed-guard functions must have acyclic, nonpanicking implementation
-  dependencies: mutable-borrow outputs on panic are unsupported. Validated native
+  dependencies: mutable-borrow outputs on panic are unsupported. Structured loops
+  can retain owners across checked nonpanicking operations; loop safety does not
+  establish termination. Scalar-vector destruction reuses the structural drop
+  audit before its unreachable unwind cleanup is omitted. Validated native
   models may block or exhaust verification without raising a catchable panic;
   neither case can establish successful completion. The updated
   guard is returned as a value. Explicit and compiler-generated normal guard
