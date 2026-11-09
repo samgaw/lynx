@@ -124,7 +124,13 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     laws = File.read!(Path.join(@fixture, "shared_resource_laws.ex"))
     File.write!(path, laws)
     [{_, beam}] = Code.compile_file(path)
-    reports = Lynx.Laws.verify([beam], native: {Lynx.Rustler, options})
+
+    reports =
+      Lynx.Laws.verify([beam],
+        native: {Lynx.Rustler, options},
+        debug_dir: Path.join(tmp, "lean-debug")
+      )
+
     assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
     guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
 

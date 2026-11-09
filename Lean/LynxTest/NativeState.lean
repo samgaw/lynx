@@ -44,6 +44,21 @@ theorem atomic_transition_run (transition : Environment → β × Environment)
       (next (transition env).1).run (transition env).2 choices :=
   Result.nativeModify_run transition next env choices
 
+private def sharedFinalizerPolicy : Result :=
+  Result.schedule {} (do
+    atomicIncrement
+    .nativeGet fun env =>
+      Result.send [] (match env.nativeFinalizerMode with
+        | .deferred => Term.true | _ => Term.false) (.ok .nil)) fun _ => do
+    atomicIncrement
+    Result.receive .infinity (fun _ message => some message) fun message =>
+      .ok (message.getD Term.false)
+
+/-- Native callback policy is shared and survives atomic updates and message delivery. -/
+theorem finalizer_policy_every_interleaving :
+    Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 24
+      (.start {nativeFinalizerMode := .deferred} sharedFinalizerPolicy) = true := by cbv
+
 private def localAndNative : Result :=
   .nativeSet {nativeRefCounter := 13} <|
     Result.schedule {} (.get fun localEnv => .send [] (.integer localEnv.nativeRefCounter) (.ok .nil)) fun _ =>

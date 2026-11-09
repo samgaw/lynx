@@ -73,7 +73,7 @@ theorem create_next {α : Type} (value : U64) (env : Environment) (next : Term �
   convert model using 1 <;> simp [__CREATE__,
     resource_new, Rustler.executeNative, NativeMutex.new, NativeM.allocate,
     NativeOwnedDrop.drop, empty, zero, allocated, pinnedEnv, cell, payload, bind_assoc,
-    Result.handle_nativeGet, Result.handle_nativeSet, Result.nativeGet_bind, Result.nativeSet_bind,
+    Result.handle, Result.handle_nativeGet, Result.handle_nativeSet, Result.nativeGet_bind, Result.nativeSet_bind,
     Result.nativeGet_continuation_apply, Result.nativeSet_continuation_apply]
   all_goals rfl
 
@@ -154,7 +154,7 @@ theorem update_native_handled_next {α β : Type} (env : Environment) (value amo
       (by simp [decodedEnv, ownedEnv, cell, List.filter, h1]) (decoded_fresh env value (counter+1) bounded)
     refine ⟨changed, updated.value, ?_, ?_⟩
     · simp only [resource_locked_increment, monadLift_self, bind_assoc]
-      rw [show decodedEnv env value (counter+1) = ownedEnv env value ((counter+1)+1) ((counter+1)+1) from rfl,
+      simp only [show decodedEnv env value (counter+1) = ownedEnv env value ((counter+1)+1) ((counter+1)+1) from rfl,
         deref_handled_next env value ((counter+1)+1) ((counter+1)+1) (by omega)]
       cases updated
       simpa [decodedEnv, ownedEnv, cell, payload, List.map, h1, (by omega : (counter+1) ≠ 0), Nat.add_assoc] using computed
@@ -173,7 +173,7 @@ theorem read_native_handled_next {α β : Type} (env : Environment) (value : U64
       ⟨value⟩ (decodedEnv env value (counter+1))
       (by simp [decodedEnv, ownedEnv, cell, List.filter, h1]) (decoded_fresh env value (counter+1) bounded)
     simp only [resource_locked_value, monadLift_self, bind_assoc]
-    rw [show decodedEnv env value (counter+1) = ownedEnv env value ((counter+1)+1) ((counter+1)+1) from rfl,
+    simp only [show decodedEnv env value (counter+1) = ownedEnv env value ((counter+1)+1) ((counter+1)+1) from rfl,
       deref_handled_next env value ((counter+1)+1) ((counter+1)+1) (by omega)]
     simpa [payload, NativeM.ok, decodedEnv, ownedEnv, cell, List.map, h1, (by omega : (counter+1) ≠ 0), Nat.add_assoc] using read
 
@@ -190,8 +190,8 @@ theorem read_call_next {α : Type} (env : Environment) (value : U64) (counter : 
   rw [decode_next env value counter bounded _ registered]
   simp only [Rustler.executeNative, __READ__,
     monadLift_self, bind_assoc, NativeM.ok, Result.ok_bind]
-  rw [read_native_handled_next env value counter bounded]
-  rw [release_handled_next env value (counter+1) (counter+2) (by omega)]
+  simp only [read_native_handled_next env value counter bounded]
+  simp only [release_handled_next env value (counter+1) (counter+2) (by omega)]
   simp [Result.handle, Rustler.encodeUnsigned]
 
 theorem add_call_next {α : Type} (env : Environment) (value amount : U64) (counter : Nat)
@@ -221,7 +221,7 @@ theorem add_call_next {α : Type} (env : Environment) (value amount : U64) (coun
   change ((Result.handle (resource_locked_increment ⟨2,counter+1⟩ amount >>= finish) handler) >>= next) _ = _
   rw [computed]
   simp only [finish]
-  rw [release_handled_next env updated (counter+1) (counter+2) (by omega)]
+  simp only [release_handled_next env updated (counter+1) (counter+2) (by omega)]
   simp [Result.handle]
 
 theorem add_safe_call_next {α : Type} (env : Environment) (value amount total : U64) (counter : Nat)
@@ -336,8 +336,8 @@ theorem decoder_badarg_cleanup_at {α β : Type} (env : Environment) (value : U6
   have same : env = pinnedEnv env value counter := by cases env; simp_all [pinnedEnv]
   conv_lhs => rw [same]
   simp only [cleanup]
-  rw [decode_handled_next env value counter bounded _ handler next registered]
-  rw [show decodedEnv env value counter = ownedEnv env value (counter+1) (counter+1) from rfl,
+  simp only [decode_handled_next env value counter bounded _ handler next registered]
+  simp only [show decodedEnv env value counter = ownedEnv env value (counter+1) (counter+1) from rfl,
     release_handled_next env value (counter+1) (counter+1) (by omega)]
   simp [Result.handle]
 

@@ -16,14 +16,19 @@ theorem caller_contract (resource : NativeResourceArc CounterResource) (amount :
 
 /-- A real Rust caller cancels its Pending future at scope exit, reclaiming the
 sole resource owner and mutex while retaining the registered wake notification. -/
-theorem caller_cancellation (value amount : U64) (env : Environment) :
+theorem caller_cancellation (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) :
     poll_cancel_resource ⟨2,3⟩ amount ⟨⟨0, false⟩⟩ (live env value 3 false) =
       (.ok (.Pending, ⟨⟨0, false⟩⟩), reclaimed env 3 true) := by
   rw [caller_contract]
   simp only [initial_state, Result.ok_bind, bind_assoc]
-  rw [first_pending_next]
+  have pending := first_pending_next value amount env (fun (reply, retained, context) => do
+    resource_suspending.closure.drop_owned retained.pointer
+    Result.ok (reply, context))
+  dsimp only at pending
+  rw [pending]
   change (resource_release ⟨2,3⟩ >>= fun _ => Result.ok ((core.task.poll.Poll.Pending : core.task.poll.Poll Bool), (⟨⟨0, false⟩⟩ : NativeTaskContext))) _ = _
-  simpa using release_next value 3 true env
+  simpa using release_next value 3 true env policy
     (fun _ => Result.ok ((core.task.poll.Poll.Pending : core.task.poll.Poll Bool), (⟨⟨0, false⟩⟩ : NativeTaskContext)))
 
 @[expose] def readyInitial (amount : U64) : resource_immediate.closure :=
@@ -51,7 +56,8 @@ theorem ready_caller_contract (resource : NativeResourceArc CounterResource) (am
       Result.ok (reply, context)) := by
   simp [poll_ready_resource, NativeM.ok]
 
-theorem caller_completion (value amount : U64) (env : Environment) :
+theorem caller_completion (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) :
     ∃ changed updated,
       poll_ready_resource ⟨2,3⟩ amount ⟨⟨0, false⟩⟩ (live env value 3 false) =
         (.ok (.Ready changed, ⟨⟨0, false⟩⟩), reclaimed env 4 false) ∧
@@ -67,9 +73,10 @@ theorem caller_completion (value amount : U64) (env : Environment) :
     Result.ok (.Ready changed, ⟨⟨0, false⟩⟩)
   obtain ⟨changed, updated, computed, arithmetic⟩ := update_next value amount env false finish
   refine ⟨changed, updated, ?_, arithmetic⟩
-  change (resource_locked_increment ⟨2,3⟩ amount >>= finish) _ = _
+  change (resource_locked_increment ⟨2,3⟩ amount >>= finish).run (live env value 3 false) = _
+  dsimp only at computed
   rw [computed]
-  simpa [finish] using release_next updated 4 false env
+  simpa [finish] using release_next updated 4 false env policy
     (fun _ => Result.ok ((core.task.poll.Poll.Ready changed : core.task.poll.Poll Bool), (⟨⟨0, false⟩⟩ : NativeTaskContext)))
 
 end Macro.Caller

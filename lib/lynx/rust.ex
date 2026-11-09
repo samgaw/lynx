@@ -218,8 +218,14 @@ defmodule Lynx.Rust do
   entries for reached monomorphic structs requiring destruction. These use actual
   optimized compiler drop MIR after checked self-pointer normalization. Unsupported
   field destructors and native operations remain rejected. Rust-owned ResourceArc
-  payloads may contain a supported mutex identity: final release and unregistered
-  construction invoke the actual extracted structural destructor. This subset
+  payloads may contain a supported mutex identity. Unregistered construction invokes
+  the actual extracted structural destructor. Final-owner release atomically retires
+  ownership and requires an explicit `Environment.nativeFinalizerMode` for observable
+  cleanup. `.synchronous` assumes inline callback execution; `.deferred` queues a
+  callback dispatched through `NativeResourceArc.runFinalizer`. The default
+  `.unspecified` exhausts verification on observable final release. OTP does not
+  guarantee destructor completion when release returns. Deferred dispatch uses native
+  allocation identities and does not model VM threads as BEAM processes. This subset
   requires default Resource callbacks and nonpanicking mutex field cleanup;
   custom Drop, poisoned/held mutex destruction and VM collection remain unsupported.
   `Lynx.Rustler.prepare!/1` supports the same opt-in for top-level resource NIF

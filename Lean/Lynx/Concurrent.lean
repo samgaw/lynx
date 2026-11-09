@@ -96,6 +96,7 @@ structure State where
   nativeRefCounter : Nat := 0
   nativeHeap : List (Nat × String × Term) := []
   nativeResourceTypes : List String := []
+  nativeFinalizerMode : NativeFinalizerMode := .unspecified
   /-- Timers yet to fire, in the order of their references. -/
   timers : List Timer := []
   /-- Signals in transit, oldest first within each pair of processes, and
@@ -142,13 +143,15 @@ and its reference counter never goes back, so references stay unique. -/
 @[expose] def State.nativeView (state : State) (processId : PID) : Environment :=
   { state.view processId with
     nativeRefCounter := state.nativeRefCounter
-    nativeHeap := state.nativeHeap, nativeResourceTypes := state.nativeResourceTypes }
+    nativeHeap := state.nativeHeap, nativeResourceTypes := state.nativeResourceTypes
+    nativeFinalizerMode := state.nativeFinalizerMode }
 
 /-- Store native effects without replacing unrelated processes or pending signals. -/
 @[expose] def State.storeNative (state : State) (processId : PID) (env : Environment) : State :=
   { state.store processId env with
     nativeRefCounter := env.nativeRefCounter
-    nativeHeap := env.nativeHeap, nativeResourceTypes := env.nativeResourceTypes }
+    nativeHeap := env.nativeHeap, nativeResourceTypes := env.nativeResourceTypes
+    nativeFinalizerMode := env.nativeFinalizerMode }
 
 /-- Append a message to a live mailbox. -/
 @[expose] def State.append (state : State) (processId : PID) (message : Term) : State :=
@@ -391,7 +394,8 @@ time elapsed when timers are canceled. -/
       else none
     elapsed
     nativeRefCounter := env.nativeRefCounter
-    nativeHeap := env.nativeHeap, nativeResourceTypes := env.nativeResourceTypes }
+    nativeHeap := env.nativeHeap, nativeResourceTypes := env.nativeResourceTypes
+    nativeFinalizerMode := env.nativeFinalizerMode }
 
 /-- Allocate the next child of a process, which starts with an empty record. -/
 @[expose] def State.spawn (state : State) (processId : PID) : PID × State :=

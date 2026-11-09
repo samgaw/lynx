@@ -174,6 +174,14 @@ inductive SharedSteps (pid : PID) : Result α →
         read env = .nativeSet {env with nativeRefCounter := after.1, nativeHeap := after.2} body)
       (rest : SharedSteps pid body after value final) :
       SharedSteps pid (.nativeGet read) before value final
+  | modify {β : Type} (transition : Environment → β × Environment)
+      (next : β → Result α) (reply : β) (before after final : Nat × List (Nat × String × Term))
+      (value : α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.nativeRefCounter = before.1 →
+        env.nativeHeap = before.2 →
+        transition env = (reply, {env with nativeRefCounter := after.1, nativeHeap := after.2}))
+      (rest : SharedSteps pid (next reply) after value final) :
+      SharedSteps pid (.nativeModify transition next) before value final
   | wait {β : Type} (poll : Environment → Option (β × Environment))
       (next : β → Result α) (reply : β) (before after final : Nat × List (Nat × String × Term))
       (value : α)
@@ -206,6 +214,10 @@ theorem SharedSteps.apply {pid : PID} {computation : Result α} {value : α}
       rw [wait_ready_apply poll next env _ reply (ready env owner counter heap)]
       simpa only using ih {env with nativeRefCounter := middle.1, nativeHeap := middle.2} owner rfl rfl
 
+  | modify transition next reply before middle final value ready rest ih =>
+      rw [nativeModify_apply, ready env owner counter heap]
+      exact ih _ owner rfl rfl
+
 /-- Retain a framed native trace as an actual prefix, so its implementation can
 compose with caller continuations and adapters without assuming termination. -/
 theorem SharedSteps.readyPrefix {pid : PID} {computation : Result α} {value : α}
@@ -231,6 +243,10 @@ theorem SharedSteps.readyPrefix {pid : PID} {computation : Result α} {value : �
       apply ReadyPrefix.wait _ _ _ _ _ _ _ (ready env owner counter heap)
       simpa only using ih {env with nativeRefCounter := middle.1,nativeHeap := middle.2} owner rfl rfl
 
+  | modify transition next reply before middle final value ready rest ih =>
+      apply ReadyPrefix.nativeModify _ _ _ _ _ _ _ (ready env owner counter heap)
+      exact ih _ owner rfl rfl
+
 /-- A successful native trace composes with its actual caller continuation. -/
 theorem SharedSteps.bind {pid : PID} {computation : Result α} {value : α}
     {before middle after : Nat × List (Nat × String × Term)}
@@ -253,6 +269,10 @@ theorem SharedSteps.bind {pid : PID} {computation : Result α} {value : α}
       rw [Result.wait_bind]
       exact .wait _ _ _ _ _ _ _ ready (ih tail)
 
+  | modify transition nextStep reply before middle final value ready rest ih =>
+      rw [nativeModify_bind]
+      exact .modify _ _ _ _ _ _ _ ready (ih tail)
+
 /-- Exception conversion preserves a successful scheduled native trace. -/
 theorem SharedSteps.handle {pid : PID} {computation : Result α} {value : α}
     {before after : Nat × List (Nat × String × Term)}
@@ -274,6 +294,10 @@ theorem SharedSteps.handle {pid : PID} {computation : Result α} {value : α}
   | wait poll next reply before middle final value ready rest ih =>
       simp only [Result.handle]
       exact .wait _ _ _ _ _ _ _ ready ih
+
+  | modify transition next reply before middle final value ready rest ih =>
+      rw [handle_nativeModify]
+      exact .modify _ _ _ _ _ _ _ ready ih
 
 /-- A native shared trace preceded by local registration or decoding steps.
 The resource-type registry is explicit in the state; process-local fields and
@@ -474,6 +498,16 @@ inductive ExclusiveSteps {γ : Type} (pid peer : PID) (peerPoll : Environment �
         env.nativeHeap = before.2 → peerPoll env = none)
       (rest : ExclusiveSteps pid peer peerPoll body after value final) :
       ExclusiveSteps pid peer peerPoll (.nativeGet read) before value final
+  | modify {β : Type} (transition : Environment → β × Environment)
+      (next : β → Result α) (reply : β) (before after final : Nat × List (Nat × String × Term))
+      (value : α)
+      (ready : ∀ env : Environment, env.currentPid = pid → env.nativeRefCounter = before.1 →
+        env.nativeHeap = before.2 →
+        transition env = (reply, {env with nativeRefCounter := after.1, nativeHeap := after.2}))
+      (blocked : ∀ env : Environment, env.currentPid = peer → env.nativeRefCounter = before.1 →
+        env.nativeHeap = before.2 → peerPoll env = none)
+      (rest : ExclusiveSteps pid peer peerPoll (next reply) after value final) :
+      ExclusiveSteps pid peer peerPoll (.nativeModify transition next) before value final
   | wait {β : Type} (poll : Environment → Option (β × Environment))
       (next : β → Result α) (reply : β) (before after final : Nat × List (Nat × String × Term))
       (value : α)
@@ -498,6 +532,9 @@ theorem ExclusiveSteps.ready {pid peer : PID} {peerPoll : Environment → Option
   | wait poll next reply before middle final value ready blocked rest ih =>
       exact .wait poll next reply before middle final value ready ih
 
+  | modify transition next reply before middle final value ready blocked rest ih =>
+      exact .modify _ _ _ _ _ _ _ ready ih
+
 /-- Compose an exclusive trace with its checked continuation. -/
 theorem ExclusiveSteps.bind {pid peer : PID} {peerPoll : Environment → Option (γ × Environment)} {computation : Result α} {value : α}
     {before middle after : Nat × List (Nat × String × Term)}
@@ -520,6 +557,10 @@ theorem ExclusiveSteps.bind {pid peer : PID} {peerPoll : Environment → Option 
       rw [Result.wait_bind]
       exact .wait _ _ _ _ _ _ _ ready blocked (ih tail)
 
+
+  | modify transition nextStep reply before middle final value ready blocked rest ih =>
+      rw [nativeModify_bind]
+      exact .modify _ _ _ _ _ _ _ ready blocked (ih tail)
 
 /-- A finite ready prefix that ends at a blocked wait while excluding a peer.
 Blocking retains the current shared state and is never successful completion. -/

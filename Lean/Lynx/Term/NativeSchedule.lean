@@ -181,6 +181,15 @@ private theorem sharedSteps_left {α : Type} {computation : Result α} {value : 
          Term.NativeRunner.schedule, traceEnv, polled]
       simpa +contextual [traceEnv, Term.NativeRunner.save] using ih
 
+  | modify transition next reply before middle final value ready rest ih =>
+      rw [Term.NativeRunner.execute_eq]
+      have evaluated := ready (traceEnv [] [([1], {})] before types) rfl rfl rfl
+      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
+      simp +contextual [Term.NativeRunner.choose,  Term.NativeRunner.step,
+         Term.NativeRunner.save,
+         traceEnv, evaluated]
+      simpa +contextual [traceEnv, Term.NativeRunner.save] using ih
+
 private theorem sharedSteps_right {α : Type} {computation : Result Term} {value : Term}
     {before after : Nat × List (Nat × String × Term)}
     (trace : SharedSteps [1] computation before value after) (rootValue : α) (previous : PID) (types : List String := []) :
@@ -229,6 +238,18 @@ private theorem sharedSteps_right {α : Type} {computation : Result Term} {value
         simp +contextual [Term.NativeRunner.choose,
           Term.NativeRunner.step, Term.NativeRunner.activate,
            Term.NativeRunner.schedule, traceEnv, polled, same,
+          (eq_comm (a := [1]) (b := previous))]
+        simpa +contextual [traceEnv, Term.NativeRunner.activate] using ih [1]
+
+  | modify transition next reply before middle final value ready rest ih =>
+      rw [Term.NativeRunner.execute_eq]
+      have evaluated := ready (traceEnv [1] [] before types) rfl rfl rfl
+      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
+      by_cases same : previous = [1]
+      all_goals
+        simp +contextual [Term.NativeRunner.choose,
+          Term.NativeRunner.step, Term.NativeRunner.activate,
+           traceEnv, evaluated, same,
           (eq_comm (a := [1]) (b := previous))]
         simpa +contextual [traceEnv, Term.NativeRunner.activate] using ih [1]
 
@@ -464,6 +485,13 @@ private theorem sharedSteps_switch_from_blocked {α β : Type} {computation : Re
         Term.NativeRunner.activate, Term.NativeRunner.save,
          traceEnv]
 
+  | modify transition next reply before middle final value ready rest =>
+      conv => lhs; rw [Term.NativeRunner.execute_eq]
+      conv => rhs; rw [Term.NativeRunner.execute_eq]
+      simp_all [Term.NativeRunner.choose,  Term.NativeRunner.step,
+        Term.NativeRunner.activate, Term.NativeRunner.save,
+         traceEnv]
+
 end KnownNativeProcesses
 
 attribute [local simp] Term.NativeRunner.choose_current_ready Term.NativeRunner.choose_swap_ready
@@ -682,6 +710,23 @@ private theorem sharedSteps_sole {α β : Type} {pid : PID} {computation : Resul
           ])
       all_goals apply ih <;> first | rfl | exact returned | native_calm
 
+  | modify transition next reply before middle final value ready rest ih =>
+      have noSignal (pid) := (calm pid).1
+      have noLinks (pid) := (calm pid).2.1
+      have noMonitors (pid) := (calm pid).2.2
+
+      obtain ⟨choices, selected⟩ := choose_single_ready (solePool left pid (.nativeModify transition next) finish) pid env preferred
+        (by intro choices accept; cases left <;> cases accepted : accept pid <;> simp +contextual [Term.Runner.findReady,
+           noSignal,  solePool, Term.NativeRunner.findReady, accepted])
+        (by intro choices accept; cases left <;> simp +contextual [ Term.Runner.findTimeout,
+             solePool, Term.NativeRunner.findTimeout])
+      have evaluated := ready (Term.NativeRunner.activate env pid) rfl counter heap
+      simp only [Term.NativeRunner.activate] at evaluated
+      rw [Term.NativeRunner.execute_eq, selected]
+      cases left <;> simp +contextual [  Term.Runner.step,
+           noSignal,  solePool, Term.NativeRunner.step, evaluated]
+      all_goals apply ih <;> first | rfl | exact counter | exact heap | exact returned | native_calm
+
 private theorem choose_pair_ready (pool : Term.NativeRunner.Pool α) (env : Term.NativeRunner.Frame)
     (preferred : ScheduleChoice) (current : env.currentPid = [] ∨ env.currentPid = [1])
     (ready : ∀ accept, Term.NativeRunner.findReady env accept pool =
@@ -745,7 +790,7 @@ private theorem choose_done_pair {computation : Result Term} {value : Term}
     cases trace with
     | done value shared => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
     | read => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
-    | update => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
+    | update | modify => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
     | wait poll next reply before middle final value ready rest =>
         have polled := ready (Term.NativeRunner.activate env [1]) rfl counter heap
         simp only [Term.NativeRunner.activate] at polled
@@ -820,6 +865,20 @@ private theorem sharedSteps_pendingRoot {computation : Result Term} {value : Ter
             polled, Term.NativeRunner.schedule, history]
           apply ih <;> first | exact Or.inr rfl | rfl | native_calm
 
+  | modify transition next reply before middle final value ready rest ih =>
+      have noSignal (pid) := (calm pid).1
+      have noLinks (pid) := (calm pid).2.1
+      have noMonitors (pid) := (calm pid).2.2
+      have trace := SharedSteps.modify transition next reply before middle final value ready rest
+      rcases choose_done_pair trace rootValue env preferred current counter heap with selected | selected
+      all_goals rw [Term.NativeRunner.execute_eq, selected]
+      · simp +contextual [Term.NativeRunner.step, Term.Runner.step, State.terminate, noSignal, noLinks, noMonitors]
+        exact sharedSteps_sole trace [] _ .current false _ _ rootValue counter heap rfl
+      · have evaluated := ready (Term.NativeRunner.activate env [1]) rfl counter heap
+        simp only [Term.NativeRunner.activate] at evaluated
+        simp +contextual [Term.NativeRunner.step, Term.Runner.step,  noSignal,   evaluated, ]
+        apply ih <;> first | exact Or.inr rfl | rfl | exact counter | exact heap | native_calm
+
 private theorem choose_root_pair {computation : Result Term} {value : Term}
     {before after : Nat × List (Nat × String × Term)}
     (trace : SharedSteps [] computation before value after) (childValue : Term)
@@ -835,7 +894,7 @@ private theorem choose_root_pair {computation : Result Term} {value : Term}
     cases trace with
     | done value shared => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
     | read => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
-    | update => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
+    | update | modify => cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, a, b]
     | wait poll next reply before middle final value ready rest =>
         have polled := ready (Term.NativeRunner.activate env []) rfl counter heap
         simp only [Term.NativeRunner.activate] at polled
@@ -902,6 +961,20 @@ private theorem sharedSteps_pendingChild {computation : Result Term} {value : Te
           simp +contextual [Term.NativeRunner.step, Term.Runner.step,  noSignal,
             polled, Term.NativeRunner.schedule, history]
           apply ih <;> first | exact Or.inl rfl | rfl | native_calm
+      · simp +contextual [Term.NativeRunner.step, Term.Runner.step, State.terminate, noSignal, noLinks, noMonitors]
+        exact sharedSteps_sole trace [] _ .current true _ _ value counter heap rfl
+
+  | modify transition next reply before middle final value ready rest ih =>
+      have noSignal (pid) := (calm pid).1
+      have noLinks (pid) := (calm pid).2.1
+      have noMonitors (pid) := (calm pid).2.2
+      have trace := SharedSteps.modify transition next reply before middle final value ready rest
+      rcases choose_root_pair trace childValue env preferred current counter heap with selected | selected
+      all_goals rw [Term.NativeRunner.execute_eq, selected]
+      · have evaluated := ready (Term.NativeRunner.activate env []) rfl counter heap
+        simp only [Term.NativeRunner.activate] at evaluated
+        simp +contextual [Term.NativeRunner.step, Term.Runner.step,  noSignal,   evaluated, ]
+        apply ih <;> first | exact Or.inl rfl | rfl | exact counter | exact heap | native_calm
       · simp +contextual [Term.NativeRunner.step, Term.Runner.step, State.terminate, noSignal, noLinks, noMonitors]
         exact sharedSteps_sole trace [] _ .current true _ _ value counter heap rfl
 
@@ -1002,6 +1075,24 @@ private theorem exclusiveSteps_root {β : Type} {computation : Result Term} {val
         simp +contextual [Term.NativeRunner.step, Term.Runner.step,  noSignal,     polled, Term.NativeRunner.schedule]
         apply ih <;> first | exact peerTrace | exact Or.inl rfl | rfl | exact counter | exact heap | native_calm
 
+  | modify transition next reply before middle final value ready blocked rest ih =>
+      have noSignal (pid) := (calm pid).1
+      have noLinks (pid) := (calm pid).2.1
+      have noMonitors (pid) := (calm pid).2.2
+      have evaluated :=
+        ready (Term.NativeRunner.activate env []) rfl counter heap
+      have excluded :=
+        blocked (Term.NativeRunner.activate env [1]) rfl counter heap
+      simp only [Term.NativeRunner.activate] at excluded
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process [] (.nativeModify transition next) some) (.process [1] (.wait peerPoll peerNext) (fun _ => none))) [] env preferred
+        (by intro choices accept; cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, noSignal, a, b, excluded])
+        (by intro choices accept; simp +contextual [Term.NativeRunner.findTimeout, Term.Runner.findTimeout])
+      simp only [Term.NativeRunner.activate] at evaluated
+      rw [Term.NativeRunner.execute_eq, selected]
+      simp +contextual [Term.NativeRunner.step, Term.Runner.step,  noSignal,     evaluated]
+      apply ih <;> first | exact peerTrace | exact Or.inl rfl | rfl | exact counter | exact heap | native_calm
+
 private theorem exclusiveSteps_child {β : Type} {computation : Result Term} {value : Term}
     {before middle after : Nat × List (Nat × String × Term)}
     (peerPoll : Environment → Option (β × Environment)) (peerNext : β → Result Term)
@@ -1075,6 +1166,24 @@ private theorem exclusiveSteps_child {β : Type} {computation : Result Term} {va
       all_goals
         simp +contextual [Term.NativeRunner.step, Term.Runner.step,  noSignal,     polled, Term.NativeRunner.schedule]
         apply ih <;> first | exact peerTrace | exact Or.inr rfl | rfl | exact counter | exact heap | native_calm
+
+  | modify transition next reply before middle final value ready blocked rest ih =>
+      have noSignal (pid) := (calm pid).1
+      have noLinks (pid) := (calm pid).2.1
+      have noMonitors (pid) := (calm pid).2.2
+      have evaluated :=
+        ready (Term.NativeRunner.activate env [1]) rfl counter heap
+      have excluded :=
+        blocked (Term.NativeRunner.activate env []) rfl counter heap
+      simp only [Term.NativeRunner.activate] at excluded
+      obtain ⟨choices, selected⟩ := choose_single_ready
+        (.parallel (.process [] (.wait peerPoll peerNext) some) (.process [1] (.nativeModify transition next) (fun _ => none))) [1] env preferred
+        (by intro choices accept; cases a : accept [] <;> cases b : accept [1] <;> simp +contextual [Term.NativeRunner.findReady, Term.Runner.findReady, noSignal, a, b, excluded])
+        (by intro choices accept; simp +contextual [Term.NativeRunner.findTimeout, Term.Runner.findTimeout])
+      simp only [Term.NativeRunner.activate] at evaluated
+      rw [Term.NativeRunner.execute_eq, selected]
+      simp +contextual [Term.NativeRunner.step, Term.Runner.step,  noSignal,     evaluated]
+      apply ih <;> first | exact peerTrace | exact Or.inr rfl | rfl | exact counter | exact heap | native_calm
 
 private theorem exclusiveBlocked_root {β : Type} {computation : Result Term}
     {before after : Nat × List (Nat × String × Term)}
@@ -1442,7 +1551,7 @@ theorem two_wait_interleave_steps
         Term.NativeRunner.save, blocked]
     | read => simp +contextual [Term.NativeRunner.choose,  env,
         Term.NativeRunner.save, blocked]
-    | update => simp +contextual [Term.NativeRunner.choose,  env,
+    | update | modify => simp +contextual [Term.NativeRunner.choose,  env,
         Term.NativeRunner.save, blocked]
     | wait poll next reply before middle final value ready rest =>
       have polled := ready (Term.NativeRunner.activate env []) rfl rfl rfl

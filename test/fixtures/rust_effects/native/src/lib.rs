@@ -234,6 +234,12 @@ pub fn resource_release(resource: rustler::ResourceArc<CounterResource>) {
     drop(resource);
 }
 
+/// Acknowledges releasing a Rust owner without promising destructor completion.
+pub fn resource_release_ack(resource: rustler::ResourceArc<CounterResource>) -> bool {
+    resource_release(resource);
+    true
+}
+
 /// Retains an alias, releases the original, updates shared state, and reclaims it.
 ///
 /// # Panics

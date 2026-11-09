@@ -121,6 +121,16 @@ deriving Repr
 
 instance : Inhabited ScheduleChoice := ⟨.current⟩
 
+/-- Explicit external models for the timing of native resource callbacks. -/
+inductive NativeFinalizerMode where
+  /-- Observable finalization requires an explicit external scheduling model. -/
+  | unspecified
+  /-- A bounded external model in which the final release runs its callback. -/
+  | synchronous
+  /-- A bounded external model in which a separate callback consumes queued work. -/
+  | deferred
+deriving Repr
+
 /-- What a running process observes and may replace. Mailboxes and other
 processes belong to the scheduler, so a process cannot change them, and
 replacing `currentPid` does not change which process is running. -/
@@ -138,6 +148,9 @@ structure Environment where
   nativeHeap : List (Nat × String × Term) := []
   /-- Resource types registered by the modeled native loader. -/
   nativeResourceTypes : List String := []
+  /-- Native destructor scheduling is an explicit model choice, never inferred
+  from Rust drop completion. The default rejects observable final-owner release. -/
+  nativeFinalizerMode : NativeFinalizerMode := .unspecified
 deriving Repr, Inhabited
 
 namespace Environment

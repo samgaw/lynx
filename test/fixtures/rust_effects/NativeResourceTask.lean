@@ -36,6 +36,7 @@ theorem first_poll_next {α : Type} (value amount : U64) (env : Environment)
   rw [poll_bind, first_pending_next]
 
 theorem resume_poll_next {α : Type} (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (next : NativeTask.Step Bool resource_suspending.closure → NativeM α) :
     ∃ changed updated,
       (adapt resource_suspending.closure.poll (pending amount) ⟨⟨0, false⟩⟩ >>= next) (live env value 3 false) =
@@ -43,13 +44,14 @@ theorem resume_poll_next {α : Type} (value amount : U64) (env : Environment)
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
   rw [poll_bind]
-  exact resume_next value amount env false
+  exact resume_next value amount env policy false
     (fun (reply, future, context) => do
       match reply with
       | .Pending => next (.pending future.pointer context)
       | .Ready changed => next (.ready changed future.pointer))
 
-theorem completion (value amount : U64) (env : Environment) :
+theorem completion (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) :
     ∃ changed updated,
       NativeTask.drive (adapt resource_suspending.closure.poll)
       resource_suspending.closure.drop_owned (fun _ => false) ⟨⟨0, false⟩⟩ 2 (initial amount) (live env value 3 false) =
@@ -64,7 +66,7 @@ theorem completion (value amount : U64) (env : Environment) :
         if cell.1 == 0 then (0, NativeWaker.typeName, .atom "idle") else cell} = live env value 3 false := by
     simp [live, cell]
   rw [consumed]
-  obtain ⟨changed, updated, computed, arithmetic⟩ := resume_poll_next value amount env
+  obtain ⟨changed, updated, computed, arithmetic⟩ := resume_poll_next value amount env policy
     (fun step => do
       match step with
       | .ready value finished => resource_suspending.closure.drop_owned finished; Result.ok (some value)
@@ -80,7 +82,8 @@ theorem completion (value amount : U64) (env : Environment) :
   funext step
   cases step <;> rfl
 
-theorem cancellation (value amount : U64) (env : Environment) :
+theorem cancellation (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) :
     NativeTask.drive (adapt resource_suspending.closure.poll)
       resource_suspending.closure.drop_owned (fun _ => true) ⟨⟨0, false⟩⟩ 2 (initial amount) (live env value 3 false) =
       (.ok none, reclaimed env 3 true) := by
@@ -88,7 +91,7 @@ theorem cancellation (value amount : U64) (env : Environment) :
   simp only [first_poll_next]
   simp only [NativeWaker.await_cancelled_next ⟨0, false⟩ (fun _ => true) _ (live env value 3 true) (by simp [live]) rfl (by simp [live, cell]) rfl]
   change (resource_release ⟨2,3⟩ >>= fun _ => Result.ok none) _ = _
-  simpa using release_next value 3 true env (fun _ => Result.ok (none : Option Bool))
+  simpa using release_next value 3 true env policy (fun _ => Result.ok (none : Option Bool))
 
 theorem cutoff_zero (amount : U64) :
     NativeTask.drive (adapt resource_suspending.closure.poll)
