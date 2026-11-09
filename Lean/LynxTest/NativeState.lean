@@ -44,6 +44,35 @@ theorem atomic_transition_run (transition : Environment → β × Environment)
       (next (transition env).1).run (transition env).2 choices :=
   Result.nativeModify_run transition next env choices
 
+private def finishesWithCounter : Result :=
+  Result.schedule {} (do atomicIncrement; .ok .nil) fun _ => do
+    atomicIncrement
+    .ok .true
+
+private def terminalCounter (expected : Nat) (config : Concurrent.Config Term) : Bool :=
+  let correct := match config with
+    | .start env _ => env.nativeRefCounter == expected
+    | .running state .. => state.nativeRefCounter == expected
+  match config.outcome with
+    | .ok (.atom "true") => correct
+    | _ => false
+
+/-- The root returns only a boolean; the checked postcondition additionally
+observes the final shared state after both workers have finished. -/
+theorem terminal_shared_counter_checked :
+    Concurrent.checkPost (terminalCounter 2) 20 (.start {} finishesWithCounter) = true := by cbv
+
+theorem terminal_shared_counter_every_run
+    (run : Concurrent.Run (.start {} finishesWithCounter) events last)
+    (terminal : Concurrent.Terminal last outcome) : terminalCounter 2 last = true :=
+  Concurrent.checkPost_sound terminal_shared_counter_checked run terminal
+
+theorem wrong_terminal_shared_counter_rejected :
+    Concurrent.checkPost (terminalCounter 1) 20 (.start {} finishesWithCounter) = false := by cbv
+
+theorem exhausted_postcondition_budget_rejected :
+    Concurrent.checkPost (fun _ => true) 0 (.start {} finishesWithCounter) = false := rfl
+
 private def sharedFinalizerPolicy : Result :=
   Result.schedule {} (do
     atomicIncrement

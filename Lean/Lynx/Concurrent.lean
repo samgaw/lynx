@@ -734,4 +734,33 @@ theorem Run.invariant {invariant : Config α → Prop}
   | refl => exact initial
   | step step _ ih => exact ih (preserved _ _ _ initial step)
 
+/-- Check the exact terminal state along every successor, with explicit fuel.
+No state-sensitive observation is passed through outcome-only reductions. -/
+@[expose] def checkPost (accept : Config α → Bool) : Nat → Config α → Bool
+  | 0, _ => false
+  | depth + 1, config =>
+      match config.successors with
+      | [] => accept config
+      | successors => successors.all fun (_, next) => checkPost accept depth next
+
+/-- Successful exploration proves the predicate at the actual terminal state
+of every run. Fuel exhaustion never establishes a postcondition. -/
+theorem checkPost_sound {accept : Config α → Bool} {depth : Nat} {first last : Config α}
+    {events : List Event} {outcome : Outcome α}
+    (checked : checkPost accept depth first = true)
+    (run : Run first events last) (terminal : Terminal last outcome) : accept last = true := by
+  induction depth generalizing first events with
+  | zero => simp [checkPost] at checked
+  | succ depth ih =>
+    cases run with
+    | refl => simpa [checkPost, terminal.successors_eq_nil] using checked
+    | step step rest =>
+      simp only [checkPost] at checked
+      cases successors : first.successors with
+      | nil => simp [Step, successors] at step
+      | cons head tail =>
+        have all : first.successors.all (fun (_, next) => checkPost accept depth next) = true := by
+          simpa [successors] using checked
+        exact ih ((List.all_eq_true.mp all) _ step) rest
+
 end Lynx.Concurrent
