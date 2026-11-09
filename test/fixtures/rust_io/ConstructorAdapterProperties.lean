@@ -27,7 +27,7 @@ theorem create_run {α : Type} (dispatcher : Dispatcher) (env : Environment) (sc
   have body := (traced.bind next).run choices
   simp only [Elixir.LynxIoFixture.Native.«log_create/0»,
     Elixir.LynxIoFixture.Native.«log_create:execution/0»,Rustler.withResourceTypes,
-    Result.nativeGet_bind,Result.nativeGet_continuation_run,Result.nativeSet_bind,Result.nativeSet_continuation_run]
+    Result.nativeModify_bind,Result.nativeModify_run]
   change (Rustler.executeNative (do
     let owner ← __CREATE__
     let term ← NativeResourceArc.encode owner
@@ -60,8 +60,7 @@ theorem append_run {α : Type} (dispatcher : Dispatcher) (env : Environment) (ne
   have applied := (joined.bind next).run choices
   simp only [Rustler.executeNative_ok,Rustler.encodeBool] at applied
   simp [Elixir.LynxIoFixture.Native.«log_append/2»,Elixir.LynxIoFixture.Native.«log_append:execution/2»,
-    Rustler.withResourceTypes,Result.nativeGet_bind,Result.nativeGet_continuation_run,Result.nativeSet_bind,
-    Result.nativeSet_continuation_run,Rustler.decodeUnsigned,Result.ofExcept,Result.handle]
+    Rustler.withResourceTypes,Result.nativeModify_bind,Result.nativeModify_run,Rustler.decodeUnsigned,Result.ofExcept,Result.handle]
   simpa [registered,constructed,mutexReady,directory,UScalar.ofNat,UScalar.ofNatCore,BitVec.ofFin_eq_ofNat] using applied
 
 theorem append_next {α : Type} (dispatcher : Dispatcher) (env : Environment) (next : Term → Result α) :

@@ -54,7 +54,9 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
   dsimp only
   let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 6) (.integer 13)
   let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 6) (.integer 19)
-  obtain ⟨childRead, childEq⟩ : ∃ read : Environment → Result Term, child = .nativeGet read := ⟨_, rfl⟩
+  obtain ⟨childTransition, childStart, childEq⟩ :
+      ∃ transition : Environment → Unit × Environment, ∃ start : Unit → Result Term,
+        child = .nativeModify transition start := ⟨_, _, rfl⟩
   let free := Record.FramedLogProperties.free false
   let held1 := NativeMutex.lockedContents [] 8 false (⟨2⟩ : NativeFile)
   let held2 := NativeMutex.lockedContents [1] 10 false (⟨2⟩ : NativeFile)
@@ -73,7 +75,7 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
     (Record.ScheduledLogProperties.body_steps [1] false 10 10 (by decide)
       committed1 sought2 written2 committed2 19#u16 position2
       valid3 valid4 valid5 ready3 ready4 ready5 seek2 write2 sync2) Rustler.encodeBool
-  have run := Result.two_registered_interleave_steps parent childRead
+  have run := Result.two_registered_modify_interleave_steps parent childTransition childStart
     (NativeMutex.pollLock (⟨1⟩ : NativeMutex NativeFile)) (resume true 13#u16)
     (NativeMutex.pollLock (⟨1⟩ : NativeMutex NativeFile)) (resume false 19#u16)
     (.ok (.Ok guard1)) (.ok (.Ok guard2)) Term.true Term.true
