@@ -2596,7 +2596,9 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
         let key ← sourceKey.mapM fun key => do
           return s!"{key}-{← importedFingerprint runtime env artifacts importHashes}"
         let directory := key.map (cacheDirectory / ·) |>.getD (temporary / toString (hash mainModule))
-        if let some saved ← if fileFailed || key.isNone then pure none else cachedDiagnostics directory then
+        -- Exports re-elaborate every input while retaining audited results for later requests.
+        if let some saved ← if fileFailed || key.isNone || export?.isSome then pure none
+            else cachedDiagnostics directory then
           diagnostics := saved
           cacheHit := true
         else

@@ -48,6 +48,43 @@ defmodule Lynx.LawsTest do
   end
 
   @tag :tmp_dir
+  test "exports warm the law cache without caching failed proofs", %{tmp_dir: tmp} do
+    source = """
+    defmodule Lynx.LawsTest.ExportCache do
+      @compile :debug_info
+      use Lynx.Laws
+      law checked, expects: true
+    end
+    """
+
+    name = Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+    [{_, beam}] = Code.compile_string(source, Path.join(tmp, name <> ".ex"))
+    export = Path.join(tmp, "law.export")
+
+    assert [%{status: :ok, cached: false}, %{status: :ok, cached: false}] =
+             Lynx.Laws.verify([beam], export: export)
+
+    assert [%{status: :ok, cached: true}, %{status: :ok, cached: true}] =
+             Lynx.Laws.verify([beam])
+
+    failed =
+      source
+      |> String.replace("ExportCache", "ExportCacheFailure")
+      |> String.replace("true", "false")
+
+    [{_, wrong}] = Code.compile_string(failed, Path.join(tmp, name <> "-failure.ex"))
+    failed_export = Path.join(tmp, "failed.export")
+
+    assert [%{status: :ok, cached: false}, %{status: :error, cached: false}] =
+             Lynx.Laws.verify([wrong], export: failed_export)
+
+    refute File.exists?(failed_export)
+
+    assert [%{status: :ok, cached: true}, %{status: :error, cached: false}] =
+             Lynx.Laws.verify([wrong])
+  end
+
+  @tag :tmp_dir
   test "verifies laws with termination suffix options", %{tmp_dir: tmp_dir} do
     {:module, module, binary, _} =
       defmodule TerminationSuffix do

@@ -184,8 +184,8 @@ defmodule Lynx.Laws do
   Pass `export: path` to write the elaborated declarations of the translated modules,
   with their dependencies, in Lean's export format. Check them with Lean's kernel and
   the independent checkers bundled with Lean using `lake check --from-export`, as
-  described in `Lynx`. Exporting bypasses the verification cache, and the export is
-  written only when every module verifies.
+  described in `Lynx`. Exporting bypasses cache reads and refreshes successfully
+  audited cache entries. The export is written only when every module verifies.
 
   Raises on translation failures, including modules without laws or unsupported
   code, and on failures to run Lean or read its response.
@@ -198,8 +198,6 @@ defmodule Lynx.Laws do
   defp do_verify(modules, opts) do
     {opts, native_verification} = Lynx.External.prepare_options!(opts)
     {names, source} = Enum.split_with(modules, &is_atom/1)
-    # Cached modules are not elaborated, so exports always verify from scratch.
-    opts = if opts[:export], do: Keyword.put(opts, :cache, false), else: opts
     translation = Enum.reduce(source, Lynx.Translation.new(opts), &Lynx.Translation.add(&2, &1))
 
     files =
