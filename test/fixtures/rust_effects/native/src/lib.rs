@@ -167,6 +167,20 @@ pub fn locked_increment_from_resource(
     effects_core::update_release(guard, amount)
 }
 
+/// Completes the cross-crate critical section before consuming its resource owner.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block.
+pub fn locked_increment_then_release_resource(
+    mutex: &Mutex<effects_core::Counter>,
+    resource: rustler::ResourceArc<ScalarResource>,
+) -> bool {
+    let amount = scalar_resource_read(&resource);
+    let changed = locked_increment(mutex, amount);
+    drop(resource);
+    changed
+}
+
 /// Releases the original handle, observes its retained alias, then releases it.
 ///
 /// # Panics
