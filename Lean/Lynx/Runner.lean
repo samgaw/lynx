@@ -2517,9 +2517,9 @@ private def auditImplementationModules (file : DecodedFile) (env : Lean.Environm
       let declarations := env.constants.toList.filterMap fun (name, _) =>
         if (env.find? name).isSome && env.getModuleIdxFor? name == moduleIdx then
           some name else none
-      if declarations.isEmpty then
-        errors := errors.push (diagnostic file.fileName file.moduleName "error"
-          s!"audit module has no declarations: {moduleName}" .unknown none)
+      -- Module existence was checked above. A generated module containing only
+      -- imports has no declarations to audit; any added private declaration is
+      -- still checked below, and its artifact remains part of the cache key.
       for name in declarations do
         for axiomName in ← collectAxioms name do
           unless #[``propext, ``Classical.choice, ``Quot.sound].contains axiomName do
@@ -2594,7 +2594,9 @@ private def verify (files : Array Json) (options : Array (TSyntax `command)) (ru
         let mainModule := moduleName.getId
         let sourceKey := if file.imports.any uncached.contains then none else file.cacheKey
         let key ← sourceKey.mapM fun key => do
-          return s!"{key}-{← importedFingerprint runtime env artifacts importHashes}"
+          -- Caller-supplied source keys must not permit reuse across audit scopes.
+          -- The policy epoch also retires successes made before type-module audits.
+          return s!"module-audit-2-{key}-{hash file.auditModules}-{← importedFingerprint runtime env artifacts importHashes}"
         let directory := key.map (cacheDirectory / ·) |>.getD (temporary / toString (hash mainModule))
         -- Exports re-elaborate every input while retaining audited results for later requests.
         if let some saved ← if fileFailed || key.isNone || export?.isSome then pure none

@@ -83,6 +83,90 @@ defmodule Lynx.RunnerTest do
     assert [%{status: :error, cached: false}] = Lynx.Commands.verify!(tmp, [input])
   end
 
+  @tag :tmp_dir
+  test "audits real empty modules and invalidates their clients when private declarations appear",
+       %{tmp_dir: tmp} do
+    empty_source = "module\n"
+
+    empty = fn source ->
+      file("empty-types.lean", "NativeEmptyTypes", [])
+      |> Map.put("cache_key", :crypto.hash(:sha256, source) |> Base.encode16(case: :lower))
+      |> Map.put("preludes", [
+        %{"source" => source, "file" => "empty-types.lean", "span" => [1], "indentation" => 0}
+      ])
+    end
+
+    client =
+      file("empty-client.lean", "NativeEmptyClient", [], ["NativeEmptyTypes"])
+      |> Map.put("preludes", [
+        %{
+          "source" =>
+            "module\npublic import NativeEmptyTypes\npublic theorem emptyBoundary : True := True.intro\n",
+          "file" => "empty-client.lean",
+          "span" => [1],
+          "indentation" => 0
+        }
+      ])
+      |> Map.put("audit_modules", ["NativeEmptyTypes", "NativeEmptyClient"])
+      |> Map.put("cache_key", Base.encode16(:crypto.strong_rand_bytes(32), case: :lower))
+
+    assert [%{status: :ok}, %{status: :ok, cached: false}] =
+             Lynx.Commands.verify!(@lean_dir, [empty.(empty_source), client])
+
+    assert [%{status: :ok}, %{status: :ok, cached: true}] =
+             Lynx.Commands.verify!(@lean_dir, [empty.(empty_source), client])
+
+    export = Path.join(tmp, "empty-boundary.export")
+
+    assert [%{status: :ok}, %{status: :ok}] =
+             Lynx.Commands.verify!(@lean_dir, [empty.(empty_source), client], export: export)
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+
+    {status, output} =
+      Lynx.Commands.lake(@lean_dir, ["check", "--from-export", export] ++ sandbox)
+
+    assert status == 0, output
+
+    for declaration <- [
+          "private axiom unusedTypeTrust : True",
+          "private theorem unfinishedType : True := by sorry"
+        ] do
+      assert [%{status: :ok}, %{status: :error, cached: false, diagnostics: diagnostics}] =
+               Lynx.Commands.verify!(@lean_dir, [
+                 empty.(empty_source <> declaration <> "\n"),
+                 client
+               ])
+
+      assert Enum.any?(diagnostics, &String.contains?(&1.message, "unexpected axiom"))
+    end
+
+    # A success under one declared scope cannot authorize a different scope,
+    # even with identical inputs, imported artifacts and caller-supplied key.
+    poisoned = empty.(empty_source <> "private axiom omittedTypeTrust : False\n")
+    narrow = Map.put(client, "audit_modules", ["NativeEmptyClient"])
+
+    assert [%{status: :ok}, %{status: :ok, cached: false}] =
+             Lynx.Commands.verify!(@lean_dir, [poisoned, narrow])
+
+    assert [%{status: :ok}, %{status: :ok, cached: true}] =
+             Lynx.Commands.verify!(@lean_dir, [poisoned, narrow])
+
+    expanded = Map.put(client, "audit_modules", ["NativeEmptyTypes"])
+
+    assert [%{status: :ok}, %{status: :error, cached: false, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, [poisoned, expanded])
+
+    assert Enum.any?(diagnostics, &String.contains?(&1.message, "unexpected axiom"))
+
+    missing = Map.put(client, "audit_modules", ["NativeEmptyMissingTypes"])
+
+    assert [%{status: :ok}, %{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(@lean_dir, [empty.(empty_source), missing])
+
+    assert Enum.any?(diagnostics, &String.contains?(&1.message, "unknown audit module"))
+  end
+
   test "audits whole native modules, including unused axioms and unfinished proofs" do
     for declaration <- [
           "private axiom unused_native : True",
