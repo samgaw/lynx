@@ -1333,3 +1333,36 @@ pub fn discarded_update(mutex: &Mutex<effects_core::Counter>, amount: u64) -> bo
     let _ = effects_core::locked_increment(mutex, amount);
     effects_core::locked_increment(mutex, amount)
 }
+
+/// Polls the actual guard-holding future twice without waiting for external readiness.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block; a caller-provided waker may panic.
+pub fn finish_guarded(
+    mutex: &Mutex<effects_core::Counter>,
+    amount: u64,
+    context: &mut std::task::Context<'_>,
+) -> std::task::Poll<bool> {
+    use std::future::Future;
+    let mut future = std::pin::pin!(guarded_suspending(mutex, amount));
+    match future.as_mut().poll(context) {
+        std::task::Poll::Pending => future.as_mut().poll(context),
+        ready => ready,
+    }
+}
+
+/// Cancels after one poll, dropping the saved guard and preserving its mutation.
+///
+/// # Panics
+/// Recursive mutex acquisition may panic or block; a caller-provided waker may panic.
+pub fn cancel_guarded(
+    mutex: &Mutex<effects_core::Counter>,
+    amount: u64,
+    context: &mut std::task::Context<'_>,
+) -> bool {
+    use std::future::Future;
+    matches!(
+        std::pin::pin!(guarded_suspending(mutex, amount)).poll(context),
+        std::task::Poll::Pending
+    )
+}
