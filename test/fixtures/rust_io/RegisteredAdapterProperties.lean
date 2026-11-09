@@ -24,7 +24,7 @@ theorem adapter_steps (pid : PID) (first : Bool) (available : List String)
     (write : writeStep sought (payload (recordValue first)) = some (.Ok 4#usize, written))
     (sync : syncStep written = some (.Ok (), committed)) :
     Result.RegisteredSteps pid
-      (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0)
+      (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0)
         (.nativeReference 6) (.integer (if first then 13 else 19)))
       (shared (Record.RegisteredLogProperties.counter first - 1) pinnedFrame (Record.FramedLogProperties.free false) before)
       available Term.true
@@ -54,8 +54,8 @@ theorem adapter_calls (before sought1 written1 committed1 sought2 written2 commi
     (seek2 : seekStep committed1 (.end_ 0#i64) = some (.Ok position2, sought2))
     (write2 : writeStep sought2 (payload 19#u16) = some (.Ok 4#usize, written2))
     (sync2 : syncStep written2 = some (.Ok (), committed2)) :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 19)
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 6) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 6) (.integer 19)
     (Result.schedule {} child (fun _ => parent))
       {nativeRefCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) before).2} =
       (.ok Term.true, {
@@ -71,8 +71,8 @@ theorem adapter_calls (before sought1 written1 committed1 sought2 written2 commi
     Result.two_registered_serial_steps _ _ _ _ _ _ _ _ _ _ parent child
 
 theorem registered_records :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 6) (.integer 19)
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 6) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 6) (.integer 19)
     (Result.schedule {} child (fun _ => parent))
       {nativeRefCounter := 6, nativeHeap := (shared 6 pinnedFrame (Record.FramedLogProperties.free false) firstInput).2} =
       (.ok Term.true, {

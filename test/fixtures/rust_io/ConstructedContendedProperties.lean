@@ -18,7 +18,7 @@ theorem adapter_prefix (pid : PID) (first : Bool) (available : List String)
     (same : (available ++ resourceTypes).eraseDups = resourceTypes)
     (contents : Term) (state : State) :
     Result.RegisteredPrefix pid
-      (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0)
+      (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0)
         (.nativeReference 8) (.integer (if first then 13 else 19)))
       (shared (beforeCounter first) (beforeFrame first) contents state) available
       (.wait (NativeMutex.pollLock (⟨4⟩ : NativeMutex NativeFile)) (resume first (recordValue first)))
@@ -45,8 +45,8 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
     (seek2 : seekStep committed1 (.end_ 0#i64) = some (.Ok position2, sought2))
     (write2 : writeStep sought2 (Record.CrashProperties.payload 19#u16) = some (.Ok 4#usize, written2))
     (sync2 : syncStep written2 = some (.Ok (), committed2)) :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 8) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 8) (.integer 19)
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 8) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 8) (.integer 19)
     (Result.schedule {} child (fun _ => parent)).run
       {nativeRefCounter := 8, nativeHeap := (shared 8 .pinned (free) before).2,
         nativeResourceTypes := resourceTypes} [.current, .swap [1]] =
@@ -54,8 +54,8 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
         nativeRefCounter := 12, nativeResourceTypes := resourceTypes,
         nativeHeap := (shared 12 .pinned (free) committed2).2}) := by
   dsimp only
-  let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 8) (.integer 13)
-  let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 8) (.integer 19)
+  let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 8) (.integer 13)
+  let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 8) (.integer 19)
   obtain ⟨childRead, childEq⟩ : ∃ read : Environment → Result Term, child = .nativeGet read := ⟨_, rfl⟩
   let held1 := NativeMutex.lockedContents [] 10 false (⟨2⟩ : NativeFile)
   let held2 := NativeMutex.lockedContents [1] 12 false (⟨2⟩ : NativeFile)
@@ -103,8 +103,8 @@ theorem contended_calls (before sought1 written1 committed1 sought2 written2 com
       Record.ConstructedConcurrentProperties.owner, bodyPhase, afterPhase, Rustler.encodeBool, recoverGuard] using childTrace
 
 theorem contended_records :
-    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 8) (.integer 13)
-    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) (.nativeReference 8) (.integer 19)
+    let parent := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 8) (.integer 13)
+    let child := Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) (.nativeReference 8) (.integer 19)
     (Result.schedule {} child (fun _ => parent)).run
       {nativeRefCounter := 8, nativeHeap := (shared 8 .pinned (free) firstInput).2,
         nativeResourceTypes := resourceTypes} [.current, .swap [1]] =
@@ -158,10 +158,10 @@ theorem contended_records :
 constructor, starting with only a namespace and successful host outcomes. -/
 theorem created_contended_records :
     (do
-      let resource ← Elixir.LynxIoFixture.Native.«log_create/0» (Dispatcher.ofTable #[] 0)
+      let resource ← Elixir.LynxIoFixture.Native.«log_create/0» (Dispatcher.ofTable [] 0)
       Result.schedule {}
-        (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) resource (.integer 19))
-        (fun _ => Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable #[] 0) resource (.integer 13))).run
+        (Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) resource (.integer 19))
+        (fun _ => Elixir.LynxIoFixture.Native.«log_append/2» (Dispatcher.ofTable [] 0) resource (.integer 13))).run
       (Record.ConstructorLogProperties.initial {} firstInput.script) [.current, .swap [1]] =
       (.ok Term.true, {
         nativeRefCounter := 12, nativeResourceTypes := resourceTypes,
