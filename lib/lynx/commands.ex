@@ -58,7 +58,8 @@ defmodule Lynx.Commands do
       Explicitly audited imported modules are included, with their private proofs,
       even when the input module only runs proof-reporting metaprograms. Export
       auditing does not expose private declarations to client proofs. The file is
-      written only when every module verifies.
+      written only when every module verifies. Export requests bypass cache reads;
+      successfully audited modules still populate their cache entries.
 
   """
   @spec verify!(String.t(), [map()], keyword()) :: [Lynx.Laws.report()]

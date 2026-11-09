@@ -59,7 +59,10 @@ defmodule Lynx.RunnerTest do
     assert [%{status: :ok, cached: false}] = Lynx.Commands.verify!(tmp, [input])
     assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(tmp, [input])
     export = Path.join(tmp, "shared-namespace.export")
-    assert [%{status: :ok}] = Lynx.Commands.verify!(tmp, [input], export: export)
+
+    assert [%{status: :ok, cached: false}] =
+             Lynx.Commands.verify!(tmp, [input], export: export)
+
     exported = File.read!(export)
     assert exported =~ "importedExportSentinel"
     assert exported =~ "privateExportSentinel"
@@ -220,6 +223,27 @@ defmodule Lynx.RunnerTest do
              Lynx.Commands.verify!(@lean_dir, files, options: [maxRecDepth: 1], export: path)
 
     refute File.exists?(path)
+  end
+
+  @tag :tmp_dir
+  test "fresh exports populate the cache and recheck already cached laws", %{tmp_dir: tmp} do
+    input =
+      file(@literal_erl, "Elixir.ExportCache", [
+        definition("ensures", success()),
+        theorem("law", "rfl")
+      ])
+      |> Map.put("cache_key", Base.encode16(:crypto.strong_rand_bytes(32), case: :lower))
+
+    export = Path.join(tmp, "fresh.export")
+
+    assert [%{status: :ok, cached: false, theorems: [%{name: "law/0"}]}] =
+             Lynx.Commands.verify!(@lean_dir, [input], export: export)
+
+    assert [%{status: :ok, cached: true, theorems: []}] =
+             Lynx.Commands.verify!(@lean_dir, [input])
+
+    assert [%{status: :ok, cached: false, theorems: [%{name: "law/0"}]}] =
+             Lynx.Commands.verify!(@lean_dir, [input], export: export)
   end
 
   @tag :tmp_dir
