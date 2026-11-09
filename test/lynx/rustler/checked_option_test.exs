@@ -73,6 +73,7 @@ defmodule Lynx.Rustler.CheckedOptionTest do
       only: [checked_analyse: 1],
       proof_modules: [
         "RustWorkspace.CheckedInternalExtraction.Funs",
+        "RustWorkspace.CheckedInternalExtraction.Types",
         "RustWorkspace.CheckedInternal",
         "RustWorkspace.CheckedOption"
       ],

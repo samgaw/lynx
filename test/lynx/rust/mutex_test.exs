@@ -83,7 +83,7 @@ defmodule Lynx.Rust.MutexTest do
 
     refute Enum.any?(result.verification.guarantees, &(&1.kind == :nif_adapter))
     codecs = "Runtime.Mutex.NativeCodecs"
-    assert codecs in result.extraction.model_modules
+    assert codecs in result.extraction.audit_modules
 
     file = Lynx.Rust.Proofs.file!(result.extraction, ["Runtime.MutexProperties"])
     export = Path.join(tmp, "mutex.export")

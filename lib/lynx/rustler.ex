@@ -349,7 +349,7 @@ defmodule Lynx.Rustler do
         execution: execution,
         owned_drops: Keyword.get(opts, :owned_drops, false),
         resource_types: Enum.map(registrations.types, & &1.tag),
-        audit_modules: extraction.model_modules,
+        audit_modules: extraction.audit_modules,
         proof_modules: proofs,
         bridge_module: bridge,
         implementation_module: prefix <> ".RustlerAdapter",
