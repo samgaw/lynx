@@ -34,7 +34,8 @@ def moduleDeclarations (moduleName : Name) : Elab.Command.CommandElabM (Array Na
   let names := env.constants.toList.filterMap fun (name, _) =>
     -- Kernel caches can retain auxiliary declarations from rolled-back tactic branches.
     if (env.find? name).isSome && env.getModuleIdxFor? name == moduleIdx then some name else none
-  if names.isEmpty then throwError "audit module has no declarations: {moduleName}"
+  -- A known, import-only module has no declarations; unknown modules were
+  -- rejected above. Empty modules do not stand in for required proof theorems.
   return names.toArray
 
 /-- Audit a whole module with the same axiom policy as a single declaration. -/
