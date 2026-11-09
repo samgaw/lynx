@@ -139,6 +139,22 @@ defmodule Lynx.Rust do
   dictionary; custom or unresolved error conversions remain unsupported. These
   primitives are reported Rust core models, not verified core implementations.
 
+  Runtime extraction supports standard `u64::checked_mul` with overflow returning
+  `None`, and nonpanicking integer casts in checked implementation dependencies.
+  Integer widths and truncation remain in the extracted operations. The pinned
+  `partial-discriminants-v1` backend can inspect an initialized enum tag after a
+  payload has moved; ordinary whole-value and field reads retain their checks.
+  Ownership analysis retains selected enum variants across repeated tests and
+  invalidates that information on assignment or calls.
+
+  Standard `Result::expect` and `Option::expect` have runtime models for successful
+  payload transfer. Failed expectations exhaust verification: panic formatting,
+  hooks and unwind for these calls remain unsupported. A proof cannot assume
+  that an expectation succeeds or establish a panic contract through this cutoff.
+  The shared-log fixture verifies writable reopening, bounded tail repair,
+  synchronization and returning a Rustler resource under declared I/O outcomes.
+  This does not establish arbitrary crash recovery or native binary/FFI correctness.
+
   `:futures` defaults to `:reject`. Selecting `:immediate` extracts actual async
   constructors and compiler-generated poll bodies, including completed-state panic
   checks and first-party callees. It requires the pinned immediate-futures backend
