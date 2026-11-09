@@ -278,6 +278,13 @@ fn derived_list(left: u64, right: u64) -> OrderedList {
     OrderedList { values }
 }
 
+/// Propagates checked arithmetic failure through the workspace's Option path.
+#[cfg(feature = "checked-option")]
+#[rustler::nif]
+fn checked_analyse(value: i64) -> Option<i64> {
+    experiment_analysis::analyse(value)
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -300,6 +307,7 @@ mod tests {
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
                 + usize::from(cfg!(feature = "derived-list"))
+                + usize::from(cfg!(feature = "checked-option"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -388,6 +396,13 @@ mod tests {
             for name in ["echo_flags", "echo_signed_bytes"] {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
+        }
+        if cfg!(feature = "checked-option") {
+            expected.push((
+                "checked_analyse".to_owned(),
+                1,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
         }
         if cfg!(feature = "derived-list") {
             expected.push((
