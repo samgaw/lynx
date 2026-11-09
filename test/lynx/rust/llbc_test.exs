@@ -392,7 +392,7 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
-  test "byte-vector NIF types require actual alloc Vec identity and u8 elements" do
+  test "scalar-vector NIF types require actual alloc Vec identity and supported element widths" do
     args = %{
       "regions" => [],
       "types" => [%{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}],
@@ -419,8 +419,28 @@ defmodule Lynx.Rust.LLBCTest do
     audit = %{references: %{}, translated: %{"type_decls" => [declaration]}}
     assert %{"vec" => "u8"} = LLBC.nif_type!(vector, audit)
 
-    assert_raise ArgumentError, ~r/unsupported NIF ADT identity/, fn ->
-      LLBC.nif_type!(put_in(vector, ["Adt", "generics", "types"], [%{"Scalar" => "Bool"}]), audit)
+    assert %{"vec" => "bool"} =
+             LLBC.nif_type!(
+               put_in(vector, ["Adt", "generics", "types"], [%{"Scalar" => "Bool"}]),
+               audit
+             )
+
+    assert %{"vec" => "i64"} =
+             LLBC.nif_type!(
+               put_in(vector, ["Adt", "generics", "types"], [
+                 %{"Scalar" => %{"Integer" => %{"Signed" => "I64"}}}
+               ]),
+               audit
+             )
+
+    for unsupported <- [
+          %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}},
+          %{"Scalar" => %{"Integer" => %{"Signed" => "I128"}}},
+          %{"Scalar" => "Char"}
+        ] do
+      assert_raise ArgumentError, ~r/unsupported NIF ADT identity/, fn ->
+        LLBC.nif_type!(put_in(vector, ["Adt", "generics", "types"], [unsupported]), audit)
+      end
     end
 
     for changed <- [

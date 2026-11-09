@@ -29,6 +29,22 @@ pub fn replace_at(input: &mut [u8], position: usize, value: u8) {
     input[position] = value;
 }
 
+/// Replaces the first signed protocol value without changing the remaining fields.
+pub fn replace_slice_first_i64(input: &mut [i64], value: i64) -> bool {
+    if input.is_empty() {
+        false
+    } else {
+        input[0] = value;
+        true
+    }
+}
+
+/// Retains ownership while updating the first signed protocol value.
+pub fn replace_first_i64(mut input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
+    let changed = replace_slice_first_i64(input.as_mut_slice(), value);
+    (changed, input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{replace_at, replace_first, slice_length};

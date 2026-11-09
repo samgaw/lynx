@@ -148,13 +148,17 @@ fn supported_type(ty: &Type, output: bool) -> Result<Value, String> {
             if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
                 if arguments.args.len() == 1 {
                     if let Some(syn::GenericArgument::Type(element)) = arguments.args.first() {
-                        if supported_type(element, output)? == json!("u8") {
-                            return Ok(json!({"vec": "u8"}));
+                        let element = supported_type(element, output)?;
+                        if element.as_str().is_some_and(|name| {
+                            ["bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"]
+                                .contains(&name)
+                        }) {
+                            return Ok(json!({"vec": element}));
                         }
                     }
                 }
             }
-            return Err("Rustler Vec currently requires exactly one u8 element type".into());
+            return Err("Rustler Vec requires exactly one supported scalar element type".into());
         }
         if path.qself.is_none()
             && (names == ["Binary"]
@@ -537,6 +541,23 @@ mod tests {
     }
 
     #[test]
+    fn discovers_scalar_vector_elements_recursively() {
+        let bindings = discover(
+            "fn native(a: Vec<i64>, b: Option<Vec<bool>>) -> (Vec<i8>, Vec<u64>) { todo!() }",
+            2,
+        );
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(
+            bindings.entries[0]["arguments"],
+            json!([{"vec":"i64"}, {"option":{"vec":"bool"}}])
+        );
+        assert_eq!(
+            bindings.entries[0]["result"],
+            json!({"tuple":[{"vec":"i8"},{"vec":"u64"}]})
+        );
+    }
+
+    #[test]
     fn discovers_nested_options_and_rejects_invalid_parameters() {
         let bindings = discover("fn native(a: Option<Option<bool>>) -> core::option::Option<(bool, Result<u8, i64>)> { todo!() }", 1);
         assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
@@ -632,7 +653,7 @@ mod tests {
             json!({"tuple": ["bool", {"vec": "u8"}]})
         );
         for source in [
-            "fn native(value: Vec<bool>) -> bool { true }",
+            "fn native(value: Vec<String>) -> bool { true }",
             "fn native(value: Vec<u8, CustomAllocator>) -> bool { true }",
             "fn native(value: other::Vec<u8>) -> bool { true }",
         ] {

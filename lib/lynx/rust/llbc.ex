@@ -698,8 +698,8 @@ defmodule Lynx.Rust.LLBC do
           _ -> raise ArgumentError, "resource NIF type requires a monomorphic nominal payload"
         end
 
-      builtin == nil and byte_vector?(id, types, audit) ->
-        %{"vec" => "u8"}
+      builtin == nil and scalar_vector?(id, types, audit) ->
+        %{"vec" => signature_type!(hd(types), audit)}
 
       true ->
         raise ArgumentError, "unsupported NIF ADT identity or tuple arity in extracted signature"
@@ -709,7 +709,7 @@ defmodule Lynx.Rust.LLBC do
   defp signature_type!(type, _),
     do: raise(ArgumentError, "unsupported NIF type in extracted signature: #{inspect(type)}")
 
-  defp byte_vector?(id, [element], audit) do
+  defp scalar_vector?(id, [element], audit) do
     declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
     with %{
@@ -725,14 +725,23 @@ defmodule Lynx.Rust.LLBC do
            }
          } <- declaration do
       name == Enum.map(~w(alloc vec Vec), &%{"Ident" => [&1, 0]}) and
-        Lynx.Rust.CallModels.expand(element, audit.references) ==
-          %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+        scalar_vector_element?(Lynx.Rust.CallModels.expand(element, audit.references))
     else
       _ -> false
     end
   end
 
-  defp byte_vector?(_, _, _), do: false
+  defp scalar_vector?(_, _, _), do: false
+
+  defp scalar_vector_element?(%{"Scalar" => "Bool"}), do: true
+
+  defp scalar_vector_element?(%{"Scalar" => %{"Integer" => %{"Signed" => width}}})
+       when width in ~w(I8 I16 I32 I64), do: true
+
+  defp scalar_vector_element?(%{"Scalar" => %{"Integer" => %{"Unsigned" => width}}})
+       when width in ~w(U8 U16 U32 U64), do: true
+
+  defp scalar_vector_element?(_), do: false
 
   def option_type?(id, audit) do
     declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))

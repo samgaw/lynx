@@ -256,6 +256,91 @@ def decodeByteVec (input : Term) : Except Exception (alloc.vec.Vec U8) :=
     .ok (Term.list (value.val.map encodeUnsigned))
   else .fail .undef
 
+/-- Scalar vectors share the byte codec's element budget. Admitted elements
+are booleans or fixed-width integers of at most eight bytes. Allocation and
+Rustler/BEAM correspondence remain external assumptions. -/
+private def decodeScalarList {α : Type} (decode : Term → Except Exception α) :
+    Nat → Term → Except Exception (List α)
+  | _, .nil => .ok []
+  | 0, .cons _ _ => .error .exhausted
+  | fuel + 1, .cons head tail => do
+    let value ← decode head
+    let rest ← decodeScalarList decode fuel tail
+    .ok (value :: rest)
+  | _, _ => .error (.error (.atom "nif_panicked"))
+
+def decodeScalarVec {α : Type} (decode : Term → Except Exception α)
+    (input : Term) : Except Exception (alloc.vec.Vec α) :=
+  match input with
+  | .nil | .cons _ _ => do
+    let values ← decodeScalarList decode byteVecLimit input
+    if bounds : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat then
+      .ok (alloc.vec.Vec.from values bounds.1)
+    else .error .exhausted
+  | _ => .error (.error (.atom "badarg"))
+
+@[expose] def encodeScalarVec {α : Type} (encode : α → Term)
+    (value : alloc.vec.Vec α) : RustM Term :=
+  if value.val.length ≤ byteVecLimit then
+    .ok (Term.list (value.val.map encode))
+  else .fail .undef
+
+theorem encodeScalarVec_exhausted {α : Type} (encode : α → Term)
+    (value : alloc.vec.Vec α) (large : byteVecLimit < value.val.length) :
+    encodeScalarVec encode value = .fail .undef := by
+  simp [encodeScalarVec, Nat.not_le.mpr large]
+
+private theorem decodeScalarList_values {α : Type} (decode : Term → Except Exception α)
+    {inputs : List Term} {values : List α}
+    (decoded : List.Forall₂ (fun input value => decode input = .ok value) inputs values)
+    (fuel : Nat) (bound : values.length ≤ fuel) :
+    decodeScalarList decode fuel (Term.list inputs) = .ok values := by
+  induction decoded generalizing fuel with
+  | nil => simp [decodeScalarList, Term.list]
+  | @cons head value tail values paired remaining ih =>
+    cases fuel with
+    | zero => simp at bound
+    | succ fuel =>
+      simp only [decodeScalarList, paired]
+      rw [ih fuel (by simpa using bound)]
+      rfl
+
+theorem decodeScalarVec_values {α : Type} (decode : Term → Except Exception α)
+    {inputs : List Term} {values : List α}
+    (decoded : List.Forall₂ (fun input value => decode input = .ok value) inputs values)
+    (bound : values.length ≤ byteVecLimit)
+    (native : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat) :
+    decodeScalarVec decode (Term.list inputs) = .ok (alloc.vec.Vec.from values native.1) := by
+  cases decoded with
+  | nil => simp [decodeScalarVec, decodeScalarList, alloc.vec.Vec.from, byteVecLimit]
+  | @cons head value tail values paired remaining =>
+    simp only [decodeScalarVec]
+    change (do
+      let values ← decodeScalarList decode byteVecLimit (Term.list (head :: tail))
+      if bounds : values.length ≤ Usize.max ∧ values.length ≤ Isize.max.toNat then
+        .ok (alloc.vec.Vec.from values bounds.1)
+      else .error .exhausted) = _
+    rw [decodeScalarList_values decode (.cons paired remaining) byteVecLimit bound]
+    change (if bounds : (value :: values).length ≤ Usize.max ∧ (value :: values).length ≤ Isize.max.toNat then
+      (Except.ok (alloc.vec.Vec.from (value :: values) bounds.1) : Except Exception (alloc.vec.Vec α))
+      else Except.error Exception.exhausted) = _
+    rw [dite_eq_left native]
+
+@[simp] theorem decodeScalarVec_nil {α : Type} (decode : Term → Except Exception α) :
+    decodeScalarVec decode .nil = .ok (alloc.vec.Vec.from [] (by simp)) := by
+  simp [decodeScalarVec, decodeScalarList, alloc.vec.Vec.from, byteVecLimit]
+
+theorem decodeScalarVec_headError {α : Type} (decode : Term → Except Exception α)
+    (head tail : Term) (error : Exception) (h : decode head = .error error) :
+    decodeScalarVec decode (.cons head tail) = .error error := by
+  simp [decodeScalarVec, decodeScalarList, byteVecLimit, h]
+
+theorem decodeScalarVec_improper {α : Type} (decode : Term → Except Exception α)
+    (head : Term) (value : α) (tail : Int) (h : decode head = .ok value) :
+    decodeScalarVec decode (.cons head (.integer tail)) =
+      .error (.error (.atom "nif_panicked")) := by
+  simp [decodeScalarVec, decodeScalarList, byteVecLimit, h]
+
 private theorem decodeByte (value : U8) :
     decodeUnsigned .U8 32 (encodeUnsigned value) = .ok value := by
   cases value with
