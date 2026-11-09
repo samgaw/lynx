@@ -197,6 +197,10 @@ defmodule Lynx.Rustler.EncoderModels do
           self["Adt"]["generics"] == arguments([variable(0), variable(1)]) ->
         {"pair", "(@A, @B)", 2, 0}
 
+      scope == path(~w(tuple)) and match?(%{"Adt" => %{"builtin" => "Tuple"}}, self) and
+          self["Adt"]["generics"] == arguments([variable(0), variable(1), variable(2)]) ->
+        {"triple", "(@A, @B, @C)", 3, 0}
+
       scope == path(~w(list)) and named?(self, ~w(alloc vec Vec), [variable(0)], ctx) ->
         {"vec", "alloc::vec::Vec<@T>", 1, 0}
 
@@ -275,7 +279,7 @@ defmodule Lynx.Rustler.EncoderModels do
         "str" ->
           {[outlives(region(0), region(2))], []}
 
-        kind when kind in ["pair", "vec"] ->
+        kind when kind in ["pair", "triple", "vec"] ->
           {Enum.map(indices(count), &outlives(%{"Lub" => variable(&1)}, region(1))), []}
 
         _ ->

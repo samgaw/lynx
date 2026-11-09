@@ -46,6 +46,21 @@ cutoff; successful allocation is assumed at this modelled FFI boundary. -/
   let right ← second.encode value.2 env
   .ok (.tuple #[left, right])
 
+@[expose] def triple {A B C : Type} (first : Encoder A) (second : Encoder B)
+    (third : Encoder C) (value : A × B × C) (env : Env) : RustM NativeTerm := do
+  let left ← first.encode value.1 env
+  let middle ← second.encode value.2.1 env
+  let right ← third.encode value.2.2 env
+  .ok (.tuple #[left, middle, right])
+
+theorem triple_values {A B C : Type} (first : Encoder A) (second : Encoder B)
+    (third : Encoder C) (value : A × B × C) (env : Env) (a b c : Term)
+    (ha : first.encode value.1 env = .ok a)
+    (hb : second.encode value.2.1 env = .ok b)
+    (hc : third.encode value.2.2 env = .ok c) :
+    triple first second third value env = .ok (.tuple #[a, b, c]) := by
+  simp [triple, ha, hb, hc]
+
 /-- Rustler's safe tuple constructor delegates to the NIF API with a u32
 arity. The model also enforces the VM's 24-bit tuple-header limit. Native
 handles/environment agreement and allocation remain unverified. Larger slices
