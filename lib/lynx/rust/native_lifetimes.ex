@@ -528,11 +528,10 @@ defmodule Lynx.Rust.NativeLifetimes do
         |> Enum.map(fn {branch, index} ->
           branch_state = %{state | exits: []}
 
-          block_state!(
-            branch,
-            refine_coroutine(data, index, refine_enum(data, index, branch_state, ctx), ctx),
-            ctx
-          )
+          case refine_enum(data, index, branch_state, ctx) do
+            :unreachable -> {:terminal, []}
+            refined -> block_state!(branch, refine_coroutine(data, index, refined, ctx), ctx)
+          end
         end)
 
       states = for result <- results, is_map(result), do: result
@@ -608,9 +607,23 @@ defmodule Lynx.Rust.NativeLifetimes do
             do: selected ++ (declared -- Enum.map(branches, &elem(&1, 0))),
             else: selected
 
+        selected =
+          case state.known[{:enum_domain, root}] do
+            previous when is_list(previous) -> Enum.filter(selected, &(&1 in previous))
+            nil -> selected
+          end
+
         if selected == [] do
-          state
+          :unreachable
         else
+          # The compiler may inspect the same Result discriminant again while
+          # dropping an already matched temporary. Retain the selected tags;
+          # an empty alternative must not resurrect an error payload's owner.
+          state = %{
+            state
+            | known: Map.put(state.known, {:enum_domain, root}, Enum.sort(selected))
+          }
+
           owned =
             Enum.any?(variants, fn variant ->
               variant["id"] in selected and
@@ -816,6 +829,7 @@ defmodule Lynx.Rust.NativeLifetimes do
       known
       |> Map.delete({:alias, local})
       |> Map.delete({:empty, local})
+      |> Map.delete({:enum_domain, local})
       |> Map.delete({:frame_borrow, local})
 
     known =
@@ -883,7 +897,11 @@ defmodule Lynx.Rust.NativeLifetimes do
       |> Map.delete(local)
       |> Map.delete({:alias, local})
       |> Map.delete({:empty, local})
+      |> Map.delete({:enum_domain, local})
       |> Map.delete({:frame_borrow, local})
+
+  defp known_after(%{"StorageLive" => local}, known, ctx),
+    do: known_after(%{"StorageDead" => local}, known, ctx)
 
   # A compiler poll mutates the frame, not the address held by another Pin
   # reborrow. Retain only aliases of that same audited frame, never state tags

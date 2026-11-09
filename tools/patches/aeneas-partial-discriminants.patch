@@ -1,0 +1,84 @@
+--- a/src/interp/InterpExpressions.ml
++++ b/src/interp/InterpExpressions.ml
+@@ -47,14 +47,23 @@
+
+ (** Read a place.
+
+-    We check that the value *doesn't contain bottoms or reserved borrows*. *)
+-let read_place_check (span : Meta.span) (access : access_kind) (p : place)
+-    (ctx : eval_ctx) : loan_id option * tvalue * path =
++    Ordinary reads reject bottom fields; discriminant-only reads require an
++    initialized enum tag. Both modes reject reserved borrows. *)
++let read_place_check ?(discriminant_only = false) (span : Meta.span)
++    (access : access_kind) (p : place) (ctx : eval_ctx) :
++    loan_id option * tvalue * path =
+   let lid, v, path = eval_place span access p ctx in
+   (* Check that there are no bottoms in the value *)
+-  [%cassert] span
+-    (not (bottom_in_value ctx.ended_regions v))
+-    "There should be no bottoms in the value";
++  (* A discriminant read observes only an initialized enum tag, not fields
++     which may already have been moved. Ordinary reads still check every field. *)
++  let initialized =
++    if discriminant_only then
++      match (value_strip_shared_loans v).value with
++      | VAdt { variant_id = Some _; _ } -> true
++      | _ -> not (bottom_in_value ctx.ended_regions v)
++    else not (bottom_in_value ctx.ended_regions v)
++  in
++  [%cassert] span initialized "There should be no bottoms in the value";
+   (* Check that there are no reserved borrows in the value *)
+   [%cassert] span
+     (not (reserved_in_value v))
+@@ -62,8 +71,9 @@
+   (* Return *)
+   (lid, v, path)
+
+-let access_rplace_reorganize_and_read (config : config) (span : Meta.span)
+-    (greedy_expand : bool) (access : access_kind) (p : place) (ctx : eval_ctx) :
++let access_rplace_reorganize_and_read ?(discriminant_only = false)
++    (config : config) (span : Meta.span) (greedy_expand : bool)
++    (access : access_kind) (p : place) (ctx : eval_ctx) :
+     loan_id option
+     * tvalue
+     * path
+@@ -81,7 +91,9 @@
+        else (ctx, fun e -> e))
+   in
+   (* Read the place - note that this checks that the value doesn't contain bottoms *)
+-  let lid, value, path = read_place_check span access p ctx in
++  let lid, value, path =
++    read_place_check ~discriminant_only span access p ctx
++  in
+   (* Compose *)
+   (lid, value, path, ctx, cc)
+
+--- a/src/interp/InterpExpressions.mli
++++ b/src/interp/InterpExpressions.mli
+@@ -18,9 +18,13 @@
+     - the value at the place itself doesn't contain loans (the [access_kind]
+       controls whether we only end mutable loans, or also shared loans).
+
++    [discriminant_only] permits moved fields of an initialized enum when reading
++    its tag. It must not be used for a whole-value or field read.
++
+     [expand_prim_copy]: if [true], expand the symbolic values which are
+     primitively copyable and contain borrows. *)
+ val access_rplace_reorganize_and_read :
++  ?discriminant_only:bool ->
+   config ->
+   Meta.span ->
+   bool ->
+--- a/src/interp/InterpStatements.ml
++++ b/src/interp/InterpStatements.ml
+@@ -998,8 +998,8 @@
+       let access = Read in
+       let expand_prim_copy = false in
+       let _, p_v, _, ctx, cf_read_p =
+-        access_rplace_reorganize_and_read config span expand_prim_copy access p
+-          ctx
++        access_rplace_reorganize_and_read ~discriminant_only:true config span
++          expand_prim_copy access p ctx
+       in
+       let ctx0 = ctx in
+       (* Match on the value *)
