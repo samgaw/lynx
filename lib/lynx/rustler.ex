@@ -101,6 +101,13 @@ defmodule Lynx.Rustler do
     * `:proof_roots` — additional qualified first-party Rust function paths to extract
       alongside selected NIFs. These internal functions need not be NIF exports;
       their actual implementations and dependencies undergo the same checks.
+    * `:root_attribute` — a qualified Rust tool attribute selecting annotated NIF
+      implementations and their dependencies. Rustler preserves function attributes
+      inside its generated wrapper. Requested bindings must still have actual bodies;
+      missing annotations cannot fall back to assumed implementations. This permits
+      release Charon binaries without the nested-function selection patch. Register
+      the tool attribute on the pinned nightly compiler, preferably only for the
+      verification build.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
@@ -167,6 +174,7 @@ defmodule Lynx.Rustler do
       :only,
       :proof_modules,
       :proof_roots,
+      :root_attribute,
       :required_properties,
       :execution,
       :futures,
@@ -179,6 +187,7 @@ defmodule Lynx.Rustler do
         key not in allowed,
         do: raise(ArgumentError, "unknown Rustler verification option: #{key}")
 
+    Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     proof_roots = Keyword.get(opts, :proof_roots, [])
 
     unless is_list(proof_roots) and
@@ -279,7 +288,8 @@ defmodule Lynx.Rustler do
       if custom? do
         raw =
           Lynx.Rust.Extraction.describe!(context, tools, roots, project, prefix <> ".Discovery",
-            external_types: models
+            external_types: models,
+            root_attribute: opts[:root_attribute]
           )
 
         resolved =
@@ -307,6 +317,7 @@ defmodule Lynx.Rustler do
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
         execution: execution,
+        root_attribute: opts[:root_attribute],
         futures: Keyword.get(opts, :futures, :reject),
         files: Keyword.get(opts, :files, :reject),
         owned_drops: Keyword.get(opts, :owned_drops, false),
