@@ -79,6 +79,203 @@ defmodule Lynx.Rust.NativeLifetimesTest do
     audit([create(0), drop.(0), returned()], false, %{sites: %{1 => [102]}})
   end
 
+  test "moving one saved field retains every other frame owner's obligation" do
+    frame_audit([frame_dispose(1), frame_dispose(2), returned()], true)
+    frame_audit([frame_dispose(1), returned()], false)
+    frame_audit([frame_dispose(2), returned()], false)
+    frame_audit([frame_dispose(1), panic()], false)
+  end
+
+  test "saved fields cannot be consumed twice or resurrected by another state test" do
+    frame_audit([frame_dispose(1), frame_dispose(1), frame_dispose(2), returned()], false)
+
+    frame_audit(
+      [frame_dispose(1), frame_switch([frame_dispose(1), frame_dispose(2), returned()])],
+      false
+    )
+  end
+
+  test "borrowed multi-owner frames retain obligations at joins and loop backedges" do
+    branch = %{
+      "kind" => %{
+        "Switch" => %{
+          "data" => %{
+            "scrutinee" => %{
+              "Value" => %{"Copy" => %{"kind" => %{"Local" => 2}, "ty" => %{"Scalar" => "Bool"}}}
+            },
+            "branches" => [[%{"Value" => [300, [%{"Bool" => true}, nil]]}, 0]],
+            "fallback" => 1
+          },
+          "branches" => [%{"statements" => [frame_dispose(1)]}, %{"statements" => []}]
+        }
+      }
+    }
+
+    frame_audit([branch, returned()], false, true)
+    frame_audit([loop([frame_dispose(1), edge("Continue", 0)]), returned()], false, true)
+    frame_audit([loop([edge("Continue", 0)]), returned()], true, true)
+    frame_audit([frame_dispose(1), panic()], false, true)
+  end
+
+  defp frame_type, do: %{"Adt" => %{"id" => 2, "builtin" => nil, "generics" => args([])}}
+  defp u32, do: %{"Scalar" => %{"Integer" => %{"Unsigned" => "U32"}}}
+
+  defp frame_place(field) do
+    %{
+      "kind" => %{
+        "Projection" => [
+          %{"kind" => %{"Local" => 1}, "ty" => frame_type()},
+          %{"Field" => [nil, field]}
+        ]
+      },
+      "ty" => if(field == 0, do: u32(), else: owner())
+    }
+  end
+
+  defp frame_dispose(field) do
+    %{
+      "kind" => %{
+        "Call" => %{
+          "call" => %{
+            "func" => %{"Regular" => %{"kind" => %{"Fun" => 101}}},
+            "args" => [%{"Move" => frame_place(field)}]
+          },
+          "dest" => %{"kind" => %{"Local" => 0}, "ty" => scalar()}
+        }
+      }
+    }
+  end
+
+  defp frame_switch(statements) do
+    tag = fn n ->
+      %{"Value" => [200 + n, [%{"Integer" => %{"Unsigned" => ["U32", to_string(n)]}}, nil]]}
+    end
+
+    %{
+      "kind" => %{
+        "Switch" => %{
+          "data" => %{
+            "scrutinee" => %{"Value" => %{"Copy" => frame_place(0)}},
+            "branches" => [[tag.(3), 0], [tag.(0), 1], [tag.(1), 1], [tag.(2), 1]],
+            "fallback" => 2
+          },
+          "branches" => [
+            %{"statements" => statements},
+            %{"statements" => [returned()]},
+            %{"statements" => [%{"kind" => "UndefinedBehavior"}]}
+          ]
+        }
+      }
+    }
+  end
+
+  defp frame_audit(statements, accepted, borrowed \\ false) do
+    params =
+      Map.merge(args([]), %{
+        "trait_clauses" => [],
+        "trait_type_constraints" => [],
+        "outlives" => []
+      })
+
+    mutex = %{
+      "def_id" => 1,
+      "kind" => "Opaque",
+      "generics" => %{params | "types" => [%{"index" => 0}]},
+      "item_meta" => %{
+        "name" => Enum.map(~w(std sync poison mutex Mutex), &%{"Ident" => [&1, 0]})
+      }
+    }
+
+    frame = %{
+      "def_id" => 2,
+      "src" => "Normal",
+      "generics" => params,
+      "kind" => %{"Struct" => [%{"ty" => u32()}, %{"ty" => owner()}, %{"ty" => owner()}]},
+      "item_meta" => %{
+        "name" => [%{"Ident" => ["owner_frame", 0]}, %{"Builtin" => ["Closure", 0]}],
+        "attr_info" => %{
+          "attributes" => [
+            %{
+              "Unknown" => %{
+                "path" => "lynx::coroutine_storage_v1",
+                "args" => JSON.encode!(%{state: 0, states: [[], [], [], [1, 2]]})
+              }
+            }
+          ]
+        }
+      }
+    }
+
+    input = if borrowed, do: %{"Ref" => ["Erased", frame_type(), "Mut"]}, else: frame_type()
+
+    name =
+      if borrowed,
+        do: [
+          %{"Ident" => ["owner_frame", 0]},
+          %{"Builtin" => ["Closure", 0]},
+          %{"Ident" => ["poll", 0]}
+        ],
+        else: [%{"Ident" => ["consume_frame", 0]}]
+
+    function = %{
+      "def_id" => 1,
+      "item_meta" => %{"name" => name},
+      "signature" => %{"inputs" => [input, %{"Scalar" => "Bool"}]},
+      "body" => %{
+        "Structured" => %{
+          "locals" => %{
+            "arg_count" => 2,
+            "locals" => [
+              %{"index" => 0, "ty" => scalar()},
+              %{"index" => 1, "ty" => input},
+              %{"index" => 2, "ty" => %{"Scalar" => "Bool"}}
+            ]
+          },
+          "body" => %{"statements" => [frame_switch(statements)]}
+        }
+      }
+    }
+
+    function =
+      if borrowed do
+        update_in(function, ["body", "Structured", "body"], &borrow_frame_places(&1, input))
+      else
+        function
+      end
+
+    translated = %{
+      "files" => [],
+      "type_decls" => [mutex, frame],
+      "fun_decls" => [function],
+      "options" => %{"cancelling_futures" => true}
+    }
+
+    run = fn ->
+      NativeLifetimes.audit!(
+        [function],
+        %{101 => %{can_fail: false, native_dispose: true}},
+        translated,
+        %{}
+      )
+    end
+
+    if accepted, do: run.(), else: assert_raise(CompileError, ~r/native owner lifetime/, run)
+  end
+
+  defp borrow_frame_places(%{"kind" => %{"Local" => 1}}, type),
+    do: %{
+      "kind" => %{"Projection" => [%{"kind" => %{"Local" => 1}, "ty" => type}, "Deref"]},
+      "ty" => frame_type()
+    }
+
+  defp borrow_frame_places(map, type) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, borrow_frame_places(value, type)} end)
+
+  defp borrow_frame_places(list, type) when is_list(list),
+    do: Enum.map(list, &borrow_frame_places(&1, type))
+
+  defp borrow_frame_places(value, _), do: value
+
   defp args(types),
     do: %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
 

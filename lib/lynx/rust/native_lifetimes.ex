@@ -127,6 +127,73 @@ defmodule Lynx.Rust.NativeLifetimes do
     end
   end
 
+  # A multi-owner compiler frame is one root while passed as a whole, but its
+  # state-refined fields have separate obligations. Moving one saved field must
+  # not discharge the resource/guard retained in another field.
+  defp owner_root({:frame_field, root, _field}), do: root
+  defp owner_root(root), do: root
+
+  defp live_root?(live, root), do: Enum.any?(live, &(owner_root(&1) == root))
+  defp delete_root(live, root), do: MapSet.reject(live, &(owner_root(&1) == root))
+
+  defp owned_remainder(live, ctx),
+    do:
+      MapSet.reject(live, &(owner_root(&1) == 0 or MapSet.member?(ctx.borrowed, owner_root(&1))))
+
+  defp join_obligations(live, ctx),
+    do:
+      MapSet.reject(live, fn owner ->
+        root = owner_root(owner)
+        root == 0 or (MapSet.member?(ctx.borrowed, root) and not multi_frame?(root, ctx))
+      end)
+
+  defp same_multi_ownership!(live, baseline, ctx) do
+    select = fn owners -> MapSet.filter(owners, &multi_frame?(owner_root(&1), ctx)) end
+    unless MapSet.equal?(select.(live), select.(baseline)), do: reject!(ctx)
+  end
+
+  defp multi_frame?(root, ctx) do
+    case ctx.frames[root] do
+      nil ->
+        false
+
+      frame ->
+        type = %{"Adt" => %{"id" => frame.id, "builtin" => nil, "generics" => frame.args}}
+        native_count(type, ctx.native, ctx.types, ctx.refs, []) > 1
+    end
+  end
+
+  defp frame_field_count(frame, field, ctx) do
+    type =
+      Enum.at(ctx.coroutines[frame.id]["fields"], field)["ty"]
+      |> CallModels.expand(ctx.refs)
+      |> CallModels.instantiate(frame.args)
+
+    native_count(type, ctx.native, ctx.types, ctx.refs, [])
+  end
+
+  defp frame_field!(root, path, ctx) do
+    frame = ctx.frames[root]
+
+    case Enum.split(path, length(frame.prefix)) do
+      {prefix, [{:field, nil, field} | _]} when prefix == frame.prefix and is_integer(field) ->
+        unless field >= 0 and field < length(ctx.coroutines[frame.id]["fields"]) and
+                 frame_field_count(frame, field, ctx) == 1,
+               do: reject!(ctx)
+
+        {:frame_field, root, field}
+
+      _ ->
+        reject!(ctx)
+    end
+  end
+
+  defp take_frame_field!(live, root, path, ctx) do
+    token = frame_field!(root, path, ctx)
+    unless MapSet.member?(live, token) and not MapSet.member?(live, root), do: reject!(ctx)
+    MapSet.delete(live, token)
+  end
+
   # Inspect actual fields after instantiation. A Pin containing a mutable
   # reference borrows its pointee; its type argument alone does not own it.
   defp contains_native?(type, native, types, refs, seen),
@@ -394,7 +461,11 @@ defmodule Lynx.Rust.NativeLifetimes do
 
   defp loop!(body, state, ctx) do
     borrowed_only!(state.live, ctx)
-    loop_ctx = Map.put(ctx, :loop_depth, Map.get(ctx, :loop_depth, 0) + 1)
+
+    loop_ctx =
+      ctx
+      |> Map.put(:loop_depth, Map.get(ctx, :loop_depth, 0) + 1)
+      |> Map.put(:loop_ownership, [state.live | Map.get(ctx, :loop_ownership, [])])
 
     # Initial branch and alias facts are not invariants of later iterations.
     # Native owners may leave on a break, but none may cross a backedge.
@@ -405,6 +476,7 @@ defmodule Lynx.Rust.NativeLifetimes do
 
         following ->
           borrowed_only!(following.live, ctx)
+          same_multi_ownership!(following.live, state.live, ctx)
           following.exits
       end
 
@@ -417,13 +489,17 @@ defmodule Lynx.Rust.NativeLifetimes do
     unless is_integer(target) and target >= 0 and target < Map.get(ctx, :loop_depth, 0),
       do: reject!(ctx)
 
-    if kind == :continue, do: borrowed_only!(state.live, ctx)
+    if kind == :continue do
+      borrowed_only!(state.live, ctx)
+      same_multi_ownership!(state.live, Enum.fetch!(ctx.loop_ownership, target), ctx)
+    end
+
     edge = %{state | exits: []}
     {:terminal, state.exits ++ [{kind, target, edge}]}
   end
 
   defp borrowed_only!(live, ctx) do
-    unless MapSet.subset?(live, ctx.borrowed),
+    unless Enum.all?(live, &MapSet.member?(ctx.borrowed, owner_root(&1))),
       do:
         LLBC.failure!(
           ctx.function,
@@ -477,8 +553,8 @@ defmodule Lynx.Rust.NativeLifetimes do
     unless Enum.all?(
              rest,
              &MapSet.equal?(
-               MapSet.difference(MapSet.delete(&1.live, 0), ctx.borrowed),
-               MapSet.difference(MapSet.delete(first.live, 0), ctx.borrowed)
+               join_obligations(&1.live, ctx),
+               join_obligations(first.live, ctx)
              )
            ),
            do: reject!(ctx)
@@ -550,12 +626,12 @@ defmodule Lynx.Rust.NativeLifetimes do
             end)
 
           if owned do
-            unless MapSet.member?(state.live, root), do: reject!(ctx)
+            unless live_root?(state.live, root), do: reject!(ctx)
             state
           else
             %{
               state
-              | live: MapSet.delete(state.live, root),
+              | live: delete_root(state.live, root),
                 known: Map.put(state.known, {:empty, root}, true)
             }
           end
@@ -654,11 +730,39 @@ defmodule Lynx.Rust.NativeLifetimes do
               end
             end)
 
+          live =
+            if multi_frame?(root, ctx) do
+              fields =
+                for tag <- tags,
+                    {:ok, indices} <- [Enum.fetch(metadata["states"], tag)],
+                    field <- indices,
+                    frame_field_count(frame, field, ctx) > 0,
+                    do: {:frame_field, root, field}
+
+              # Unknown states retain the aggregate obligation. Never infer
+              # empty ownership from an out-of-range compiler state.
+              if Enum.all?(tags, &(is_integer(&1) and &1 < length(metadata["states"]))) do
+                fields = MapSet.new(fields)
+
+                # A second state test narrows existing ownership. It cannot
+                # resurrect a field already moved out of the same frame.
+                retained =
+                  if MapSet.member?(state.live, root),
+                    do: fields,
+                    else: MapSet.intersection(state.live, fields)
+
+                MapSet.union(delete_root(state.live, root), retained)
+              else
+                state.live
+              end
+            else
+              if owned, do: MapSet.put(state.live, root), else: delete_root(state.live, root)
+            end
+
           %{
             state
             | known: Map.put(state.known, {:states, root}, tags),
-              live:
-                if(owned, do: MapSet.put(state.live, root), else: MapSet.delete(state.live, root))
+              live: live
           }
         else
           state
@@ -732,7 +836,7 @@ defmodule Lynx.Rust.NativeLifetimes do
                    %{borrowed: false, id: ^id, prefix: []},
                    frame_info(pointee, ctx.types, ctx.refs, ctx.coroutines, [])
                  ) and
-                 native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) == 1,
+                 native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) > 0,
                do: Map.put(Map.delete(known, local), {:frame_borrow, local}, {root, id, path}),
                else: Map.delete(known, local)
 
@@ -897,7 +1001,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp statement!(%{"StorageLive" => _}, live, _), do: live
 
   defp statement!(%{"StorageDead" => local}, live, ctx) do
-    if MapSet.member?(live, local) and not MapSet.member?(ctx.borrowed, local), do: reject!(ctx)
+    if live_root?(live, local) and not MapSet.member?(ctx.borrowed, local), do: reject!(ctx)
     live
   end
 
@@ -937,7 +1041,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp statement!("Return", live, ctx) do
-    if MapSet.size(MapSet.difference(MapSet.delete(live, 0), ctx.borrowed)) > 0, do: reject!(ctx)
+    if MapSet.size(owned_remainder(live, ctx)) > 0, do: reject!(ctx)
     :terminal
   end
 
@@ -1014,13 +1118,19 @@ defmodule Lynx.Rust.NativeLifetimes do
             if frame,
               do: %{"Adt" => %{"id" => frame.id, "builtin" => nil, "generics" => frame.args}}
 
-          unless frame && path != [] && MapSet.member?(live, root) &&
-                   native_count(frame_type, ctx.native, ctx.types, ctx.refs, []) == 1 &&
+          unless frame && path != [] && live_root?(live, root) &&
                    native_count(type, ctx.native, ctx.types, ctx.refs, []) == 1 &&
                    empty_operand?(replacement, ctx.known, ctx),
                  do: reject!(ctx)
 
-          MapSet.delete(live, root)
+          if multi_frame?(root, ctx) do
+            take_frame_field!(live, root, path, ctx)
+          else
+            unless native_count(frame_type, ctx.native, ctx.types, ctx.refs, []) == 1,
+              do: reject!(ctx)
+
+            delete_root(live, root)
+          end
         else
           moves!([borrow, replacement], live, ctx)
         end
@@ -1056,7 +1166,7 @@ defmodule Lynx.Rust.NativeLifetimes do
     Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
 
     if MapSet.member?(ctx.owners, local) do
-      if MapSet.member?(live, local), do: reject!(ctx)
+      if live_root?(live, local), do: reject!(ctx)
       MapSet.put(live, local)
     else
       live
@@ -1065,14 +1175,20 @@ defmodule Lynx.Rust.NativeLifetimes do
 
   defp destination!(dest, live, ctx) do
     if native_place?(dest, ctx) do
-      {root, _} = resolve_place(dest, ctx.known)
+      {root, path} = resolve_place(dest, ctx.known)
 
-      unless ctx.frames[root] && ctx.frames[root].borrowed &&
-               native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) == 0,
-             do: reject!(ctx)
+      if multi_frame?(root, ctx) do
+        token = frame_field!(root, path, ctx)
+        if MapSet.member?(live, root) or MapSet.member?(live, token), do: reject!(ctx)
+        MapSet.put(live, token)
+      else
+        unless ctx.frames[root] && ctx.frames[root].borrowed &&
+                 native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) == 0,
+               do: reject!(ctx)
 
-      if MapSet.member?(live, root), do: reject!(ctx)
-      MapSet.put(live, root)
+        if live_root?(live, root), do: reject!(ctx)
+        MapSet.put(live, root)
+      end
     else
       live
     end
@@ -1081,20 +1197,21 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp moves!(%{"Move" => %{"kind" => %{"Local" => local}} = place}, live, ctx) do
     Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
 
-    if MapSet.member?(ctx.owners, local) and not MapSet.member?(live, local) and
+    if MapSet.member?(ctx.owners, local) and not live_root?(live, local) and
          ctx.known[{:empty, local}] != true,
        do: reject!(ctx)
 
-    MapSet.delete(live, local)
+    delete_root(live, local)
   end
 
-  # A projection can transfer the complete native ownership of a container only
-  # when the actual instantiated type contains exactly one native owner.
+  # A projection transfers either one tracked saved field, or the complete
+  # ownership of a single-owner container/whole compiler frame. A frame inside
+  # another aggregate must account for all of that aggregate's native owners.
   defp moves!(%{"Move" => place}, live, ctx) do
     if native_place?(place, ctx) do
-      {root, _} = resolve_place(place, ctx.known)
+      {root, path} = resolve_place(place, ctx.known)
 
-      unless MapSet.member?(live, root),
+      unless live_root?(live, root),
         do:
           LLBC.failure!(
             ctx.function,
@@ -1113,8 +1230,21 @@ defmodule Lynx.Rust.NativeLifetimes do
           },
           else: ctx.locals[root]
 
-      unless native_count(root_type, ctx.native, ctx.types, ctx.refs, []) == 1, do: reject!(ctx)
-      MapSet.delete(live, root)
+      root_count = native_count(root_type, ctx.native, ctx.types, ctx.refs, [])
+      selected = Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
+      container = frame_info(ctx.locals[root], ctx.types, ctx.refs, ctx.coroutines, [])
+
+      whole_frame =
+        match?(%{borrowed: false}, frame_info(selected, ctx.types, ctx.refs, ctx.coroutines, [])) and
+          native_count(selected, ctx.native, ctx.types, ctx.refs, []) == root_count and
+          (is_nil(container) or (not container.borrowed and path == container.prefix))
+
+      cond do
+        whole_frame -> delete_root(live, root)
+        multi_frame?(root, ctx) -> take_frame_field!(live, root, path, ctx)
+        root_count == 1 -> delete_root(live, root)
+        true -> reject!(ctx)
+      end
     else
       live
     end
