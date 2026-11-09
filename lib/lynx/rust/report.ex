@@ -276,6 +276,11 @@ defmodule Lynx.Rust.Report do
 
     byte_vec? = Enum.any?(bindings.bindings, &byte_vector?([&1["arguments"], &1["result"]]))
 
+    option_model =
+      "Rustler #{version} Option codec model: payload-first decoding, nil fallback and untagged encoding; nested encodings may collide; native FFI correctness unverified"
+
+    option? = Enum.any?(bindings.bindings, &option?([&1["arguments"], &1["result"]]))
+
     resource_model =
       "Rustler #{version} VM resource codec model: stable term identity, aggregate VM pin, fresh Rust owner per decode and bounded reference count; VM collection, owner death, serialization, physical reference counts and FFI correctness unverified"
 
@@ -299,6 +304,7 @@ defmodule Lynx.Rust.Report do
               do: [byte_vec_model],
               else: []
             ) ++
+              if(option?([binding["arguments"], binding["result"]]), do: [option_model], else: []) ++
               if(resource?([binding["arguments"], binding["result"]]),
                 do: [resource_model],
                 else: []
@@ -328,7 +334,8 @@ defmodule Lynx.Rust.Report do
         external_models:
           report.external_models ++
             if(byte_vec?, do: [byte_vec_model], else: []) ++
-            if(resource?, do: [resource_model], else: []),
+            if(resource?, do: [resource_model], else: []) ++
+            if(option?, do: [option_model], else: []),
         trusted_boundary:
           report.trusted_boundary ++
             [
@@ -339,6 +346,11 @@ defmodule Lynx.Rust.Report do
     |> Map.put(:rustler_version, version)
     |> Map.put(:unverified_nif_exports, unverified)
   end
+
+  defp option?(%{"option" => _}), do: true
+  defp option?(map) when is_map(map), do: Enum.any?(Map.values(map), &option?/1)
+  defp option?(list) when is_list(list), do: Enum.any?(list, &option?/1)
+  defp option?(_), do: false
 
   defp resource?(%{"resource" => _}), do: true
   defp resource?(map) when is_map(map), do: Enum.any?(Map.values(map), &resource?/1)

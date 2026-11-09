@@ -135,6 +135,44 @@ For i8/i16, Rustler 0.38/0.39 decode i32 and then truncates; i32/i64 do not narr
   | some value => .ok value
   | none => .error (.error (.atom "badarg"))
 
+/-- Rustler tries the payload decoder before recognizing nil. Nested options
+therefore decode nil as some none, rather than outer none. -/
+@[expose] def decodeOption {α : Type} (decode : Term → Except Exception α)
+    (input : Term) : Except Exception (Option α) :=
+  match decode input with
+  | .ok value => .ok (some value)
+  | .error (.error (.atom "badarg")) => match input with
+    | .atom "nil" => .ok none
+    | _ => .error (.error (.atom "badarg"))
+  | .error error => .error error
+
+@[expose] def encodeOption {α : Type} (encode : α → Term) : Option α → Term
+  | some value => encode value
+  | none => .atom "nil"
+
+@[expose] def encodeOptionM {α : Type} (encode : α → RustM Term) : Option α → RustM Term
+  | some value => encode value
+  | none => .ok (.atom "nil")
+
+@[simp] theorem decodeOption_some {α : Type} (decode : Term → Except Exception α)
+    (input : Term) (value : α) (h : decode input = .ok value) :
+    decodeOption decode input = .ok (some value) := by simp [decodeOption, h]
+
+theorem decodeOption_panic {α : Type} (decode : Term → Except Exception α) (input : Term)
+    (h : decode input = .error (.error (.atom "nif_panicked"))) :
+    decodeOption decode input = .error (.error (.atom "nif_panicked")) := by
+  simp [decodeOption, h]
+
+/-- Roundtrip needs the payload decoder to reject nil. This is deliberately
+not asserted for nested options, whose encoding is not injective. -/
+theorem decodeOption_encodeOption {α : Type} (decode : Term → Except Exception α)
+    (encode : α → Term) (roundtrip : ∀ value, decode (encode value) = .ok value)
+    (nilRejected : decode (.atom "nil") = .error (.error (.atom "badarg"))) (value : Option α) :
+    decodeOption decode (encodeOption encode value) = .ok value := by
+  cases value with
+  | none => simp [encodeOption, decodeOption, nilRejected]
+  | some value => simp [encodeOption, decodeOption, roundtrip]
+
 /-- Ordinary Result values use tagged tuples, unlike Rustler's NifResult errors. -/
 @[expose] def decodeResult {α β : Type}
     (decodeOk : Term → Except Exception α) (decodeErr : Term → Except Exception β)

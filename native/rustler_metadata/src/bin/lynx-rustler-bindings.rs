@@ -175,6 +175,21 @@ fn supported_type(ty: &Type, output: bool) -> Result<Value, String> {
             return Err("Rustler Binary requires an elided lifetime".into());
         }
         if path.qself.is_none()
+            && (names == ["Option"]
+                || names == ["core", "option", "Option"]
+                || names == ["std", "option", "Option"])
+        {
+            let segment = path.path.segments.last().ok_or("missing Option segment")?;
+            if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
+                if let [syn::GenericArgument::Type(inner)] =
+                    arguments.args.iter().collect::<Vec<_>>().as_slice()
+                {
+                    return Ok(json!({"option": supported_type(inner, output)?}));
+                }
+            }
+            return Err("Rustler Option requires one supported value type".into());
+        }
+        if path.qself.is_none()
             && (names == ["Result"]
                 || names == ["core", "result", "Result"]
                 || names == ["std", "result", "Result"])
@@ -518,6 +533,29 @@ mod tests {
             let bindings = discover(signature, arity);
             assert!(bindings.entries.is_empty(), "{signature}");
             assert_eq!(bindings.errors.len(), 1, "{signature}");
+        }
+    }
+
+    #[test]
+    fn discovers_nested_options_and_rejects_invalid_parameters() {
+        let bindings = discover("fn native(a: Option<Option<bool>>) -> core::option::Option<(bool, Result<u8, i64>)> { todo!() }", 1);
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(
+            bindings.entries[0]["arguments"],
+            json!([{"option":{"option":"bool"}}])
+        );
+        assert_eq!(
+            bindings.entries[0]["result"],
+            json!({"option":{"tuple":["bool", {"result":["u8","i64"]}]}})
+        );
+        for signature in [
+            "fn native(a: Option<bool, u8>) -> bool { true }",
+            "fn native(a: other::Option<bool>) -> bool { true }",
+            "fn native(a: Option<String>) -> bool { true }",
+        ] {
+            let invalid = discover(signature, 1);
+            assert!(invalid.entries.is_empty(), "{signature}");
+            assert_eq!(invalid.errors.len(), 1, "{signature}");
         }
     }
 

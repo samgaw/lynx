@@ -347,6 +347,32 @@ defmodule Lynx.Rustler.Adapter do
     end
   end
 
+  defp type!(%{"option" => inner}) do
+    inner = type!(inner)
+
+    if inner[:resource],
+      do:
+        raise(ArgumentError, "resource codecs currently require top-level NIF arguments/results")
+
+    type = %{
+      lean: "(Option #{inner.lean})",
+      decode:
+        if(is_nil(inner.decode),
+          do: nil,
+          else: "Lynx.Rustler.decodeOption (#{inner.decode})"
+        ),
+      encode: "(Lynx.Rustler.encodeOption (#{inner.encode}))"
+    }
+
+    if Map.has_key?(inner, :encode_m),
+      do:
+        Map.merge(type, %{
+          encode: nil,
+          encode_m: "(Lynx.Rustler.encodeOptionM (#{monadic_encoder(inner)}))"
+        }),
+      else: type
+  end
+
   defp type!(%{"result" => [ok, err]}) do
     ok = type!(ok)
     err = type!(err)
