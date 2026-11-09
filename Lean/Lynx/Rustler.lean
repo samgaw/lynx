@@ -10,9 +10,9 @@ namespace Lynx.Rustler
 This models registration availability; native loader and FFI execution remain
 trusted. Existing resource contents and other runtime state are preserved. -/
 @[expose] def withResourceTypes {α : Type} (types : List String) (computation : Result α) :
-    Result α := .nativeGet fun env =>
-  .nativeSet { env with nativeResourceTypes := (env.nativeResourceTypes ++ types).eraseDups }
-    computation
+    Result α := .nativeModify (fun env =>
+      ((), {env with nativeResourceTypes := (env.nativeResourceTypes ++ types).eraseDups}))
+    (fun _ => computation)
 
 @[simp] theorem withResourceTypes_apply {α : Type} (types : List String)
     (computation : Result α) (env : Environment) :
@@ -25,7 +25,7 @@ theorem registered_resource_type (types : List String) (env : Environment)
     name ∈ (env.nativeResourceTypes ++ types).eraseDups := by
   simp [member]
 
-/-- Registration is a local get/set prefix of the actual generated adapter.
+/-- Registration is an atomic capability prefix of the actual generated adapter.
 The following trace must hold for the resulting registry, rather than assuming
 that every resource type was already available. -/
 theorem withResourceTypes_registeredSteps {pid : PID} {computation : Result α}
@@ -36,7 +36,7 @@ theorem withResourceTypes_registeredSteps {pid : PID} {computation : Result α}
     Result.RegisteredSteps pid (withResourceTypes types computation)
       before available value after finalTypes := by
   unfold withResourceTypes
-  refine .update _ computation before before after available
+  refine .modify _ (fun _ => computation) () before before after available
     (available ++ types).eraseDups finalTypes value ?_ trace
   intro env _ refs heap registry
   congr 1
@@ -52,7 +52,7 @@ theorem withResourceTypes_registeredPrefix {pid : PID} {computation residual : R
     Result.RegisteredPrefix pid (withResourceTypes types computation)
       before available residual after finalTypes := by
   unfold withResourceTypes
-  refine .update _ computation before before after available
+  refine .modify _ (fun _ => computation) () before before after available
     (available ++ types).eraseDups finalTypes residual ?_ trace
   intro env _ refs heap registry
   congr 1

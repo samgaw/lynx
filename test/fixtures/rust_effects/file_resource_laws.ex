@@ -16,6 +16,7 @@ defmodule LynxEffectsFixture.FileResourceLaws do
     simp only [Lynx.concurrent_eq_run, Lynx.apply_eq, «rejects_integer_resource:ensures/1»,
       Elixir.LynxFileResourceFixture.Native.«file_release/1», Lynx.Rustler.withResourceTypes,
       Lynx.Result.tryWith_eq, Lynx.Result.handle_nativeGet, Lynx.Result.handle_nativeSet,
+      Lynx.Result.handle_nativeModify, Lynx.Result.nativeModify_bind, Lynx.Result.nativeModify_run,
       Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
       Lynx.Result.nativeGet_continuation_run, Lynx.Result.nativeSet_continuation_run, Lynx.Result.handle_get, Lynx.Result.handle_set, Lynx.Result.get_bind, Lynx.Result.set_bind,
       Lynx.Result.get_continuation_apply, Lynx.Result.set_continuation_apply, bind_assoc]
