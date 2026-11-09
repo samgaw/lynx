@@ -447,6 +447,26 @@ private theorem registeredPrefix_right_switch {α β γ : Type}
         Term.NativeRunner.activate, Term.NativeRunner.save,
          traceEnv] using registeredPrefix_right rest parent finished
 
+private theorem registeredPrefix_modify_right_switch {α β γ δ : Type}
+    {transition : Environment → δ × Environment} {start : δ → Result β}
+    {poll : Environment → Option (γ × Environment)} {next : γ → Result β}
+    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
+    (trace : RegisteredPrefix [1] (.nativeModify transition start) before types (.wait poll next) after finalTypes)
+    (parent : Result α) (finished : Term.NativeRunner.Finished α) :
+    Term.NativeRunner.execute [] (Term.NativeRunner.save (traceEnv [] [([1], {})] before types))
+      (.parallel (.process [] parent some) (.process [1] (.nativeModify transition start) (fun _ => none))) finished (.swap [1]) =
+    Term.NativeRunner.execute [] (Term.NativeRunner.save (traceEnv [1] [([], {})] after finalTypes))
+      (.parallel (.process [] parent some) (.process [1] (.wait poll next) (fun _ => none))) finished .current := by
+  cases trace with
+  | modify transition next reply before middle final types middleTypes finalTypes residual ready rest =>
+      rw [Term.NativeRunner.execute_eq]
+      have evaluated := ready (traceEnv [1] [([], {})] before types) rfl rfl rfl rfl
+      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
+      simp +contextual [Term.NativeRunner.choose, Term.NativeRunner.step,
+        Term.NativeRunner.save, traceEnv, evaluated]
+      simpa +contextual [traceEnv, Term.NativeRunner.save] using registeredPrefix_right rest parent finished
+
+
 private theorem sharedSteps_switch_from_blocked {α β : Type} {computation : Result α} {value : α}
     {before after : Nat × List (Nat × String × Term)}
     (trace : SharedSteps [] computation before value after)
@@ -1501,6 +1521,54 @@ theorem two_registered_interleave_steps
     Term.NativeRunner.step,  Term.NativeRunner.save,
      Term.NativeRunner.schedule, traceEnv, acquired]
   have decoder := registeredPrefix_right_switch childPrefix (parentNext parentValue) none
+  have blockedStep := sharedSteps_switch_from_blocked parentTrace childPoll childNext types2 none blocked
+  have ownerDone := sharedSteps_left parentTrace (.wait childPoll childNext) none types2
+  simp +contextual [traceEnv, Term.NativeRunner.save] at decoder blockedStep ownerDone
+  rw [decoder, blockedStep, ownerDone]
+  rw [Term.NativeRunner.execute_eq]
+  simp +contextual [Term.NativeRunner.choose,
+    Term.NativeRunner.step,
+     Term.NativeRunner.schedule,  childAcquired]
+  simpa +contextual [traceEnv, Term.NativeRunner.activate] using
+    sharedSteps_right childTrace rootValue [1] types2
+
+/-- Atomic registration/decoding can lead the child prefix in this same concrete
+contended schedule. Every IO wait and both ownership suffixes remain in the
+certified traces. This does not establish arbitrary schedules or fairness. -/
+theorem two_registered_modify_interleave_steps {δ : Type}
+    (parent : Result Term) (childTransition : Environment → δ × Environment)
+    (childStart : δ → Result Term)
+    (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
+    (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
+    (parentValue : β) (childValue : γ) (rootValue childResult : Term)
+    (s0 s1 s2 s3 s4 s5 s6 : Nat × List (Nat × String × Term))
+    (types0 types1 types2 : List String)
+    (parentPrefix : RegisteredPrefix [] parent s0 types0 (.wait parentPoll parentNext) s1 types1)
+    (childPrefix : RegisteredPrefix [1] (.nativeModify childTransition childStart) s2 types1 (.wait childPoll childNext) s3 types2) :
+    let atState := fun (pid : PID) (shared : Nat × List (Nat × String × Term)) (types : List String) =>
+      ({ currentPid := pid, nativeRefCounter := shared.1, nativeHeap := shared.2, nativeResourceTypes := types } : Environment)
+    parentPoll (atState [] s1 types1) =
+      some (parentValue, atState [] s2 types1) →
+    SharedSteps [] (parentNext parentValue) s3 rootValue s4 →
+    childPoll (atState [1] s3 types2) = none →
+    childPoll (atState [1] s4 types2) = some (childValue, atState [1] s5 types2) →
+    SharedSteps [1] (childNext childValue) s5 childResult s6 →
+    (Result.schedule {} (.nativeModify childTransition childStart) (fun _ => parent)).run
+      { nativeRefCounter := s0.1, nativeHeap := s0.2, nativeResourceTypes := types0}
+      [.current, .swap [1]] =
+      (.ok rootValue, atState [] s6 types2) := by
+  dsimp only
+  intro acquired parentTrace blocked childAcquired childTrace
+  rw [run_spawn_pair]
+  simp only [Term.NativeRunner.schedule, Term.Runner.schedule]
+  change Term.NativeRunner.execute [] (Term.NativeRunner.save (traceEnv [] [([1], {})] s0 types0 [.swap [1]]))
+    (.parallel (.process [] parent some) (.process [1] (.nativeModify childTransition childStart) (fun _ => none))) none .current = _
+  rw [registeredPrefix_left parentPrefix (.nativeModify childTransition childStart) none [.swap [1]]]
+  rw [Term.NativeRunner.execute_eq]
+  simp +contextual [Term.NativeRunner.choose,
+    Term.NativeRunner.step,  Term.NativeRunner.save,
+     Term.NativeRunner.schedule, traceEnv, acquired]
+  have decoder := registeredPrefix_modify_right_switch childPrefix (parentNext parentValue) none
   have blockedStep := sharedSteps_switch_from_blocked parentTrace childPoll childNext types2 none blocked
   have ownerDone := sharedSteps_left parentTrace (.wait childPoll childNext) none types2
   simp +contextual [traceEnv, Term.NativeRunner.save] at decoder blockedStep ownerDone

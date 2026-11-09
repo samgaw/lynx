@@ -85,6 +85,47 @@ theorem native_reference_is_separate (id : Nat) :
     Term.nativeReference id ≠ .reference [1] := by
   simp [Term.nativeReference]
 
+private def traceAcquire (env : Environment) : Option (Unit × Environment) :=
+  some ((), {env with nativeRefCounter := 1})
+
+private def traceRelease (env : Environment) : Option (Unit × Environment) :=
+  some ((), {env with nativeRefCounter := 2})
+
+private def traceChildAcquire (env : Environment) : Option (Unit × Environment) :=
+  if env.nativeRefCounter = 2 then some ((), env) else none
+
+private def traceRegister (env : Environment) : Unit × Environment :=
+  ((), {env with nativeResourceTypes := env.nativeResourceTypes ++ ["journal"]})
+
+private def traceParentNext (_ : Unit) : Result := .wait traceRelease (fun _ => .ok .true)
+private def traceChildStart (_ : Unit) : Result := .wait traceChildAcquire (fun _ => .ok .true)
+
+/-- Registration is atomic, the child really blocks while the parent holds the
+lock, and both suffixes retain the registered capability. -/
+theorem atomic_registration_contended_trace :
+    (Result.schedule {} (.nativeModify traceRegister traceChildStart)
+      (fun _ => .wait traceAcquire traceParentNext)).run {} [.current, .swap [1]] =
+      (.ok Term.true, {nativeRefCounter := 2, nativeResourceTypes := ["journal"]}) := by
+  have childPrefix : Result.RegisteredPrefix [1] (.nativeModify traceRegister traceChildStart)
+      (1, []) [] (.wait traceChildAcquire (fun _ => .ok Term.true)) (1, []) ["journal"] := by
+    refine .modify _ _ () _ _ _ _ _ _ _ ?_ (.refl _ _ _)
+    intro env pid counter heap types
+    cases env
+    simp_all [traceRegister]
+  have release : Result.SharedSteps [] (traceParentNext ()) (1, []) Term.true (2, []) := by
+    refine .wait _ _ () _ _ _ _ ?_ (.done _ _)
+    intro env pid counter heap
+    cases env
+    simp_all [traceRelease]
+  simpa [traceParentNext, traceChildStart] using
+    (Result.two_registered_modify_interleave_steps
+      (.wait traceAcquire traceParentNext) traceRegister traceChildStart
+      traceAcquire traceParentNext traceChildAcquire (fun _ => .ok Term.true)
+      () () Term.true Term.true
+      (0, []) (0, []) (1, []) (1, []) (2, []) (2, []) (2, [])
+      [] [] ["journal"] (.refl _ _ _) childPrefix
+      (by rfl) release (by simp [traceChildAcquire]) (by simp [traceChildAcquire]) (.done _ _))
+
 run_cmd do
   LynxTest.ProofAudit.checkModule `LynxTest.NativeState
 

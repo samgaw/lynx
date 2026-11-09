@@ -93,6 +93,7 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.Result.RegisteredPrefix.handle
   have _ := @Lynx.Result.RegisteredPrefix.thenSteps
   have _ := @Lynx.Result.two_registered_interleave_steps
+  have _ := @Lynx.Result.two_registered_modify_interleave_steps
   have _ := @Lynx.Rustler.withResourceTypes_registeredPrefix
   have _ := @Lynx.Rustler.executeNative_registeredPrefix
   have _ := @Lynx.Result.RegisteredSteps.readyPrefix
