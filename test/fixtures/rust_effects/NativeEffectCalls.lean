@@ -48,9 +48,12 @@ private theorem one_next {α : Type} (before after amount : U64) (counter : Nat)
 /-- The unused first result still updates the shared value; the next call sees it. -/
 theorem discarded_state :
     discarded_update ⟨1⟩ 1#u64 (state 0#u64 1) = (.ok true, state 2#u64 3) := by
-  simp only [discarded_update, monadLift_self]
-  rw [one_next 0#u64 1#u64 1#u64 1 _ (by decide) (by decide)]
+  have first := one_next 0#u64 1#u64 1#u64 1
+    (fun _ => effects_core.locked_increment ⟨1⟩ 1#u64) (by decide) (by decide)
   have final := one_next 1#u64 2#u64 1#u64 2 Result.ok (by decide) (by decide)
-  simpa [Result.bind_ok, Result.ok_apply] using final
+  have second : effects_core.locked_increment ⟨1⟩ 1#u64 (state 1#u64 2) =
+      (.ok true, state 2#u64 3) := by
+    simpa [Result.bind_ok, Result.ok_apply] using final
+  simpa only [discarded_update, monadLift_self] using first.trans second
 
 end EffectCalls.Properties
