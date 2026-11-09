@@ -17,6 +17,7 @@ private def bitstringConstructor : (bytes : ByteArray) → (lastBits : Fin 8) �
     Lynx.Term.Bitstring.Valid bytes lastBits → Lynx.Term :=
   fun bytes lastBits valid => Lynx.Term.bitstring bytes lastBits valid
 private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
+private def nativeReferenceConstructor : Nat → Lynx.Term := Lynx.Term.nativeReference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
 private theorem publicReferenceComparison : True := by

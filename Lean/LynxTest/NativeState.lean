@@ -61,7 +61,7 @@ theorem localAndNative_every_schedule (choices : List ScheduleChoice) :
 
 /-- Allocating an Erlang reference leaves the native allocator unchanged. -/
 theorem reference_preserves_native_counter (env : Environment) :
-    ((Erlang.erlang.«make_ref/0» (Dispatcher.ofTable #[] 0)) env).2.nativeRefCounter =
+    ((Erlang.erlang.«make_ref/0» (Dispatcher.ofTable [] 0)) env).2.nativeRefCounter =
       env.nativeRefCounter := by
   rw [Erlang.erlang.make_ref_apply]
 
