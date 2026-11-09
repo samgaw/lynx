@@ -191,6 +191,34 @@ mod custom_encoding {
     }
 }
 
+/// Applies the workspace policy to an optional boolean field.
+#[cfg(feature = "optional")]
+#[rustler::nif]
+fn optional_flag(value: Option<bool>) -> bool {
+    experiment_analysis::optional_flag(value)
+}
+
+/// Observes Rustler's inner-first decoding of nested options.
+#[cfg(feature = "optional")]
+#[rustler::nif]
+fn nested_missing(value: Option<Option<bool>>) -> bool {
+    matches!(value, Some(None))
+}
+
+/// Retains the structure of an optional composite value.
+#[cfg(feature = "optional")]
+#[rustler::nif]
+fn optional_pair(value: Option<(bool, Result<u8, i64>)>) -> Option<(bool, Result<u8, i64>)> {
+    value
+}
+
+/// Preserves list decoder panics and verification bounds inside Option.
+#[cfg(feature = "optional")]
+#[rustler::nif]
+fn optional_bytes(value: Option<Vec<u8>>) -> Option<Vec<u8>> {
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -209,6 +237,7 @@ mod tests {
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
                 + usize::from(cfg!(feature = "collections"))
+                + 4 * usize::from(cfg!(feature = "optional"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -275,6 +304,16 @@ mod tests {
             ),
         ] {
             if enabled {
+                expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
+            }
+        }
+        if cfg!(feature = "optional") {
+            for name in [
+                "optional_flag",
+                "nested_missing",
+                "optional_pair",
+                "optional_bytes",
+            ] {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
         }

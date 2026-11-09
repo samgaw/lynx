@@ -676,6 +676,9 @@ defmodule Lynx.Rust.LLBC do
       builtin == "Tuple" and length(types) <= 7 ->
         %{"tuple" => Enum.map(types, &signature_type!(&1, audit))}
 
+      builtin == nil and length(types) == 1 and option_type?(id, audit) ->
+        %{"option" => signature_type!(hd(types), audit)}
+
       builtin == nil and length(types) == 2 and result_type?(id, audit) ->
         %{"result" => Enum.map(types, &signature_type!(&1, audit))}
 
@@ -730,6 +733,46 @@ defmodule Lynx.Rust.LLBC do
   end
 
   defp byte_vector?(_, _, _), do: false
+
+  def option_type?(id, audit) do
+    declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
+
+    with %{
+           "item_meta" => %{"name" => name},
+           "generics" => %{
+             "regions" => [],
+             "types" => [%{"index" => 0}],
+             "const_generics" => [],
+             "trait_clauses" => [],
+             "outlives" => [],
+             "trait_type_constraints" => []
+           },
+           "kind" => kind
+         } <- declaration do
+      name == Enum.map(~w(core option Option), &%{"Ident" => [&1, 0]}) and
+        match?(
+          %{
+            "Enum" => [
+              %{
+                "id" => 0,
+                "name" => "None",
+                "fields" => [],
+                "discriminant" => %{"Signed" => ["Isize", "0"]}
+              },
+              %{
+                "id" => 1,
+                "name" => "Some",
+                "fields" => [%{"ty" => %{"TypeVar" => %{"Free" => 0}}}],
+                "discriminant" => %{"Signed" => ["Isize", "1"]}
+              }
+            ]
+          },
+          Lynx.Rust.CallModels.expand(kind, audit.references)
+        )
+    else
+      _ -> false
+    end
+  end
 
   def result_type?(id, audit) do
     case Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id)) do

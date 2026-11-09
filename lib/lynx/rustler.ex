@@ -3,8 +3,10 @@ defmodule Lynx.Rustler do
   Prepares verified native semantics for a Rustler facade in a Cargo workspace.
 
   The adapter supports booleans, signed/unsigned fixed-width integers through
-  64 bits, tuples of zero through seven fields, and ordinary `Result<T, E>`
-  values composed from those types. Return values can also contain monomorphic
+  64 bits, tuples of zero through seven fields, and ordinary `Option<T>`/`Result<T, E>`
+  values composed from those types. Options try the payload decoder first, then
+  recognize `nil`; nested options therefore do not have an injective encoding.
+  Return values can also contain monomorphic
   first-party structs/enums whose actual `Encoder` implementations can be
   extracted. The compiler resolves their types, encoder roots and generated atom
   caches automatically; no per-export Lean adapter or name mapping is required.

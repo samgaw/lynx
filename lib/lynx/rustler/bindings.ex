@@ -151,6 +151,30 @@ defmodule Lynx.Rustler.Bindings do
     end
   end
 
+  defp result!(%{"option" => inner}, type, audit, mode, translation) do
+    case Lynx.Rust.CallModels.expand(type, audit.references) do
+      %{
+        "Adt" => %{
+          "id" => id,
+          "builtin" => nil,
+          "generics" => %{
+            "types" => [inner_type],
+            "regions" => [],
+            "const_generics" => [],
+            "trait_refs" => []
+          }
+        }
+      } ->
+        unless LLBC.option_type?(id, audit),
+          do: raise(ArgumentError, "NIF option is not the extracted core::option::Option")
+
+        %{"option" => result!(inner, inner_type, audit, mode, translation)}
+
+      _ ->
+        raise ArgumentError, "Rustler and compiled Option signatures differ"
+    end
+  end
+
   defp result!(%{"result" => [ok, err]}, type, audit, mode, translation) do
     case Lynx.Rust.CallModels.expand(type, audit.references) do
       %{

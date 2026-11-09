@@ -59,3 +59,11 @@ pub fn preserve<T>(value: T) -> T {
 pub fn byte_length(value: &[u8]) -> u64 {
     value.len() as u64
 }
+
+/// Uses the default flag when an optional protocol field is absent.
+pub fn optional_flag(value: Option<bool>) -> bool {
+    match value {
+        Some(flag) => !flag,
+        None => false,
+    }
+}

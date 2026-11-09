@@ -214,6 +214,69 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
+  test "Option codecs require the standard identity and exact generic enum layout" do
+    parameters = %{
+      "regions" => [],
+      "types" => [%{"index" => 0}],
+      "const_generics" => [],
+      "trait_clauses" => [],
+      "outlives" => [],
+      "trait_type_constraints" => []
+    }
+
+    declaration = %{
+      "def_id" => 42,
+      "item_meta" => %{"name" => Enum.map(~w(core option Option), &%{"Ident" => [&1, 0]})},
+      "generics" => parameters,
+      "kind" => %{
+        "Enum" => [
+          %{
+            "id" => 0,
+            "name" => "None",
+            "fields" => [],
+            "discriminant" => %{"Signed" => ["Isize", "0"]}
+          },
+          %{
+            "id" => 1,
+            "name" => "Some",
+            "fields" => [%{"ty" => %{"TypeVar" => %{"Free" => 0}}}],
+            "discriminant" => %{"Signed" => ["Isize", "1"]}
+          }
+        ]
+      }
+    }
+
+    type = %{
+      "Adt" => %{
+        "id" => 42,
+        "builtin" => nil,
+        "generics" => %{
+          "regions" => [],
+          "types" => [%{"Scalar" => "Bool"}],
+          "const_generics" => [],
+          "trait_refs" => []
+        }
+      }
+    }
+
+    audit = %{translated: %{"type_decls" => [declaration]}, references: %{}}
+    assert %{"option" => "bool"} = LLBC.nif_type!(type, audit)
+
+    for invalid <- [
+          put_in(
+            declaration,
+            ["item_meta", "name"],
+            Enum.map(~w(first_party Option), &%{"Ident" => [&1, 0]})
+          ),
+          %{declaration | "kind" => "Opaque"},
+          update_in(declaration, ["kind", "Enum"], &Enum.reverse/1),
+          put_in(declaration, ["generics", "types"], [])
+        ] do
+      changed = put_in(audit, [:translated, "type_decls"], [invalid])
+      assert_raise ArgumentError, ~r/unsupported NIF ADT/, fn -> LLBC.nif_type!(type, changed) end
+    end
+  end
+
   test "composite signatures retain tuple structure and require the standard Result identity" do
     boolean = %{"Value" => [0, %{"Scalar" => "Bool"}]}
 

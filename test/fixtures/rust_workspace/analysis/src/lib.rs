@@ -78,3 +78,8 @@ pub fn slice_length(input: Vec<u8>) -> (usize, Vec<u8>) {
 pub fn replace_at(input: &mut [u8], position: usize, value: u8) {
     experiment_core::collections::replace_at(input, position, value);
 }
+
+/// Applies the core protocol flag policy across the workspace boundary.
+pub fn optional_flag(value: Option<bool>) -> bool {
+    experiment_core::optional_flag(value)
+}
