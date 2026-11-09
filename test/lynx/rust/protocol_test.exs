@@ -1,10 +1,13 @@
 defmodule Lynx.Rust.ProtocolTest do
   use ExUnit.Case
-  @tools System.get_env("LYNX_AENEAS_DIR")
+  @unpatched System.get_env("LYNX_UNPATCHED_AENEAS_DIR")
+  @tools @unpatched || System.get_env("LYNX_AENEAS_DIR")
   @workspace Path.expand("../../fixtures/rust_workspace", __DIR__)
   @proofs Path.expand("../../fixtures/rust_protocol", __DIR__)
   @moduletag timeout: 900_000
-  if is_nil(@tools), do: @moduletag(skip: "set LYNX_AENEAS_DIR for Rust parser proofs")
+  if is_nil(@tools),
+    do:
+      @moduletag(skip: "set LYNX_AENEAS_DIR or LYNX_UNPATCHED_AENEAS_DIR for Rust parser proofs")
 
   @tag tmp_dir: "process-#{System.pid()}"
   test "proves bounded slice and UTF-8 operations independently of Rustler", %{tmp_dir: tmp} do
@@ -15,6 +18,7 @@ defmodule Lynx.Rust.ProtocolTest do
     packages(project)
 
     options = [
+      tools: @tools,
       roots:
         Enum.map(
           ~w(parse_frame utf8_status first prefix_length),
@@ -26,7 +30,7 @@ defmodule Lynx.Rust.ProtocolTest do
       proof_modules: ["Protocol.Properties", "Protocol.Utf8Cases"],
       required_properties:
         Enum.map(
-          ~w(first_spec first_empty split_panic split_spec utf8_valid utf8_error utf8_exhausted short parse_valid unicode_frame),
+          ~w(first_spec first_empty split_panic split_spec utf8_valid utf8_error utf8_exhausted short wrong_version wrong_length accepted_shape parse_valid unicode_frame),
           &("Protocol.Properties." <> &1)
         )
     ]
@@ -90,14 +94,26 @@ defmodule Lynx.Rust.ProtocolTest do
 
     source = Path.join(workspace, "nif/src/lib.rs")
 
-    File.write!(
-      source,
+    native_source =
       String.replace(
         File.read!(source),
         "LynxRustFixture.BinaryNative",
         "LynxRustFixture.ProtocolNative"
       )
-    )
+
+    native_source =
+      if @unpatched do
+        "#![feature(register_tool)]\n#![register_tool(verify)]\n" <>
+          Regex.replace(
+            ~r/(^#\[rustler::nif[^\n]*\]\n)/m,
+            native_source,
+            "\\1#[verify::start_from]\n"
+          )
+      else
+        native_source
+      end
+
+    File.write!(source, native_source)
 
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "ProtocolNative"))
@@ -107,6 +123,7 @@ defmodule Lynx.Rust.ProtocolTest do
       workspace: workspace,
       package: "experiment-nif",
       tools: @tools,
+      root_attribute: if(@unpatched, do: "verify::start_from"),
       lean_project: project,
       module_prefix: "ProtocolNative.Extraction",
       build_dir: Path.join(tmp, "build"),
@@ -144,6 +161,9 @@ defmodule Lynx.Rust.ProtocolTest do
         [
           proof_modules: ["ProtocolNative.Core", "ProtocolNative.Properties"],
           required_properties: [
+            "ProtocolNative.Core.wrong_version",
+            "ProtocolNative.Core.wrong_length",
+            "ProtocolNative.Core.accepted_shape",
             "ProtocolNative.Core.parse_valid",
             "ProtocolNative.Properties.facade_unicode",
             "ProtocolNative.Properties.facade_short"
@@ -219,16 +239,26 @@ defmodule Lynx.Rust.ProtocolTest do
 
     rust = Path.join(workspace, "core/src/protocol.rs")
     original = File.read!(rust)
-    changed = String.replace(original, "input[0] != 1", "input[0] != 2")
-    assert changed != original
-    File.write!(rust, changed)
 
-    error =
-      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-        Lynx.Rustler.prepare!(options)
-      end
+    for {before, after_change} <- [
+          {"input[0] != 1", "input[0] != 2"},
+          {"input.len() != length + 2", "input.len() < length + 2"},
+          {"return Err(2)", "return Err(3)"}
+        ] do
+      changed = String.replace(original, before, after_change)
+      assert changed != original
+      File.write!(rust, changed)
 
-    assert Exception.message(error) =~ "unsolved goals"
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
+
+      assert Exception.message(error) =~ "unsolved goals"
+    end
+
+    File.write!(rust, original)
+    assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
   end
 
   defp native_properties(parse, status) do

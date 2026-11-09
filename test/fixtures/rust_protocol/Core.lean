@@ -73,6 +73,58 @@ theorem short (input : Slice U8) (bound : input.val.length < 2) :
     protocol.parse_frame input = .ok (.Err 1#u8) := by
   simp [protocol.parse_frame, UScalar.lt_equiv, bound]
 
+/-- Version rejection precedes length and text validation for every complete header. -/
+theorem wrong_version (input payload : Slice U8) (version length : U8)
+    (shape : input.val = [version, length] ++ payload.val)
+    (unsupported : version ≠ 1#u8) :
+    protocol.parse_frame input = .ok (.Err 2#u8) := by
+  have unsupported_val : version.val ≠ 1 := by
+    intro equal
+    apply unsupported
+    apply UScalar.eq_of_val_eq
+    simpa using equal
+  simp [protocol.parse_frame, Slice.index_usize, shape, UScalar.lt_equiv, unsupported_val]
+
+/-- Both truncation and trailing data are rejected before UTF-8 conversion. -/
+theorem wrong_length (input payload : Slice U8) (length : U8)
+    (shape : input.val = [1#u8, length] ++ payload.val)
+    (mismatch : payload.val.length ≠ length.val) :
+    protocol.parse_frame input = .ok (.Err 3#u8) := by
+  have count_val : (UScalar.cast .Usize length).val = length.val := by
+    rw [UScalar.cast_val_mod_pow_greater_numBits_eq]
+    cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits]
+  let total : Usize := Usize.ofNatCore (length.val + 2) (by scalar_tac)
+  have added : UScalar.cast .Usize length + 2#usize = RustM.ok total := by
+    apply add_exact
+    simp [total, count_val]
+  have different : payload.val.length + 1 + 1 ≠ total.val := by
+    simp [total]
+    omega
+  simp [protocol.parse_frame, Slice.index_usize, shape, UScalar.lt_equiv,
+    lift, added, different]
+
+/-- Success requires the canonical version and exact consumption, with a bounded payload. -/
+theorem accepted_shape (input payload : Slice U8) (version length : U8) (count : U64)
+    (shape : input.val = [version, length] ++ payload.val)
+    (accepted : protocol.parse_frame input = .ok (.Ok count)) :
+    version = 1#u8 ∧ payload.val.length = length.val ∧
+      input.val.length = length.val + 2 ∧ payload.val.length ≤ 255 := by
+  have canonical : version = 1#u8 := by
+    by_contra unsupported
+    rw [wrong_version input payload version length shape unsupported] at accepted
+    have impossible := RustM.ok_injective accepted
+    cases impossible
+  subst version
+  have exact_length : payload.val.length = length.val := by
+    by_contra mismatch
+    rw [wrong_length input payload length shape mismatch] at accepted
+    have impossible := RustM.ok_injective accepted
+    cases impossible
+  refine ⟨rfl, exact_length, ?_, ?_⟩
+  · simp [shape, exact_length]
+  · rw [exact_length]
+    scalar_tac
+
 theorem parse_valid (input payload : Slice U8) (length : U8)
     (shape : input.val = [1#u8, length] ++ payload.val)
     (size : payload.val.length = length.val)
