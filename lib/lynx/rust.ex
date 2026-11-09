@@ -168,9 +168,9 @@ defmodule Lynx.Rust do
 
   `futures: :cancelling, execution: :runtime` also extracts the compiler's actual
   coroutine destruction body. Its self-pointer accesses become consuming accesses
-  to the logical frame; pointer escapes are rejected. Saved storage can retain one
-  supported native owner across suspension, and destruction consumes it through
-  the checked destructor model. Slot removal uses Aeneas's existing mutable
+  to the logical frame; pointer escapes are rejected. Saved storage can retain
+  multiple supported native owners in separate fields across suspension, and
+  destruction consumes them through the checked destructor models. Slot removal uses Aeneas's existing mutable
   replacement primitive. Invalid state tags and missing saved owners exhaust
   verification. The owned-captures backend also retains one supported native
   capture in an optional initial slot, moves it into saved storage on suspension,
@@ -188,8 +188,12 @@ defmodule Lynx.Rust do
   families remain excluded. Reborrows retain the same audited sole frame across
   polls; previous state-tag and ownership-emptiness facts are discarded. Standard
   mutable-reference DerefMut semantics and physical pinning remain trusted.
-  Multiple simultaneously live native owners per frame, non-Unpin fields,
-  native executor integration and async NIF composition remain unsupported.
+  Each saved field currently supports one native owner. Ownership must agree at
+  branch joins and remain invariant across loop backedges; moving one field does
+  not consume the remaining frame. Whole-frame moves preserve all its owners.
+  Nested multi-owner saved fields, non-Unpin fields, general native executor
+  correspondence and generated async NIF exports remain unsupported. Explicit
+  synchronous Rustler facades can poll and cancel supported extracted futures.
   Native allocation, physical pinning, standard primitives and FFI retain their
   reported trusted boundaries.
 

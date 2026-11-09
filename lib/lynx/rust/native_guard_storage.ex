@@ -52,7 +52,11 @@ defmodule Lynx.Rust.NativeGuardStorage do
       } ->
         Enum.any?(
           attributes,
-          &match?(%{"Unknown" => %{"path" => "lynx::coroutine_storage_v1"}}, &1)
+          &match?(
+            %{"Unknown" => %{"path" => path}}
+            when path in ["lynx::coroutine_storage_v1", "lynx::coroutine_storage_v2"],
+            &1
+          )
         ) &&
           Enum.any?(fields, fn field ->
             String.starts_with?(field["name"] || "", "saved_") &&
