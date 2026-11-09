@@ -8,11 +8,11 @@ namespace Runtime.PayloadFacadeProperties
 /-- The actual NIF's compiler cleanup runs before either continuation or handler. -/
 theorem handler_spec {β : Type} (value : U64) (accepted : Bool)
     (next : Term → Result β) (handler : Exception → Result β)
-    (env : Environment) (empty : env.nativeHeap = []) :
-    Result.tryWith (Rustler.executeNative (__NIF__ value accepted) Rustler.encodeBool)
-      next handler env =
-      if accepted then next Term.true { env with nativeRefCounter := env.nativeRefCounter + 1 }
-      else handler (.error (.atom "nif_panicked")) { env with nativeRefCounter := env.nativeRefCounter + 1 } := by
+    (env : Environment) (empty : env.nativeHeap = []) (schedule : List ScheduleChoice) :
+    (Result.tryWith (Rustler.executeNative (__NIF__ value accepted) Rustler.encodeBool)
+      next handler).run env schedule =
+      if accepted then (next Term.true).run { env with nativeRefCounter := env.nativeRefCounter + 1 } schedule
+      else (handler (.error (.atom "nif_panicked"))).run { env with nativeRefCounter := env.nativeRefCounter + 1 } schedule := by
   cases accepted <;>
     simp [__NIF__, mutex_assert, Rustler.executeNative, Result.tryWith, Result.handle,
       Result.bind, NativeMutex.new, NativeM.allocate, NativeDrop.drop, NativeMutex.dispose,
@@ -22,12 +22,12 @@ theorem handler_spec {β : Type} (value : U64) (accepted : Bool)
 /-- Additional protected work runs only after successful native completion. -/
 theorem handler_prefix_spec {β γ : Type} (value : U64) (accepted : Bool)
     (tail : Term → Result β) (next : β → Result γ) (handler : Exception → Result γ)
-    (env : Environment) (empty : env.nativeHeap = []) :
-    Result.tryWith (do
+    (env : Environment) (empty : env.nativeHeap = []) (schedule : List ScheduleChoice) :
+    (Result.tryWith (do
       let encoded ← Rustler.executeNative (__NIF__ value accepted) Rustler.encodeBool
-      tail encoded) next handler env =
-      if accepted then Result.tryWith (tail Term.true) next handler { env with nativeRefCounter := env.nativeRefCounter + 1 }
-      else handler (.error (.atom "nif_panicked")) { env with nativeRefCounter := env.nativeRefCounter + 1 } := by
+      tail encoded) next handler).run env schedule =
+      if accepted then (Result.tryWith (tail Term.true) next handler).run { env with nativeRefCounter := env.nativeRefCounter + 1 } schedule
+      else (handler (.error (.atom "nif_panicked"))).run { env with nativeRefCounter := env.nativeRefCounter + 1 } schedule := by
   cases accepted <;>
     simp [__NIF__, mutex_assert, Rustler.executeNative, Result.tryWith, Result.handle,
       Result.bind, NativeMutex.new, NativeM.allocate, NativeDrop.drop, NativeMutex.dispose,
