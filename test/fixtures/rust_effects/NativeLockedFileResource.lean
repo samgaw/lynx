@@ -18,28 +18,30 @@ theorem construct_next {α : Type} (state : State) (env : Environment)
 /-- Releasing the final Rust owner invokes the extracted payload destructor,
 consumes its file capability and retains the disk image after Arc reclamation. -/
 theorem final_release_next {α : Type} (before after : State) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (valid : Valid before) (ready : blocked before = false)
     (step : closeStep before = some after) (next : Unit → NativeM α) :
     (locked_file_resource_release ⟨3,4⟩ >>= next) (live env before) = next () (retired env after) := by
+  let closingEnv := NativeResourceArc.retiredState (⟨3,4⟩ : NativeResourceArc effects_native.LockedFileResource) (live env before)
   have cleanup : ∀ next : NativeM α,
-      (do NativeResourceCleanup.cleanup payload; next) (live env before) =
-        next (cleaned env after) := by
+      (do NativeResourceCleanup.cleanup payload; next) closingEnv =
+        next (retired env after) := by
     intro next
-    have poll : pollClose ⟨1⟩ (live env before) =
-        some (.ok (), retire ⟨1⟩ after (live env before)) := by
-      simp [pollClose, lookup, live, mutexCell, fileCell, decode_valid before valid, ready, step]
-    have h := cleanup_ready payload ⟨1⟩ false (live env before)
-      (retire ⟨1⟩ after (live env before))
-      (by simp [payload, live, mutexCell, fileCell]) poll
-      (by simp [payload, retire, live, mutexCell, fileCell]) (fun _ => next)
-    simpa [NativeResourceCleanup.cleanup, retire, live, cleaned, fileCell, mutexCell,
+    have poll : pollClose ⟨1⟩ closingEnv =
+        some (.ok (), retire ⟨1⟩ after closingEnv) := by
+      simp [closingEnv, NativeResourceArc.retiredState, pollClose, lookup, live, mutexCell, fileCell, decode_valid before valid, ready, step]
+    have h := cleanup_ready payload ⟨1⟩ false closingEnv
+      (retire ⟨1⟩ after closingEnv)
+      (by simp [closingEnv, NativeResourceArc.retiredState, payload, live, mutexCell, fileCell]) poll
+      (by simp [closingEnv, NativeResourceArc.retiredState, payload, retire, live, mutexCell, fileCell]) (fun _ => next)
+    simpa [closingEnv, NativeResourceArc.retiredState, retired, NativeResourceCleanup.cleanup, retire, live, cleaned, fileCell, mutexCell,
       closedCell, payload] using h
   have released := NativeResourceArc.releaseOwned_last_run_next
-    (⟨3,4⟩ : NativeResourceArc effects_native.LockedFileResource) payload next (live env before) (cleaned env after)
+    (⟨3,4⟩ : NativeResourceArc effects_native.LockedFileResource) payload next (live env before) (retired env after)
+    (.inr policy)
     (by simp [live, mutexCell, fileCell]) (by simp [live, mutexCell, fileCell])
     (by simp [live, mutexCell, fileCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType]) cleanup
-    (by simp [cleaned, closedCell]) (by simp [cleaned, closedCell])
-    (by simp [cleaned, closedCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType])
+
   simpa [locked_file_resource_release, monadLift_self, NativeOwnedDrop.drop, cleaned, retired, closedCell]
     using released
 
@@ -85,44 +87,54 @@ theorem retained_release_next {α : Type} (state : State) (env : Environment)
       .tuple #[.integer 1, NativeCodec.encode payload]), closedCell state]}
 
 theorem retained_final_release_next {α : Type} (before after : State) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (valid : Valid before) (ready : blocked before = false)
     (step : closeStep before = some after) (next : Unit → NativeM α) :
     (locked_file_resource_release ⟨3,5⟩ >>= next) (retained env before) = next () (retired env after 5) := by
+  let closingEnv := NativeResourceArc.retiredState (⟨3,5⟩ : NativeResourceArc effects_native.LockedFileResource) (retained env before)
   have cleanup : ∀ next : NativeM α,
-      (do NativeResourceCleanup.cleanup payload; next) (retained env before) =
-        next (retainedCleaned env after) := by
+      (do NativeResourceCleanup.cleanup payload; next) closingEnv =
+        next (retired env after 5) := by
     intro next
-    have poll : pollClose ⟨1⟩ (retained env before) =
-        some (.ok (), retire ⟨1⟩ after (retained env before)) := by
-      simp [pollClose, lookup, retained, mutexCell, fileCell, decode_valid before valid, ready, step]
-    have h := cleanup_ready payload ⟨1⟩ false (retained env before)
-      (retire ⟨1⟩ after (retained env before))
-      (by simp [payload, retained, mutexCell, fileCell]) poll
-      (by simp [payload, retire, retained, mutexCell, fileCell]) (fun _ => next)
-    simpa [NativeResourceCleanup.cleanup, retire, retained, retainedCleaned, fileCell, mutexCell,
+    have poll : pollClose ⟨1⟩ closingEnv =
+        some (.ok (), retire ⟨1⟩ after closingEnv) := by
+      simp [closingEnv, NativeResourceArc.retiredState, pollClose, lookup, retained, mutexCell, fileCell, decode_valid before valid, ready, step]
+    have h := cleanup_ready payload ⟨1⟩ false closingEnv
+      (retire ⟨1⟩ after closingEnv)
+      (by simp [closingEnv, NativeResourceArc.retiredState, payload, retained, mutexCell, fileCell]) poll
+      (by simp [closingEnv, NativeResourceArc.retiredState, payload, retire, retained, mutexCell, fileCell]) (fun _ => next)
+    simpa [closingEnv, NativeResourceArc.retiredState, retired, NativeResourceCleanup.cleanup, retire, retained, retainedCleaned, fileCell, mutexCell,
       closedCell, payload] using h
   have released := NativeResourceArc.releaseOwned_last_run_next
     (⟨3,5⟩ : NativeResourceArc effects_native.LockedFileResource) payload next
-    (retained env before) (retainedCleaned env after)
+    (retained env before) (retired env after 5)
+    (.inr policy)
     (by simp [retained, mutexCell, fileCell]) (by simp [retained, mutexCell, fileCell])
     (by simp [retained, mutexCell, fileCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType]) cleanup
-    (by simp [retainedCleaned, closedCell]) (by simp [retainedCleaned, closedCell])
-    (by simp [retainedCleaned, closedCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType])
+
   simpa [locked_file_resource_release, monadLift_self, NativeOwnedDrop.drop, retainedCleaned, retired, closedCell]
     using released
 
 /-- Actual construction, aliasing and both releases close exactly on the last
 owner. The ghost disk state survives resource reclamation. -/
 theorem complete_cycle (before after : State) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (registered : NativeResourceArc.typeName effects_native.LockedFileResource ∈ env.nativeResourceTypes)
     (valid : Valid before) (ready : blocked before = false)
     (step : closeStep before = some after) :
     locked_file_resource_cycle ⟨1⟩ (initial env before) = (.ok (), retired env after 5) := by
   simp only [locked_file_resource_cycle, monadLift_self]
-  rw [construct_next before env _ registered]
-  rw [clone_next before env]
-  rw [retained_release_next before env]
-  simpa [NativeM.ok] using retained_final_release_next before after env valid ready step Result.ok
+  have constructed := construct_next before env (fun first => do
+    let second ← locked_file_resource_clone first
+    locked_file_resource_release first
+    locked_file_resource_release second) registered
+  have cloned := clone_next before env (fun second => do
+    locked_file_resource_release ⟨3,4⟩
+    locked_file_resource_release second)
+  have released := retained_release_next before env (fun _ => locked_file_resource_release ⟨3,5⟩)
+  dsimp only at constructed cloned released
+  rw [constructed, cloned, released]
+  simpa [NativeM.ok] using retained_final_release_next before after env policy valid ready step Result.ok
 
 @[expose] def held (env : Environment) (state : State) : Environment :=
   {env with nativeRefCounter := 5, nativeHeap := [
@@ -140,7 +152,7 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
     (locked_file_resource_sync ⟨3,4⟩ >>= next) (live env before) =
       next reply {live env after with nativeRefCounter := 5} := by
   simp only [locked_file_resource_sync, monadLift_self, bind_assoc]
-  rw [NativeResourceArc.deref_single_next
+  simp only [NativeResourceArc.deref_single_next
     (⟨3,4⟩ : NativeResourceArc effects_native.LockedFileResource) payload _ (live env before)
     (by simp [NativeCodec.typeName,NativeMutex.typeName, NativeFile.typeName, NativeFile.closedTypeName,live, mutexCell, fileCell]) (by simp [NativeCodec.typeName,NativeMutex.typeName, NativeFile.typeName, NativeFile.closedTypeName,live, mutexCell, fileCell])
     (by simp [NativeCodec.typeName,NativeMutex.typeName, NativeFile.typeName, NativeFile.closedTypeName,live, mutexCell, fileCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType])]
@@ -148,7 +160,7 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
     (live env before) (by simp [NativeCodec.typeName,NativeMutex.typeName, NativeFile.typeName, NativeFile.closedTypeName,live, mutexCell, fileCell, NativeCodec.encode])
     (by simp [NativeCodec.typeName,NativeMutex.typeName, NativeFile.typeName, NativeFile.closedTypeName,live, mutexCell, fileCell])
   simp only [payload, NativeMutex.lock, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ locking]
+  rw [Result.wait_ready_run _ _ _ _ _ locking]
   simp only [Bool.false_eq_true, if_false, NativeM.ok, Result.ok_bind, bind_assoc]
   have environment :
       ({live env before with
@@ -163,7 +175,7 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
     effects_core.synchronize_file, monadLift_self, syncAll, Result.wait_bind]
   have poll : pollSync ⟨1⟩ (held env before) = some (.ok reply, held env after) := by
     simp [NativeCodec.typeName,NativeMutex.typeName, NativeFile.typeName, NativeFile.closedTypeName,pollSync, lookup, held, fileCell, decode_valid before valid, ready, step, store]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp only [Result.ok_bind, NativeOwnedDrop.drop]
   have released := NativeGuard.release_owned_next
     (⟨⟨2⟩, 5, env.currentPid, ⟨1⟩⟩ : NativeGuard NativeFile)
@@ -177,13 +189,14 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
 /-- A full actual resource cycle does not convert close into fsync. The old
 persistent byte remains a real admitted crash outcome after resource reclamation. -/
 theorem cycle_keeps_disk (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (registered : NativeResourceArc.typeName effects_native.LockedFileResource ∈ env.nativeResourceTypes) :
     locked_file_resource_cycle ⟨1⟩ (initial env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, closeChoice⟩) =
       (.ok (), retired env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, .nil⟩ 5) ∧
     lookup ⟨1⟩ (retired env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, .nil⟩ 5) = none ∧
     crashImage ⟨1⟩ ⟨#[0]⟩ (retired env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, .nil⟩ 5) =
       some ⟨⟨#[1]⟩, 5⟩ := by
-  refine ⟨complete_cycle _ _ env registered (by unfold Valid; decide)
+  refine ⟨complete_cycle _ _ env policy registered (by unfold Valid; decide)
     (by simp [NativeCodec.typeName,blocked, closeChoice])
     (by
       simp [NativeCodec.typeName,closeStep, action, closeChoice, persist, ← ByteArray.size_data]

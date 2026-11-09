@@ -25,6 +25,28 @@ abbrev NativeM (α : Type) := Result α
 
 namespace NativeM
 
+attribute [cbv_eval] U64.max_eq
+
+@[cbv_eval] theorem u64Bv_eq (value : U64) : U64.bv value = UScalar.bv value := rfl
+
+/-- Evaluate checked addition using Aeneas's proved bit-vector specification.
+Overflow remains `none`; this equation does not replace Rust arithmetic. -/
+@[cbv_eval] theorem checkedAddU64_eq (x y : U64) :
+    U64.checked_add x y =
+      if x.val + y.val ≤ U64.max then some (⟨x.bv + y.bv⟩ : U64) else none := by
+  have specification := U64.checked_add_bv_spec x y
+  cases result : U64.checked_add x y with
+  | none =>
+    simp only [result] at specification
+    simp only [if_neg (Nat.not_le_of_lt specification)]
+  | some value =>
+    simp only [result] at specification
+    rw [if_pos specification.1]
+    congr 1
+    cases value
+    congr 1
+    exact specification.2.2
+
 @[expose] def ok {α : Type} (value : α) : NativeM α := Result.ok value
 
 @[expose] def fail {α : Type} (error : Error) : NativeM α :=
@@ -152,6 +174,27 @@ instance {ty : UScalarTy} : NativeCodec (UScalar ty) where
 
 theorem encode_unsigned {ty : UScalarTy} (value : UScalar ty) :
     encode value = .integer value.val := rfl
+
+/-- Avoid evaluating a linear natural-number comparison while constructing the
+range witness. This is the same unsigned heap decoder, including rejected inputs. -/
+@[cbv_eval] theorem decode_unsigned_eq {ty : UScalarTy} (term : Term) :
+    decode (α := UScalar ty) term =
+      match term with
+      | .integer value => if 0 ≤ value ∧ value < (2 ^ ty.numBits : Int) then
+          some (⟨BitVec.ofNat ty.numBits value.toNat⟩ : UScalar ty) else none
+      | _ => none := by
+  cases term <;> simp only [decode]
+  rename_i value
+  by_cases nonnegative : 0 ≤ value
+  · have range : value.toNat < 2 ^ ty.numBits ↔ value < (2 ^ ty.numBits : Int) := by
+      rw [← Int.ofNat_lt, Int.toNat_of_nonneg nonnegative, Int.natCast_pow]
+      rfl
+    simp only [nonnegative, true_and, ← range]
+    split
+    · congr 1
+      simp [UScalar.ofNatCore, BitVec.ofFin_eq_ofNat]
+    · rfl
+  · simp [nonnegative]
 
 theorem decode_unsigned {ty : UScalarTy} (value : Int) :
     decode (α := UScalar ty) (.integer value) =
@@ -596,6 +639,15 @@ structure NativeResourceArc (α : Type) where
 Drop or to the actual extracted owning destructor. No default instance exists. -/
 class NativeResourceCleanup (α : Type) where
   cleanup : α → NativeM Unit
+  /-- False only for compiler-certified cleanup with no observable effects. -/
+  observable : Bool := true
+
+/-- Result of an explicit native finalizer callback dispatch. Busy work has not
+completed and must never be treated as a successful cleanup. -/
+inductive NativeFinalizerStatus where
+  | idle
+  | busy
+  | completed
 
 /-- Owned-destruction mode uses a separate dispatch with no destructor-free Arc
 fallback. Each concrete resource requires a validated payload cleanup instance. -/
@@ -683,19 +735,56 @@ registered type. Physical allocation success is an explicit FFI boundary. -/
     | some (_, value) => .ok value
     | none => .error .exhausted
 
-/-- Consume exactly this Rust ownership token. Admission requires a payload with
-no Rust destructor and default resource callbacks. A VM pin is a separate token
-and survives release of every Rust-owned handle. -/
-def release {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM Unit :=
-  .nativeGet fun env =>
+/-- The framed environment after final-owner retirement. This projection is
+for cleanup contracts; takeOwner validates that final retirement is permitted. -/
+@[expose] def retiredState {α : Type} (handle : NativeResourceArc α) (env : Environment) : Environment :=
+  {env with nativeHeap :=
+    (env.nativeHeap.filter (fun cell => cell.1 != handle.token)).filter (fun cell => cell.1 != handle.id)}
+
+/-- Atomically consume a validated owner and update its allocation's count.
+Only the final owner receives the payload, transferring its cleanup obligation.
+After retirement no token can re-enter that allocation. -/
+@[expose] def ownerState {α : Type} [NativeCodec α] (handle : NativeResourceArc α)
+    (env : Environment) : Except Exception (Option α) × Environment :=
     match ownership handle env with
     | some (count, value) =>
       let remaining := env.nativeHeap.filter (fun cell => cell.1 != handle.token)
-      let heap := if count = 1 then remaining.filter (fun cell => cell.1 != handle.id)
+      let heap := if count = 1 then (retiredState handle env).nativeHeap
         else remaining.map fun cell => if cell.1 == handle.id then
           (handle.id, typeName α, .tuple #[.integer (count - 1), NativeCodec.encode value]) else cell
-      .nativeSet { env with nativeHeap := heap } (.ok ())
-    | none => .error .exhausted
+      (Except.ok (if count = 1 then some value else none), {env with nativeHeap := heap})
+    | none => ((Except.error .exhausted : Except Exception (Option α)), env)
+
+@[expose] def takeOwner {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM (Option α) :=
+  .nativeModify (ownerState handle) Result.ofExcept
+
+@[expose] def finalizerType (α : Type) [NativeCodec α] : String :=
+  "resource-finalizer<" ++ NativeCodec.typeName (α := α) ++ ">"
+
+@[expose] def runningFinalizerType (α : Type) [NativeCodec α] : String :=
+  "resource-finalizer-running<" ++ NativeCodec.typeName (α := α) ++ ">"
+
+/-- Select an explicit callback policy when the final owner has observable
+cleanup. Missing policy exhausts verification without changing ownership. -/
+@[expose] def ownedState {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) (env : Environment) : Except Exception (Option α) × Environment :=
+  match ownerState handle env with
+  | (.ok none, updated) => (.ok none, updated)
+  | (.ok (some value), updated) =>
+    if !NativeResourceCleanup.observable (α := α) then (.ok (some value), updated) else
+    match env.nativeFinalizerMode with
+    | .unspecified => (.error .exhausted, env)
+    | .synchronous => (.ok (some value), updated)
+    | .deferred => (.ok none, {updated with nativeHeap :=
+        (handle.id, finalizerType α, NativeCodec.encode value) :: updated.nativeHeap})
+  | (.error error, _) => (.error error, env)
+
+/-- Consume exactly this Rust ownership token. Admission requires a payload with
+no Rust destructor and default resource callbacks. A VM pin is a separate token
+and survives release of every Rust-owned handle. -/
+@[expose] def release {α : Type} [NativeCodec α] (handle : NativeResourceArc α) : NativeM Unit := do
+  let _ ← takeOwner handle
+  Result.ok ()
 
 instance {α : Type} [NativeCodec α] : NativeDrop (NativeResourceArc α) where
   drop := release
@@ -710,24 +799,48 @@ Physical allocation success and the VM callback remain explicit FFI boundaries. 
       NativeResourceCleanup.cleanup value
       NativeM.fail .panic
 
-/-- Nonfinal release retains the shared payload. Final release runs the admitted
-actual cleanup before reclaiming the resource cell and this ownership token. -/
-def releaseOwned {α : Type} [NativeCodec α] [NativeResourceCleanup α]
-    (handle : NativeResourceArc α) : NativeM Unit :=
-  .nativeGet fun env =>
-    match ownership handle env with
-    | some (count, value) => do
-      if count = 1 then NativeResourceCleanup.cleanup value else .ok ()
-      release handle
-    | none => .error .exhausted
+/-- Retirement and callback-policy selection are atomic. Synchronous cleanup
+requires explicit admission; deferred cleanup is queued separately from the
+Rust call's return. OTP does not guarantee callback completion on release. -/
+@[expose] def releaseOwned {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (handle : NativeResourceArc α) : NativeM Unit := do
+  let final ← Result.nativeModify (ownedState handle) Result.ofExcept
+  match final with
+  | none => Result.ok ()
+  | some value => NativeResourceCleanup.cleanup value
+
+/-- Claim pending work once. Running callbacks are observable as busy rather
+than complete. Dispatch is an explicit environment action, not a BEAM process
+spawn or a proof of the VM's callback scheduler. -/
+@[expose] def runFinalizer {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (identity : Nat) : NativeM NativeFinalizerStatus := do
+  let claim ← Result.nativeModify (fun env =>
+    match env.nativeHeap.filter (fun cell => cell.1 == identity) with
+    | [] => (Except.ok (.inl NativeFinalizerStatus.idle : Sum NativeFinalizerStatus α), env)
+    | [(_, tag, payload)] =>
+      if tag == runningFinalizerType α then (.ok (.inl .busy), env) else
+      if tag == finalizerType α then
+        match NativeCodec.decode payload with
+        | none => (.error .exhausted, env)
+        | some value => (.ok (.inr value), {env with nativeHeap := env.nativeHeap.map fun cell =>
+            if cell.1 == identity then (identity, runningFinalizerType α, .atom "running") else cell})
+      else (.error .exhausted, env)
+    | _ => (.error .exhausted, env)) Result.ofExcept
+  match claim with
+  | .inl status => Result.ok status
+  | .inr value =>
+    NativeResourceCleanup.cleanup value
+    let _ ← NativeM.removeCell (runningFinalizerType α) identity
+    Result.ok .completed
 
 instance {α : Type} [NativeCodec α] [NativeResourceCleanup α] :
     NativeOwnedDrop (NativeResourceArc α) where
   drop := releaseOwned
 
-/-- A validated final token executes payload cleanup before reclaiming the Arc. -/
+/-- A validated final token retires the Arc before running its payload cleanup. -/
 theorem releaseOwned_last_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
     (handle : NativeResourceArc α) (value : α) (next : Unit → NativeM β) (env : Environment)
+    (policy : NativeResourceCleanup.observable (α := α) = false ∨ env.nativeFinalizerMode = .synchronous)
     (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
       [(handle.token, handleType α, .nativeReference handle.id)])
     (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
@@ -735,9 +848,11 @@ theorem releaseOwned_last_next {α β : Type} [NativeCodec α] [NativeResourceCl
     (owners : (env.nativeHeap.filter fun cell =>
       cell.2.1 == handleType α && cell.2.2 == .nativeReference handle.id).length = 1) :
     (releaseOwned handle >>= next) env =
-      (do NativeResourceCleanup.cleanup value; release handle >>= next) env := by
-  simp [releaseOwned, ownership, token, stored, owners,
-    NativeCodec.roundtrip, referenceLimit]
+      (do NativeResourceCleanup.cleanup value; next ()) (retiredState handle env) := by
+  rcases policy with policy | policy
+  all_goals
+    simp [releaseOwned, takeOwner, ownerState, ownedState, retiredState, ownership, token, stored, owners,
+    NativeCodec.roundtrip, referenceLimit, policy]
 
 /-- Releasing one of two validated tokens does not run payload destruction. -/
 theorem releaseOwned_retained_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
@@ -749,7 +864,7 @@ theorem releaseOwned_retained_next {α β : Type} [NativeCodec α] [NativeResour
     (owners : (env.nativeHeap.filter fun cell =>
       cell.2.1 == handleType α && cell.2.2 == .nativeReference handle.id).length = 2) :
     (releaseOwned handle >>= next) env = (release handle >>= next) env := by
-  simp [releaseOwned, ownership, token, stored, owners,
+  simp [releaseOwned, release, takeOwner, ownerState, ownedState, retiredState, ownership, token, stored, owners,
     NativeCodec.roundtrip, referenceLimit]
 
 /-- A live resource borrow retains its exact shared payload identity. -/
@@ -933,7 +1048,7 @@ theorem releaseOwned_retained_run_next {α β : Type} [NativeCodec α] [NativeRe
         if cell.1 == handle.id then
           (handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value]) else cell } := by
   rw [releaseOwned_retained_next handle value next env token stored owners]
-  simp [release, ownership, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
+  simp [release, takeOwner, ownerState, ownedState, retiredState, ownership, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
 
 /-- Nonfinal release supports overlapping Rust callers and a VM pin. The
 complete owner registry must agree with the stored count before consumption. -/
@@ -953,18 +1068,17 @@ theorem releaseOwned_live_prefix {α : Type} [NativeCodec α] [NativeResourceCle
   have positive : 0 < count := by omega
   have different : count ≠ 1 := by omega
   have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
-  unfold releaseOwned
-  apply Result.ReadyPrefix.nativeGet
-  simp [ownership, token, stored, owners, NativeCodec.roundtrip, positive,
-    boundInt, different]
-  unfold release
-  apply Result.ReadyPrefix.nativeGet
+  unfold releaseOwned ownedState ownerState
+  rw [Result.nativeModify_bind]
+  let updated : Environment := {env with nativeHeap :=
+    (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
+      if cell.1 == handle.id then
+        (handle.id,typeName α,.tuple #[.integer (count - 1),NativeCodec.encode value]) else cell}
+  refine Result.ReadyPrefix.nativeModify _ _ (Except.ok none) env updated _ _ ?_ (.refl _ _)
   simp [ownership, token, stored, owners, NativeCodec.roundtrip, positive, boundInt,
-    different]
-  apply Result.ReadyPrefix.nativeSet
-  exact .refl _ _
+    different, updated]
 
-/-- Nonfinal owner release retains its actual reads and write in a scheduled
+/-- Nonfinal owner release retains its atomic retirement step in a scheduled
 trace. The continuation receives the heap after consuming exactly this token. -/
 theorem releaseOwned_live_sharedSteps {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
     (pid : PID) (handle : NativeResourceArc α) (value : α) (count : Nat)
@@ -985,18 +1099,12 @@ theorem releaseOwned_live_sharedSteps {α β : Type} [NativeCodec α] [NativeRes
   have positive : 0 < count := by omega
   have different : count ≠ 1 := by omega
   have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
-  unfold releaseOwned
-  rw [Result.nativeGet_bind]
-  refine .read _ (release handle >>= finish) before after answer ?_ ?_
-  · intro env _ _ heap
-    simp [ownership, heap, token, stored, owners, NativeCodec.roundtrip,
-      positive, boundInt, different]
-  · unfold release
-    rw [Result.nativeGet_bind]
-    refine .update _ (finish ()) before _ after answer ?_ rest
-    intro env _ counter heap
-    simp [ownership, counter, heap, token, stored, owners, NativeCodec.roundtrip,
-      positive, boundInt, different, Result.nativeSet_bind]
+  unfold releaseOwned ownedState ownerState
+  simp only [Result.nativeModify_bind]
+  refine .modify _ _ (Except.ok none) before _ after answer ?_ rest
+  intro env _ counter heap
+  simp [ownership, counter, heap, token, stored, owners, NativeCodec.roundtrip,
+    positive, boundInt, different]
 
 /-- Resource reads and owner consumption retain mutual exclusion at every local step. -/
 theorem releaseOwned_live_exclusiveSteps {α β γ : Type} [NativeCodec α] [NativeResourceCleanup α]
@@ -1020,18 +1128,12 @@ theorem releaseOwned_live_exclusiveSteps {α β γ : Type} [NativeCodec α] [Nat
   have positive : 0 < count := by omega
   have different : count ≠ 1 := by omega
   have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
-  unfold releaseOwned
-  rw [Result.nativeGet_bind]
-  refine .read _ (release handle >>= finish) before after answer ?_ blocked ?_
-  · intro env _ _ heap
-    simp [ownership, heap, token, stored, owners, NativeCodec.roundtrip,
-      positive, boundInt, different]
-  · unfold release
-    rw [Result.nativeGet_bind]
-    refine .update _ (finish ()) before _ after answer ?_ blocked rest
-    intro env _ counter heap
-    simp [ownership, counter, heap, token, stored, owners, NativeCodec.roundtrip,
-      positive, boundInt, different, Result.nativeSet_bind]
+  unfold releaseOwned ownedState ownerState
+  simp only [Result.nativeModify_bind]
+  refine .modify _ _ (Except.ok none) before _ after answer ?_ blocked rest
+  intro env _ counter heap
+  simp [ownership, counter, heap, token, stored, owners, NativeCodec.roundtrip,
+    positive, boundInt, different]
 
 /-- Consuming a retained Rust owner is a prefix that preserves its VM pin and
 payload. Final resource destruction is not bypassed when only one owner exists. -/
@@ -1063,13 +1165,14 @@ theorem releaseOwned_retained_handled_next {α β γ : Type} [NativeCodec α] [N
       (env.nativeHeap.filter fun cell => cell.1 != handle.token).map fun cell =>
         if cell.1 == handle.id then
           (handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value]) else cell } := by
-  simp [releaseOwned, release, ownership, token, stored, owners,
+  simp [releaseOwned, takeOwner, ownerState, ownedState, retiredState, release, takeOwner, ownerState, ownedState, retiredState, ownership, token, stored, owners,
     NativeCodec.roundtrip, referenceLimit, Result.handle]
 
-/-- Successful final cleanup may change payload-owned cells, while retaining the
-Arc bookkeeping until release consumes it. All other environment fields survive. -/
+/-- The unique final owner cleans up from the retired allocation state. The
+cleanup contract must preserve whatever unrelated state its implementation requires. -/
 theorem releaseOwned_last_run_next {α β : Type} [NativeCodec α] [NativeResourceCleanup α]
     (handle : NativeResourceArc α) (value : α) (next : Unit → NativeM β) (env after : Environment)
+    (policy : NativeResourceCleanup.observable (α := α) = false ∨ env.nativeFinalizerMode = .synchronous)
     (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
       [(handle.token, handleType α, .nativeReference handle.id)])
     (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
@@ -1077,19 +1180,10 @@ theorem releaseOwned_last_run_next {α β : Type} [NativeCodec α] [NativeResour
     (owners : (env.nativeHeap.filter fun cell =>
       cell.2.1 == handleType α && cell.2.2 == .nativeReference handle.id).length = 1)
     (cleaned : ∀ next : NativeM β,
-      (do NativeResourceCleanup.cleanup value; next) env = next after)
-    (tokenAfter : after.nativeHeap.filter (fun cell => cell.1 == handle.token) =
-      [(handle.token, handleType α, .nativeReference handle.id)])
-    (storedAfter : after.nativeHeap.filter (fun cell => cell.1 == handle.id) =
-      [(handle.id, typeName α, .tuple #[.integer 1, NativeCodec.encode value])])
-    (ownersAfter : (after.nativeHeap.filter fun cell =>
-      cell.2.1 == handleType α && cell.2.2 == .nativeReference handle.id).length = 1) :
-    (releaseOwned handle >>= next) env = next () {after with nativeHeap :=
-      (after.nativeHeap.filter fun cell => cell.1 != handle.token).filter fun cell => cell.1 != handle.id} := by
-  rw [releaseOwned_last_next handle value next env token stored owners]
-  rw [cleaned (release handle >>= next)]
-  simp [release, ownership, tokenAfter, storedAfter, ownersAfter,
-    NativeCodec.roundtrip, referenceLimit]
+      (do NativeResourceCleanup.cleanup value; next) (retiredState handle env) = next after) :
+    (releaseOwned handle >>= next) env = next () after := by
+  rw [releaseOwned_last_next handle value next env policy token stored owners]
+  exact cleaned (next ())
 
 /-- A VM resource term retains a distinct ownership token. Its registry cell is
 separate from Rust tokens; repeated encoding of the allocation reuses its term
@@ -1148,6 +1242,61 @@ def decode {α : Type} [NativeCodec α] (term : Term) : NativeM (NativeResourceA
       | none => .error (.error (.atom "badarg"))
       | some pin => clone pin
     else .error (.error (.atom "badarg"))
+
+/-- Public computation equation for resource decoding. Parsing helpers remain private. -/
+@[cbv_eval] theorem decode_eq {α : Type} [NativeCodec α] (term : Term) :
+    decode (α := α) term = .nativeGet (fun env =>
+      if typeName α ∈ env.nativeResourceTypes then
+        let owner : Option (NativeResourceArc α) := do
+          let .nativeReference identity := term | none
+          let [cell] := env.nativeHeap.filter (fun cell => cell.1 == identity) | none
+          if cell.2.1 != termType α then none else
+          let .tuple fields := cell.2.2 | none
+          if size : fields.size = 2 then
+            let .nativeReference id := (fields[0]'(by omega)) | none
+            let .nativeReference token := (fields[1]'(by omega)) | none
+            some ⟨id, token⟩
+          else none
+        match owner with
+        | none => .error (.error (.atom "badarg"))
+        | some pin => clone pin
+      else .error (.error (.atom "badarg"))) := by
+  rfl
+
+/-- Public computation equation for resource encoding, including existing VM pins. -/
+@[cbv_eval] theorem encode_eq {α : Type} [NativeCodec α] (handle : NativeResourceArc α) :
+    encode handle = .nativeGet (fun env =>
+      let entryOwner : (Nat × String × Term) → Option (NativeResourceArc α) := fun cell => do
+        if cell.2.1 != termType α then none else
+        let .tuple fields := cell.2.2 | none
+        if size : fields.size = 2 then
+          let .nativeReference id := (fields[0]'(by omega)) | none
+          let .nativeReference token := (fields[1]'(by omega)) | none
+          some ⟨id, token⟩
+        else none
+      match ownership handle env with
+      | none => .error .exhausted
+      | some _ =>
+        let existing := env.nativeHeap.filter fun cell =>
+          match entryOwner cell with
+          | some owner => owner.id == handle.id
+          | none => false
+        match existing with
+        | [] => do
+          let pin ← clone handle
+          let identity ← NativeM.allocate (termType α)
+            (.tuple #[.nativeReference pin.id, .nativeReference pin.token])
+          .ok (.nativeReference identity)
+        | [(identity, _, _)] =>
+          let owner : Option (NativeResourceArc α) := do
+            let [cell] := env.nativeHeap.filter (fun cell => cell.1 == identity) | none
+            entryOwner cell
+          match owner with
+          | some pin => if (ownership pin env).isSome then .ok (.nativeReference identity)
+              else .error .exhausted
+          | none => .error .exhausted
+        | _ => .error .exhausted) := by
+  rfl
 
 /-- Decode through the surviving VM pin while other Rust owners are live.
 The actual registry, allocation and owner-token count are checked together. -/
@@ -1250,13 +1399,13 @@ Rust owner or changing the heap, even inside a larger translated computation. -/
 theorem decode_nonreference_handled_next {α β γ : Type} [NativeCodec α]
     (term : Term) (notReference : ∀ identity, term ≠ .nativeReference identity)
     (finish : NativeResourceArc α → NativeM β) (handler : Exception → NativeM β)
-    (next : β → NativeM γ) (env : Environment) :
-    ((Result.handle (decode (α := α) term >>= finish) handler) >>= next) env =
-      (handler (.error (.atom "badarg")) >>= next) env := by
+    (next : β → NativeM γ) (env : Environment) (choices : List ScheduleChoice) :
+    ((Result.handle (decode (α := α) term >>= finish) handler) >>= next).run env choices =
+      (handler (.error (.atom "badarg")) >>= next).run env choices := by
   by_cases registered : typeName α ∈ env.nativeResourceTypes
   · cases term <;> simp_all [decode, termOwner, Result.handle,
-      Result.nativeGet_bind, Result.nativeGet_continuation_apply]
-  · simp [decode, registered, Result.handle, Result.nativeGet_bind, Result.nativeGet_continuation_apply]
+      Result.nativeGet_bind, Result.nativeGet_continuation_run]
+  · simp [decode, registered, Result.handle, Result.nativeGet_bind, Result.nativeGet_continuation_run]
 
 /-- Rustler cannot recover a typed resource before its type is registered. -/
 theorem decode_unregistered {α : Type} [NativeCodec α] (term : Term) (env : Environment)
@@ -1308,7 +1457,7 @@ theorem release_missing {α : Type} [NativeCodec α] (handle : NativeResourceArc
     (env : Environment)
     (missing : env.nativeHeap.filter (fun cell => cell.1 == handle.token) = []) :
     release handle env = (.error .exhausted, env) := by
-  simp [release, ownership, missing]
+  simp [release, takeOwner, ownerState, ownedState, retiredState, ownership, missing]
 
 /-- A forged count cannot keep a resource alive without the corresponding owners. -/
 theorem deref_inconsistent_count {α : Type} [NativeCodec α]
@@ -1335,7 +1484,7 @@ theorem clone_release_cycle_next {α β : Type} [NativeCodec α] (value : α)
       release retained
       next observed) env = next value { env with nativeRefCounter := env.nativeRefCounter + 3 } := by
   simp only [new, Result.nativeGet_bind, Result.nativeGet_continuation_apply, ite_eq_left registered]
-  simp [clone, release, deref, ownership, NativeM.allocate,
+  simp [clone, release, takeOwner, ownerState, ownedState, retiredState, deref, ownership, NativeM.allocate,
     empty, NativeCodec.roundtrip, referenceLimit, handleType, typeName, Nat.add_assoc]
 
 theorem clone_release_cycle {α : Type} [NativeCodec α] (value : α) (env : Environment)
@@ -1367,7 +1516,7 @@ theorem clone_release_cycle_handled_next {α β γ : Type} [NativeCodec α] (val
         { env with nativeRefCounter := env.nativeRefCounter + 3 } := by
   simp only [new, Result.nativeGet_bind, Result.handle, Result.nativeGet_continuation_apply,
     ite_eq_left registered]
-  simp [clone, release, deref, ownership, NativeM.allocate, Result.handle,
+  simp [clone, release, takeOwner, ownerState, ownedState, retiredState, deref, ownership, NativeM.allocate, Result.handle,
     empty, NativeCodec.roundtrip, referenceLimit, handleType, typeName, Nat.add_assoc]
 
 set_option maxHeartbeats 800000 in
@@ -1392,7 +1541,7 @@ theorem vm_roundtrip_next {α β : Type} [NativeCodec α] (value : α)
         (env.nativeRefCounter + 1, typeName α, .tuple #[.integer 1, NativeCodec.encode value])] } := by
   simp only [new, Result.nativeGet_bind, Result.nativeGet_continuation_apply, ite_eq_left registered]
   simp only [typeName] at registered
-  simp [encode, decode, termOwner, termEntryOwner, clone, release, deref, ownership,
+  simp [encode, decode, termOwner, termEntryOwner, clone, release, takeOwner, ownerState, ownedState, retiredState, deref, ownership,
     NativeM.allocate, empty, NativeCodec.roundtrip, referenceLimit, handleType,
     typeName, termType, registered, Nat.add_assoc]
 
@@ -1661,7 +1810,7 @@ theorem new_encode_release_framed_next {α β : Type} [NativeCodec α] (value : 
   simp only [typeName, beq_iff_eq] at mapTwo mapOne
   simp only [new, Result.handle, Result.nativeGet_bind, Result.nativeGet_continuation_apply,
     ite_eq_left registered]
-  simp [encode, termOwner, termEntryOwner, clone, release, ownership,
+  simp [encode, termOwner, termEntryOwner, clone, release, takeOwner, ownerState, ownedState, retiredState, ownership,
     NativeM.allocate, Result.handle, vmCells, ids1, ids2,
     removes, mapTwo, mapOne, anys1, anys2, anys3, anys4, tokens, terms,
     NativeCodec.roundtrip, referenceLimit,
@@ -1703,7 +1852,7 @@ theorem newOwned_encode_release_framed_run {α β : Type} [NativeCodec α] [Nati
   simp only [typeName, beq_iff_eq] at mapTwo mapOne
   simp only [newOwned, new, Result.handle, Result.nativeGet_bind, Result.nativeGet_continuation_run,
     ite_eq_left registered]
-  simp [encode, termOwner, termEntryOwner, clone, releaseOwned, release, ownership,
+  simp [encode, termOwner, termEntryOwner, clone, releaseOwned, takeOwner, ownerState, ownedState, retiredState, release, takeOwner, ownerState, ownedState, retiredState, ownership,
     NativeM.allocate, Result.handle, vmCells, ids1, ids2,
     removes, mapTwo, mapOne, anys1, anys2, anys3, anys4, tokens, terms,
     NativeCodec.roundtrip, referenceLimit,
@@ -1745,7 +1894,7 @@ theorem new_encode_release_handled_next {α β : Type} [NativeCodec α] (value :
       (env.nativeRefCounter + 1, typeName α, .tuple #[.integer 1, NativeCodec.encode value])] } := by
   simp only [new, Result.handle, Result.nativeGet_bind, Result.nativeGet_continuation_apply,
     ite_eq_left registered]
-  simp [encode, termOwner, termEntryOwner, clone, release, ownership,
+  simp [encode, termOwner, termEntryOwner, clone, release, takeOwner, ownerState, ownedState, retiredState, ownership,
     NativeM.allocate, Result.handle, empty, NativeCodec.roundtrip, referenceLimit,
     handleType, typeName, termType, Nat.add_assoc]
 
@@ -1807,7 +1956,7 @@ theorem decode_read_pinned_next {α β γ : Type} [NativeCodec α]
   simp only [typeName, handleType, termType] at allocation owner registry owners
   dsimp only [changed] at allocation2 owner2 absent2 count2 removes restores
   simp only [replaceCell_fun, typeName, handleType, beq_iff_eq] at allocation2 owner2 absent2 count2 removes restores
-  simp [decode, registered, termOwner, termEntryOwner, clone, release, deref,
+  simp [decode, registered, termOwner, termEntryOwner, clone, release, takeOwner, ownerState, ownedState, retiredState, deref,
     ownership, Result.handle, allocation, owner, registry, owners,
     allocation2, owner2, absent2, count2, anyFresh, removes, restores,
     NativeCodec.roundtrip, referenceLimit, typeName, handleType, termType,
@@ -1929,7 +2078,7 @@ theorem decode_read_release_handled_next {α β γ : Type} [NativeCodec α]
   have e : env.nativeRefCounter + 1 ≠ pin := by omega
   have f : env.nativeRefCounter + 1 ≠ term := by omega
   simp only [typeName] at registered
-  simp [decode, registered, termOwner, termEntryOwner, clone, release, deref, ownership,
+  simp [decode, registered, termOwner, termEntryOwner, clone, release, takeOwner, ownerState, ownedState, retiredState, deref, ownership,
     Result.handle, stored, NativeCodec.roundtrip, referenceLimit, handleType,
     typeName, termType, a, b, c, d, Ne.symm a, Ne.symm b, Ne.symm c,
     Ne.symm d, Ne.symm e, Ne.symm f]
@@ -1959,7 +2108,7 @@ theorem decode_failure_cleanup_handled_next {α β γ : Type} [NativeCodec α]
   have e : env.nativeRefCounter + 1 ≠ pin := by omega
   have f : env.nativeRefCounter + 1 ≠ term := by omega
   simp only [typeName] at registered
-  simp [decode, registered, termOwner, termEntryOwner, clone, release, ownership,
+  simp [decode, registered, termOwner, termEntryOwner, clone, release, takeOwner, ownerState, ownedState, retiredState, ownership,
     Result.handle, stored, NativeCodec.roundtrip, referenceLimit, handleType,
     typeName, termType, a, b, c, d, Ne.symm a, Ne.symm b, Ne.symm c,
     Ne.symm d, Ne.symm e, Ne.symm f]

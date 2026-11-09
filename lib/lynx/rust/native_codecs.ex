@@ -262,7 +262,7 @@ defmodule Lynx.Rust.NativeCodecs do
             cases value
             simp [NativeCodec.roundtrip]
 
-        #{if type.native_cleanup == :trivial, do: "instance : NativeResourceCleanup #{identifier!(lean)} where\n  cleanup _ := .ok ()", else: ""}
+        #{if type.native_cleanup == :trivial, do: "instance : NativeResourceCleanup #{identifier!(lean)} where\n  cleanup _ := .ok ()\n  observable := false", else: ""}
 
         @[simp] theorem #{quote!("typeName::" <> rust)} :
             NativeCodec.typeName (α := #{identifier!(lean)}) = #{JSON.encode!(type.native_tag)} := rfl

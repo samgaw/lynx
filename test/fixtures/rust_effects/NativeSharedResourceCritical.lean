@@ -134,7 +134,7 @@ theorem critical_state_handled_next {α β : Type} (finish : Bool → NativeM α
   simp only [bind_assoc]
   unfold NativeMutex.lock
   simp only [Result.wait_bind, Result.handle]
-  rw [Result.wait_ready_apply _ _ _ _ _
+  rw [Result.wait_ready_run _ _ _ _ _
     (NativeMutex.pollLock_unlocked mutex value poisoned env stored fresh)]
   cases poisoned <;>
     simpa [effects_core.recover_guard, NativePoisonError.into_inner, NativeM.ok, returned,
@@ -180,7 +180,7 @@ theorem locked_read_handled_next {α β : Type} (finish : U64 → NativeM α)
     simpa only [heldEnv, replacement_overwrite] using released
   unfold NativeMutex.lock
   simp only [Result.wait_bind, Result.handle]
-  rw [Result.wait_ready_apply _ _ _ _ _
+  rw [Result.wait_ready_run _ _ _ _ _
     (NativeMutex.pollLock_unlocked mutex value false env stored fresh)]
   simpa [effects_core.recover_guard, effects_core.read_guard, NativeGuard.deref,
     effects_core.release_guard, NativeOwnedDrop.drop, NativeM.ok, heldEnv, replaceCell, Result.handle] using result

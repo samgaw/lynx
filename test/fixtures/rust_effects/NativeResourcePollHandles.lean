@@ -17,7 +17,7 @@ theorem cancel_call_next {α : Type} (env : Environment) (value amount : U64) (c
   simp only [Rustler.executeNative, Shared.Future.cancel_contract,
     monadLift_self, bind_assoc, NativeM.ok, Result.ok_bind]
   rw [show decodedEnv env value counter = ownedEnv env value (counter+1) (counter+1) from rfl]
-  rw [release_handled_next env value (counter+1) (counter+1) (by omega)]
+  simp only [release_handled_next env value (counter+1) (counter+1) (by omega)]
   simp [Result.handle, Rustler.encodeBool, Term.true]
 
 theorem cancel_call_at {α : Type} (env : Environment) (value amount : U64) (counter : Nat)

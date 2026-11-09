@@ -20,6 +20,20 @@ private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
 private def nativeReferenceConstructor : Nat → Lynx.Term := Lynx.Term.nativeReference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
+-- Closed comparison proofs use public evaluation equations.
+example : Lynx.Term.compare (.atom "a") (.atom "b") = .lt := by cbv
+example : Lynx.Term.compare (.integer 7) (.integer 3) = .gt := by cbv
+example : Lynx.Term.compare (.reference [0, 1]) (.reference [0, 2]) = .lt := by cbv
+example : Lynx.Term.compare (.tuple #[]) (.tuple #[]) = .eq := by cbv
+example : Lynx.Term.exactCompare (.atom "file") (.atom "file") = .eq := by cbv
+example : Lynx.Term.exactCompare (.integer 7) (.integer 3) = .gt := by cbv
+example : Lynx.Term.exactCompare (.reference [0, 1]) (.reference [0, 2]) = .lt := by cbv
+example : Lynx.Term.exactCompare (.tuple #[]) (.tuple #[]) = .eq := by cbv
+example : Lynx.Term.compare (.tuple #[.integer 1]) (.tuple #[.integer 2]) = .lt := by cbv
+example : Lynx.Term.exactCompare (.tuple #[.atom "a"]) (.tuple #[.atom "b"]) = .lt := by cbv
+example : Lynx.Term.compare (.cons (.integer 1) .nil) (.cons (.integer 2) .nil) = .lt := by cbv
+example : Lynx.Term.exactCompare (.cons (.atom "a") .nil) (.cons (.atom "b") .nil) = .lt := by cbv
+
 private theorem publicReferenceComparison : True := by
   have _ := @Lynx.Term.compare_eq_reference
   have _ := @Lynx.Term.compare_atoms
@@ -37,6 +51,8 @@ private theorem publicExceptionEquations : True := by
   have _ := @Lynx.Result.ReadyPrefix.nativeModify
   have _ := @Lynx.Result.RegisteredPrefix.modify
   have _ := @Lynx.Result.RegisteredSteps.modify
+  have _ := @Lynx.Result.SharedSteps.modify
+  have _ := @Lynx.Result.ExclusiveSteps.modify
   have _ := @Lynx.Result.wait_ready_run
   have _ := @Lynx.Result.wait_transition_run
   have _ := @Lynx.Result.handle_get
@@ -595,6 +611,12 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.initial",
   "Lynx.Concurrent.State.mk",
   "Lynx.Concurrent.State.modify",
+  "Lynx.Concurrent.State.monitor",
+  "Lynx.Concurrent.State.nativeFinalizerMode",
+  "Lynx.Concurrent.State.nativeHeap",
+  "Lynx.Concurrent.State.nativeRefCounter",
+  "Lynx.Concurrent.State.nativeResourceTypes",
+  "Lynx.Concurrent.State.nativeView",
   "Lynx.Concurrent.State.process",
   "Lynx.Concurrent.State.processes",
   "Lynx.Concurrent.State.receive",
@@ -698,6 +720,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Environment",
   "Lynx.Environment.currentPid",
   "Lynx.Environment.mk",
+  "Lynx.Environment.nativeFinalizerMode",
   "Lynx.Environment.nativeHeap",
   "Lynx.Environment.nativeResourceTypes",
   "Lynx.Environment.pdict",
@@ -721,6 +744,10 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Exception.stacktrace",
   "Lynx.Exception.throw",
   "Lynx.Exception.withReason",
+  "Lynx.NativeFinalizerMode",
+  "Lynx.NativeFinalizerMode.deferred",
+  "Lynx.NativeFinalizerMode.synchronous",
+  "Lynx.NativeFinalizerMode.unspecified",
   "Lynx.Outcome",
   "Lynx.Outcome.deadlock",
   "Lynx.Outcome.error",
@@ -919,6 +946,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.instInhabitedSpawnOptions",
   "Lynx.instReprEnvironment",
   "Lynx.instReprException",
+  "Lynx.instReprNativeFinalizerMode",
   "Lynx.instReprOutcome",
   "Lynx.instReprReceiveTimeout",
   "Lynx.instReprRequest",

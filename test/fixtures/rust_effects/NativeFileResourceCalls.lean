@@ -108,14 +108,14 @@ theorem sync_next {α : Type} (env : Environment) (before after : State) (counte
   simp only [__SYNC__,
     file_resource_sync,monadLift_self,Rustler.executeNative,bind_assoc]
   obtain ⟨token,stored,owners⟩ := decoded_views env before counter bounded
-  rw [NativeResourceArc.deref_retained_handled_next _ payload _ _ _ _ token stored owners]
+  simp only [NativeResourceArc.deref_retained_handled_next (⟨2,counter+1⟩ : NativeResourceArc effects_native.FileResource) payload _ _ next (decodedEnv env before counter) token stored owners]
   have zero : counter ≠ 0 := by omega
   have poll : pollSync ⟨1⟩ (decodedEnv env before counter) =
       some (.ok (.Ok ()),decodedEnv env after counter) := by
     simp [pollSync,lookup,decodedEnv,fileCell,decode_valid before valid,ready,step,store,zero]
   simp only [payload,effects_core.synchronize_file,monadLift_self,syncAll,Result.wait_bind,
     Result.handle]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp only [Result.ok_bind,monadLift_self,file_resource_release,NativeOwnedDrop.drop,
     NativeM.ok]
   have released := retained_release env after counter bounded (Result.ok Term.true)
@@ -201,9 +201,9 @@ theorem release_sync_protocol (env : Environment) (counter : Nat) (bounded : 5 �
     lookup ⟨1⟩ (pinnedEnv env twice (counter + 3)) = some twice ∧
     twice.durable = ⟨#[2]⟩ := by
   constructor
-  · rw [release_next env before counter bounded _ registered]
-    rw [sync_next env before once (counter + 1) (by omega) before_valid before_ready first_step _ registered]
-    rw [sync_next env once twice (counter + 1 + 1) (by omega) once_valid once_ready second_step _ registered]
+  · simp only [release_next env before counter bounded _ registered]
+    simp only [sync_next env before once (counter + 1) (by omega) before_valid before_ready first_step _ registered]
+    simp only [sync_next env once twice (counter + 1 + 1) (by omega) once_valid once_ready second_step _ registered]
     simp [Nat.add_assoc]
   · constructor
     · simp [lookup,pinnedEnv,NativeResourceArc.vmCells,fileCell,decode_valid twice twice_valid]

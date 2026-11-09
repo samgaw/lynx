@@ -15,22 +15,24 @@ theorem construct_next {α : Type} (state : State) (env : Environment)
 /-- Releasing the final Rust owner invokes the extracted payload destructor,
 consumes its file capability and retains the disk image after Arc reclamation. -/
 theorem final_release_next {α : Type} (before after : State) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (valid : Valid before) (ready : blocked before = false)
     (step : closeStep before = some after) (next : Unit → NativeM α) :
     (file_resource_release ⟨2,3⟩ >>= next) (live env before) = next () (retired env after) := by
+  let closingEnv := NativeResourceArc.retiredState (⟨2,3⟩ : NativeResourceArc effects_native.FileResource) (live env before)
   have cleanup : ∀ next : NativeM α,
-      (do NativeResourceCleanup.cleanup payload; next) (live env before) =
-        next (cleaned env after) := by
+      (do NativeResourceCleanup.cleanup payload; next) closingEnv =
+        next (retired env after) := by
     intro next
-    have h := cleanup_ready payload (live env before) before after
-      (by simp [lookup, payload, live, fileCell, decode_valid before valid]) ready step (fun _ => next)
-    simpa [NativeResourceCleanup.cleanup, retire, live, cleaned, fileCell, closedCell, payload] using h
+    have h := cleanup_ready payload closingEnv before after
+      (by simp [closingEnv, NativeResourceArc.retiredState, lookup, payload, live, fileCell, decode_valid before valid]) ready step (fun _ => next)
+    simpa [closingEnv, NativeResourceArc.retiredState, retired, NativeResourceCleanup.cleanup, retire, live, cleaned, fileCell, closedCell, payload] using h
   have released := NativeResourceArc.releaseOwned_last_run_next
-    (⟨2,3⟩ : NativeResourceArc effects_native.FileResource) payload next (live env before) (cleaned env after)
+    (⟨2,3⟩ : NativeResourceArc effects_native.FileResource) payload next (live env before) (retired env after)
+    (.inr policy)
     (by simp [live, fileCell]) (by simp [live, fileCell])
     (by simp [live, fileCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType]) cleanup
-    (by simp [cleaned, closedCell]) (by simp [cleaned, closedCell])
-    (by simp [cleaned, closedCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType])
+
   simpa [file_resource_release, monadLift_self, NativeOwnedDrop.drop, cleaned, retired, closedCell]
     using released
 
@@ -76,38 +78,48 @@ theorem retained_release_next {α : Type} (state : State) (env : Environment)
       .tuple #[.integer 1, NativeCodec.encode payload]), closedCell state]}
 
 theorem retained_final_release_next {α : Type} (before after : State) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (valid : Valid before) (ready : blocked before = false)
     (step : closeStep before = some after) (next : Unit → NativeM α) :
     (file_resource_release ⟨2,4⟩ >>= next) (retained env before) = next () (retired env after 4) := by
+  let closingEnv := NativeResourceArc.retiredState (⟨2,4⟩ : NativeResourceArc effects_native.FileResource) (retained env before)
   have cleanup : ∀ next : NativeM α,
-      (do NativeResourceCleanup.cleanup payload; next) (retained env before) =
-        next (retainedCleaned env after) := by
+      (do NativeResourceCleanup.cleanup payload; next) closingEnv =
+        next (retired env after 4) := by
     intro next
-    have h := cleanup_ready payload (retained env before) before after
-      (by simp [lookup, payload, retained, fileCell, decode_valid before valid]) ready step (fun _ => next)
-    simpa [NativeResourceCleanup.cleanup, retire, retained, retainedCleaned, fileCell, closedCell, payload] using h
+    have h := cleanup_ready payload closingEnv before after
+      (by simp [closingEnv, NativeResourceArc.retiredState, lookup, payload, retained, fileCell, decode_valid before valid]) ready step (fun _ => next)
+    simpa [closingEnv, NativeResourceArc.retiredState, retired, NativeResourceCleanup.cleanup, retire, retained, retainedCleaned, fileCell, closedCell, payload] using h
   have released := NativeResourceArc.releaseOwned_last_run_next
     (⟨2,4⟩ : NativeResourceArc effects_native.FileResource) payload next
-    (retained env before) (retainedCleaned env after)
+    (retained env before) (retired env after 4)
+    (.inr policy)
     (by simp [retained, fileCell]) (by simp [retained, fileCell])
     (by simp [retained, fileCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType]) cleanup
-    (by simp [retainedCleaned, closedCell]) (by simp [retainedCleaned, closedCell])
-    (by simp [retainedCleaned, closedCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType])
+
   simpa [file_resource_release, monadLift_self, NativeOwnedDrop.drop, retainedCleaned, retired, closedCell]
     using released
 
 /-- Actual construction, aliasing and both releases close exactly on the last
 owner. The ghost disk state survives resource reclamation. -/
 theorem complete_cycle (before after : State) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes)
     (valid : Valid before) (ready : blocked before = false)
     (step : closeStep before = some after) :
     file_resource_cycle ⟨1⟩ (initial env before) = (.ok (), retired env after 4) := by
   simp only [file_resource_cycle, monadLift_self]
-  rw [construct_next before env _ registered]
-  rw [clone_next before env]
-  rw [retained_release_next before env]
-  simpa [NativeM.ok] using retained_final_release_next before after env valid ready step Result.ok
+  have constructed := construct_next before env (fun first => do
+    let second ← file_resource_clone first
+    file_resource_release first
+    file_resource_release second) registered
+  have cloned := clone_next before env (fun second => do
+    file_resource_release ⟨2,3⟩
+    file_resource_release second)
+  have released := retained_release_next before env (fun _ => file_resource_release ⟨2,4⟩)
+  dsimp only at constructed cloned released
+  rw [constructed, cloned, released]
+  simpa [NativeM.ok] using retained_final_release_next before after env policy valid ready step Result.ok
 
 /-- Synchronization follows the actual first-party call into the core crate. -/
 theorem sync_contract (resource : NativeResourceArc effects_native.FileResource) :
@@ -142,11 +154,12 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
     (by simp [live, fileCell, encode, NativeResourceArc.typeName, NativeResourceArc.handleType])
   rw [sync_contract]
   simp only [bind_assoc]
+  dsimp only at observed
   rw [observed]
   have poll : pollSync ⟨1⟩ (live env before) = some (.ok reply, live env after) := by
     simp [pollSync, lookup, live, fileCell, decode_valid before valid, ready, step, store]
   simp only [payload, effects_core.synchronize_file, monadLift_self, syncAll, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.ok_bind]
 
 @[expose] def closeChoice : Term :=
@@ -155,13 +168,14 @@ theorem sync_ready_next {α : Type} (before after : State) (env : Environment)
 /-- A full actual resource cycle does not convert close into fsync. The old
 persistent byte remains a real admitted crash outcome after resource reclamation. -/
 theorem cycle_keeps_disk (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (registered : NativeResourceArc.typeName effects_native.FileResource ∈ env.nativeResourceTypes) :
     file_resource_cycle ⟨1⟩ (initial env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, closeChoice⟩) =
       (.ok (), retired env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, .nil⟩ 4) ∧
     lookup ⟨1⟩ (retired env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, .nil⟩ 4) = none ∧
     crashImage ⟨1⟩ ⟨#[0]⟩ (retired env ⟨⟨#[2]⟩, ⟨#[1]⟩, 0, .nil⟩ 4) =
       some ⟨⟨#[1]⟩, 4⟩ := by
-  refine ⟨complete_cycle _ _ env registered (by unfold Valid; decide)
+  refine ⟨complete_cycle _ _ env policy registered (by unfold Valid; decide)
     (by simp [blocked, closeChoice])
     (by
       simp [closeStep, action, closeChoice, persist, ← ByteArray.size_data]

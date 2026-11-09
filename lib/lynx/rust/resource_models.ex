@@ -56,9 +56,9 @@ defmodule Lynx.Rust.ResourceModels do
         label:
           if(get_in(t, ["options", "owned_drops"]) == true,
             do:
-              "Rustler 0.39 ResourceArc with extracted payload cleanup: shared identity and reference tokens; retaining an owner atomically updates its logical token and count without a scheduler boundary; registration failure disposes its moved payload; final Rust-owned release invokes the validated compiler destructor; VM callbacks, allocation and FFI correctness remain trusted boundaries",
+              "Rustler 0.39 ResourceArc with extracted payload cleanup: shared identity and reference tokens; retaining an owner atomically updates its logical token and count without a scheduler boundary; registration failure disposes its moved payload; owner release and final-owner selection are atomic in the logical heap; observable final cleanup requires an explicit nativeFinalizerMode: synchronous is an external timing assumption; deferred retires the Arc and queues a unique callback for explicit runFinalizer dispatch; unspecified timing exhausts verification; compiler-certified trivial cleanup has no observable timing; callback completion runs the validated compiler destructor; VM callback scheduling, GC, allocation and FFI correctness remain unverified trusted boundaries",
             else:
-              "Rustler 0.39 Rust-owned ResourceArc model: explicit registration precondition, distinct linear ownership tokens, shared immutable destructor-free payload and bounded reference count; retaining an owner atomically updates its logical token and count without a scheduler boundary; inherited Resource callback flags modeled false; VM pins, custom callbacks, physical allocation and FFI unverified"
+              "Rustler 0.39 Rust-owned ResourceArc model: explicit registration precondition, distinct linear ownership tokens, shared immutable destructor-free payload and bounded reference count; retaining an owner atomically updates its logical token and count without a scheduler boundary; owner release consumes its token and updates the count atomically; inherited Resource callback flags modeled false; VM pins, custom callbacks, physical allocation and FFI unverified"
           )
       }
     else

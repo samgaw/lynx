@@ -33,32 +33,34 @@ theorem initial_state (amount : U64) :
     resource_suspending ⟨2,3⟩ amount = Result.ok (initial amount) := rfl
 
 theorem release_next {α : Type} (value : U64) (counter : Nat) (notified : Bool)
-    (env : Environment) (next : Unit → NativeM α) :
+    (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) (next : Unit → NativeM α) :
     (resource_release ⟨2,3⟩ >>= next) (live env value counter notified) =
       next () (reclaimed env counter notified) := by
   have cleanup : ∀ next : NativeM α,
       (do NativeResourceCleanup.cleanup ({state := ⟨1⟩} : CounterResource); next)
-        (live env value counter notified) = next (cleaned env counter notified) := by
+        (NativeResourceArc.retiredState (⟨2,3⟩ : NativeResourceArc CounterResource)
+          (live env value counter notified)) = next (reclaimed env counter notified) := by
     intro next
-    simp [NativeResourceCleanup.cleanup, CounterResource.drop_owned, NativeOwnedDrop.drop,
-      NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeM.ok,
-      live, cleaned, cell, NativeCodec.roundtrip, List.filter]
+    simp [NativeResourceArc.retiredState, NativeResourceCleanup.cleanup, CounterResource.drop_owned,
+      NativeOwnedDrop.drop, NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeM.ok,
+      live, reclaimed, cell, NativeCodec.roundtrip, List.filter]
   have result := NativeResourceArc.releaseOwned_last_run_next
     (⟨2,3⟩ : NativeResourceArc CounterResource) ⟨⟨1⟩⟩ next
-    (live env value counter notified) (cleaned env counter notified)
+    (live env value counter notified) (reclaimed env counter notified)
+    (.inr policy)
     (by simp [live, cell]) (by simp [live, cell])
     (by simp [live, cell, NativeMutex.typeName, NativeResourceArc.handleType,
       NativeResourceArc.typeName, NativeWaker.typeName]) cleanup
-    (by simp [cleaned]) (by simp [cleaned])
-    (by simp [cleaned, NativeResourceArc.handleType, NativeResourceArc.typeName, NativeWaker.typeName])
-  simpa [resource_release, NativeOwnedDrop.drop, cleaned, reclaimed] using result
+  simpa [resource_release, NativeOwnedDrop.drop] using result
 
-theorem drop_unstarted (value amount : U64) (env : Environment) :
+theorem drop_unstarted (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) :
     resource_suspending.closure.drop_owned (initial amount) (live env value 3 false) =
       (.ok (), reclaimed env 3 false) := by
   have body : resource_suspending.closure.drop_owned (initial amount) = resource_release ⟨2,3⟩ := rfl
   rw [body]
-  simpa using release_next value 3 false env Result.ok
+  simpa using release_next value 3 false env policy Result.ok
 
 theorem first_pending_next {α : Type} (value amount : U64) (env : Environment)
     (next : (core.task.poll.Poll Bool × effects_native.core.pin.Pin resource_suspending.closure × NativeTaskContext) → Result α) :
@@ -78,12 +80,13 @@ theorem first_pending_next {α : Type} (value amount : U64) (env : Environment)
     (by simp [live]) (by simp [live, cell]) rfl
   simpa [NativeWaker.notifiedEnv, live, cell] using woke
 
-theorem cancel_pending (value amount : U64) (env : Environment) :
+theorem cancel_pending (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) :
     resource_suspending.closure.drop_owned (pending amount) (live env value 3 true) =
       (.ok (), reclaimed env 3 true) := by
   have body : resource_suspending.closure.drop_owned (pending amount) = resource_release ⟨2,3⟩ := rfl
   rw [body]
-  simpa using release_next value 3 true env Result.ok
+  simpa using release_next value 3 true env policy Result.ok
 
 theorem completed_drop (amount : U64) :
     resource_suspending.closure.drop_owned (completed amount) = Result.ok () := rfl
@@ -112,7 +115,8 @@ theorem update_next {α : Type} (value amount : U64) (env : Environment) (notifi
     simpa [live, cell, List.map] using computed
   · cases changed <;> cases updated <;> simpa using arithmetic
 
-theorem resume_next {α : Type} (value amount : U64) (env : Environment) (notified : Bool)
+theorem resume_next {α : Type} (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) (notified : Bool)
     (next : (core.task.poll.Poll Bool × effects_native.core.pin.Pin resource_suspending.closure × NativeTaskContext) → Result α) :
     ∃ changed updated,
       (resource_suspending.closure.poll ⟨pending amount⟩ ⟨⟨0, false⟩⟩ >>= next) (live env value 3 notified) =
@@ -136,15 +140,16 @@ theorem resume_next {α : Type} (value amount : U64) (env : Environment) (notifi
   simp only [bind_assoc, Result.ok_bind]
   change (resource_locked_increment ⟨2,3⟩ amount >>= finish) _ = _
   rw [computed]
-  exact release_next updated 4 notified env _
+  exact release_next updated 4 notified env policy _
 
-theorem suspend_then_cancel (value amount : U64) (env : Environment) :
+theorem suspend_then_cancel (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) :
     (do
       let (_, future, _) ← resource_suspending.closure.poll ⟨initial amount⟩ ⟨⟨0, false⟩⟩
       resource_suspending.closure.drop_owned future.pointer) (live env value 3 false) =
         (.ok (), reclaimed env 3 true) := by
   rw [first_pending_next]
-  exact cancel_pending value amount env
+  exact cancel_pending value amount env policy
 
 theorem missing_capture (amount : U64) :
     resource_suspending.closure.drop_owned {initial amount with _0 := none} =

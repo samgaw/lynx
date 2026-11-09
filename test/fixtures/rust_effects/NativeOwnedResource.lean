@@ -53,7 +53,8 @@ theorem payload_cleanup_next {α : Type} (value : U64) (env : Environment) (toke
     NativeM.readCell, NativeM.removeCell, NativeM.ok, live, cell, payloadReclaimed, (by omega : token ≠ 1),
     NativeMutex.typeName, NativeResourceArc.typeName, NativeResourceArc.handleType, NativeCodec.roundtrip]
 
-theorem final_release_next {α : Type} (next : Unit → NativeM α) (value : U64) (env : Environment) (token counter : Nat) (valid : 3 ≤ token) :
+theorem final_release_next {α : Type} (next : Unit → NativeM α) (value : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous) (token counter : Nat) (valid : 3 ≤ token) :
     (resource_release ⟨2,token⟩ >>= next) (live env value token counter) =
       next () {env with nativeRefCounter := counter, nativeHeap := []} := by
   have n1 : (token == 1) = false := by simp; omega
@@ -61,15 +62,22 @@ theorem final_release_next {α : Type} (next : Unit → NativeM α) (value : U64
   have r1 : (1 == token) = false := by simp; omega
   have r2 : (2 == token) = false := by simp; omega
   have cleaned : ∀ next : NativeM α,
-      (do NativeResourceCleanup.cleanup ({state := ⟨1⟩} : CounterResource); next) (live env value token counter) =
-        next (payloadReclaimed env token counter) := payload_cleanup_next value env token counter valid
+      (do NativeResourceCleanup.cleanup ({state := ⟨1⟩} : CounterResource); next)
+        (NativeResourceArc.retiredState (⟨2,token⟩ : NativeResourceArc CounterResource)
+          (live env value token counter)) = next {env with nativeRefCounter := counter, nativeHeap := []} := by
+    intro next
+    simp [NativeResourceArc.retiredState, live, cell, n1, n2, r1, r2, bne_eq, List.filter,
+      NativeResourceCleanup.cleanup, CounterResource.drop_owned, NativeOwnedDrop.drop,
+      NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeM.ok, NativeCodec.roundtrip]
   have released := NativeResourceArc.releaseOwned_last_run_next
-    (⟨2,token⟩ : NativeResourceArc CounterResource) ⟨⟨1⟩⟩ next (live env value token counter) (payloadReclaimed env token counter)
-    (by simp [List.filter, live, cell, (by omega : token ≠ 1), (by omega : token ≠ 2), n1, n2, r1, r2, bne_eq]) (by simp [List.filter, live, cell, (by omega : token ≠ 1), (by omega : token ≠ 2), n1, n2, r1, r2, bne_eq])
-    (by simp [n1, n2, r1, r2, bne_eq, List.filter, live, cell, NativeMutex.typeName, NativeResourceArc.typeName, NativeResourceArc.handleType, (by omega : token ≠ 2)]) cleaned
-    (by simp [List.filter, payloadReclaimed, (by omega : token ≠ 2), n1, n2, r1, r2, bne_eq]) (by simp [List.filter, payloadReclaimed, (by omega : token ≠ 2), n1, n2, r1, r2, bne_eq])
-    (by simp [n1, n2, r1, r2, bne_eq, List.filter, payloadReclaimed, NativeMutex.typeName, NativeResourceArc.typeName, NativeResourceArc.handleType, (by omega : token ≠ 2)])
-  simpa [n1, n2, r1, r2, bne_eq, List.filter, resource_release, NativeOwnedDrop.drop, payloadReclaimed, (by omega : token ≠ 2)] using released
+    (⟨2,token⟩ : NativeResourceArc CounterResource) ⟨⟨1⟩⟩ next (live env value token counter)
+    {env with nativeRefCounter := counter, nativeHeap := []}
+    (.inr policy)
+    (by simp [List.filter, live, cell, (by omega : token ≠ 1), (by omega : token ≠ 2), n1, n2, r1, r2, bne_eq])
+    (by simp [List.filter, live, cell, (by omega : token ≠ 1), (by omega : token ≠ 2), n1, n2, r1, r2, bne_eq])
+    (by simp [n1, n2, r1, r2, bne_eq, List.filter, live, cell, NativeMutex.typeName,
+      NativeResourceArc.typeName, NativeResourceArc.handleType, (by omega : token ≠ 2)]) cleaned
+  simpa [resource_release, NativeOwnedDrop.drop] using released
 
 @[expose] def aliased (env : Environment) (value : U64) : Environment :=
   {env with nativeRefCounter := 4, nativeHeap := [
@@ -122,6 +130,7 @@ theorem update_next {α : Type} (value amount : U64) (env : Environment)
   · cases changed <;> cases updated <;> simpa using arithmetic
 
 theorem complete_cycle (value amount : U64) (env : Environment)
+    (policy : env.nativeFinalizerMode = .synchronous)
     (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes) :
     ∃ (changed : Bool) (updated : U64),
       resource_cycle value amount (initial env) =
@@ -156,6 +165,6 @@ theorem complete_cycle (value amount : U64) (env : Environment)
   change (resource_locked_increment ⟨2,4⟩ amount >>= finish).run (live env value 4 4) = _
   rw [computed]
   simpa [finish, NativeM.ok] using
-    final_release_next (fun _ => NativeM.ok changed) updated env 4 5 (by decide)
+    final_release_next (fun _ => NativeM.ok changed) updated env policy 4 5 (by decide)
 
 end Resource.Properties
