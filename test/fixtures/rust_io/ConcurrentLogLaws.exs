@@ -24,7 +24,7 @@ defmodule LynxIoFixture.ConcurrentLogLaws do
     proof: ~LEAN"""
     set_option maxHeartbeats 64000000 in
     set_option maxRecDepth 4096 in
-    have verified : Lynx.Concurrent.checkPost Record.ConcurrentStorageProperties.durableRecords 384
+    have verified : Lynx.Concurrent.checkPost Record.ConcurrentRecoveryProperties.recoverable 384
         (.start Record.ConcurrentStorageProperties.initial
           (Lynx.apply «concurrent_append:ensures/0» Erlang.program.fun_table)) = true := by
       clear schedule
@@ -38,7 +38,7 @@ defmodule LynxIoFixture.ConcurrentLogLaws do
       (Lynx.apply «concurrent_append:ensures/0» Erlang.program.fun_table)
       Record.ConcurrentStorageProperties.initial schedule
     have durable := Lynx.Concurrent.checkPost_sound verified run terminal
-    have accepted := Record.ConcurrentStorageProperties.accepted_outcome last durable
+    have accepted := Record.ConcurrentRecoveryProperties.accepted_outcome last durable
     rw [terminal.outcome_eq] at accepted
     simpa only [Lynx.concurrentFrom_eq_run] using accepted
     """
