@@ -116,7 +116,12 @@ defmodule Lynx.Rustler.EncoderModels do
   # models are requested. This selects interface metadata, not foreign bodies.
   def metadata_includes(models) do
     if Enum.any?(models, &(&1.rust == "rustler::env::Env" and &1.lean == "Lynx.Rustler.Env")),
-      do: ["rustler::types::Encoder"],
+      do:
+        ["rustler::types::Encoder"] ++
+          Enum.map(
+            ~w(vtable vtable_drop_shim encode::vtable_method),
+            &("rustler::types::string::{rustler::types::Encoder<alloc::string::String>}::" <> &1)
+          ),
       else: []
   end
 

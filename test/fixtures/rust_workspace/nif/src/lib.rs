@@ -504,6 +504,27 @@ fn boxed_returned(value: u64, should_panic: bool) -> rustler::NifResult<bool> {
     })))
 }
 
+/// Formats a message after preserving the value through both library crates.
+#[cfg(feature = "string-errors")]
+fn error_text(value: u64) -> String {
+    let value = experiment_analysis::preserve(value);
+    format!("λvalue={value}")
+}
+
+/// Raises a boxed UTF-8 String using the standard Rustler Encoder dictionary.
+#[cfg(feature = "string-errors")]
+#[rustler::nif]
+fn string_error(value: u64) -> rustler::NifResult<bool> {
+    Err(rustler::Error::RaiseTerm(Box::new(error_text(value))))
+}
+
+/// Returns the same owned message inside an error tuple on a dirty scheduler.
+#[cfg(feature = "string-errors")]
+#[rustler::nif(name = "string_term", schedule = "DirtyCpu")]
+fn string_returned(value: u64) -> rustler::NifResult<bool> {
+    Err(rustler::Error::Term(Box::new(error_text(value))))
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -525,6 +546,7 @@ mod tests {
                 + 3 * usize::from(cfg!(feature = "nif-result"))
                 + 2 * usize::from(cfg!(feature = "validated-decoder"))
                 + 2 * usize::from(cfg!(feature = "boxed-errors"))
+                + 2 * usize::from(cfg!(feature = "string-errors"))
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
@@ -646,6 +668,20 @@ mod tests {
                     "validated_result".to_owned(),
                     1,
                     rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
+        }
+        if cfg!(feature = "string-errors") {
+            expected.extend([
+                (
+                    "string_error".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+                (
+                    "string_term".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
                 ),
             ]);
         }

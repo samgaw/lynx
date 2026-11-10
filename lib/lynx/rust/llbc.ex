@@ -102,8 +102,17 @@ defmodule Lynx.Rust.LLBC do
       Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
       |> Lynx.Rust.LLBCJson.restore_global_constant_values!(document)
 
+    foreign_tables =
+      if :rustler_encoders in Keyword.get(opts, :external_calls, []),
+        do: Lynx.Rust.VTables.foreign_globals(translated),
+        else: []
+
+    # Remove overlap between selections, preserving duplicate identities within
+    # either input so the vtable audit can reject inconsistent extraction.
+    table_globals = globals ++ Enum.reject(foreign_tables, &(&1 in globals))
+
     {vtables, functions, vtable_dependencies} =
-      Lynx.Rust.VTables.audit!(globals, functions, translated, refs)
+      Lynx.Rust.VTables.audit!(table_globals, functions, translated, refs)
 
     {generated_drops, functions} = Enum.split_with(functions, &Lynx.Rust.DropModels.generated?/1)
 
@@ -265,6 +274,8 @@ defmodule Lynx.Rust.LLBC do
         {:ok, drops} -> drops
         {:error, function, message} -> failure!(function, translated, message)
       end
+
+    drops = Lynx.Rust.VTables.merge_drops(vtables, drops)
 
     if Keyword.get(opts, :execution, :pure) == :runtime,
       do: Lynx.Rust.NativeLifetimes.audit!(functions, modelled, translated, refs, drops)

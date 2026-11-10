@@ -94,7 +94,10 @@ defmodule Lynx.Rustler do
   255 bytes. Atom returns a value; RaiseAtom raises when converted on return.
   `Term`/`RaiseTerm` admit an owned boxed Encoder with an actual first-party
   implementation on a monomorphic scalar-field struct and callback-free compiler
-  drop metadata. Encoding is deferred until return conversion. A panic there
+  drop metadata. Owned String payloads additionally use the catalogued String
+  Encoder and logical deallocation models, with validated compiled vtables and
+  shims. The foreign String Encoder body is not claimed verified.
+  Encoding is deferred until return conversion. A panic there
   escapes Rustler's computation catch and exhausts verification. Atom creation,
   allocation, native reclamation and FFI correctness remain trusted boundaries.
   Error inspection, other payload layouts and runtime NifResult conversion are

@@ -25,6 +25,7 @@ nif-result = []
 validated-decoder = []
 atom-errors = ["validated-decoder"]
 boxed-errors = []
+string-errors = []
 
 [dependencies]
 experiment-analysis = { path = "../analysis" }
