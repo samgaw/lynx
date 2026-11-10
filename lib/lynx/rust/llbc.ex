@@ -11,6 +11,7 @@ defmodule Lynx.Rust.LLBC do
   @loop_backend @undefined_backend <> "+native-loops-v1"
   @effectful_backend @loop_backend <> "+effectful-calls-v1"
   @discriminant_backend @effectful_backend <> "+partial-discriminants-v1"
+  @record_backend @discriminant_backend <> "+lean-record-types-v1"
   @unwind_backends [
     @unwind_backend,
     @global_backend,
@@ -19,7 +20,8 @@ defmodule Lynx.Rust.LLBC do
     @undefined_backend,
     @loop_backend,
     @effectful_backend,
-    @discriminant_backend
+    @discriminant_backend,
+    @record_backend
   ]
   @runtime_backends ["nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1" | @unwind_backends]
 
@@ -423,7 +425,11 @@ defmodule Lynx.Rust.LLBC do
         )
 
     if expected_monad != "RustM" and
-         (translation["aeneas_version"] not in [@effectful_backend, @discriminant_backend] or
+         (translation["aeneas_version"] not in [
+            @effectful_backend,
+            @discriminant_backend,
+            @record_backend
+          ] or
             translation["effectful_calls_preserved"] != true),
        do:
          raise(
@@ -444,7 +450,8 @@ defmodule Lynx.Rust.LLBC do
                @undefined_backend,
                @loop_backend,
                @effectful_backend,
-               @discriminant_backend
+               @discriminant_backend,
+               @record_backend
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
@@ -478,7 +485,8 @@ defmodule Lynx.Rust.LLBC do
                  translation["aeneas_version"] not in [
                    @loop_backend,
                    @effectful_backend,
-                   @discriminant_backend
+                   @discriminant_backend,
+                   @record_backend
                  ],
                do: raise(ArgumentError, "native loops require the native-loops-v1 Aeneas backend")
 
