@@ -127,16 +127,14 @@ defmodule Lynx.Rust.LLBCTest do
     assert %{0 => _} = LLBC.link!(audit, pure)
     assert %{0 => _} = LLBC.link!(audit, native, result_monad: "Lynx.NativeM")
 
-    assert %{0 => _} =
-             LLBC.link!(
-               audit,
-               Map.put(
-                 native,
-                 "aeneas_version",
-                 @effectful_backend <> "+partial-discriminants-v1"
-               ),
-               result_monad: "Lynx.NativeM"
-             )
+    for suffix <- ["+partial-discriminants-v1", "+partial-discriminants-v1+lean-record-types-v1"] do
+      assert %{0 => _} =
+               LLBC.link!(
+                 audit,
+                 Map.put(native, "aeneas_version", @effectful_backend <> suffix),
+                 result_monad: "Lynx.NativeM"
+               )
+    end
 
     for {translation, expected} <- [
           {native, "RustM"},
