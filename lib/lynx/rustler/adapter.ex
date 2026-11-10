@@ -126,6 +126,7 @@ defmodule Lynx.Rustler.Adapter do
     term_params = Enum.map_join(args, " ", &("(" <> &1 <> " : Lynx.Term)"))
     native = identifier!(binding["lean_name"])
     call = Enum.join([native | args], " ")
+    call = captured_call(call, binding)
 
     execution =
       atomic_identifier!(binding["name"] <> ":execution/" <> Integer.to_string(binding["arity"]))
@@ -163,6 +164,7 @@ defmodule Lynx.Rustler.Adapter do
 
     invocation = Enum.join([execution | decoded], " ")
     direct = Enum.join([native | decoded], " ")
+    direct = captured_call(direct, binding)
 
     adapter_theorem =
       atomic_identifier!(binding["name"] <> ":adapter/" <> Integer.to_string(binding["arity"]))
@@ -193,6 +195,11 @@ defmodule Lynx.Rustler.Adapter do
         #{wrapper_call} = #{registry}(#{direct_body}) := rfl
     """
   end
+
+  defp captured_call(call, %{"captured_unwind" => true}),
+    do: "Lynx.Rustler.resumeCaptured (#{call})"
+
+  defp captured_call(call, _), do: call
 
   defp decode_body(args, decoded, types, continuation) do
     Enum.zip([args, decoded, types])

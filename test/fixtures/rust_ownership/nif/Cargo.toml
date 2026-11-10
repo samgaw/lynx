@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [features]
 borrowed-guard = []
+captured-unwind = []
 
 [dependencies]
 ownership-app = { path = "../app" }

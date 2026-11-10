@@ -518,6 +518,24 @@ theorem decodeUnsigned_outOfRange (ty : UScalarTy) (bits : Nat) (value : Int)
     decodeUnsigned ty bits (.integer value) = .error (.error (.atom "badarg")) := by
   simp [decodeUnsigned, outside]
 
+/-- Restore Rustler's panic boundary after the extracted computation has run
+its actual cleanup. Captured Err is an exceptional exit, never a Rust return. -/
+@[expose] def resumeCaptured {α : Type}
+    (computation : RustM (core.result.Result α Unit)) : RustM α := do
+  let outcome ← computation
+  match outcome with
+  | .Ok value => RustM.ok value
+  | .Err () => RustM.fail .panic
+
+@[simp] theorem resumeCaptured_ok {α : Type} (value : α) :
+    resumeCaptured (RustM.ok (.Ok value)) = RustM.ok value := by
+  simp [resumeCaptured]
+
+@[simp] theorem resumeCaptured_panic {α : Type} :
+    resumeCaptured (RustM.ok (.Err ()) : RustM (core.result.Result α Unit)) =
+      RustM.fail .panic := by
+  simp [resumeCaptured]
+
 /-- Observe the extracted computation directly. No implementation result is
 assumed or replaced with a handwritten function. Panic models an unwinding
 Rustler wrapper; divergence/undefined behaviour is an uncatchable verification
