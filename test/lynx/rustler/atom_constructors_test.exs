@@ -92,6 +92,57 @@ defmodule Lynx.Rustler.AtomConstructorsTest do
     end
   end
 
+  test "names unsupported payload constructors using the compiled enum layout", ctx do
+    error =
+      Enum.find(
+        ctx.layout["translated"]["type_decls"],
+        &(&1 && match?(%{"Enum" => _}, &1["kind"]))
+      )
+
+    variants = error["kind"]["Enum"]
+    atom = Enum.find(variants, &(&1["name"] == "Atom"))
+    raised = Enum.find(variants, &(&1["name"] == "RaiseTerm"))
+    doc = replace_variant(ctx.document, atom["id"], raised["id"])
+
+    assert_raise CompileError,
+                 ~r/Error::RaiseTerm construction: dynamic Encoder payloads require verified dispatch, deferred encoding, panic and destruction semantics/,
+                 fn ->
+                   ErrorConstructors.lower!(doc, ctx.layout, @crates)
+                 end
+
+    layout =
+      update_in(ctx.layout, ["translated", "type_decls"], fn types ->
+        Enum.map(types, fn type ->
+          if type == error do
+            put_in(
+              type,
+              ["kind", "Enum"],
+              Enum.map(variants, fn v ->
+                if v == raised, do: %{v | "name" => "OtherPayload"}, else: v
+              end)
+            )
+          else
+            type
+          end
+        end)
+      end)
+
+    assert_raise CompileError, ~r/Error::OtherPayload construction/, fn ->
+      ErrorConstructors.lower!(doc, layout, @crates)
+    end
+  end
+
+  defp replace_variant(%{"Aggregate" => [%{"Adt" => [type, old, extra]}, operands]}, old, new),
+    do: %{"Aggregate" => [%{"Adt" => [type, new, extra]}, operands]}
+
+  defp replace_variant(map, old, new) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, replace_variant(value, old, new)} end)
+
+  defp replace_variant(list, old, new) when is_list(list),
+    do: Enum.map(list, &replace_variant(&1, old, new))
+
+  defp replace_variant(value, _, _), do: value
+
   defp loads(%{"Ref" => %{"kind" => "Shared"} = ref} = map),
     do: [ref | Enum.flat_map(Map.values(map), &loads/1)]
 

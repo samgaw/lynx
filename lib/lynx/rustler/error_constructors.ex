@@ -20,10 +20,64 @@ defmodule Lynx.Rustler.ErrorConstructors do
   def lower!(document, layout, first_party, prefix \\ "Rust") do
     {document, badarg} = lower_badarg!(document, layout, first_party)
     {document, atoms} = Lynx.Rustler.AtomConstructors.lower!(document, layout, first_party)
+    reject_remaining!(document, layout, first_party)
 
     {document,
      if(atoms, do: %{badarg: badarg, atoms: Map.put(atoms, :prefix, prefix)}, else: badarg)}
   end
+
+  defp reject_remaining!(document, layout, first_party) do
+    error = error_type(document)
+    variants = error_type(layout)["kind"]["Enum"]
+
+    for function <- functions(document, first_party) do
+      reject_constructor!(
+        function["body"],
+        error["def_id"],
+        variants,
+        function,
+        document["translated"]
+      )
+    end
+  end
+
+  defp reject_constructor!(
+         %{"Aggregate" => [%{"Adt" => [%{"id" => id}, variant, _]}, _]},
+         id,
+         variants,
+         function,
+         translated
+       ) do
+    case Enum.find(variants, &(&1["id"] == variant)) do
+      %{"name" => name} ->
+        detail =
+          if name in ["Term", "RaiseTerm"],
+            do:
+              "dynamic Encoder payloads require verified dispatch, deferred encoding, panic and destruction semantics",
+            else: "the constructor is outside the validated Rustler Error subset"
+
+        LLBC.failure!(
+          function,
+          translated,
+          "unsupported Rustler Error::#{name} construction: #{detail}"
+        )
+
+      _ ->
+        LLBC.failure!(
+          function,
+          translated,
+          "inconsistent compiled Rustler Error constructor identity"
+        )
+    end
+  end
+
+  defp reject_constructor!(map, id, variants, function, translated) when is_map(map),
+    do: Enum.each(Map.values(map), &reject_constructor!(&1, id, variants, function, translated))
+
+  defp reject_constructor!(list, id, variants, function, translated) when is_list(list),
+    do: Enum.each(list, &reject_constructor!(&1, id, variants, function, translated))
+
+  defp reject_constructor!(_, _, _, _, _), do: :ok
 
   defp lower_badarg!(document, layout, first_party) do
     if "rustler" in first_party,
