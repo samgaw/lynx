@@ -80,5 +80,22 @@ defmodule Lynx.Rust.BorrowedOwnershipTest do
 
     File.write!(source, original)
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "ownership-app", options).reports
+
+    # The Aeneas preset reconstructs this assertion and erases the actual
+    # destructor cleanup on failure. An empty reconstructed edge is not evidence
+    # that unwinding leaves the borrowed flag unchanged.
+    changed =
+      String.replace(
+        original,
+        "let _guard = Flip(value);",
+        "let _guard = Flip(value); assert!(false);"
+      )
+
+    refute changed == original
+    File.write!(source, changed)
+
+    assert_raise CompileError, ~r/reconstructed assertions with owned locals/, fn ->
+      Lynx.Rust.verify!(workspace, "ownership-app", options)
+    end
   end
 end
