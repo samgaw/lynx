@@ -206,7 +206,7 @@ defmodule Lynx.Rustler.NifResultTest do
         String.replace(
           source,
           "Err(error) => Err(error)",
-          "Err(_) => Err(rustler::Error::BadArg)"
+          "Err(_) => Err(rustler::Error::RaiseAtom(\"unsupported\"))"
         )
 
       File.write!(native, constructed)

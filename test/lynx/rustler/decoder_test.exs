@@ -190,7 +190,7 @@ defmodule Lynx.Rustler.DecoderTest do
         String.replace(
           source,
           "Err(error) => Err(error)",
-          "Err(_) => Err(rustler::Error::BadArg)"
+          "Err(_) => Err(rustler::Error::RaiseAtom(\"unsupported\"))"
         )
 
       refute constructed == source

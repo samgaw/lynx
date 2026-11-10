@@ -46,9 +46,9 @@ defmodule Lynx.Rustler.DecoderModels do
     end
   end
 
-  # An opaque foreign Error may be forwarded from an admitted primitive, but
-  # none of its constructors, payload projections or discriminants are modeled.
-  # In particular, never treat every Rustler Error as BadArg.
+  # Validated BadArg construction is lowered before this audit. Reject every
+  # remaining constructor, payload projection and discriminant. Never treat an
+  # arbitrary opaque Rustler Error as BadArg.
   def audit(functions, translated, refs) do
     case named(translated, ~w(rustler error Error)) do
       nil ->
@@ -61,7 +61,7 @@ defmodule Lynx.Rustler.DecoderModels do
 
           function ->
             {:error, function,
-             "Rustler Error construction or inspection requires unsupported dynamic-payload semantics; only opaque primitive-error forwarding is supported"}
+             "Rustler Error construction or inspection is unsupported here; only opaque error forwarding and validated BadArg construction are supported"}
         end
     end
   end

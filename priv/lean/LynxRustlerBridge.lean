@@ -529,9 +529,13 @@ cutoff and cannot establish a successful return. -/
   | _ => .error .exhausted
 
 /-- Opaque conversion outcome for errors returned by supported primitive
-decoders. Error construction, payload access and dynamic Encoders are not
-admitted. This does not identify every Rustler Error with BadArg. -/
+decoders and validated BadArg construction. Payload access and dynamic Encoders
+require separate semantics. This does not identify every Rustler Error with BadArg. -/
 @[expose] abbrev DecoderError := Except Exception Term
+
+/-- The conversion outcome of the validated zero-field Rustler BadArg constructor.
+Other constructors and Error inspection require separate admitted semantics. -/
+@[expose] def badArgOutcome : DecoderError := .error (.error (.atom "badarg"))
 
 namespace Decoding
 

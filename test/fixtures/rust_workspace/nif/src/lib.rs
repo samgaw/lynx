@@ -374,6 +374,50 @@ fn echo_term(input: rustler::Term<'_>) -> rustler::Term<'_> {
     input
 }
 
+/// Rejects zero after decoding; malformed inputs retain their original error.
+#[cfg(feature = "validated-decoder")]
+fn validate_nonzero(input: rustler::Term<'_>) -> rustler::NifResult<bool> {
+    match <u64 as rustler::Decoder<'_>>::decode(input) {
+        Ok(value) => {
+            if value == 0 {
+                Err(rustler::Error::BadArg)
+            } else {
+                Ok(experiment_analysis::restore(value != 0))
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(feature = "validated-decoder")]
+struct ValidatedFlag {
+    enabled: bool,
+}
+
+#[cfg(feature = "validated-decoder")]
+impl<'a> rustler::Decoder<'a> for ValidatedFlag {
+    fn decode(input: rustler::Term<'a>) -> rustler::NifResult<Self> {
+        match validate_nonzero(input) {
+            Ok(enabled) => Ok(Self { enabled }),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// Exercises the actual custom Decoder before entering the native body.
+#[cfg(feature = "validated-decoder")]
+#[rustler::nif]
+fn validated_flag(input: ValidatedFlag) -> bool {
+    experiment_analysis::restore(input.enabled)
+}
+
+/// Exercises the same validation through Rustler's NifResult return conversion.
+#[cfg(feature = "validated-decoder")]
+#[rustler::nif]
+fn validated_result(input: rustler::Term<'_>) -> rustler::NifResult<bool> {
+    validate_nonzero(input)
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -393,6 +437,7 @@ mod tests {
                 + usize::from(cfg!(feature = "custom-encoder"))
                 + usize::from(cfg!(feature = "custom-decoder"))
                 + 3 * usize::from(cfg!(feature = "nif-result"))
+                + 2 * usize::from(cfg!(feature = "validated-decoder"))
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
@@ -502,6 +547,20 @@ mod tests {
                 2,
                 rustler::SchedulerFlags::Normal as u32,
             ));
+        }
+        if cfg!(feature = "validated-decoder") {
+            expected.extend([
+                (
+                    "validated_flag".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+                (
+                    "validated_result".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
         }
         if cfg!(feature = "nif-result") {
             expected.extend([

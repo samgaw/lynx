@@ -169,6 +169,7 @@ defmodule Lynx.Rust.Report do
       fingerprint: extraction.fingerprint,
       trusted_boundary:
         @trusted ++
+          Lynx.Rustler.ErrorConstructors.boundary(Map.get(extraction, :rustler_constructors)) ++
           if(Enum.any?(Map.values(extraction.audit.external_calls), & &1[:native_wake_operation]),
             do: [
               "Registered nonpanicking wake callback relation; native Context/Waker registration, vtables, allocation and executor correctness unverified"

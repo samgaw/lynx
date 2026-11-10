@@ -71,7 +71,7 @@ defmodule Lynx.Rustler.DecoderModelsTest do
         ] do
       function = %{"body" => body}
       assert {:error, ^function, message} = DecoderModels.audit([function], ctx.translated, %{})
-      assert message =~ "only opaque primitive-error forwarding"
+      assert message =~ "only opaque error forwarding"
     end
 
     assert {:ok, %{}} =
