@@ -58,6 +58,9 @@ defmodule Lynx.Rust do
   drop elaboration. The resulting dictionary can compose actual extracted
   methods in proofs; executable Rust dynamic calls remain unsupported. Native
   vtable ABI, allocation success and reclamation remain reported assumptions.
+  Catalogued Rustler String Encoder dictionaries additionally use the existing
+  encoding and logical deallocation models after compiled vtable/shim validation;
+  foreign implementation bodies remain unverified.
 
   `:proof_modules` lists Lean modules containing properties; `:required_properties`
   can require particular theorem names, rejecting missing or unrelated theorems. Every supplied module is audited

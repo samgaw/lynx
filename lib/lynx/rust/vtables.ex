@@ -34,6 +34,44 @@ defmodule Lynx.Rust.VTables do
     {checked, ordinary, dependencies}
   end
 
+  # Only this catalogued foreign dictionary may be admitted. Its method remains
+  # an explicitly reported Rustler FFI model, never a first-party implementation.
+  def foreign_globals(translated) do
+    Enum.filter(translated["global_decls"], fn global ->
+      global && global["global_kind"] == "VTable" &&
+        match?(
+          [
+            %{"Ident" => ["rustler", 0]},
+            %{"Ident" => ["types", 0]},
+            %{"Ident" => ["string", 0]},
+            %{"Impl" => %{"Trait" => _}},
+            %{"Builtin" => ["VTable", 0]}
+          ],
+          global["item_meta"]["name"]
+        )
+    end)
+  end
+
+  def merge_drops(tables, audit) do
+    Enum.reduce(Map.values(tables), audit, fn global, audit ->
+      case global["lynx_vtable"][:drops] do
+        nil ->
+          audit
+
+        drops ->
+          Map.new(audit, fn {key, entries} ->
+            {key,
+             Map.merge(entries, drops[key], fn _id, left, right ->
+               unless left == right,
+                 do: raise(ArgumentError, "inconsistent vtable destruction dependency")
+
+               left
+             end)}
+          end)
+      end
+    end)
+  end
+
   defp table!(global, translated, refs) do
     ctx = %{translated: translated, refs: refs, traits: %{}}
 
@@ -77,13 +115,26 @@ defmodule Lynx.Rust.VTables do
 
       %{"Adt" => %{"id" => self_id, "builtin" => nil, "generics" => @args}} = self
       payload = one!(translated["type_decls"], self_id)
-      %{"Struct" => fields} = payload["kind"]
       true = plain?(payload["generics"]) && payload["item_meta"]["has_errors"] == false
-      true = Enum.all?(fields, &DropModels.primitive_scalar?(CallModels.expand(&1["ty"], refs)))
       [%{"skip_binder" => %{"id" => method_id}}] = impl["methods"]
       method = one!(translated["fun_decls"], method_id)
-      true = is_map(method["body"]) && method["item_meta"]["has_errors"] == false
+      true = method["item_meta"]["has_errors"] == false
       true = FormatModels.method_identity?(method, impl, trait_id, ctx)
+
+      standard =
+        payload["kind"] == "Opaque" &&
+          payload["item_meta"]["name"] ==
+            Enum.map(~w(alloc string String), &%{"Ident" => [&1, 0]})
+
+      model = if standard, do: Lynx.Rustler.EncoderModels.resolve(method, translated, refs)
+
+      if standard do
+        %{lean: "Lynx.Rustler.Encoding.string", encoder_standard: true} = model
+      else
+        %{"Struct" => fields} = payload["kind"]
+        true = Enum.all?(fields, &DropModels.primitive_scalar?(CallModels.expand(&1["ty"], refs)))
+        true = is_map(method["body"])
+      end
 
       profile = method_profile!(method, self, translated, refs)
 
@@ -121,12 +172,25 @@ defmodule Lynx.Rust.VTables do
         slot_fn["item_meta"]["name"] ==
           method["item_meta"]["name"] ++ [%{"Builtin" => ["VTableMethod", 0]}]
 
-      shim!(drop_fn, nil, self, trait_id, nil, refs)
+      drop_profile =
+        if standard,
+          do: %{region: 0, target: 2, extra: [], output: nil, regions: [0], string: true}
+
+      shim!(drop_fn, nil, self, trait_id, drop_profile, refs)
       shim!(slot_fn, method_id, self, trait_id, profile, refs)
+
+      drops =
+        if standard do
+          {:ok, drops} = DropModels.audit([drop_fn], [], translated, refs, [])
+          true = map_size(drops.erasures) == 1
+          drops
+        end
 
       Map.put(global, "lynx_vtable", %{
         impl: impl_id,
         trait: trait_id,
+        model_method: if(standard, do: model.lean),
+        drops: drops,
         external_trait: if(Map.get(profile, :encoder, false), do: "rustler::types::Encoder"),
         methods: [method_id],
         shims: [drop_id, slot_id]
@@ -192,6 +256,29 @@ defmodule Lynx.Rust.VTables do
       |> Enum.reject(&storage?/1)
 
     if method == nil do
+      kinds =
+        if Map.get(profile, :string, false) do
+          [initial, cast, %{"Drop" => drop}, "Return"] = kinds
+
+          expected = %{
+            "kind" => %{
+              "Projection" => [
+                %{
+                  "kind" => %{"Local" => 2},
+                  "ty" => %{"Ref" => [%{"Var" => %{"Free" => 0}}, self, "Mut"]}
+                },
+                "Deref"
+              ]
+            },
+            "ty" => self
+          }
+
+          true = CallModels.expand(drop["place"], refs) == expected
+          [initial, cast, "Return"]
+        else
+          kinds
+        end
+
       [
         %{
           "Assign" => [
@@ -329,8 +416,19 @@ defmodule Lynx.Rust.VTables do
 
     true =
       Enum.all?(info.methods, fn id ->
-        Enum.count(translation["functions"], &(&1["def_id"] == id && &1["is_opaque"] == false)) ==
-          1
+        case info[:model_method] do
+          "Lynx.Rustler.Encoding.string" ->
+            Enum.all?(translation["functions"], &(&1["def_id"] != id))
+
+          nil ->
+            Enum.count(
+              translation["functions"],
+              &(&1["def_id"] == id && &1["is_opaque"] == false)
+            ) == 1
+
+          _ ->
+            false
+        end
       end)
 
     %{
@@ -340,7 +438,12 @@ defmodule Lynx.Rust.VTables do
       "declaration" => global,
       "inlined" => true,
       "modelled" => true,
-      "label" => @label
+      "label" =>
+        if(info[:model_method],
+          do:
+            "Rustler String Encoder vtable and shims validated against the compiled interface; dictionary invokes the approved String encoding model; logical String deallocation model; native vtable ABI, encoding FFI, allocation and reclamation unverified",
+          else: @label
+        )
     }
   rescue
     _ in [MatchError, KeyError] ->
