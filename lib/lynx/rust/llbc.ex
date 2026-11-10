@@ -133,6 +133,8 @@ defmodule Lynx.Rust.LLBC do
         do: {[], functions},
         else: Enum.split_with(functions, &Lynx.Rust.DropModels.generated?/1)
 
+    if ownership, do: Lynx.Rust.OwnershipUnwind.audit!(functions, translated, refs)
+
     ownership_dispatch =
       if ownership,
         do: Lynx.Rust.OwnershipDispatch.audit!(functions, translated, refs, primitive_models),
