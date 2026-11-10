@@ -23,6 +23,7 @@ defmodule Lynx.Rust.Mir do
     cond do
       opts[:mir] -> ["--mir", Atom.to_string(opts[:mir])]
       opts[:owned_drops] == true and opts[:futures] != :cancelling -> ["--mir", "optimized"]
+      opts[:unwind] == :captured and opts[:owned_drops] != :explicit -> ["--mir", "elaborated"]
       true -> []
     end
   end

@@ -278,6 +278,22 @@ defmodule Lynx.Rust.LLBCJsonTest do
   end
 
   @tag :tmp_dir
+  test "serializes captured-exit switches when the original extraction has none", %{tmp_dir: tmp} do
+    path = Path.join(tmp, "source.json")
+    File.write!(path, ~s({"Switch":null}))
+
+    document = %{
+      "Switch" => %{
+        "data" => %{"scrutinee" => nil, "branches" => [], "fallback" => nil},
+        "branches" => []
+      }
+    }
+
+    assert LLBCJson.encode_like!(document, path) ==
+             ~s({"Switch":{"data":{"scrutinee":null,"branches":[],"fallback":null},"branches":[]}})
+  end
+
+  @tag :tmp_dir
   test "rejects ambiguous schemas for a new record rather than guessing field order", %{
     tmp_dir: tmp
   } do

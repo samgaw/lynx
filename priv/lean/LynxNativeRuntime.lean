@@ -56,6 +56,22 @@ Overflow remains `none`; this equation does not replace Rust arithmetic. -/
 
 @[expose] def lift {α : Type} (value : α) : NativeM α := Result.ok value
 
+/-- Restore the native panic marker only after compiler cleanup has completed,
+preserving its heap updates for the Rustler catch boundary. -/
+@[expose] def resumeCaptured {α : Type}
+    (computation : NativeM (core.result.Result α Unit)) : NativeM α := do
+  let outcome ← computation
+  match outcome with
+  | .Ok value => ok value
+  | .Err () => fail .panic
+
+@[simp] theorem resumeCaptured_ok {α : Type} (value : α) :
+    resumeCaptured (ok (.Ok value)) = ok value := by simp [resumeCaptured, ok]
+
+@[simp] theorem resumeCaptured_panic {α : Type} :
+    resumeCaptured (ok (.Err ()) : NativeM (core.result.Result α Unit)) =
+      fail .panic := by simp [resumeCaptured, ok]
+
 /-- A successful standard `Result::expect` transfers the actual Ok payload.
 The error path cannot establish a Rust outcome: Debug formatting, error
 destruction and unwind require separate models before that path is supported. -/
@@ -353,7 +369,8 @@ payload to scalars or compiler-certified destructor-free structs. -/
       let lockState := fields[0]'(by omega)
       let poisonState := fields[1]'(by omega)
       let payload := fields[2]'(by omega)
-      if lockState == .atom "unlocked" && poisonState == .atom "unpoisoned" then
+      if lockState == .atom "unlocked" &&
+          (poisonState == .atom "unpoisoned" || poisonState == .atom "poisoned") then
         match NativeCodec.decode (α := α) payload with
         | some _ =>
           let _ ← NativeM.removeCell (typeName α) mutex.id
@@ -623,6 +640,94 @@ end Lynx.NativeGuard
 namespace Lynx
 instance {α : Type} [NativeCodec α] : NativeDrop (NativeGuard α) where
   drop := NativeGuard.release
+end Lynx
+
+namespace Lynx.NativeGuard
+
+/-- Standard guard destruction during unwind from a nonpanicking acquisition.
+The compiler adapter admits no nested cleanup calls or acquisitions. Validation,
+latest-payload commit, poisoning and unlock form one logical release step. -/
+@[expose] def pollReleasePanicking {α : Type} [NativeCodec α] (guard : NativeGuard α)
+    (env : Environment) : Option (Except Exception Unit × Environment) :=
+  match pollRelease guard env with
+  | some (.ok (), updated) =>
+      some (.ok (), { updated with nativeHeap := updated.nativeHeap.map fun cell =>
+        if cell.1 == guard.mutex.id then
+          (guard.mutex.id, NativeMutex.typeName α,
+            .tuple #[.atom "unlocked", .atom "poisoned", NativeCodec.encode guard.value])
+        else cell })
+  | other => other
+
+@[expose] def releasePanicking {α : Type} [NativeCodec α] (guard : NativeGuard α) : NativeM Unit :=
+  .wait (pollReleasePanicking guard) fun reply => match reply with
+    | .ok value => .ok value
+    | .error error => .error error
+
+theorem pollReleasePanicking_owned {α : Type} [NativeCodec α] (guard : NativeGuard α)
+    (original : α) (poisoned : Bool) (env : Environment)
+    (owner : guard.ownerContext = env.currentPid)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) =
+      [(guard.mutex.id, NativeMutex.typeName α,
+        NativeMutex.lockedContents guard.ownerContext guard.token poisoned original)]) :
+    pollReleasePanicking guard env = some (.ok (), { env with
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α,
+          .tuple #[.atom "unlocked", .atom "poisoned", NativeCodec.encode guard.value])
+        else cell }) := by
+  cases poisoned <;>
+    simp [pollReleasePanicking, pollRelease, NativeMutex.lockedContents, stored, owner,
+      NativeCodec.roundtrip, List.map_map]
+  all_goals
+    congr 3
+    intro id type contents present
+    by_cases same : id = guard.mutex.id <;> simp_all [same]
+
+theorem releasePanicking_owned {α : Type} [NativeCodec α] (guard : NativeGuard α)
+    (original : α) (poisoned : Bool) (env : Environment)
+    (owner : guard.ownerContext = env.currentPid)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) =
+      [(guard.mutex.id, NativeMutex.typeName α,
+        NativeMutex.lockedContents guard.ownerContext guard.token poisoned original)]) :
+    releasePanicking guard env = (.ok (), { env with nativeHeap := env.nativeHeap.map fun cell =>
+      if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α,
+          .tuple #[.atom "unlocked", .atom "poisoned", NativeCodec.encode guard.value])
+      else cell }) := by
+  unfold releasePanicking
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (pollReleasePanicking_owned guard original poisoned env owner stored)]
+  simp
+
+theorem releasePanicking_owned_next {α β : Type} [NativeCodec α] (guard : NativeGuard α)
+    (original : α) (poisoned : Bool) (next : NativeM β) (env : Environment)
+    (owner : guard.ownerContext = env.currentPid)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) =
+      [(guard.mutex.id, NativeMutex.typeName α,
+        NativeMutex.lockedContents guard.ownerContext guard.token poisoned original)]) :
+    (do releasePanicking guard; next) env = next { env with
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
+        (guard.mutex.id, NativeMutex.typeName α,
+          .tuple #[.atom "unlocked", .atom "poisoned", NativeCodec.encode guard.value])
+        else cell } := by
+  unfold releasePanicking
+  rw [Result.wait_bind]
+  try dsimp only
+  rw [Result.wait_ready_run _ _ _ _ _ (pollReleasePanicking_owned guard original poisoned env owner stored)]
+  simp
+
+end Lynx.NativeGuard
+
+namespace Lynx
+/-- Compiler-scoped std unwind destruction. This is a reported external model,
+not a verified implementation of arbitrary first-party Drop behavior. -/
+class NativeUnwindDrop (α : Type) where
+  drop : α → NativeM Unit
+
+instance {α : Type} [NativeCodec α] : NativeUnwindDrop (NativeGuard α) where
+  drop := NativeGuard.releasePanicking
+
+instance {α : Type} [NativeCodec α] : NativeUnwindDrop (NativeMutex α) where
+  drop := NativeMutex.dispose
 end Lynx
 
 namespace Lynx.NativeGuard

@@ -10,7 +10,8 @@ defmodule Lynx.Rust.CallModels do
           :rustler_encoders,
           :rustler_decoders,
           :native_wakers,
-          :native_files
+          :native_files,
+          :captured_unwind_drops
         ],
         do: raise(ArgumentError, "unknown external Rust call model: #{inspect(key)}")
 
@@ -35,7 +36,10 @@ defmodule Lynx.Rust.CallModels do
                 Lynx.Rust.LockModels.resolve(function, translated, refs) ||
                 Lynx.Rust.PoisonModels.resolve(function, translated, refs) ||
                 Lynx.Rust.GuardModels.resolve(function, translated, refs) ||
-                Lynx.Rust.NativeDrops.resolve(function, translated, refs)
+                Lynx.Rust.NativeDrops.resolve(function, translated, refs) ||
+                if(:captured_unwind_drops in enabled,
+                  do: Lynx.Rust.NativeUnwindDrops.resolve(function, translated, refs)
+                )
           ) ||
             Lynx.Rust.BoxModels.resolve(function, translated, refs) ||
             Lynx.Rust.ResultModels.resolve(function, translated, refs) ||

@@ -84,6 +84,17 @@ defmodule Lynx.Rust do
   bounds operations and generic/formatted panic payloads are rejected. This mode does not verify native exception
   unwinding, allocation or FFI correctness.
 
+  `execution: :runtime, unwind: :captured` additionally supports compiler-validated
+  standard MutexGuard and destructor-free Mutex cleanup. Aeneas needs its existing
+  runtime-monad/effectful-call extensions; Charon must preserve assertion cleanup.
+  The reconstructed guard payload is committed before unlocking and poisoning on
+  panic. Disposing an unlocked poisoned mutex is supported. Entry is modelled as
+  nonpanicking, including acquisition of incoming guards; nested cleanup calls,
+  acquisitions during cleanup, user destructors
+  and double panics remain rejected. Standard locks, physical thread context and
+  native allocation remain explicitly reported external models. This mode selects
+  elaborated MIR without compiler-owned resource/future lowering.
+
   Compiler temporaries that copy a mutable reference without retagging can be
   normalized when their only use is a dereference in the immediately following
   scalar assignment. The original pointer target and write are preserved, and

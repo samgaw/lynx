@@ -25,6 +25,22 @@ defmodule Lynx.Rust.NativeLifetimesTest do
     assert error.description =~ "loop header or backedge"
   end
 
+  test "nonpanicking transfers retain unrelated owners and track the returned owner" do
+    transferred = call(102, [%{"Move" => place(1)}], 1)
+    complete = [create(1), create(2), transferred, dispose(1), dispose(2), create(0), returned()]
+    model = %{can_fail: false, native_transfer: true}
+    audit(complete, true, nil, %{102 => model})
+    audit(complete, false, nil, %{102 => %{model | can_fail: true}})
+    audit(complete, false, nil, %{102 => Map.delete(model, :native_transfer)})
+
+    audit(
+      [create(1), create(2), transferred, dispose(2), create(0), returned()],
+      false,
+      nil,
+      %{102 => model}
+    )
+  end
+
   test "a boolean known before the loop cannot hide an unsafe later iteration" do
     initial = %{
       "kind" => %{
@@ -303,7 +319,7 @@ defmodule Lynx.Rust.NativeLifetimesTest do
     }
   end
 
-  defp audit(statements, accepted, drops \\ nil) do
+  defp audit(statements, accepted, drops \\ nil, models \\ %{}) do
     params =
       Map.merge(args([%{"index" => 0}]), %{
         "trait_clauses" => [],
@@ -340,7 +356,10 @@ defmodule Lynx.Rust.NativeLifetimesTest do
     run = fn ->
       NativeLifetimes.audit!(
         [function],
-        %{100 => %{can_fail: false}, 101 => %{can_fail: false, native_dispose: true}},
+        Map.merge(
+          %{100 => %{can_fail: false}, 101 => %{can_fail: false, native_dispose: true}},
+          models
+        ),
         translated,
         %{},
         drops

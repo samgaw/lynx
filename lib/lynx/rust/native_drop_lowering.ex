@@ -5,13 +5,18 @@ defmodule Lynx.Rust.NativeDropLowering do
   # A consuming `drop(place)` and `core::mem::drop(move place)` have the same
   # ownership action. Use the actual compiler declaration and checked destructor
   # dictionary, preserving every other statement and all source locations.
-  def lower!(document, first_party) do
+  def lower!(document, first_party, opts \\ []) do
+    {document, unwind_drop} =
+      if opts[:unwind] == :captured,
+        do: Lynx.Rust.NativeUnwindDrops.prepare!(document),
+        else: {document, nil}
+
     if NativeDrops.needs_lowering?(document),
-      do: do_lower!(document, first_party),
+      do: do_lower!(document, first_party, unwind_drop),
       else: {document, []}
   end
 
-  defp do_lower!(document, first_party) do
+  defp do_lower!(document, first_party, unwind_drop) do
     translated = document["translated"]
     refs = LLBC.type_references!(document)
 
@@ -38,6 +43,7 @@ defmodule Lynx.Rust.NativeDropLowering do
             translated: translated,
             refs: refs,
             mem_drop: mem_drop,
+            unwind_drop: unwind_drop,
             function: function,
             locals: Map.new(locals, &{&1["index"], &1["ty"]}),
             local_template: hd(locals)
@@ -70,10 +76,29 @@ defmodule Lynx.Rust.NativeDropLowering do
 
   defp walk(%{"kind" => %{"Drop" => drop}} = statement, ctx, state, cleanup) do
     case NativeDrops.site(drop, ctx.translated, ctx.refs) do
-      {:ok, _site} when cleanup ->
+      {:ok, _site} when cleanup and is_nil(ctx.unwind_drop) ->
         walk_children(statement, ctx, state, cleanup)
 
       {:ok, site} ->
+        if cleanup and site.native_kind not in [:guard, :mutex],
+          do:
+            LLBC.failure!(
+              ctx.function,
+              ctx.translated,
+              "unsupported native destructor during captured unwind"
+            )
+
+        if cleanup and site.native_kind == :mutex and
+             not NativeDrops.destructor_free?(site.payload, ctx.translated, ctx.refs),
+           do:
+             LLBC.failure!(
+               ctx.function,
+               ctx.translated,
+               "captured unwind requires a destructor-free mutex payload"
+             )
+
+        mem_drop = if cleanup, do: ctx.unwind_drop, else: ctx.mem_drop
+
         unless ctx.mem_drop,
           do:
             raise(
@@ -126,7 +151,7 @@ defmodule Lynx.Rust.NativeDropLowering do
         call = %{
           "func" => %{
             "Regular" => %{
-              "kind" => %{"Fun" => ctx.mem_drop["def_id"]},
+              "kind" => %{"Fun" => mem_drop["def_id"]},
               "generics" => Map.put(arguments([site.self]), "trait_refs", [dictionary])
             }
           },
@@ -141,7 +166,8 @@ defmodule Lynx.Rust.NativeDropLowering do
           statement: statement["id"],
           destructor: site.function,
           type: CallModels.expand(site.self, ctx.refs),
-          consuming_call: ctx.mem_drop["def_id"]
+          consuming_call: mem_drop["def_id"],
+          unwind: cleanup
         }
 
         state = %{

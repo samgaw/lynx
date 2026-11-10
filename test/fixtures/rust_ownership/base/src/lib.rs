@@ -39,3 +39,12 @@ pub fn checked_flip(value: &mut bool, accepted: bool) {
     let _guard = Flip(value);
     assert!(accepted);
 }
+
+/// Mutates protected contents before checking the request.
+///
+/// # Panics
+/// Panics after mutation when the request is rejected.
+pub fn mutate_before_check(value: &mut bool, accepted: bool) {
+    *value = !*value;
+    assert!(accepted);
+}

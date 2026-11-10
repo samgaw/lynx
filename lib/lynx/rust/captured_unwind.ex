@@ -5,11 +5,16 @@ defmodule Lynx.Rust.CapturedUnwind do
   # Make exceptional exit explicit before Aeneas's ordinary borrow translation.
   # Err () means Rust panic after the actual MIR cleanup, never a successful Rust
   # return. Nonpanicking callees keep their original interfaces and actual bodies.
-  def lower!(document, functions, refs) do
+  def lower!(document, functions, refs, opts \\ []) do
     translated = document["translated"]
+    models = Keyword.get(opts, :models, %{})
+    runtime = Keyword.get(opts, :runtime, false)
 
     safe =
-      NativeBorrows.nonpanicking_calls(functions, %{}, %{translated: translated, references: refs})
+      NativeBorrows.nonpanicking_calls(functions, models, %{
+        translated: translated,
+        references: refs
+      })
 
     lifted = Enum.reject(functions, &MapSet.member?(safe, &1["def_id"]))
 
@@ -72,6 +77,8 @@ defmodule Lynx.Rust.CapturedUnwind do
             function: function,
             translated: translated,
             safe: safe,
+            models: models,
+            runtime: runtime,
             plans: plans,
             plan: plan,
             unit: unit,
@@ -102,6 +109,9 @@ defmodule Lynx.Rust.CapturedUnwind do
 
           {changed, {[record | records], state.next}}
         else
+          function =
+            if runtime, do: Map.update!(function, "body", &prune_safe(&1, safe)), else: function
+
           {function, {records, next}}
         end
       end)
@@ -185,6 +195,13 @@ defmodule Lynx.Rust.CapturedUnwind do
 
     cond do
       MapSet.member?(state.safe, id) ->
+        if cleanup and state.runtime and not (state.models[id] || %{})[:native_unwind_dispose],
+          do:
+            reject!(
+              state,
+              "captured runtime cleanup permits only validated standard unwind destruction; nested cleanup calls are unsupported"
+            )
+
         {call, state} = nonpanicking_call(s, call, state)
         {[call], state}
 
@@ -343,6 +360,29 @@ defmodule Lynx.Rust.CapturedUnwind do
   defp owner?(type), do: not DropModels.primitive_scalar?(type)
 
   defp reject!(state, reason), do: LLBC.failure!(state.function, state.translated, reason)
+
+  defp prune_safe(%{"Call" => %{"call" => call, "on_unwind" => edge} = data} = node, safe) do
+    id = get_in(call, ["func", "Regular", "kind", "Fun"])
+
+    if MapSet.member?(safe, id) do
+      terminal = %{
+        "kind" => "UnwindResume",
+        "span" => edge["span"],
+        "id" => edge["id"],
+        "comments_before" => []
+      }
+
+      Map.put(node, "Call", Map.put(data, "on_unwind", Map.put(edge, "statements", [terminal])))
+    else
+      node
+    end
+  end
+
+  defp prune_safe(map, safe) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, prune_safe(value, safe)} end)
+
+  defp prune_safe(list, safe) when is_list(list), do: Enum.map(list, &prune_safe(&1, safe))
+  defp prune_safe(value, _), do: value
 
   defp panic!(nil, _), do: :ok
 
