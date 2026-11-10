@@ -98,3 +98,8 @@ pub fn order_pair(left: u64, right: u64) -> (u64, u64) {
 pub fn batch_length<T>(input: &experiment_core::collections::Batch<T>) -> usize {
     experiment_core::collections::batch_length(input)
 }
+
+/// Composes classification and owned diagnostic cleanup across crates.
+pub fn result_is_ok(input: Result<u64, String>) -> bool {
+    experiment_core::collections::result_is_ok(input)
+}

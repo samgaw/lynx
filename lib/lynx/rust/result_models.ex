@@ -2,6 +2,70 @@ defmodule Lynx.Rust.ResultModels do
   @moduledoc false
   alias Lynx.Rust.{CallModels, Constants, LLBC, FileModels, FormatModels}
 
+  # A shared variant observation does not decode, move or destroy its payloads.
+  # Reuse upstream Aeneas's observer while checking the actual Rust interface.
+  def resolve(
+        %{
+          "body" => "Opaque",
+          "src" => "Normal",
+          "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["result", 0]},
+              %{
+                "Impl" => %{
+                  "Ty" => %{
+                    "kind" => "InherentImplBlock",
+                    "skip_binder" => parent,
+                    "params" => parent_params
+                  }
+                }
+              },
+              %{"Ident" => ["is_ok", 0]}
+            ]
+          },
+          "generics" => params
+        },
+        translated,
+        refs
+      ) do
+    expand = &CallModels.expand(&1, refs)
+    t = variable(0)
+    e = variable(1)
+
+    with [%{"Ref" => [%{"Var" => %{"Free" => 0}}, self, "Shared"]}] <- expand.(sig["inputs"]),
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- self,
+         true <- LLBC.result_type?(id, %{translated: translated, references: refs}),
+         true <- args == arguments([t, e]),
+         true <- free_parent(expand.(parent)) == self,
+         true <- parameters?(parent_params, 2),
+         [%{"index" => 0}] <- params["regions"],
+         true <- parameters?(params |> Map.put("regions", []) |> Map.put("outlives", []), 2),
+         true <-
+           expand.(params["outlives"]) ==
+             Enum.map([t, e], fn type ->
+               %{
+                 "regions" => [],
+                 "outlives" => [],
+                 "skip_binder" => [%{"Lub" => type}, %{"Var" => %{"Free" => 0}}]
+               }
+             end),
+         true <- expand.(sig["output"]) == %{"Scalar" => "Bool"} do
+      %{
+        rust_name: "core::result::{core::result::Result<@T, @E>}::is_ok",
+        lean: "Aeneas.Std.core.result.Result.is_ok",
+        builtin: true,
+        can_fail: true,
+        lift: false,
+        label:
+          "Aeneas shared Result::is_ok variant observer; payloads are borrowed and not destroyed; Rust core implementation unverified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
   # Aeneas's map_err model invokes the actual FnOnce implementation, but does
   # not drop an unused callback on Ok. Admit only capture-free compiler closures
   # with NoopDestruct; captured state and user-written FnOnce implementations

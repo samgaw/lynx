@@ -74,4 +74,13 @@ theorem generic_composition (T : Type) (input : experiment_core.collections.Batc
     batch_length input = RustM.ok (alloc.vec.Vec.len input.values) := by
   exact generic_core T input
 
+theorem result_core (input : core.result.Result U64 String) :
+    experiment_core.collections.result_is_ok input =
+      RustM.ok (match input with | .Ok _ => true | .Err _ => false) := by
+  cases input <;> rfl
+
+theorem result_composition (input : core.result.Result U64 String) :
+    result_is_ok input = RustM.ok (match input with | .Ok _ => true | .Err _ => false) := by
+  exact result_core input
+
 end Collections.Properties
