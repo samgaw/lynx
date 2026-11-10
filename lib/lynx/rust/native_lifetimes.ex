@@ -1166,6 +1166,13 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp administrative?(%{"Use" => _}), do: true
   defp administrative?(%{"Aggregate" => _}), do: true
   defp administrative?(%{"Discriminant" => _}), do: true
+  # These primitive operations cannot panic while an owner remains live.
+  # Overloaded operators are calls and retain their separate body audit.
+  defp administrative?(%{"BinaryOp" => [op, _, _]})
+       when op in ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge),
+       do: true
+
+  defp administrative?(%{"UnaryOp" => ["Not", _]}), do: true
   defp administrative?(_), do: false
 
   defp transfer!(dest, value, live, ctx) do
