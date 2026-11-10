@@ -117,7 +117,18 @@ defmodule Lynx.Rustler.Bindings do
     bindings =
       for binding <- manifest.bindings do
         function = function!(audit, binding)
-        signature = function["signature"]
+
+        captured =
+          Enum.find(Map.get(audit, :captured_unwind, []), &(&1.function_id == function["def_id"]))
+
+        if captured && captured.captured_signature != function["signature"],
+          do:
+            raise(
+              ArgumentError,
+              "captured Rust implementation signature does not match its exit model"
+            )
+
+        signature = if captured, do: captured.original_signature, else: function["signature"]
 
         arguments =
           Enum.zip_with(binding["arguments"], signature["inputs"], fn hint, type ->
@@ -145,7 +156,8 @@ defmodule Lynx.Rustler.Bindings do
             ),
           "lean_name" => implementation["lean_name"],
           "definition_id" => function["def_id"],
-          "lean_file" => implementation["lean_file"]
+          "lean_file" => implementation["lean_file"],
+          "captured_unwind" => captured != nil
         })
       end
 

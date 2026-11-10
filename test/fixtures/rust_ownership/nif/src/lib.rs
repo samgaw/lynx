@@ -1,6 +1,7 @@
 //! Rustler facade for actual cross-crate destruction.
 #![feature(register_tool)]
 #![register_tool(verify)]
+#![register_tool(lynx)]
 
 /// Consumes an owned first-party value before returning.
 ///
@@ -29,4 +30,18 @@ rustler::init!("Elixir.LynxOwnershipFixture.Native");
 #[verify::start_from]
 fn borrowed_flip(value: bool) -> bool {
     ownership_app::scoped_flip(value)
+}
+
+/// Observes a composed borrowed operation, including its panic cleanup.
+///
+/// # Panics
+/// Propagates rejection after executing both first-party guard destructors.
+#[cfg(feature = "captured-unwind")]
+#[rustler::nif(name = "captured_value", schedule = "DirtyCpu")]
+#[lynx::captured]
+fn captured(value: bool, accepted: bool) -> bool {
+    let mut first = value;
+    let mut second = false;
+    ownership_app::compose(&mut first, &mut second, accepted);
+    first
 }
