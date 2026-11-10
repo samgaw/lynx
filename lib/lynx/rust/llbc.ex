@@ -98,6 +98,13 @@ defmodule Lynx.Rust.LLBC do
 
     refs = references(document, %{})
 
+    globals =
+      Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
+      |> Lynx.Rust.LLBCJson.restore_global_constant_values!(document)
+
+    {vtables, functions, vtable_dependencies} =
+      Lynx.Rust.VTables.audit!(globals, functions, translated, refs)
+
     {generated_drops, functions} = Enum.split_with(functions, &Lynx.Rust.DropModels.generated?/1)
 
     {initializers, ordinary} =
@@ -106,12 +113,14 @@ defmodule Lynx.Rust.LLBC do
         &(is_map(&1["src"]) && Map.has_key?(&1["src"], "GlobalInitializer"))
       )
 
-    globals =
-      Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
-      |> Lynx.Rust.LLBCJson.restore_global_constant_values!(document)
-
     constants =
-      Lynx.Rust.Constants.audit!(globals, initializers, refs, translated["type_decls"])
+      Lynx.Rust.Constants.audit!(
+        Enum.reject(globals, &Map.has_key?(vtables, &1["def_id"])),
+        initializers,
+        refs,
+        translated["type_decls"]
+      )
+      |> Map.merge(vtables)
       |> Map.merge(Lynx.Rust.ScalarGlobals.models(translated, refs))
 
     available_models =
@@ -181,6 +190,9 @@ defmodule Lynx.Rust.LLBC do
       Map.merge(trait_dependencies, encoder_dependencies, fn _id, renderers, encoders ->
         Enum.uniq(renderers ++ encoders)
       end)
+
+    trait_dependencies =
+      Map.merge(trait_dependencies, vtable_dependencies, fn _, a, b -> Enum.uniq(a ++ b) end)
 
     modelled =
       available_models
@@ -539,6 +551,18 @@ defmodule Lynx.Rust.LLBC do
       do: failure!(function, translated, "missing or unsupported Rust constant reference #{id}")
   end
 
+  defp check_calls!(
+         %{"Global" => %{"Global" => %{"id" => id} = reference}},
+         allowed,
+         function,
+         translated
+       ) do
+    unless get_in(allowed.constants, [id, "lynx_vtable"]),
+      do: failure!(function, translated, "missing validated Rust vtable reference #{id}")
+
+    check_calls!(%{"Global" => reference}, allowed, function, translated)
+  end
+
   defp check_calls!(%{"Global" => _}, _, function, translated),
     do: failure!(function, translated, "missing or unsupported Rust constant reference")
 
@@ -591,7 +615,8 @@ defmodule Lynx.Rust.LLBC do
                        is_map_key(value, "TypeVar") or is_map_key(value, "Ref") or
                        is_map_key(value, "Slice") or is_map_key(value, "Array") or
                        is_map_key(value, "RawPtr") or is_map_key(value, "FnPtr") or
-                       is_map_key(value, "FnDef") or is_map_key(value, "PtrMetadata") or
+                       is_map_key(value, "FnDef") or is_map_key(value, "DynTrait") or
+                       is_map_key(value, "PtrMetadata") or
                        is_map_key(value, "TraitType")))) do
     case Map.fetch(refs, id) do
       {:ok, existing} when existing != value ->

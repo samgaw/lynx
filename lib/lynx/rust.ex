@@ -51,6 +51,14 @@ defmodule Lynx.Rust do
   Optional `:mir` selects `:promoted`, `:elaborated` or `:optimized` compiler MIR
   for pure extraction. It cannot override runtime or owned-drop extraction.
 
+  Pure extraction admits the Aeneas logical heap `Box::new` model. Boxed trait
+  construction additionally requires validated compiler vtable metadata: a
+  monomorphic scalar-field struct, one extracted safe shared method returning a
+  scalar, and a callback-free drop shim. Use elaborated MIR to retain compiler
+  drop elaboration. The resulting dictionary can compose actual extracted
+  methods in proofs; executable Rust dynamic calls remain unsupported. Native
+  vtable ABI, allocation success and reclamation remain reported assumptions.
+
   `:proof_modules` lists Lean modules containing properties; `:required_properties`
   can require particular theorem names, rejecting missing or unrelated theorems. Every supplied module is audited
   in full, including private and unused declarations.

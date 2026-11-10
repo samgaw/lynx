@@ -37,6 +37,7 @@ defmodule Lynx.Rust.CallModels do
                 Lynx.Rust.GuardModels.resolve(function, translated, refs) ||
                 Lynx.Rust.NativeDrops.resolve(function, translated, refs)
           ) ||
+            Lynx.Rust.BoxModels.resolve(function, translated, refs) ||
             Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
             Lynx.Rust.TryModels.resolve(function, translated, refs) ||
             Lynx.Rust.SliceModels.resolve(function, translated, refs) ||
