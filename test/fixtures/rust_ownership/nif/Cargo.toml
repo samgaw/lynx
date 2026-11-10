@@ -6,6 +6,9 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+borrowed-guard = []
+
 [dependencies]
 ownership-app = { path = "../app" }
 rustler = "=0.39.0"
