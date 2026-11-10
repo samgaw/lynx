@@ -205,7 +205,8 @@ defmodule Lynx.Rust.CollectionModels do
 
           {_,
            [element, %{"Adt" => %{"id" => allocator, "builtin" => nil, "generics" => alloc_args}}]} ->
-            Lynx.Rust.DropModels.primitive_scalar?(element) and alloc_args == arguments([]) and
+            (method == "len" or Lynx.Rust.DropModels.primitive_scalar?(element)) and
+              alloc_args == arguments([]) and
               Enum.any?(translated["type_decls"], fn type ->
                 type != nil and type["def_id"] == allocator and
                   type["item_meta"]["name"] == path(~w(alloc alloc Global)) and
@@ -224,7 +225,11 @@ defmodule Lynx.Rust.CollectionModels do
         do:
           raise(
             ArgumentError,
-            "unsupported Vec::#{method}: only primitive scalar elements and the standard Global allocator are admitted"
+            if(method == "len",
+              do: "unsupported Vec::len: only the standard Global allocator is admitted",
+              else:
+                "unsupported Vec::#{method}: only primitive scalar elements and the standard Global allocator are admitted"
+            )
           )
     end
 

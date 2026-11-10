@@ -29,7 +29,9 @@ defmodule Lynx.Rust do
   these models' verified boundary.
 
   Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
-  Aeneas's value and borrow-update models. Owned primitive scalar vectors using
+  Aeneas's value and borrow-update models. Shared `Vec::len` observations support
+  arbitrary element types with the standard Global allocator; this does not admit
+  element destruction or owned operations on those types. Owned primitive scalar vectors using
   the standard Global allocator support `new`, `len` and bounded `push`, with
   logical deallocation including compiler-emitted cleanup paths. Growth beyond
   262144 elements exhausts verification. A kernel-checked model theorem rules

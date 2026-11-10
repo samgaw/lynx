@@ -93,3 +93,8 @@ pub fn replace_first_i64(input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
 pub fn order_pair(left: u64, right: u64) -> (u64, u64) {
     experiment_core::order_pair(left, right)
 }
+
+/// Observes a generic batch through its first-party implementation.
+pub fn batch_length<T>(input: &experiment_core::collections::Batch<T>) -> usize {
+    experiment_core::collections::batch_length(input)
+}
