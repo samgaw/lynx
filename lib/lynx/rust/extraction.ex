@@ -143,6 +143,49 @@ defmodule Lynx.Rust.Extraction do
 
     discovery = %{discovery | document: document}
 
+    {document, rustler_constructors} =
+      if Keyword.get(opts, :execution, :pure) == :pure and
+           :rustler_decoders in Keyword.get(opts, :external_calls, []) and
+           Lynx.Rustler.ErrorConstructors.needed?(document, first_party) do
+        unless Enum.any?(
+                 models,
+                 &(&1.rust == "rustler::error::Error" and &1.lean == "Lynx.Rustler.DecoderError")
+               ),
+               do:
+                 raise(
+                   ArgumentError,
+                   "Rustler BadArg requires its explicit opaque Error conversion model"
+                 )
+
+        layout_opts =
+          Keyword.take(opts, [:root_attribute, :mir, :unwind, :futures, :owned_drops])
+          |> Keyword.put(
+            :external_types,
+            Enum.reject(models, &(&1.rust == "rustler::error::Error"))
+          )
+
+        layout =
+          describe!(
+            context,
+            tools,
+            roots,
+            output,
+            module <> ".ErrorLayout",
+            layout_opts,
+            Enum.map(caches, & &1.opaque_pattern)
+          )
+
+        {lowered, proof} =
+          Lynx.Rustler.ErrorConstructors.lower!(document, layout.document, first_party)
+
+        {lowered,
+         if(proof,
+           do: Map.put(proof, :layout_fingerprint, Lynx.Rust.Fingerprint.file!(layout.llbc))
+         )}
+      else
+        {document, nil}
+      end
+
     runtime_call_models =
       Keyword.get(opts, :external_calls, []) ++
         file_models ++
@@ -222,7 +265,7 @@ defmodule Lynx.Rust.Extraction do
         else: document
 
     backend_llbc =
-      if native_drops == [] and native_unwind == [] do
+      if native_drops == [] and native_unwind == [] and rustler_constructors == nil do
         llbc
       else
         path = Path.rootname(llbc) <> ".native-drops.llbc"
@@ -273,7 +316,8 @@ defmodule Lynx.Rust.Extraction do
         external_calls: requested_calls,
         unwind: unwind,
         execution: Keyword.get(opts, :execution, :pure),
-        rustler_atom_caches: {caches, module}
+        rustler_atom_caches: {caches, module},
+        rustler_constructors: rustler_constructors
       )
 
     audit = Lynx.Rust.FormatModels.scope(audit, module)
@@ -472,6 +516,7 @@ defmodule Lynx.Rust.Extraction do
     %{
       audit: audit,
       compiler_drop_queries: compiler_drop_queries,
+      rustler_constructors: rustler_constructors,
       native_expect_aliases: native_expect_aliases,
       formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
@@ -502,8 +547,8 @@ defmodule Lynx.Rust.Extraction do
           Lynx.Rust.Fingerprint.digest(
             :erlang.term_to_binary(
               {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
-               Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
-               requested_calls,
+               rustler_constructors, Lynx.Rust.Fingerprint.file!(backend_llbc), unwind,
+               native_unwind, models, requested_calls,
                audit.external_calls
                |> Map.values()
                |> Enum.map(&Map.drop(&1, [:function, :definition_id]))

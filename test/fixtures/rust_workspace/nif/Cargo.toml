@@ -22,6 +22,7 @@ unsupported-binary-method = ["binary"]
 custom-encoder = []
 custom-decoder = []
 nif-result = []
+validated-decoder = []
 
 [dependencies]
 experiment-analysis = { path = "../analysis" }

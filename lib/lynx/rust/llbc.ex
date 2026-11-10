@@ -123,6 +123,7 @@ defmodule Lynx.Rust.LLBC do
         Keyword.get(opts, :execution, :pure)
       )
       |> Map.merge(cache_models)
+      |> Map.merge(Lynx.Rustler.ErrorConstructors.models!(document, opts[:rustler_constructors]))
 
     if :rustler_decoders in Keyword.get(opts, :external_calls, []) do
       case Lynx.Rustler.DecoderModels.audit(functions, translated, refs) do

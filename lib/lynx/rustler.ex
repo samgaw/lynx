@@ -86,8 +86,10 @@ defmodule Lynx.Rustler do
   validity and environment copying at the explicit FFI boundary. In pure mode,
   `NifResult<T>` and `Result<T, rustler::Error>` return the successful payload
   directly, following Rustler's NifReturnable specialization. Supported decoder
-  errors retain their original return/exception outcome. Constructing or inspecting
-  Rustler errors, dynamic payloads and runtime NifResult conversion are rejected.
+  errors retain their original return/exception outcome. Pure BadArg construction
+  is validated against the compiled enum and lowered to an explicit foreign
+  primitive. Other constructors, Error inspection, dynamic payloads and runtime
+  NifResult conversion are rejected.
 
   Options:
 
@@ -119,8 +121,9 @@ defmodule Lynx.Rustler do
       `:optimized`. Custom input Decoders default to `:elaborated`, retaining
       compiler drop elaboration. Their actual first-party bodies are extracted;
       the initial primitive model admits u64 decoding and opaque forwarding of
-      its error. Constructing or inspecting Rustler errors, dynamic payloads and
-      runtime custom Decoders are unsupported and rejected.
+      its error. Pure BadArg construction is validated against the actual enum
+      metadata and lowered to an explicit foreign primitive. Other constructors,
+      Error inspection, dynamic payloads and runtime custom Decoders are rejected.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
@@ -354,7 +357,7 @@ defmodule Lynx.Rustler do
                  lean: "Lynx.Rustler.DecoderError",
                  import: bridge,
                  label:
-                   "Opaque Rustler Error conversion outcome for supported primitive decoders; only forwarding is admitted; construction, inspection and dynamic payloads unsupported"
+                   "Opaque Rustler Error conversion outcome for supported primitive decoders; forwarding and validated BadArg construction admitted; inspection and other constructors unsupported"
                }
              ],
              else: []
@@ -482,7 +485,9 @@ defmodule Lynx.Rustler do
           "Rustler #{rustler_version} wrapper, FFI, native code and BEAM",
           "configured native artifact is installed by the application loader",
           "Lean kernel and standard logical axioms"
-        ] ++ if(registrations.boundary, do: [registrations.boundary], else: [])
+        ] ++
+          if(registrations.boundary, do: [registrations.boundary], else: []) ++
+          Lynx.Rustler.ErrorConstructors.boundary(extraction.rustler_constructors)
     }
   end
 
