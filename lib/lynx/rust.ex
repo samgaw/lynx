@@ -58,7 +58,17 @@ defmodule Lynx.Rust do
   release binaries without Lynx's nested-function selection patch.
 
   Optional `:mir` selects `:promoted`, `:elaborated` or `:optimized` compiler MIR
-  for pure extraction. It cannot override runtime or owned-drop extraction.
+  for pure extraction. It cannot override runtime or compiler-owned runtime extraction.
+
+  `owned_drops: :explicit` retains upstream precise destructor dictionaries in
+  pure extraction. Generic consumers can compose with actual first-party Drop
+  bodies, including panics. Supplied dictionaries must resolve to actual audited
+  method bodies or reported compiler NoopDestruct primitives over supported
+  closed types. Untracked dictionaries, opaque methods, raw pointer operations
+  and unsupported dictionary shapes are rejected. This mode uses unmodified
+  extraction tools and does not establish native allocation, FFI, unwind cleanup
+  or stateful destructor correctness. `owned_drops: true` retains the separate
+  runtime-only compiler lowering.
 
   Pure extraction admits the Aeneas logical heap `Box::new` model. Boxed trait
   construction additionally requires validated compiler vtable metadata: a

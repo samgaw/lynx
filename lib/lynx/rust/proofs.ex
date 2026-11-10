@@ -10,8 +10,15 @@ defmodule Lynx.Rust.Proofs do
     imports =
       Enum.uniq([extraction.module <> ".Funs" | proof_modules ++ Keyword.get(opts, :imports, [])])
 
+    primitives = Map.get(extraction, :audit, %{}) |> Map.get(:compiler_primitives, [])
+    primitive_ids = MapSet.new(primitives, & &1.function_id)
+
     implementations =
-      extraction.implementations |> Map.values() |> Enum.map(& &1["lean_name"]) |> Enum.sort()
+      extraction.implementations
+      |> Map.values()
+      |> Enum.reject(&MapSet.member?(primitive_ids, &1["def_id"]))
+      |> Enum.map(& &1["lean_name"])
+      |> Enum.sort()
 
     required = Keyword.get(opts, :required_properties, [])
 

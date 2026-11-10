@@ -68,7 +68,18 @@ defmodule Lynx.Rust.LLBC do
                "incomplete LLBC or unsupported Charon version (expected 0.1.304)"
              )
 
+    if Keyword.get(opts, :explicit_ownership, false) and
+         Keyword.get(opts, :execution, :pure) != :pure,
+       do: raise(ArgumentError, "explicit ownership currently requires pure execution")
+
+    ownership =
+      if Keyword.get(opts, :explicit_ownership, false),
+        do: Lynx.Rust.ExplicitOwnership.prepare!(document)
+
+    document = if ownership, do: ownership.document, else: document
     translated = document["translated"]
+    primitive_models = if ownership, do: ownership.primitive_models, else: []
+    primitive_ids = MapSet.new(primitive_models, & &1.function_id)
     {cache_candidates, cache_module} = Keyword.get(opts, :rustler_atom_caches, {[], ""})
     cache_models = Lynx.Rustler.AtomCaches.models!(document, cache_candidates, cache_module)
 
@@ -88,7 +99,10 @@ defmodule Lynx.Rust.LLBC do
     {library_helpers, external} =
       Enum.split_with(external, &Lynx.Rust.LibraryHelpers.selected?(&1, translated))
 
-    functions = functions ++ library_helpers
+    {primitives, external} =
+      Enum.split_with(external, &MapSet.member?(primitive_ids, &1["def_id"]))
+
+    functions = functions ++ library_helpers ++ primitives
 
     all_functions = functions
     ids = Enum.map(all_functions, & &1["def_id"])
@@ -114,7 +128,15 @@ defmodule Lynx.Rust.LLBC do
     {vtables, functions, vtable_dependencies} =
       Lynx.Rust.VTables.audit!(table_globals, functions, translated, refs)
 
-    {generated_drops, functions} = Enum.split_with(functions, &Lynx.Rust.DropModels.generated?/1)
+    {generated_drops, functions} =
+      if ownership,
+        do: {[], functions},
+        else: Enum.split_with(functions, &Lynx.Rust.DropModels.generated?/1)
+
+    ownership_dispatch =
+      if ownership,
+        do: Lynx.Rust.OwnershipDispatch.audit!(functions, translated, refs, primitive_models),
+        else: %{unsafe: MapSet.new(), calls: %{}, dependencies: %{}}
 
     {initializers, ordinary} =
       Enum.split_with(
@@ -218,6 +240,11 @@ defmodule Lynx.Rust.LLBC do
         Enum.uniq(left ++ right)
       end)
 
+    trait_dependencies =
+      Map.merge(trait_dependencies, ownership_dispatch.dependencies, fn _, left, right ->
+        Enum.uniq(left ++ right)
+      end)
+
     modelled =
       available_models
       |> Map.take(direct_calls ++ (trait_dependencies |> Map.values() |> List.flatten()))
@@ -236,7 +263,10 @@ defmodule Lynx.Rust.LLBC do
     allowed = %{
       functions: MapSet.new(Enum.map(functions, & &1["def_id"]) ++ Map.keys(modelled)),
       constants: constants,
-      trait_calls: decoder_dispatch.calls
+      trait_calls:
+        Map.merge(decoder_dispatch.calls, ownership_dispatch.calls, fn _, left, right ->
+          Enum.uniq(left ++ right)
+        end)
     }
 
     for function <- functions do
@@ -248,7 +278,8 @@ defmodule Lynx.Rust.LLBC do
                },
                function
              ) or
-               (MapSet.member?(callback_ids, function["def_id"]) and
+               ((MapSet.member?(callback_ids, function["def_id"]) or
+                   MapSet.member?(ownership_dispatch.unsafe, function["def_id"])) and
                   match?(
                     %{
                       "body" => %{"Structured" => _},
@@ -270,9 +301,15 @@ defmodule Lynx.Rust.LLBC do
     # Preserve direct-call diagnostics before examining cleanup reached by those
     # calls. No extraction can proceed until the separate drop audit succeeds.
     drops =
-      case Lynx.Rust.DropModels.audit(functions, generated_drops, translated, refs, first_party) do
-        {:ok, drops} -> drops
-        {:error, function, message} -> failure!(function, translated, message)
+      if ownership do
+        # prepare! rejects residual Drop statements. Destruction is now ordinary
+        # executable calls checked above, so no structural erasure is requested.
+        %{erasures: %{}, sites: %{}}
+      else
+        case Lynx.Rust.DropModels.audit(functions, generated_drops, translated, refs, first_party) do
+          {:ok, drops} -> drops
+          {:error, function, message} -> failure!(function, translated, message)
+        end
       end
 
     drops = Lynx.Rust.VTables.merge_drops(vtables, drops)
@@ -294,6 +331,9 @@ defmodule Lynx.Rust.LLBC do
     check_constant_cycles!(functions, constants, translated, dispatch_dependencies)
 
     %{
+      document: document,
+      explicit_ownership: ownership && Map.drop(ownership, [:document]),
+      compiler_primitives: primitive_models,
       functions: ordinary,
       library_helpers: Enum.map(library_helpers, & &1["def_id"]),
       constant_initializers: initializers,

@@ -33,6 +33,10 @@ defmodule Lynx.Rust.Extraction do
          Keyword.get(opts, :execution, :pure) != :runtime,
        do: raise(ArgumentError, "owned destruction requires runtime execution")
 
+    if Keyword.get(opts, :owned_drops, false) == :explicit and
+         Keyword.get(opts, :execution, :pure) != :pure,
+       do: raise(ArgumentError, "explicit ownership currently requires pure execution")
+
     file_models =
       Lynx.Rust.FileModels.enabled!(
         Keyword.get(opts, :files, :reject),
@@ -317,8 +321,20 @@ defmodule Lynx.Rust.Extraction do
         unwind: unwind,
         execution: Keyword.get(opts, :execution, :pure),
         rustler_atom_caches: {caches, module},
-        rustler_constructors: rustler_constructors
+        rustler_constructors: rustler_constructors,
+        explicit_ownership: Keyword.get(opts, :owned_drops, false) == :explicit
       )
+
+    document = audit.document
+
+    backend_llbc =
+      if audit.explicit_ownership do
+        path = Path.rootname(llbc) <> ".ownership.llbc"
+        File.write!(path, Lynx.Rust.LLBCJson.encode_like!(document, llbc))
+        path
+      else
+        backend_llbc
+      end
 
     audit = Lynx.Rust.FormatModels.scope(audit, module)
     formatting_modules = Lynx.Rust.FormatModels.install!(audit.external_calls, output, module)
@@ -525,6 +541,7 @@ defmodule Lynx.Rust.Extraction do
 
     %{
       audit: audit,
+      explicit_ownership: audit.explicit_ownership,
       compiler_drop_queries: compiler_drop_queries,
       rustler_constructors: rustler_constructors,
       native_expect_aliases: native_expect_aliases,
