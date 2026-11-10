@@ -19,11 +19,11 @@ defmodule Lynx.Rustler.ErrorConstructors do
   # Keep Error opaque: no dummy fields or erasure of its unsupported variants.
   def lower!(document, layout, first_party, prefix \\ "Rust") do
     {document, badarg} = lower_badarg!(document, layout, first_party)
-    {document, atoms} = Lynx.Rustler.AtomConstructors.lower!(document, layout, first_party)
+    {document, values} = Lynx.Rustler.ValueConstructors.lower!(document, layout, first_party)
     reject_remaining!(document, layout, first_party)
 
     {document,
-     if(atoms, do: %{badarg: badarg, atoms: Map.put(atoms, :prefix, prefix)}, else: badarg)}
+     if(values, do: %{badarg: badarg, values: Map.put(values, :prefix, prefix)}, else: badarg)}
   end
 
   defp reject_remaining!(document, layout, first_party) do
@@ -214,23 +214,29 @@ defmodule Lynx.Rustler.ErrorConstructors do
 
   def boundary(nil), do: []
 
-  def boundary(%{atoms: _} = proof),
+  def boundary(%{values: _} = proof),
     do:
       boundary(proof.badarg) ++
         [
-          "Lynx validated lowering of foreign Rustler atom error constructors; atom creation and allocation success assumed at native FFI boundary"
-        ]
+          "Lynx validated lowering of foreign Rustler value error constructors; allocation, reclamation and native FFI remain unverified"
+        ] ++
+        if(Enum.any?(proof.values.entries, &(&1.literal == nil)),
+          do: [
+            "Foreign owned Box<dyn Encoder> constructor-signature lifetime names normalized for Aeneas; original executable operands and types retained"
+          ],
+          else: []
+        )
 
   def boundary(_proof),
     do: ["Lynx validated lowering of foreign Rustler BadArg constructor operations"]
 
   def models!(_document, nil), do: %{}
 
-  def models!(document, %{atoms: atoms, badarg: badarg}),
+  def models!(document, %{values: values, badarg: badarg}),
     do:
       Map.merge(
         models!(document, badarg),
-        Lynx.Rustler.AtomConstructors.models!(document, atoms, atoms.prefix)
+        Lynx.Rustler.ValueConstructors.models!(document, values, values.prefix)
       )
 
   def models!(document, proof) do
@@ -258,9 +264,9 @@ defmodule Lynx.Rustler.ErrorConstructors do
     }
   end
 
-  def install!(%{atoms: atoms}, output, prefix, models) do
+  def install!(%{values: values}, output, prefix, models) do
     bridge = Enum.find(models, &(&1.rust == "rustler::error::Error"))
-    Lynx.Rustler.AtomConstructors.install!(atoms, output, prefix, bridge.import)
+    Lynx.Rustler.ValueConstructors.install!(values, output, prefix, bridge.import)
   end
 
   def install!(_, _, _, _), do: []

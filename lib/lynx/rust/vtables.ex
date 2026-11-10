@@ -85,15 +85,7 @@ defmodule Lynx.Rust.VTables do
       true = is_map(method["body"]) && method["item_meta"]["has_errors"] == false
       true = FormatModels.method_identity?(method, impl, trait_id, ctx)
 
-      %{
-        "is_unsafe" => false,
-        "abi" => "Rust",
-        "is_variadic" => false,
-        "inputs" => [%{"Ref" => [%{"Var" => %{"Free" => 0}}, ^self, "Shared"]}],
-        "output" => output
-      } = CallModels.expand(method["signature"], refs)
-
-      true = DropModels.primitive_scalar?(output)
+      profile = method_profile!(method, self, translated, refs)
 
       %{"Adt" => %{"id" => table_id, "builtin" => nil, "generics" => @args}} =
         CallModels.expand(global["ty"], refs)
@@ -116,8 +108,8 @@ defmodule Lynx.Rust.VTables do
       usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
       [%{"SizeOf" => ^self}, ^usize] = size
       [%{"AlignOf" => ^self}, ^usize] = align
-      drop_id = pointer!(drop)
-      slot_id = pointer!(slot)
+      drop_id = pointer!(drop, 1)
+      slot_id = pointer!(slot, length(profile.regions))
       drop_fn = one!(translated["fun_decls"], drop_id)
       slot_fn = one!(translated["fun_decls"], slot_id)
 
@@ -129,12 +121,13 @@ defmodule Lynx.Rust.VTables do
         slot_fn["item_meta"]["name"] ==
           method["item_meta"]["name"] ++ [%{"Builtin" => ["VTableMethod", 0]}]
 
-      shim!(drop_fn, nil, self, trait_id, refs)
-      shim!(slot_fn, method_id, self, trait_id, refs)
+      shim!(drop_fn, nil, self, trait_id, nil, refs)
+      shim!(slot_fn, method_id, self, trait_id, profile, refs)
 
       Map.put(global, "lynx_vtable", %{
         impl: impl_id,
         trait: trait_id,
+        external_trait: if(Map.get(profile, :encoder, false), do: "rustler::types::Encoder"),
         methods: [method_id],
         shims: [drop_id, slot_id]
       })
@@ -143,22 +136,53 @@ defmodule Lynx.Rust.VTables do
         reraise ArgumentError,
                 [
                   message:
-                    "missing or unsupported compiler vtable metadata #{inspect(global["def_id"])}; requires a monomorphic scalar-field payload, one extracted shared method and a callback-free destructor: #{Exception.message(error)}"
+                    "missing or unsupported compiler vtable metadata #{inspect(global["def_id"])}; requires a monomorphic scalar-field payload, one extracted shared scalar method or validated Rustler Encoder, and a callback-free destructor: #{Exception.message(error)}"
                 ],
                 __STACKTRACE__
     end
   end
 
-  defp shim!(function, method, self, trait, refs) do
+  defp method_profile!(method, self, translated, refs) do
+    signature = CallModels.expand(method["signature"], refs)
+
+    if Lynx.Rustler.EncoderModels.implementation_method?(method, self, translated, refs) do
+      [_receiver, env] = signature["inputs"]
+
+      %{
+        region: 1,
+        target: 3,
+        extra: [env],
+        output: signature["output"],
+        regions: [0, 1],
+        encoder: true
+      }
+    else
+      %{
+        "is_unsafe" => false,
+        "abi" => "Rust",
+        "is_variadic" => false,
+        "inputs" => [%{"Ref" => [%{"Var" => %{"Free" => 0}}, ^self, "Shared"]}],
+        "output" => output
+      } = signature
+
+      true = DropModels.primitive_scalar?(output)
+      %{region: 0, target: 2, extra: [], output: output, regions: [0]}
+    end
+  end
+
+  defp shim!(function, method, self, trait, profile, refs) do
+    profile = profile || %{region: 0, target: 2, extra: [], output: nil, regions: [0]}
     true = function["src"] == "VTableShim" && function["item_meta"]["has_errors"] == false
 
     %{
       "is_unsafe" => unsafe,
       "abi" => "Rust",
       "is_variadic" => false,
-      "inputs" => [%{"Ref" => [%{"Var" => %{"Free" => 0}}, %{"DynTrait" => predicate}, kind]}]
+      "inputs" => [%{"Ref" => [region, %{"DynTrait" => predicate}, kind]} | extra],
+      "output" => output
     } = CallModels.expand(function["signature"], refs)
 
+    true = region == %{"Var" => %{"Free" => profile.region}} && extra == profile.extra
     true = unsafe == (method == nil) && dyn_trait!(predicate) == trait
     true = kind == if(method == nil, do: "Mut", else: "Shared")
 
@@ -184,18 +208,37 @@ defmodule Lynx.Rust.VTables do
         "Return"
       ] = kinds
 
-      cast!(cast, self, "Mut", refs)
+      cast!(cast, self, "Mut", profile, refs)
     else
+      true = output == profile.output
       [cast, %{"Call" => call}, "Return"] = kinds
-      cast!(cast, self, "Shared", refs)
+      cast!(cast, self, "Shared", profile, refs)
 
       %{
         "func" => %{"Regular" => %{"kind" => %{"Fun" => ^method}, "generics" => args}},
-        "args" => [%{"Move" => %{"kind" => %{"Local" => 2}}}],
+        "args" => actual,
         "safety" => "Inherit"
       } = call["call"]
 
-      true = args == %{@args | "regions" => [%{"Var" => %{"Free" => 0}}]}
+      true =
+        args == %{@args | "regions" => Enum.map(profile.regions, &%{"Var" => %{"Free" => &1}})}
+
+      receiver = %{
+        "Move" => %{
+          "kind" => %{"Local" => profile.target},
+          "ty" => %{"Ref" => [region, self, "Shared"]}
+        }
+      }
+
+      expected = [
+        receiver
+        | Enum.with_index(profile.extra, 2)
+          |> Enum.map(fn {type, index} ->
+            %{"Move" => %{"kind" => %{"Local" => index}, "ty" => type}}
+          end)
+      ]
+
+      true = CallModels.expand(actual, refs) == expected
       %{"kind" => %{"Local" => 0}} = call["dest"]
 
       ["UnwindResume"] =
@@ -219,7 +262,7 @@ defmodule Lynx.Rust.VTables do
   defp cast!(
          %{
            "Assign" => [
-             %{"kind" => %{"Local" => 2}, "ty" => dest},
+             %{"kind" => %{"Local" => local}, "ty" => dest},
              %{
                "UnaryOp" => [
                  %{"Cast" => %{"Concretize" => [target, []]}},
@@ -230,16 +273,18 @@ defmodule Lynx.Rust.VTables do
          },
          self,
          kind,
+         profile,
          refs
        ) do
-    expected = %{"Ref" => [%{"Var" => %{"Free" => 0}}, self, kind]}
+    true = local == profile.target
+    expected = %{"Ref" => [%{"Var" => %{"Free" => profile.region}}, self, kind]}
 
     true =
       CallModels.expand(dest, refs) == expected && CallModels.expand(target, refs) == expected
   end
 
-  defp pointer!([%{"FnPtr" => %{"kind" => %{"Fun" => id}, "generics" => args}}, _]) do
-    true = args == %{@args | "regions" => ["Erased"]}
+  defp pointer!([%{"FnPtr" => %{"kind" => %{"Fun" => id}, "generics" => args}}, _], regions) do
+    true = args == %{@args | "regions" => List.duplicate("Erased", regions)}
     id
   end
 
@@ -267,7 +312,20 @@ defmodule Lynx.Rust.VTables do
         &(&1["def_id"] == info.impl && &1["impl_trait_def_id"] == info.trait)
       )
 
-    [_trait] = Enum.filter(translation["trait_decls"], &(&1["def_id"] == info.trait))
+    traits = Enum.filter(translation["trait_decls"], &(&1["def_id"] == info.trait))
+
+    case {traits, Map.get(info, :external_trait)} do
+      {[_], nil} ->
+        :ok
+
+      {[], "rustler::types::Encoder"} ->
+        true =
+          impl["impl_trait_is_builtin"] == true &&
+            impl["impl_trait_rust_name"] == "rustler::types::Encoder"
+
+      _ ->
+        raise ArgumentError, "missing or inconsistent extracted vtable trait identity"
+    end
 
     true =
       Enum.all?(info.methods, fn id ->

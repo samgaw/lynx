@@ -528,10 +528,50 @@ cutoff and cannot establish a successful return. -/
   | .vis (.fail .panic) _ => .error (.error (.atom "nif_panicked"))
   | _ => .error .exhausted
 
-/-- Opaque conversion outcome for errors returned by supported primitive
-decoders and validated BadArg construction. Payload access and dynamic Encoders
-require separate semantics. This does not identify every Rustler Error with BadArg. -/
-@[expose] abbrev DecoderError := Except Exception Term
+/-- Staged conversion outcome for supported Rustler errors. Captured encoders
+remain unevaluated until return conversion. Rust-side variant inspection and
+payload access remain unsupported; this is not the native Error enum layout. -/
+inductive DecoderError where
+  | ok : Term → DecoderError
+  | error : Exception → DecoderError
+  | encoded : Bool → (Env → RustM NativeTerm) → DecoderError
+
+/-- Error payload encoders execute during Rustler return conversion. Panics here
+escape the computation's catch_unwind boundary, so they exhaust verification
+rather than becoming a catchable nif_panicked result. -/
+@[expose] def DecoderError.convert : DecoderError → Except Exception Term
+  | .ok value => .ok value
+  | .error exception => .error exception
+  | .encoded raised encode =>
+      match (encode ()).match with
+      | .ok value => if raised then .error (.error value) else .ok (.tuple #[.atom "error", value])
+      | _ => .error .exhausted
+
+@[simp] theorem DecoderError.convert_ok (value : Term) :
+    DecoderError.convert (.ok value) = .ok value := rfl
+@[simp] theorem DecoderError.convert_error (error : Exception) :
+    DecoderError.convert (.error error) = .error error := rfl
+
+@[expose] def raiseTermErrorOutcome (boxed : Dyn Encoder) : DecoderError :=
+  .encoded true (fun env => boxed.inst.encode boxed.value env)
+
+@[expose] def termErrorOutcome (boxed : Dyn Encoder) : DecoderError :=
+  .encoded false (fun env => boxed.inst.encode boxed.value env)
+
+theorem raiseTermErrorOutcome_converts {α : Type} (encoder : Encoder α) (value : α)
+    (term : Term) (encoded : encoder.encode value () = RustM.ok term) :
+    DecoderError.convert (raiseTermErrorOutcome ⟨α, encoder, value⟩) = .error (.error term) := by
+  simp [raiseTermErrorOutcome, DecoderError.convert, encoded]
+
+theorem termErrorOutcome_converts {α : Type} (encoder : Encoder α) (value : α)
+    (term : Term) (encoded : encoder.encode value () = RustM.ok term) :
+    DecoderError.convert (termErrorOutcome ⟨α, encoder, value⟩) = .ok (.tuple #[.atom "error", term]) := by
+  simp [termErrorOutcome, DecoderError.convert, encoded]
+
+theorem raiseTermErrorOutcome_panics {α : Type} (encoder : Encoder α) (value : α)
+    (panicked : encoder.encode value () = RustM.fail .panic) :
+    DecoderError.convert (raiseTermErrorOutcome ⟨α, encoder, value⟩) = .error .exhausted := by
+  simp [raiseTermErrorOutcome, DecoderError.convert, panicked]
 
 /-- The conversion outcome of the validated zero-field Rustler BadArg constructor.
 Other constructors and Error inspection require separate admitted semantics. -/
@@ -557,7 +597,7 @@ and verification exhaustion, then continue only on successful decoding. -/
     (continuation : α → Except Exception Term) : Except Exception Term :=
   match computation.match with
   | .ok (.Ok value) => continuation value
-  | .ok (.Err returned) => returned
+  | .ok (.Err returned) => returned.convert
   | .vis (.fail .panic) _ => .error (.error (.atom "nif_panicked"))
   | _ => .error .exhausted
 
@@ -566,7 +606,7 @@ theorem withDecoded_ok {α : Type} (value : α) (continuation : α → Except Ex
 
 theorem withDecoded_error {α : Type} (returned : DecoderError)
     (continuation : α → Except Exception Term) :
-    withDecoded (RustM.ok (.Err returned)) continuation = returned := by simp [withDecoded]
+    withDecoded (RustM.ok (.Err returned)) continuation = returned.convert := by simp [withDecoded]
 
 end Decoding
 

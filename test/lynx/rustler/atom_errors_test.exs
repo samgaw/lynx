@@ -71,7 +71,7 @@ defmodule Lynx.Rustler.AtomErrorsTest do
       [argument] = by_name["validated_flag"]["arguments"]
       assert %{"decoder" => decoder} = argument
 
-      assert %{atoms: %{entries: entries, sites: sites}} =
+      assert %{values: %{entries: entries, sites: sites}} =
                prepared.extraction.rustler_constructors
 
       assert Enum.sort(Enum.map(sites, & &1.variant)) == ["Atom", "RaiseAtom"]

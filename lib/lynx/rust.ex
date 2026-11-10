@@ -53,8 +53,8 @@ defmodule Lynx.Rust do
 
   Pure extraction admits the Aeneas logical heap `Box::new` model. Boxed trait
   construction additionally requires validated compiler vtable metadata: a
-  monomorphic scalar-field struct, one extracted safe shared method returning a
-  scalar, and a callback-free drop shim. Use elaborated MIR to retain compiler
+  monomorphic scalar-field struct, one extracted safe shared scalar-returning
+  method or validated Rustler Encoder, and a callback-free drop shim. Use elaborated MIR to retain compiler
   drop elaboration. The resulting dictionary can compose actual extracted
   methods in proofs; executable Rust dynamic calls remain unsupported. Native
   vtable ABI, allocation success and reclamation remain reported assumptions.
