@@ -23,7 +23,10 @@ defmodule Lynx.Rust.CollectionsTest do
 
     options = [
       roots:
-        Enum.map(~w(replace_first slice_length replace_at), &("experiment_analysis::" <> &1)),
+        Enum.map(
+          ~w(replace_first slice_length replace_at batch_length),
+          &("experiment_analysis::" <> &1)
+        ),
       mir: :elaborated,
       lean_project: project,
       module_prefix: "Collections.Extraction",
@@ -31,7 +34,7 @@ defmodule Lynx.Rust.CollectionsTest do
       proof_modules: ["Collections.Properties"],
       required_properties:
         Enum.map(
-          ~w(slice_transition vector_transition composition preserves_length empty_unchanged shared_core shared_composition index_panic),
+          ~w(slice_transition vector_transition composition preserves_length empty_unchanged shared_core shared_composition index_panic generic_core generic_composition),
           &("Collections.Properties." <> &1)
         )
     ]
@@ -55,6 +58,12 @@ defmodule Lynx.Rust.CollectionsTest do
            )
 
     assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract and
+                 &1.theorem == "Collections.Properties.generic_composition")
+           )
+
+    assert Enum.any?(
              result.verification.external_models,
              &String.contains?(&1, "Standard Vec Deref shared slice-view model")
            )
@@ -74,6 +83,15 @@ defmodule Lynx.Rust.CollectionsTest do
     original = File.read!(source)
     changed = String.replace(original, "input[0] = value;", "input[0] = 0;")
     assert changed != original
+    File.write!(source, changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    end
+
+    # An element-independent observation must be linked to the actual implementation.
+    changed = String.replace(original, "input.values.len()", "input.values.len() + 1")
+    refute changed == original
     File.write!(source, changed)
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
@@ -178,7 +196,7 @@ defmodule Lynx.Rust.CollectionsTest do
         %{"Ident" => ["CustomAllocator", 0]}
       ])
 
-    assert_raise CompileError, ~r/Vec drop/, fn ->
+    assert_raise CompileError, ~r/unsupported Vec::len: only the standard Global allocator/, fn ->
       LLBC.audit!(bad_allocator, audit.first_party)
     end
 

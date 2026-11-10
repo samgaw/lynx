@@ -66,4 +66,12 @@ theorem index_panic (input : Slice U8) (position : Usize) (value : U8)
   simp [replace_at, experiment_core.collections.replace_at, Slice.update,
     List.getElem?_eq_none_iff.mpr outside]
 
+theorem generic_core (T : Type) (input : experiment_core.collections.Batch T) :
+    experiment_core.collections.batch_length input = RustM.ok (alloc.vec.Vec.len input.values) := by
+  rfl
+
+theorem generic_composition (T : Type) (input : experiment_core.collections.Batch T) :
+    batch_length input = RustM.ok (alloc.vec.Vec.len input.values) := by
+  exact generic_core T input
+
 end Collections.Properties

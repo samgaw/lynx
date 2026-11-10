@@ -1,5 +1,17 @@
 //! In-place collection transitions that do not allocate or destroy elements.
 
+/// A collection whose elements are only borrowed by length observations.
+#[derive(Debug)]
+pub struct Batch<T> {
+    /// Stored values, with ownership retained by the caller.
+    pub values: Vec<T>,
+}
+
+/// Observes length without decoding, moving or destroying an element.
+pub fn batch_length<T>(input: &Batch<T>) -> usize {
+    input.values.len()
+}
+
 /// Replaces the first byte, leaving an empty input unchanged.
 pub fn replace_slice_first(input: &mut [u8], value: u8) -> bool {
     if input.is_empty() {

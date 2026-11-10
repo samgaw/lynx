@@ -274,6 +274,29 @@ defmodule Lynx.Rust.CollectionModelsTest do
 
     assert :ok = Lynx.Rust.CollectionModels.audit([caller.(scalar, global)], models, types, %{})
 
+    # Shared length observation neither executes element code nor takes ownership.
+    {length, _} = owned_example("len")
+    length_models = CallModels.resolve([length], types, %{}, [])
+    element = %{"TypeVar" => %{"Free" => 0}}
+
+    assert :ok =
+             Lynx.Rust.CollectionModels.audit(
+               [caller.(element, global)],
+               length_models,
+               types,
+               %{}
+             )
+
+    assert {:error, _, message} =
+             Lynx.Rust.CollectionModels.audit(
+               [caller.(element, %{})],
+               length_models,
+               types,
+               %{}
+             )
+
+    assert message =~ "standard Global allocator"
+
     for {element, allocator} <- [
           {%{"Ref" => []}, global},
           {%{"TypeVar" => %{"Free" => 0}}, global},
