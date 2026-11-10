@@ -149,7 +149,16 @@ defmodule Lynx.Rustler do
       modeled VM pins; native task identity and custom return encoders remain
       unsupported in this mode. Ordinary scalar/tuple/result and
       byte-vector codecs retain their existing decoding rules and cutoffs.
-    * `:owned_drops` — `false` by default. With runtime execution, `true` admits
+    * `:owned_drops` — `false` by default. `:explicit` with pure execution retains
+      upstream destructor dictionaries and actual first-party Drop bodies,
+      including panics converted by the NIF adapter. Supplied dictionaries are
+      checked against actual methods or explicitly reported compiler NoopDestruct
+      primitives. This mode does not require compiler or Lean-library patches;
+      NIF boundary codecs are limited to bools, fixed-width integers and their
+      tuples/options/results, whose wrapper cleanup has no destructor effects.
+      Observable unwind cleanup and reconstructed fallible operations with owned
+      locals are rejected. Native allocation and wrapper/FFI correctness remain
+      trusted boundaries. With runtime execution, `true` admits
       supported ResourceArc payloads that directly own mutex or File fields,
       using actual extracted structural cleanup. Result encoding and partial argument-decoding cleanup
       use the same owning dispatch as extracted Rust calls. VM pins survive
@@ -239,12 +248,17 @@ defmodule Lynx.Rustler do
 
     owned = Keyword.get(opts, :owned_drops, false)
 
-    unless is_boolean(owned) and (not owned or execution == :runtime),
-      do:
-        raise(
-          ArgumentError,
-          "owned resource cleanup requires runtime execution and a boolean owned_drops option"
-        )
+    unless {owned, execution} in [
+             {false, :pure},
+             {false, :runtime},
+             {true, :runtime},
+             {:explicit, :pure}
+           ],
+           do:
+             raise(
+               ArgumentError,
+               "owned resource cleanup requires runtime execution for true; :explicit requires pure execution"
+             )
 
     execution
   end
@@ -280,6 +294,7 @@ defmodule Lynx.Rustler do
     File.write!(expanded, Lynx.Rust.Cargo.expand!(context))
     compiled = Lynx.Rustler.Metadata.inspect!(native)
     discovered = Lynx.Rustler.Metadata.bindings!(expanded, compiled, opts[:only])
+    Lynx.Rustler.Bindings.validate_ownership!(discovered, Keyword.get(opts, :owned_drops, false))
 
     roots =
       for binding <- discovered.bindings do

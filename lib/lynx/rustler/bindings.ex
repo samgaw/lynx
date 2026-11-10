@@ -3,6 +3,34 @@ defmodule Lynx.Rustler.Bindings do
 
   alias Lynx.Rust.LLBC
 
+  # The pure adapter does not execute destruction of decoded arguments or the
+  # result after encoding. Keep explicit ownership at this boundary limited to
+  # codecs whose Rust values have no destructor effects. Internal Rust owners
+  # still execute their actual extracted destructor implementations.
+  def validate_ownership!(manifest, :explicit) do
+    for binding <- manifest.bindings do
+      unless Enum.all?([binding["result"] | binding["arguments"]], &value_codec?/1),
+        do:
+          raise(
+            ArgumentError,
+            "explicit Rustler ownership requires destructor-free value codecs at the NIF boundary: #{binding["name"]}/#{binding["arity"]}"
+          )
+    end
+  end
+
+  def validate_ownership!(_, _), do: :ok
+
+  defp value_codec?(type) when type in ~w(bool i8 i16 i32 i64 u8 u16 u32 u64), do: true
+
+  defp value_codec?(%{"tuple" => fields} = type) when map_size(type) == 1,
+    do: Enum.all?(fields, &value_codec?/1)
+
+  defp value_codec?(%{"result" => [ok, error]} = type) when map_size(type) == 1,
+    do: value_codec?(ok) and value_codec?(error)
+
+  defp value_codec?(%{"option" => inner} = type) when map_size(type) == 1, do: value_codec?(inner)
+  defp value_codec?(_), do: false
+
   def custom?(%{"native" => _}), do: true
   def custom?(map) when is_map(map), do: Enum.any?(Map.values(map), &custom?/1)
   def custom?(list) when is_list(list), do: Enum.any?(list, &custom?/1)

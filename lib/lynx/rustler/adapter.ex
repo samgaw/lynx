@@ -35,14 +35,22 @@ defmodule Lynx.Rustler.Adapter do
 
     owned = Keyword.get(opts, :owned_drops, false)
 
-    unless is_boolean(owned) and (not owned or execution == :runtime),
-      do:
-        raise(
-          ArgumentError,
-          "owned resource cleanup requires runtime execution and a boolean owned_drops option"
-        )
+    unless {owned, execution} in [
+             {false, :pure},
+             {false, :runtime},
+             {true, :runtime},
+             {:explicit, :pure}
+           ],
+           do:
+             raise(
+               ArgumentError,
+               "owned resource cleanup requires runtime execution for true; :explicit requires pure execution"
+             )
 
-    release = if owned, do: "Lynx.NativeOwnedDrop.drop", else: "Lynx.NativeResourceArc.release"
+    Lynx.Rustler.Bindings.validate_ownership!(manifest, owned)
+
+    release =
+      if owned == true, do: "Lynx.NativeOwnedDrop.drop", else: "Lynx.NativeResourceArc.release"
 
     declarations =
       Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution, resources, release))

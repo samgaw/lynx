@@ -126,7 +126,7 @@ defmodule Lynx.Rust.ExplicitOwnershipTest do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
-    for path <- ~w(Cargo.toml Cargo.lock base app),
+    for path <- ~w(Cargo.toml Cargo.lock base app nif),
         do: File.cp_r!(Path.join(@workspace, path), Path.join(workspace, path))
 
     project = Path.join(tmp, "proofs")
