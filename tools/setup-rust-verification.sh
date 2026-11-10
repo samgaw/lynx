@@ -6,11 +6,12 @@ verification_profile=pure
 case "${1-}" in
   --pure) shift ;;
   --unpatched) verification_profile=unpatched; shift ;;
+  --captured) verification_profile=captured; shift ;;
   --runtime) verification_profile=runtime; shift ;;
-  -*) echo "usage: $0 [--pure|--unpatched|--runtime] NEW_INSTALL_DIRECTORY" >&2; exit 1 ;;
+  -*) echo "usage: $0 [--pure|--unpatched|--captured|--runtime] NEW_INSTALL_DIRECTORY" >&2; exit 1 ;;
 esac
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 [--pure|--unpatched|--runtime] NEW_INSTALL_DIRECTORY" >&2
+  echo "usage: $0 [--pure|--unpatched|--captured|--runtime] NEW_INSTALL_DIRECTORY" >&2
   exit 1
 fi
 if [ "$verification_profile" = runtime ] && ! command -v opam >/dev/null 2>&1; then
@@ -68,7 +69,11 @@ fi
 source_dir="$install_dir/charon-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/charon "$source_dir"
 git -C "$source_dir" checkout --detach 7b462d9159db2ed3015162352183906a30bfafc6
-git -C "$source_dir" apply "$script_dir/patches/charon-nested-proof-roots.patch"
+if [ "$verification_profile" = captured ]; then
+  git -C "$source_dir" apply "$script_dir/patches/charon-assertion-cleanup.patch"
+else
+  git -C "$source_dir" apply "$script_dir/patches/charon-nested-proof-roots.patch"
+fi
 if [ "$verification_profile" = runtime ]; then
   git -C "$source_dir" apply "$script_dir/patches/charon-needs-drop.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-immediate-futures.patch"
@@ -84,8 +89,13 @@ fi
 cd "$source_dir/charon"
 rustup run nightly-2026-09-17 cargo build --locked --release \
   --no-default-features --features rustc --bin charon --bin charon-driver
-IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
-  --no-default-features --features rustc --test ui -- nested-function-proof-root
+if [ "$verification_profile" = captured ]; then
+  IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+    --no-default-features --features rustc --test crate_data -- reconstructed_assertions_preserve_observable_unwind_cleanup
+else
+  IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+    --no-default-features --features rustc --test ui -- nested-function-proof-root
+fi
 if [ "$verification_profile" = runtime ]; then
   IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
     --no-default-features --features rustc --test crate_data -- needs_drop
@@ -105,6 +115,15 @@ if [ "$verification_profile" = runtime ]; then
     --no-default-features --features rustc --test crate_data -- pin_as_mut_reborrows_only_standard_mutable_references
 fi
 cp target/release/charon target/release/charon-driver "$install_dir/"
+if [ "$verification_profile" = captured ]; then
+  printf '%s\n' 'profile=captured' 'aeneas=build-2b9e3ea' \
+    'charon=7b462d9159db2ed3015162352183906a30bfafc6+cleanup-edges-v1' \
+    'charon_cleanup_edges=preserved-v1' 'aeneas_lean=unmodified' \
+    'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
+  echo "Installed captured-unwind toolchain. Set LYNX_AENEAS_DIR to $install_dir"
+  echo "Nested NIF roots require root_attribute selection and annotated Rust functions."
+  exit 0
+fi
 if [ "$verification_profile" = pure ]; then
   printf '%s\n' 'profile=pure' 'aeneas=build-2b9e3ea' \
     'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots' \
