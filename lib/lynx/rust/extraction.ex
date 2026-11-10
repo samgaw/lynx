@@ -248,6 +248,11 @@ defmodule Lynx.Rust.Extraction do
         do: Lynx.Rust.LLBCJson.restore_trait_references!(document, discovery.document),
         else: document
 
+    document =
+      if Keyword.get(opts, :execution, :pure) == :runtime and unwind == :captured,
+        do: Lynx.Rust.NativePanicCapture.prepare!(document),
+        else: document
+
     {document, native_drops} =
       if Keyword.get(opts, :execution, :pure) == :runtime,
         do: Lynx.Rust.NativeDropLowering.lower!(document, first_party, unwind: unwind),

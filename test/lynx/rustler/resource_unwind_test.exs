@@ -157,7 +157,7 @@ defmodule Lynx.Rustler.ResourceUnwindTest do
       |> String.replace("LynxOwnershipFixture", "LynxResourceUnwindFixture")
       |> String.replace(
         "\nend\n",
-        "\n  def resource_checked(_resource, _accepted), do: :erlang.nif_error(:not_loaded)\n  def resource_seed(_value), do: :erlang.nif_error(:not_loaded)\nend\n"
+        "\n  def resource_checked(_resource, _accepted), do: :erlang.nif_error(:not_loaded)\n  def resource_seed(_value), do: :erlang.nif_error(:not_loaded)\n  def resource_created(_value, _accepted), do: :erlang.nif_error(:not_loaded)\nend\n"
       )
     )
 
