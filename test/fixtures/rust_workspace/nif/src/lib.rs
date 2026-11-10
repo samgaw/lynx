@@ -308,6 +308,12 @@ fn checked_analyse(value: i64) -> Option<i64> {
     experiment_analysis::analyse(value)
 }
 
+/// Internal tuple extraction proof root; this is not a NIF export.
+#[cfg(feature = "custom-decoder")]
+pub fn tuple_fields(input: rustler::Term<'_>) -> rustler::NifResult<Vec<rustler::Term<'_>>> {
+    rustler::types::tuple::get_tuple(input)
+}
+
 /// A protocol flag decoded by an actual first-party Decoder implementation.
 #[cfg(feature = "custom-decoder")]
 struct ProtocolFlag {

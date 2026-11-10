@@ -584,6 +584,37 @@ Atom creation and allocation success remain assumptions at the native FFI bounda
 
 namespace Decoding
 
+/-- Model of Rustler get_tuple: preserve field order and report BadArg for
+non-tuples. Oversized logical tuples exhaust verification. Native handles,
+vector allocation and the Rustler/NIF implementation remain trusted boundaries. -/
+@[expose] def getTuple (term : NativeTerm) :
+    RustM (core.result.Result (alloc.vec.Vec NativeTerm) DecoderError) :=
+  match term with
+  | .tuple fields =>
+    if bounds : fields.toList.length ≤ Usize.max ∧ fields.toList.length ≤ Isize.max.toNat ∧
+        fields.toList.length ≤ 16777215 then
+      .ok (.Ok (alloc.vec.Vec.from fields.toList bounds.1))
+    else .fail .undef
+  | _ => .ok (.Err badArgOutcome)
+
+theorem getTuple_fields (fields : Array Term)
+    (bounds : fields.toList.length ≤ Usize.max ∧ fields.toList.length ≤ Isize.max.toNat ∧
+      fields.toList.length ≤ 16777215) :
+    getTuple (.tuple fields) = .ok (.Ok (alloc.vec.Vec.from fields.toList bounds.1)) := by
+  simp only [Array.length_toList] at bounds
+  simp [getTuple, bounds]
+
+theorem getTuple_not_tuple (term : Term) (notTuple : ∀ fields, term ≠ .tuple fields) :
+    getTuple term = .ok (.Err badArgOutcome) := by
+  cases term <;> simp_all [getTuple]
+
+theorem getTuple_exhausted (fields : Array Term)
+    (outside : ¬ (fields.toList.length ≤ Usize.max ∧ fields.toList.length ≤ Isize.max.toNat ∧
+      fields.toList.length ≤ 16777215)) :
+    getTuple (.tuple fields) = .fail .undef := by
+  simp only [Array.length_toList] at outside
+  simp [getTuple, outside]
+
 @[expose] def u64 (term : NativeTerm) : RustM (core.result.Result U64 DecoderError) :=
   .ok (match decodeUnsigned .U64 64 term with
     | .ok value => .Ok value
