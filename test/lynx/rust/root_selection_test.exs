@@ -21,7 +21,12 @@ defmodule Lynx.Rust.RootSelectionTest do
 
       checking =
         Task.async(fn ->
-          for options <- [[root_attribute: true], [unknown_option: true]] do
+          for options <- [
+                [root_attribute: true],
+                [item_roots: ["demo::_"]],
+                [excluded_functions: ["demo::function"]],
+                [unknown_option: true]
+              ] do
             assert_raise ArgumentError, fn ->
               Lynx.Rust.verify!("/unused", "unused", options)
             end
@@ -40,6 +45,24 @@ defmodule Lynx.Rust.RootSelectionTest do
     after
       send(holder.pid, :release)
       Task.shutdown(holder, 2_000)
+    end
+  end
+
+  test "metadata selectors reject invalid paths before invoking extraction", context do
+    for key <- [:item_roots, :excluded_functions],
+        items <- [true, "demo::_", ["demo"], ["demo::*"], ["demo::_\n"], [1]] do
+      assert_raise ArgumentError, ~r/invalid Rust metadata/, fn ->
+        Lynx.Rust.Extraction.describe!(
+          context,
+          "/unused",
+          ["demo::function"],
+          "/unused",
+          "Demo",
+          [
+            {key, items}
+          ]
+        )
+      end
     end
   end
 
