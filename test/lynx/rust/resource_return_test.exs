@@ -24,6 +24,9 @@ defmodule Lynx.Rust.ResourceReturnTest do
     property = Path.join(project, "Returned/Properties.lean")
     proof = File.read!(Path.join(@fixture, "ResourceReturnProperties.lean"))
     File.write!(property, proof)
+    frame_property = Path.join(project, "Returned/Framed.lean")
+    frame_proof = File.read!(Path.join(@fixture, "ResourceFrameProperties.lean"))
+    File.write!(frame_property, frame_proof)
 
     opts = [
       roots: ["ownership_nif::allocate_resource"],
@@ -34,12 +37,16 @@ defmodule Lynx.Rust.ResourceReturnTest do
       lean_project: project,
       build_dir: Path.join(tmp, "build"),
       module_prefix: "Returned.Extraction",
-      proof_modules: ["Returned.Properties"],
+      proof_modules: ["Returned.Properties", "Returned.Framed"],
       required_properties:
         Enum.map(
           ~w(mutate checked allocate allocate_registered allocate_unregistered),
           &("Returned.Properties." <> &1)
-        )
+        ) ++
+          Enum.map(
+            ~w(allocate_next allocate_twice rejected_after_return),
+            &("Returned.Framed." <> &1)
+          )
     ]
 
     verify = fn -> Lynx.Rust.verify!(workspace, "ownership-nif", opts) end
@@ -58,6 +65,20 @@ defmodule Lynx.Rust.ResourceReturnTest do
     assert model.resource_operation == "new"
     assert Enum.all?(captures, &(&1.source_name == model.native_captured_source_name))
     assert [%{status: :ok, cached: true}] = verify.().reports
+
+    assert_raise RuntimeError,
+                 ~r/no extracted implementation in its statement: Returned.Framed.returned_frame/,
+                 fn ->
+                   Lynx.Rust.verify!(
+                     workspace,
+                     "ownership-nif",
+                     Keyword.update!(
+                       opts,
+                       :required_properties,
+                       &["Returned.Framed.returned_frame" | &1]
+                     )
+                   )
+                 end
 
     document = result.extraction.audit.document
     t = document["translated"]
@@ -119,6 +140,15 @@ defmodule Lynx.Rust.ResourceReturnTest do
       assert_raise RuntimeError, ~r/Rust properties or proof audit failed/, verify
     end
 
+    File.write!(frame_property, frame_proof <> "\nprivate axiom framedTrust : False")
+    assert_raise RuntimeError, ~r/Rust properties or proof audit failed/, verify
+    File.write!(frame_property, frame_proof)
+    wrong_frame = String.replace(frame_proof, ":: env.nativeHeap}", ":: []}")
+    refute wrong_frame == frame_proof
+    File.write!(frame_property, wrong_frame)
+    assert_raise RuntimeError, ~r/native Lean project command failed/, verify
+    File.write!(frame_property, frame_proof)
+
     wrong = String.replace(proof, "value := !value", "value := value")
     refute wrong == proof
     File.write!(property, wrong)
@@ -129,6 +159,16 @@ defmodule Lynx.Rust.ResourceReturnTest do
     File.write!(source, String.replace(original, "*value = !*value;", "*value = *value;"))
     assert_raise RuntimeError, ~r/native Lean project command failed/, verify
     File.write!(source, original)
+    factory_source = Path.join(workspace, "nif/src/lib.rs")
+    factory = File.read!(factory_source)
+
+    broken_factory =
+      String.replace(factory, "UnwindResource { value: result }", "UnwindResource { value }")
+
+    refute broken_factory == factory
+    File.write!(factory_source, broken_factory)
+    assert_raise RuntimeError, ~r/native Lean project command failed/, verify
+    File.write!(factory_source, factory)
     assert [%{status: :ok}] = verify.().reports
   end
 
