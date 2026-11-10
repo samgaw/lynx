@@ -22,3 +22,11 @@ fn scalar(code: u64) -> bool {
 }
 
 rustler::init!("Elixir.LynxOwnershipFixture.Native");
+
+/// Observes a borrowed guard's scope-exit mutation through two workspace crates.
+#[cfg(feature = "borrowed-guard")]
+#[rustler::nif]
+#[verify::start_from]
+fn borrowed_flip(value: bool) -> bool {
+    ownership_app::scoped_flip(value)
+}
