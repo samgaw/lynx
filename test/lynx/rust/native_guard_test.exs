@@ -85,7 +85,11 @@ defmodule Lynx.Rust.NativeGuardTest do
 
     for failing <- [
           %{"Panic" => %{"on_unwind" => %{"statements" => []}}},
-          %{"Loop" => %{"statements" => []}}
+          %{
+            "Loop" => %{
+              "statements" => [%{"kind" => %{"Panic" => %{"on_unwind" => %{"statements" => []}}}}]
+            }
+          }
         ] do
       invalid =
         Enum.map(functions, fn function ->
