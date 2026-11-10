@@ -61,7 +61,7 @@ defmodule Lynx.Rust.CleanupFlagsTest do
   end
 
   test "a call destination invalidates the old value and branch labels must be known" do
-    overwrite = put_in(call(), ["kind", "Call", "call", "dest"], place(1))
+    overwrite = put_in(call(), ["kind", "Call", "dest"], place(1))
     {document, records} = lower([assign(false), overwrite, call()])
     assert records != []
     assert [%{"kind" => %{"Switch" => _}} | _] = cleanup(document)
@@ -87,6 +87,43 @@ defmodule Lynx.Rust.CleanupFlagsTest do
     assert [%{"kind" => %{"Switch" => _}} | _] = cleanup(document)
   end
 
+  test "panic cleanup uses only known unborrowed flags and forgets call destinations" do
+    panic = %{
+      "kind" => %{"Panic" => %{"on_unwind" => get_in(call(), ["kind", "Call", "on_unwind"])}}
+    }
+
+    for value <- [false, true] do
+      {document, records} = lower([assign(value), panic])
+      assert Enum.any?(records, &match?(%{kind: :constant_cleanup_branch, value: ^value}, &1))
+
+      statements =
+        get_in(
+          hd(document["translated"]["fun_decls"]),
+          ["body", "Structured", "body", "statements"]
+        )
+
+      cleanup = get_in(List.last(statements), ["kind", "Panic", "on_unwind", "statements"])
+
+      if value do
+        assert [%{"kind" => %{"Drop" => %{}}}, %{"kind" => "UnwindResume"}] = cleanup
+      else
+        assert [%{"kind" => "UnwindResume"}] = cleanup
+      end
+    end
+
+    overwrite = put_in(call(), ["kind", "Call", "dest"], place(1))
+    {document, _} = lower([assign(false), overwrite, panic])
+
+    statements =
+      get_in(
+        hd(document["translated"]["fun_decls"]),
+        ["body", "Structured", "body", "statements"]
+      )
+
+    assert [%{"kind" => %{"Switch" => _}} | _] =
+             get_in(List.last(statements), ["kind", "Panic", "on_unwind", "statements"])
+  end
+
   defp place(index), do: %{"kind" => %{"Local" => index}, "ty" => %{"Scalar" => "Bool"}}
 
   defp literal(value),
@@ -99,7 +136,8 @@ defmodule Lynx.Rust.CleanupFlagsTest do
     %{
       "kind" => %{
         "Call" => %{
-          "call" => %{"dest" => place(3)},
+          "call" => %{"args" => []},
+          "dest" => place(3),
           "on_unwind" => %{
             "statements" => [
               %{

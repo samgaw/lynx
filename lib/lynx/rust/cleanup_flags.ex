@@ -113,8 +113,13 @@ defmodule Lynx.Rust.CleanupFlags do
     # A call cannot mutate an unborrowed local. Its destination is unavailable
     # on unwind and receives an unknown value on normal return.
     {unwind, _, records} = block(call["on_unwind"], known, ctx, true)
-    known = Map.delete(known, root(call["call"]["dest"]))
+    known = Map.delete(known, root(call["dest"]))
     {[put_in(statement, ["kind", "Call", "on_unwind"], unwind)], known, records}
+  end
+
+  defp statement(%{"kind" => %{"Panic" => panic}} = statement, known, ctx, _) do
+    {unwind, _, records} = block(panic["on_unwind"], known, ctx, true)
+    {[put_in(statement, ["kind", "Panic", "on_unwind"], unwind)], %{}, records}
   end
 
   defp statement(%{"kind" => %{"Assign" => [place, value]}} = statement, known, ctx, _) do
