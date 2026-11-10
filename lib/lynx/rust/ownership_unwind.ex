@@ -38,6 +38,17 @@ defmodule Lynx.Rust.OwnershipUnwind do
     node |> Map.delete("on_unwind") |> walk!(owned, ids, function, translated)
   end
 
+  # Charon's reconstruct_asserts replaces a panic branch with an Assert,
+  # retaining the panic kind but not its original unwind edge. A trivial
+  # reconstructed edge therefore cannot establish that owner cleanup was empty.
+  defp walk!(%{"Assert" => _}, true, _, function, translated),
+    do:
+      LLBC.failure!(
+        function,
+        translated,
+        "explicit ownership rejects reconstructed assertions with owned locals: original panic unwind edges are unavailable"
+      )
+
   defp walk!(%{"BinaryOp" => [op, _, _]} = node, true, ids, function, translated) do
     unless op in ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge),
       do:
