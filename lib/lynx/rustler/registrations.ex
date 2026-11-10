@@ -7,22 +7,24 @@ defmodule Lynx.Rustler.Registrations do
     if Enum.any?(extraction.audit.external_calls, fn {_, m} -> m[:native_resource_type] end) do
       crate = context.artifact["target"]["name"]
       metadata = Lynx.Rustler.Metadata.resources!(expanded, compiled, crate)
-      modules = metadata["registrations"] |> Enum.map(& &1["modules"]) |> Enum.uniq()
+      # Selecting the enclosing anonymous constants lets upstream Charon visit
+      # their nested items. Exact inventory/constructor identities are still
+      # checked below against the macro expansion and compiled loader.
+      roots = [crate <> "::" <> metadata["loader"]]
 
-      roots =
-        [crate <> "::" <> metadata["loader"]] ++
-          for(
-            module <- modules,
-            name <- ~w(__INVENTORY __ctor __CTOR),
-            do: Enum.join([crate | module] ++ ["_", name], "::")
-          )
+      items =
+        metadata["registrations"]
+        |> Enum.map(&Enum.join([crate | &1["modules"]] ++ ["_"], "::"))
+        |> Enum.uniq()
 
       raw =
         Extraction.describe!(context, tools, roots, project, prefix <> ".ResourceRegistration",
           # Inventory roots can also select NIF records in anonymous constants.
           # Their raw FFI entry bodies are irrelevant to registration metadata.
           # Actual selected NIF computations were extracted and audited above.
-          opaque_functions: [crate <> "::_::__INVENTORY::nif_func"]
+          opaque_functions: [crate <> "::_::__INVENTORY::nif_func"],
+          excluded_functions: metadata["excluded_functions"],
+          item_roots: items
         )
 
       entries = resolve!(metadata, raw.document, crate)
@@ -131,6 +133,11 @@ defmodule Lynx.Rustler.Registrations do
                     &(&1["item_meta"]["name"] == parent ++ path(["__ctor"]))
                   )
 
+                [table] =
+                  Enum.filter(globals, &(&1["item_meta"]["name"] == parent ++ path(["__CTOR"])))
+
+                retained_constructor!(table, ctor, globals, functions, document)
+
                 unless submits?(ctor["body"], t) and
                          node["def_id"] in global_ids(ctor["body"]),
                        do:
@@ -208,6 +215,60 @@ defmodule Lynx.Rustler.Registrations do
     e in [MatchError, KeyError, FunctionClauseError] ->
       raise ArgumentError,
             "missing or inconsistent compiler resource registration: #{Exception.message(e)}"
+  end
+
+  # Container selection must retain the same constructor initializer that exact
+  # __CTOR roots selected. Check its actual function pointer as well as its body;
+  # physical linker execution remains an explicitly reported boundary.
+  defp retained_constructor!(table, ctor, globals, functions, document) do
+    [initializer] = initializer_closure(table, globals, functions, [])
+    body = Lynx.Rust.LLBCJson.restore_constant_references!(initializer["body"], document)
+
+    statements =
+      body["Structured"]["body"]["statements"]
+      |> Enum.map(& &1["kind"])
+      |> Enum.reject(fn
+        %{"StorageLive" => _} -> true
+        %{"StorageDead" => _} -> true
+        "Nop" -> true
+        _ -> false
+      end)
+
+    valid =
+      case statements do
+        [
+          %{
+            "Assign" => [
+              %{"kind" => %{"Local" => 0}},
+              %{
+                "UnaryOp" => [
+                  %{"Cast" => "FnDefToFnPtr"},
+                  %{
+                    "Const" => %{
+                      "Value" => [
+                        _,
+                        [
+                          %{"FnDef" => %{"kind" => %{"Fun" => id}, "generics" => args}},
+                          _
+                        ]
+                      ]
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "Return"
+        ] ->
+          id == ctor["def_id"] and args == ResourceModels.args([])
+
+        _ ->
+          false
+      end
+
+    unless valid,
+      do:
+        raise(ArgumentError, "resource constructor table does not retain its actual constructor")
   end
 
   defp initializer_closure(node, globals, functions, seen) do

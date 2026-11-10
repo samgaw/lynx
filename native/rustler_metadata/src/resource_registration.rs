@@ -231,6 +231,7 @@ fn loader(crate_name: &str, module: &str) -> Result<ItemFn, String> {
 #[derive(Default)]
 struct Registrations {
     modules: Vec<String>,
+    functions: Vec<Vec<String>>,
     entries: Vec<Value>,
     errors: Vec<String>,
     anonymous: std::collections::BTreeMap<Vec<String>, usize>,
@@ -243,7 +244,11 @@ impl<'ast> Visit<'ast> for Registrations {
     }
     // Module-level anonymous constants have compiler disambiguators independent
     // of function/impl bodies. Resource inventories are module items.
-    fn visit_item_fn(&mut self, _item: &'ast ItemFn) {}
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        let mut path = self.modules.clone();
+        path.push(item.sig.ident.to_string());
+        self.functions.push(path);
+    }
     fn visit_item_impl(&mut self, _item: &'ast syn::ItemImpl) {}
     fn visit_item_const(&mut self, item: &'ast ItemConst) {
         let ordinal = self.anonymous.entry(self.modules.clone()).or_default();
@@ -289,7 +294,19 @@ pub(super) fn discover(file: &syn::File, crate_name: &str, module: &str) -> Resu
     if !visitor.errors.is_empty() {
         return Err(visitor.errors.join("\n"));
     }
-    Ok(json!({"registrations": visitor.entries, "loader": format!("{crate_name}_nif_init")}))
+    // A container selector can also match ordinary module functions. Their
+    // signatures may contain unsupported coroutine types; they are irrelevant
+    // to registration discovery. Never exclude the validated loader or functions
+    // nested inside the inventory constants whose actual bodies are audited.
+    let loader = format!("{crate_name}_nif_init");
+    let excluded_functions: Vec<_> = visitor
+        .functions
+        .into_iter()
+        .filter(|path| path.as_slice() != [loader.as_str()])
+        .map(|path| format!("{crate_name}::{}", path.join("::")))
+        .collect();
+    Ok(json!({"registrations": visitor.entries, "loader": loader,
+        "excluded_functions": excluded_functions}))
 }
 
 #[cfg(test)]
@@ -349,6 +366,24 @@ mod tests {
         assert!(registrations.errors.is_empty());
         assert_eq!(registrations.entries.len(), 1);
         assert_eq!(registrations.entries[0]["anonymous_index"], 1);
+        assert_eq!(registrations.functions, vec![vec!["unrelated"]]);
+    }
+
+    #[test]
+    fn separates_module_functions_from_required_nested_registration_bodies() {
+        let file = syn::parse_file(&format!(
+            "async fn unrelated() {{}} mod nested {{ async fn another() {{}} {INVENTORY} }}"
+        ))
+        .expect("fixture");
+        let mut registrations = Registrations::default();
+        registrations.visit_file(&file);
+        assert!(registrations.errors.is_empty());
+        assert_eq!(
+            registrations.functions,
+            vec![vec!["unrelated"], vec!["nested", "another"]]
+        );
+        assert_eq!(registrations.entries.len(), 1);
+        assert_eq!(registrations.entries[0]["modules"], json!(["nested"]));
     }
 
     #[test]

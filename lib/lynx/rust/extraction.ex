@@ -638,11 +638,27 @@ defmodule Lynx.Rust.Extraction do
           :unwind,
           :futures,
           :owned_drops,
-          :opaque_functions
+          :opaque_functions,
+          :excluded_functions,
+          :item_roots
         ],
         do: raise(ArgumentError, "unknown Rust discovery option: #{key}")
 
     opaque = Keyword.get(opts, :opaque_functions, [])
+    items = Keyword.get(opts, :item_roots, [])
+
+    for {paths, label} <- [
+          {items, "item roots"},
+          {Keyword.get(opts, :excluded_functions, []), "excluded functions"}
+        ] do
+      unless is_list(paths) and
+               Enum.all?(
+                 paths,
+                 &(is_binary(&1) and
+                     Regex.match?(~r/\A[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+\z/, &1))
+               ),
+             do: raise(ArgumentError, "invalid Rust metadata #{label}")
+    end
 
     unless is_list(opaque) and
              Enum.all?(opaque, &is_binary/1) and
@@ -696,6 +712,11 @@ defmodule Lynx.Rust.Extraction do
     root_args =
       Lynx.Rust.RootSelection.arguments(roots, attribute, [context.artifact["target"]["name"]])
 
+    # Metadata discovery also selects non-function items. Their consumers audit
+    # the resolved identities; requested function roots retain the body check.
+    root_args =
+      root_args ++ Enum.flat_map(Keyword.get(opts, :item_roots, []), &["--start-from", &1])
+
     includes = Enum.flat_map(first_party, &["--include", &1])
     llbc = Path.join(output, String.replace(module, ".", "_") <> ".llbc")
 
@@ -734,6 +755,7 @@ defmodule Lynx.Rust.Extraction do
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++
         Enum.flat_map(models, &["--opaque", &1.rust]) ++
         Enum.flat_map(opaque, &["--opaque", &1]) ++
+        Enum.flat_map(Keyword.get(opts, :excluded_functions, []), &["--exclude", &1]) ++
         ["--"] ++ Lynx.Rust.Cargo.extraction_arguments(context, output)
 
     diagnostics =
