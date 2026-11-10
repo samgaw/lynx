@@ -151,6 +151,28 @@ def alloc.string.ToString.to_string {T : Type _} (inst : core.fmt.Display T) (va
   | .Ok () => .ok text
   | .Err _ => .fail .panic
 
+/-- Allocated default formatting. Native capacity and allocation success remain
+external boundaries. A formatter error triggers Rust's expect panic, while an
+oversized result is a verification cutoff. -/
+@[expose]
+def alloc.fmt.format (args : core.fmt.Arguments) : RustM String := do
+  let (result, text) ← args ""
+  match result with
+  | .Ok () => if text.utf8ByteSize ≤ 4294967295 ∧ text.utf8ByteSize ≤ Isize.max.toNat then .ok text else .fail .undef
+  | .Err _ => .fail .panic
+
+theorem alloc.fmt.format_success (args : core.fmt.Arguments) (text : String)
+    (rendered : args "" = .ok (.Ok (), text)) (bound : text.utf8ByteSize ≤ 4294967295 ∧ text.utf8ByteSize ≤ Isize.max.toNat) :
+    alloc.fmt.format args = .ok text := by simp [alloc.fmt.format, rendered, bound]
+
+theorem alloc.fmt.format_error (args : core.fmt.Arguments) (text : String) (error : core.fmt.Error)
+    (rendered : args "" = .ok (.Err error, text)) :
+    alloc.fmt.format args = .fail .panic := by simp [alloc.fmt.format, rendered]
+
+theorem alloc.fmt.format_exhausted (args : core.fmt.Arguments) (text : String)
+    (rendered : args "" = .ok (.Ok (), text)) (outside : ¬ (text.utf8ByteSize ≤ 4294967295 ∧ text.utf8ByteSize ≤ Isize.max.toNat)) :
+    alloc.fmt.format args = .fail .undef := by simp [alloc.fmt.format, rendered, outside]
+
 @[expose]
 def core.fmt.rt.Argument.new_display
   {T : Type _} (inst : core.fmt.Display T) (value : T) : RustM core.fmt.rt.Argument :=
