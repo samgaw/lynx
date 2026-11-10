@@ -13,6 +13,18 @@ theorem blocked_has_no_success :
     ((Result.wait (α := Term) (β := Unit) (fun _ => none) (fun _ => .ok (.atom "finished"))) {}).1 = .deadlock := by
   cbv
 
+/-- A blocked native operation preserves its configured finalizer policy and
+shared heap instead of falling back to a fresh ordinary process environment. -/
+theorem blocked_preserves_native_environment (mode : NativeFinalizerMode)
+    (choices : List ScheduleChoice) :
+    let env : Environment := {
+      currentPid := [3], nativeFinalizerMode := mode
+      nativeRefCounter := 7, nativeHeap := [(4, "resource", .atom "retained")]
+      nativeResourceTypes := ["registered"]}
+    (Result.wait (β := Unit) (fun _ => none) (fun _ => Result.ok Term.true)).run env choices =
+      (.deadlock, env) := by
+  exact Result.wait_blocked_run _ _ _ rfl choices
+
 /-- Committing a native poll preserves every process mailbox. A blocked poll
 has no commit at all, and a ready poll cannot overwrite VM messages. -/
 theorem blocked_preserves_mailbox (state : Concurrent.State) (pid target : PID) (env : Environment) :
