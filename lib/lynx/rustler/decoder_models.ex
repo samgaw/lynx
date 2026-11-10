@@ -46,7 +46,7 @@ defmodule Lynx.Rustler.DecoderModels do
     end
   end
 
-  # Validated BadArg construction is lowered before this audit. Reject every
+  # Validated constructor operations are lowered before this audit. Reject every
   # remaining constructor, payload projection and discriminant. Never treat an
   # arbitrary opaque Rustler Error as BadArg.
   def audit(functions, translated, refs) do
@@ -61,7 +61,7 @@ defmodule Lynx.Rustler.DecoderModels do
 
           function ->
             {:error, function,
-             "Rustler Error construction or inspection is unsupported here; only opaque error forwarding and validated BadArg construction are supported"}
+             "Rustler Error construction or inspection is unsupported here; only opaque error forwarding and validated BadArg/ASCII literal Atom/RaiseAtom construction are supported"}
         end
     end
   end
