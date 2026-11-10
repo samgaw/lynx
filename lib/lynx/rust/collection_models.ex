@@ -3,7 +3,8 @@ defmodule Lynx.Rust.CollectionModels do
   alias Lynx.Rust.CallModels
 
   def resolve(function, translated, refs) do
-    owned(function, translated, refs) || views(function, translated, refs)
+    owned(function, translated, refs) || views(function, translated, refs) ||
+      trait_view(function, translated, refs)
   end
 
   defp owned(function, translated, refs) do
@@ -353,6 +354,86 @@ defmodule Lynx.Rust.CollectionModels do
       _ -> nil
     end
   end
+
+  # Vec's standard Deref uses the same logical shared slice as as_slice.
+  # Validate the actual trait/method identity; never apply this to user Deref bodies.
+  defp trait_view(function, translated, refs) do
+    function = CallModels.expand(function, refs)
+    ctx = %{translated: translated, refs: refs, traits: %{}}
+
+    with %{
+           "body" => "Opaque",
+           "src" => %{"TraitImpl" => source},
+           "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false} = sig
+         } <- function,
+         %{"id" => impl_id} <- source["impl_ref"],
+         %{"id" => trait_id} <- source["trait_ref"],
+         impl when not is_nil(impl) <- find(translated["trait_impls"], impl_id),
+         trait when not is_nil(trait) <- find(translated["trait_decls"], trait_id),
+         impl = CallModels.expand(impl, refs),
+         trait = CallModels.expand(trait, refs),
+         name = path(~w(alloc vec)) ++ [%{"Impl" => %{"Trait" => impl_id}}],
+         true <- function["item_meta"]["name"] == name ++ path(~w(deref)),
+         true <- impl["item_meta"]["name"] == name,
+         true <- impl["src"] == "Normal" and not impl["is_negative"] and not impl["is_unsafe"],
+         true <-
+           impl["consts"] == [] and impl["types"] == [nil] and impl["implied_trait_refs"] == [],
+         true <- parameters?(impl["generics"], 0) and parameters?(function["generics"], 1),
+         %{"id" => ^trait_id, "generics" => args} <- impl["impl_trait"],
+         [vector, target] <- args["types"],
+         true <- args == arguments([vector, target]),
+         true <- target == %{"Slice" => [type_var(0), nil]},
+         %{"Adt" => %{"id" => vec_id, "builtin" => nil, "generics" => vec_args}} <- vector,
+         true <- vec_args == arguments([type_var(0)]),
+         vector_decl when not is_nil(vector_decl) <- find(translated["type_decls"], vec_id),
+         true <- vector_decl["item_meta"]["name"] == path(~w(alloc vec Vec)),
+         true <- type_parameters?(vector_decl["generics"]),
+         true <- deref_trait?(trait),
+         true <- Lynx.Rust.FormatModels.method_identity?(function, impl, trait_id, ctx),
+         true <- sig["inputs"] == [reference(vector, "Shared")],
+         true <- sig["output"] == reference(target, "Shared") do
+      %{
+        rust_name: "alloc::vec::{core::ops::deref::Deref<alloc::vec::Vec<@T>, [@T]>}::deref",
+        lean: "Aeneas.Std.alloc.vec.Vec.deref",
+        builtin: true,
+        can_fail: false,
+        lift: false,
+        keep_params: [true, false],
+        label:
+          "Standard Vec Deref shared slice-view model; actual compiled trait and method identities validated; Rust alloc implementation, native references and allocator correctness unverified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp deref_trait?(trait) do
+    r = %{"Var" => %{"Bound" => [0, 0]}}
+
+    with true <- trait["item_meta"]["name"] == path(~w(core ops deref Deref)),
+         true <- trait["src"] == "Normal" and trait["is_unsafe"] == false,
+         true <-
+           trait["consts"] == [] and trait["types"] == [nil] and trait["implied_clauses"] == [],
+         true <- parameters?(trait["generics"], 0),
+         [%{"kind" => %{"TraitMethod" => [id, 0]}, "params" => p, "skip_binder" => method}] <-
+           trait["methods"],
+         true <- id == trait["def_id"],
+         true <- Enum.map(p["regions"], & &1["index"]) == [0],
+         true <- Enum.all?(Map.values(Map.delete(p, "regions")), &(&1 == [])),
+         true <- method["name"] == "deref" and method["default"] == nil do
+      method["signature"] == %{
+        "abi" => "Rust",
+        "is_unsafe" => false,
+        "is_variadic" => false,
+        "inputs" => [%{"Ref" => [r, type_var(0), "Shared"]}],
+        "output" => %{"Ref" => [r, type_var(1), "Shared"]}
+      }
+    else
+      _ -> false
+    end
+  end
+
+  defp find(items, id), do: Enum.find(items, &(&1 && &1["def_id"] == id))
 
   defp type_parameters?(%{
          "regions" => [],

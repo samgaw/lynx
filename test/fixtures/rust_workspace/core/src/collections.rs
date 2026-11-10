@@ -18,7 +18,8 @@ pub fn replace_first(mut input: Vec<u8>, value: u8) -> (bool, Vec<u8>) {
 
 /// Observes the shared slice view and returns ownership to the caller.
 pub fn slice_length(input: Vec<u8>) -> (usize, Vec<u8>) {
-    (input.as_slice().len(), input)
+    let slice: &[u8] = &input;
+    (slice.len(), input)
 }
 
 /// Replaces one byte using Rust's bounds-checked mutable indexing.
