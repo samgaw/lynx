@@ -200,6 +200,13 @@ defmodule Lynx.Rustler.Adapter do
 
   defp lean_list(strings), do: "[" <> Enum.map_join(strings, ", ", &JSON.encode!/1) <> "]"
 
+  defp execute(call, %{nif_result: payload}, :pure, release) do
+    "Lynx.Rustler.Decoding.withDecoded (#{call}) (fun returned => #{execute("RustM.ok returned", payload, :pure, release)})"
+  end
+
+  defp execute(_call, %{nif_result: _}, :runtime, _release),
+    do: raise(ArgumentError, "runtime Rustler NifResult conversion is unsupported")
+
   defp execute(call, %{resource: true}, :runtime, release) do
     "Lynx.Rustler.executeNative (do let value ← (#{call}); let term ← Lynx.NativeResourceArc.encode value; #{release} value; Lynx.Result.ok term) id"
   end
@@ -245,6 +252,20 @@ defmodule Lynx.Rustler.Adapter do
       encode_m: "(fun (value : #{type}) => #{identifier!(encoder)} value ())"
     }
   end
+
+  defp type!(%{"nif_result" => payload}) do
+    payload = type!(payload)
+
+    %{
+      lean: "(core.result.Result #{payload.lean} Lynx.Rustler.DecoderError)",
+      decode: nil,
+      encode: nil,
+      nif_result: payload
+    }
+  end
+
+  defp type!("term"),
+    do: %{lean: "Lynx.Rustler.NativeTerm", decode: "Lynx.Rustler.decodeTerm", encode: "id"}
 
   defp type!("bool"),
     do: %{lean: "Bool", decode: "Lynx.Rustler.decodeBool", encode: "Lynx.Rustler.encodeBool"}

@@ -99,6 +99,39 @@ fn supported_type(ty: &Type) -> Result<Value, String> {
             .iter()
             .map(|segment| segment.ident.to_string())
             .collect();
+        if path.qself.is_none() && (names == ["NifResult"] || names == ["rustler", "NifResult"]) {
+            let segment = path
+                .path
+                .segments
+                .last()
+                .ok_or("missing NifResult segment")?;
+            if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
+                if let [syn::GenericArgument::Type(inner)] =
+                    arguments.args.iter().collect::<Vec<_>>().as_slice()
+                {
+                    return Ok(json!({"nif_result": supported_type(inner)?}));
+                }
+            }
+            return Err("Rustler NifResult requires one supported return type".into());
+        }
+        if path.qself.is_none()
+            && (names == ["Term"]
+                || names == ["rustler", "Term"]
+                || names == ["rustler", "term", "Term"])
+        {
+            let segment = path.path.segments.last().ok_or("missing Term segment")?;
+            match &segment.arguments {
+                syn::PathArguments::None => return Ok(json!("term")),
+                syn::PathArguments::AngleBracketed(arguments) if arguments.args.len() == 1 => {
+                    if matches!(arguments.args.first(), Some(syn::GenericArgument::Lifetime(lifetime)) if lifetime.ident == "_")
+                    {
+                        return Ok(json!("term"));
+                    }
+                }
+                _ => {}
+            }
+            return Err("Rustler Term requires an elided lifetime".into());
+        }
         if path.qself.is_none()
             && (names == ["ResourceArc"]
                 || names == ["rustler", "ResourceArc"]
@@ -510,6 +543,27 @@ mod tests {
             "fn native(a: rustler::ResourceArc<State<u64>>) -> bool { true }",
             "fn native(a: rustler::ResourceArc<&State>) -> bool { true }",
             "fn native(a: rustler::ResourceArc<State, Other>) -> bool { true }",
+        ] {
+            assert_eq!(discover(signature, 1).errors.len(), 1, "{signature}");
+        }
+    }
+
+    #[test]
+    fn discovers_raw_terms_and_nif_result_return_hints() {
+        let bindings = discover(
+            "fn native(a: rustler::Term<'_>) -> rustler::NifResult<bool> { todo!() }",
+            1,
+        );
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(bindings.entries[0]["arguments"], json!(["term"]));
+        assert_eq!(bindings.entries[0]["result"], json!({"nif_result":"bool"}));
+        let identity = discover("fn native(a: Term) -> Term<'_> { a }", 1);
+        assert!(identity.errors.is_empty(), "{:?}", identity.errors);
+        assert_eq!(identity.entries[0]["result"], json!("term"));
+        for signature in [
+            "fn native(a: Term<'static>) -> bool { true }",
+            "fn native(a: Term<bool>) -> bool { true }",
+            "fn native(a: bool) -> NifResult<bool, u64> { todo!() }",
         ] {
             assert_eq!(discover(signature, 1).errors.len(), 1, "{signature}");
         }

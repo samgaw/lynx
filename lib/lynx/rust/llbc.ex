@@ -646,6 +646,23 @@ defmodule Lynx.Rust.LLBC do
         "item_meta" => %{
           "name" => [
             %{"Ident" => ["rustler", 0]},
+            %{"Ident" => ["term", 0]},
+            %{"Ident" => ["Term", 0]}
+          ]
+        }
+      } ->
+        if Enum.any?(
+             models,
+             &(&1.rust == "rustler::term::Term" and &1.lean == "Lynx.Rustler.NativeTerm")
+           ),
+           do: "term",
+           else: raise(ArgumentError, "Rustler Term requires its explicit FFI type model")
+
+      %{
+        "kind" => "Opaque",
+        "item_meta" => %{
+          "name" => [
+            %{"Ident" => ["rustler", 0]},
             %{"Ident" => ["types", 0]},
             %{"Ident" => ["binary", 0]},
             %{"Ident" => ["Binary", 0]}

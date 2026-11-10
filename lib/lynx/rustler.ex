@@ -82,6 +82,13 @@ defmodule Lynx.Rustler do
   @doc """
   Prepares one Rustler facade and returns its external bundle and audit reports.
 
+  Raw `rustler::Term` inputs use Rustler's identity Decoder, with native handle
+  validity and environment copying at the explicit FFI boundary. In pure mode,
+  `NifResult<T>` and `Result<T, rustler::Error>` return the successful payload
+  directly, following Rustler's NifReturnable specialization. Supported decoder
+  errors retain their original return/exception outcome. Constructing or inspecting
+  Rustler errors, dynamic payloads and runtime NifResult conversion are rejected.
+
   Options:
 
     * `:lean_project` — a Lake project depending on Lynx and the pinned Aeneas
@@ -274,14 +281,13 @@ defmodule Lynx.Rustler do
 
     custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
     decoders? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["arguments"]))
-    codecs? = custom? or decoders?
-    mir = if(decoders?, do: Keyword.get(opts, :mir, :elaborated), else: opts[:mir])
+    returns? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.nif_result?(&1["result"]))
+    term? = Enum.any?(discovered.bindings, &contains_term?/1)
+    codecs? = custom? or decoders? or returns? or term?
+    mir = opts[:mir] || if(decoders? or returns?, do: :elaborated)
 
     if execution == :runtime and decoders?,
       do: raise(ArgumentError, "runtime Rustler custom decoders are unsupported")
-
-    if execution == :runtime and custom?,
-      do: raise(ArgumentError, "runtime Rustler custom encoders are unsupported")
 
     models =
       if binary? do
@@ -297,6 +303,21 @@ defmodule Lynx.Rustler do
       else
         []
       end
+
+    models =
+      models ++
+        if(term?,
+          do: [
+            %{
+              rust: "rustler::term::Term",
+              lean: "Lynx.Rustler.NativeTerm",
+              import: bridge,
+              label:
+                "Rustler raw Term identity/copy FFI model; native term handles, environments and allocation unverified"
+            }
+          ],
+          else: []
+        )
 
     {discovered, roots, models} =
       if codecs? do
@@ -325,25 +346,37 @@ defmodule Lynx.Rustler do
               }
 
         errors =
-          if decoders?,
-            do: [
-              %{
-                rust: "rustler::error::Error",
-                lean: "Lynx.Rustler.DecoderError",
-                import: bridge,
-                label:
-                  "Opaque Rustler Error conversion outcome for supported primitive decoders; only forwarding is admitted; construction, inspection and dynamic payloads unsupported"
-              }
-            ],
-            else: []
+          if decoders? or
+               Enum.any?(resolved.bindings, &Lynx.Rustler.Bindings.nif_result?(&1["result"])),
+             do: [
+               %{
+                 rust: "rustler::error::Error",
+                 lean: "Lynx.Rustler.DecoderError",
+                 import: bridge,
+                 label:
+                   "Opaque Rustler Error conversion outcome for supported primitive decoders; only forwarding is admitted; construction, inspection and dynamic payloads unsupported"
+               }
+             ],
+             else: []
 
         {resolved,
          roots ++
            Lynx.Rustler.Bindings.encoder_roots(resolved) ++
-           Lynx.Rustler.Bindings.decoder_roots(resolved), models ++ codecs ++ errors}
+           Lynx.Rustler.Bindings.decoder_roots(resolved),
+         Enum.uniq_by(models ++ codecs ++ errors, & &1.rust)}
       else
         {discovered, roots, models}
       end
+
+    custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
+    returns? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.nif_result?(&1["result"]))
+    mir = opts[:mir] || if(decoders? or returns?, do: :elaborated)
+
+    if execution == :runtime and returns?,
+      do: raise(ArgumentError, "runtime Rustler NifResult conversion is unsupported")
+
+    if execution == :runtime and custom?,
+      do: raise(ArgumentError, "runtime Rustler custom encoders are unsupported")
 
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
@@ -358,7 +391,7 @@ defmodule Lynx.Rustler do
         external_calls:
           if(binary?, do: [:rustler_binary_as_slice], else: []) ++
             if(custom?, do: [:rustler_encoders], else: []) ++
-            if(decoders?, do: [:rustler_decoders], else: []),
+            if(decoders? or returns?, do: [:rustler_decoders], else: []),
         rustler_atoms: if(custom?, do: :discover, else: [])
       )
 
@@ -452,6 +485,14 @@ defmodule Lynx.Rustler do
         ] ++ if(registrations.boundary, do: [registrations.boundary], else: [])
     }
   end
+
+  defp contains_term?("term"), do: true
+  defp contains_term?(values) when is_list(values), do: Enum.any?(values, &contains_term?/1)
+
+  defp contains_term?(value) when is_map(value),
+    do: Enum.any?(Map.values(value), &contains_term?/1)
+
+  defp contains_term?(_), do: false
 
   defp contains_binary?("binary"), do: true
   defp contains_binary?(values) when is_list(values), do: Enum.any?(values, &contains_binary?/1)

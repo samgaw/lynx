@@ -339,6 +339,41 @@ fn decoded_flag(input: ProtocolFlag, should_panic: bool) -> bool {
     experiment_analysis::restore(input.enabled)
 }
 
+/// Decodes a dynamic input before computing through the workspace dependencies.
+#[cfg(feature = "nif-result")]
+fn decode_result_impl(input: rustler::Term<'_>, should_panic: bool) -> rustler::NifResult<bool> {
+    match <u64 as rustler::Decoder<'_>>::decode(input) {
+        Ok(value) => {
+            if should_panic {
+                panic!();
+            }
+            Ok(experiment_analysis::restore(value != 0))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Returns a decoded result without adding an Erlang result tag.
+#[cfg(feature = "nif-result")]
+#[rustler::nif]
+fn forwarded_result(input: rustler::Term<'_>, should_panic: bool) -> rustler::NifResult<bool> {
+    decode_result_impl(input, should_panic)
+}
+
+/// Exercises the same NifReturnable specialization with explicit Result spelling.
+#[cfg(feature = "nif-result")]
+#[rustler::nif(name = "explicit_result", schedule = "DirtyCpu")]
+fn spelled_result(input: rustler::Term<'_>, should_panic: bool) -> Result<bool, rustler::Error> {
+    decode_result_impl(input, should_panic)
+}
+
+/// Preserves an arbitrary Erlang term through Rustler's stateless Term boundary.
+#[cfg(feature = "nif-result")]
+#[rustler::nif]
+fn echo_term(input: rustler::Term<'_>) -> rustler::Term<'_> {
+    input
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -357,6 +392,7 @@ mod tests {
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
                 + usize::from(cfg!(feature = "custom-decoder"))
+                + 3 * usize::from(cfg!(feature = "nif-result"))
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
@@ -466,6 +502,25 @@ mod tests {
                 2,
                 rustler::SchedulerFlags::Normal as u32,
             ));
+        }
+        if cfg!(feature = "nif-result") {
+            expected.extend([
+                (
+                    "forwarded_result".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+                (
+                    "explicit_result".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "echo_term".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
         }
         if cfg!(feature = "custom-decoder") {
             expected.push((
