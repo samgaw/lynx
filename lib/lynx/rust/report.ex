@@ -211,6 +211,12 @@ defmodule Lynx.Rust.Report do
             ],
             else: []
           ) ++
+          if(get_in(extraction, [:explicit_ownership, :reference_copies]) not in [nil, []],
+            do: [
+              "Lynx adjacent single-dereference unretagged mutable-reference copy normalization"
+            ],
+            else: []
+          ) ++
           Lynx.Rustler.ErrorConstructors.boundary(Map.get(extraction, :rustler_constructors)) ++
           if(Enum.any?(Map.values(extraction.audit.external_calls), & &1[:native_wake_operation]),
             do: [

@@ -72,6 +72,12 @@ defmodule Lynx.Rust do
   or stateful destructor correctness. `owned_drops: true` retains the separate
   runtime-only compiler lowering.
 
+  Compiler temporaries that copy a mutable reference without retagging can be
+  normalized when their only use is a dereference in the immediately following
+  scalar assignment. The original pointer target and write are preserved, and
+  normalization records appear in `:explicit_ownership`. Other mutable-reference
+  copy shapes remain subject to the backend's supported subset.
+
   Pure extraction admits the Aeneas logical heap `Box::new` model. Boxed trait
   construction additionally requires validated compiler vtable metadata: a
   monomorphic scalar-field struct, one extracted safe shared scalar-returning
