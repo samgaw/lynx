@@ -56,3 +56,47 @@ fn captured(value: bool, accepted: bool) -> bool {
 fn guarded(value: bool, accepted: bool) -> bool {
     ownership_app::local_guard_panic(value, accepted)
 }
+
+/// Immutable payload whose Rust ownership tokens can be released during panic.
+#[cfg(feature = "resource-unwind")]
+#[derive(Debug)]
+pub struct UnwindResource {
+    pub value: bool,
+}
+
+#[cfg(feature = "resource-unwind")]
+#[rustler::resource_impl]
+impl rustler::Resource for UnwindResource {}
+
+/// Runs the cross-crate transition and consumes its retained owner on either exit.
+///
+/// # Panics
+/// Rejection propagates after releasing this resource owner.
+#[cfg(feature = "resource-unwind")]
+pub fn checked_resource_inner(
+    resource: rustler::ResourceArc<UnwindResource>,
+    accepted: bool,
+) -> bool {
+    let mut value = resource.value;
+    ownership_app::checked_value(&mut value, accepted);
+    value
+}
+
+/// Retains the resource across a fallible first-party operation.
+///
+/// # Panics
+/// Rejection releases the retained and original Rust owners before NIF conversion.
+#[cfg(feature = "resource-unwind")]
+#[rustler::nif(name = "resource_checked", schedule = "DirtyCpu")]
+#[lynx::resource_unwind]
+fn checked_resource(resource: rustler::ResourceArc<UnwindResource>, accepted: bool) -> bool {
+    let retained = resource.clone();
+    checked_resource_inner(retained, accepted)
+}
+
+/// Supplies native handles for runtime checks; not a selected verification root.
+#[cfg(feature = "resource-unwind")]
+#[rustler::nif]
+fn resource_seed(value: bool) -> rustler::ResourceArc<UnwindResource> {
+    rustler::ResourceArc::new(UnwindResource { value })
+}

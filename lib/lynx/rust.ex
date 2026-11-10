@@ -95,6 +95,13 @@ defmodule Lynx.Rust do
   native allocation remain explicitly reported external models. This mode selects
   elaborated MIR without compiler-owned resource/future lowering.
 
+  Captured runtime cleanup also releases destructor-free Rustler ResourceArc
+  owners, preserving other Rust aliases and VM pins. The payload requires the
+  existing compiler drop query and default Resource callbacks; custom cleanup is
+  rejected. Resource construction can panic on missing registration and remains
+  outside captured extraction. Reports identify unselected constructor exports;
+  existing handles can enter through the verified resource decoder.
+
   Compiler temporaries that copy a mutable reference without retagging can be
   normalized when their only use is a dereference in the immediately following
   scalar assignment. The original pointer target and write are preserved, and

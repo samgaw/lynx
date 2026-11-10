@@ -946,6 +946,11 @@ and survives release of every Rust-owned handle. -/
 instance {α : Type} [NativeCodec α] : NativeDrop (NativeResourceArc α) where
   drop := release
 
+/-- Compiler-validated unwind release has the same ownership effect for a
+destructor-free resource. Custom payload cleanup requires a separate model. -/
+instance {α : Type} [NativeCodec α] : NativeUnwindDrop (NativeResourceArc α) where
+  drop := release
+
 /-- Registration failure unwinds the still-owned argument before reporting panic.
 Physical allocation success and the VM callback remain explicit FFI boundaries. -/
 @[expose] def newOwned {α : Type} [NativeCodec α] [NativeResourceCleanup α]

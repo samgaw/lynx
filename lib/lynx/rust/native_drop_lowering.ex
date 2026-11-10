@@ -80,7 +80,7 @@ defmodule Lynx.Rust.NativeDropLowering do
         walk_children(statement, ctx, state, cleanup)
 
       {:ok, site} ->
-        if cleanup and site.native_kind not in [:guard, :mutex],
+        if cleanup and site.native_kind not in [:guard, :mutex, :resource],
           do:
             LLBC.failure!(
               ctx.function,
@@ -88,13 +88,13 @@ defmodule Lynx.Rust.NativeDropLowering do
               "unsupported native destructor during captured unwind"
             )
 
-        if cleanup and site.native_kind == :mutex and
+        if cleanup and site.native_kind in [:mutex, :resource] and
              not NativeDrops.destructor_free?(site.payload, ctx.translated, ctx.refs),
            do:
              LLBC.failure!(
                ctx.function,
                ctx.translated,
-               "captured unwind requires a destructor-free mutex payload"
+               "captured unwind requires a destructor-free mutex or resource payload"
              )
 
         mem_drop = if cleanup, do: ctx.unwind_drop, else: ctx.mem_drop
@@ -191,6 +191,9 @@ defmodule Lynx.Rust.NativeDropLowering do
         # blocks hide another effectful destructor.
         {kind, state} = walk_children(kind, ctx, state, cleanup)
         {Map.put(statement, "kind", kind), state}
+
+      {:error, message} when not is_nil(ctx.unwind_drop) ->
+        LLBC.failure!(ctx.function, ctx.translated, message)
 
       {:error, _message} ->
         walk_children(statement, ctx, state, cleanup)
