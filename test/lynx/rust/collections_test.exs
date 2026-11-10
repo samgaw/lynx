@@ -24,7 +24,7 @@ defmodule Lynx.Rust.CollectionsTest do
     options = [
       roots:
         Enum.map(
-          ~w(replace_first slice_length replace_at batch_length),
+          ~w(replace_first slice_length replace_at batch_length result_is_ok),
           &("experiment_analysis::" <> &1)
         ),
       mir: :elaborated,
@@ -34,7 +34,7 @@ defmodule Lynx.Rust.CollectionsTest do
       proof_modules: ["Collections.Properties"],
       required_properties:
         Enum.map(
-          ~w(slice_transition vector_transition composition preserves_length empty_unchanged shared_core shared_composition index_panic generic_core generic_composition),
+          ~w(slice_transition vector_transition composition preserves_length empty_unchanged shared_core shared_composition index_panic generic_core generic_composition result_core result_composition),
           &("Collections.Properties." <> &1)
         )
     ]
@@ -46,6 +46,12 @@ defmodule Lynx.Rust.CollectionsTest do
              %{
                type: "alloc::vec::Vec<u8>",
                status: :modelled,
+               implementation_verified: false,
+               first_party: false
+             },
+             %{
+               type: "core::result::Result",
+               status: :audited_erasure,
                implementation_verified: false,
                first_party: false
              }
@@ -66,6 +72,12 @@ defmodule Lynx.Rust.CollectionsTest do
     assert Enum.any?(
              result.verification.external_models,
              &String.contains?(&1, "Standard Vec Deref shared slice-view model")
+           )
+
+    assert Enum.any?(
+             result.verification.guarantees,
+             &(&1.kind == :cross_crate_contract and
+                 &1.theorem == "Collections.Properties.result_composition")
            )
 
     reject_metadata(result.extraction)
@@ -98,6 +110,14 @@ defmodule Lynx.Rust.CollectionsTest do
       Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     end
 
+    changed = String.replace(original, "input.is_ok()", "!input.is_ok()")
+    refute changed == original
+    File.write!(source, changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    end
+
     # A wrong shared view must invalidate its own universal length contract too.
     changed = String.replace(original, "(slice.len(), input)", "(slice.len() + 1, input)")
     refute changed == original
@@ -122,6 +142,7 @@ defmodule Lynx.Rust.CollectionsTest do
             fn drop(&mut self) { panic!("observable destructor"); }
         }
         pub fn discard(_values: Vec<DropByte>) {}
+        pub fn discard_result(_value: Result<u64, DropByte>) {}
         """
     )
 
@@ -134,20 +155,29 @@ defmodule Lynx.Rust.CollectionsTest do
         pub fn discard(values: Vec<experiment_core::collections::DropByte>) {
             experiment_core::collections::discard(values);
         }
+        pub fn discard_result(value: Result<u64, experiment_core::collections::DropByte>) {
+            experiment_core::collections::discard_result(value);
+        }
         """
     )
 
     context =
       Lynx.Rust.Cargo.build!(workspace, "experiment-analysis", Path.join(tmp, "build"), [])
 
-    assert_raise CompileError, ~r/structural drop erasure rejected/, fn ->
-      Lynx.Rust.Extraction.run!(
-        context,
-        @tools,
-        ["experiment_analysis::discard"],
-        Path.join(tmp, "proofs"),
-        "Rejected.Extraction"
-      )
+    for {root, diagnostic} <- [
+          {"discard", ~r/structural drop erasure rejected/},
+          {"discard_result", ~r/Result drop/}
+        ] do
+      assert_raise CompileError, diagnostic, fn ->
+        Lynx.Rust.Extraction.run!(
+          context,
+          @tools,
+          ["experiment_analysis::" <> root],
+          Path.join(tmp, "proofs"),
+          "Rejected.Extraction",
+          mir: :elaborated
+        )
+      end
     end
   end
 
@@ -203,7 +233,11 @@ defmodule Lynx.Rust.CollectionsTest do
     bad_element = change_drop_elements(document)
     assert_raise CompileError, ~r/Vec drop/, fn -> LLBC.audit!(bad_element, audit.first_party) end
 
-    [{id, _}] = Map.to_list(audit.drops.erasures)
+    {id, _} =
+      Enum.find(audit.drops.erasures, fn {_, model} ->
+        model.type == "alloc::vec::Vec<u8>"
+      end)
+
     position = Enum.find_index(document["translated"]["fun_decls"], &(&1 && &1["def_id"] == id))
 
     bad_signature =

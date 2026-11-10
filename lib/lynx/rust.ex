@@ -38,6 +38,12 @@ defmodule Lynx.Rust do
   out catchable overflow panics within that bound. Drop erasure for custom
   allocators or element destructors is rejected. Native allocation, capacity and
   deallocation correctness remain unverified.
+
+  Concrete `Result<T, E>` cleanup checks the actual generated destructor at
+  scalar, admitted Copy or logical String payload types. Generic payloads and
+  observable destructors remain rejected. The shared `Result::is_ok` observer
+  reuses an explicitly reported Aeneas model; native Rust core behavior and heap
+  deallocation remain outside these implementation proofs.
   """
 
   @doc """

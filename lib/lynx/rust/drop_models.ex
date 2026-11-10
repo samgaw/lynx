@@ -52,7 +52,8 @@ defmodule Lynx.Rust.DropModels do
       types: declarations(translated["type_decls"]),
       traits: declarations(translated["trait_decls"]),
       impls: declarations(translated["trait_impls"]),
-      constants: constant_references(translated, %{})
+      constants: constant_references(translated, %{}),
+      trait_references: Lynx.Rust.ResourceModels.trait_references(translated)
     }
 
     Enum.reduce_while(functions ++ generated, {:ok, %{erasures: %{}, sites: %{}}}, fn function,
@@ -107,12 +108,93 @@ defmodule Lynx.Rust.DropModels do
     |> Enum.sort_by(& &1.rust_name)
   end
 
+  defp site!(
+         %{
+           "kind" => "Precise",
+           "place" => %{"ty" => annotation},
+           "fn_ptr" => %{"kind" => %{"Fun" => _}, "generics" => %{"types" => [_, _]}}
+         } = drop,
+         ctx,
+         seen
+       ) do
+    case expand(annotation, ctx) do
+      %{"Adt" => %{"id" => id, "builtin" => nil}} ->
+        case ctx.types[id]["item_meta"]["name"] do
+          [%{"Ident" => ["core", 0]}, %{"Ident" => ["result", 0]}, %{"Ident" => ["Result", 0]}] ->
+            result_site!(drop, ctx, seen)
+
+          [%{"Ident" => ["alloc", 0]}, %{"Ident" => ["vec", 0]}, %{"Ident" => ["Vec", 0]}] ->
+            vector_site!(drop, ctx, seen)
+
+          name ->
+            reject!("unsupported generic drop for #{inspect(name)}")
+        end
+
+      _ ->
+        reject!("unsupported generic drop type")
+    end
+  end
+
+  # Only the body of a checked, concretely instantiated Result drop may use its
+  # compiler-generated untracked payload dictionaries. An unconstrained generic
+  # payload is never treated as destruction-free.
+  defp site!(
+         %{
+           "kind" => "Precise",
+           "place" => %{"ty" => type},
+           "fn_ptr" => %{"kind" => %{"Trait" => [reference, 0]}, "generics" => args}
+         },
+         %{substitutions: _} = ctx,
+         _
+       ) do
+    ref =
+      case reference do
+        %{"Value" => [_, value]} -> value
+        %{"Deduplicated" => id} -> ctx.trait_references[id]
+        other -> other
+      end
+
+    with %{
+           "kind" => %{
+             "BuiltinOrAuto" => %{
+               "builtin_data" => "UntrackedDestruct",
+               "parent_trait_refs" => [],
+               "types" => [],
+               "vtable" => nil
+             }
+           },
+           "trait_decl_ref" => %{"id" => trait, "generics" => trait_args}
+         } <- ref,
+         true <- destruct_trait?(trait, Map.delete(ctx, :substitutions)),
+         true <- expand(trait_args, ctx) == arguments([expand(type, ctx)]),
+         true <- arguments?(args, 1),
+         true <- nonobservable_payload?(expand(type, ctx), ctx) do
+      {nil, %{}}
+    else
+      _ -> reject!("unsupported or unproved Result payload destruction")
+    end
+  end
+
+  defp site!(drop, ctx, seen) do
+    with %{
+           "place" => %{"ty" => type},
+           "fn_ptr" => %{"kind" => %{"Fun" => id}, "generics" => args},
+           "kind" => "Precise"
+         } <- drop,
+         true <- arguments?(args, 1) do
+      {_, entries} = destructor!(id, expand(type, ctx), ctx, seen)
+      {id, entries}
+    else
+      _ -> reject!("unsupported or inconsistent Rust drop site")
+    end
+  end
+
   # Charon preserves both the element and allocator parameters on Vec's
   # generated drop even though it removes the allocator from the Vec type.
   # Erasure requires scalar elements or an unconditional compiler Copy witness,
   # and Global: neither has an element/custom allocator destructor. Native
   # deallocation remains an explicit heap model.
-  defp site!(
+  defp vector_site!(
          %{
            "kind" => "Precise",
            "place" => %{"ty" => annotation},
@@ -237,19 +319,7 @@ defmodule Lynx.Rust.DropModels do
     end
   end
 
-  defp site!(drop, ctx, seen) do
-    with %{
-           "place" => %{"ty" => type},
-           "fn_ptr" => %{"kind" => %{"Fun" => id}, "generics" => args},
-           "kind" => "Precise"
-         } <- drop,
-         true <- arguments?(args, 1) do
-      {_, entries} = destructor!(id, expand(type, ctx), ctx, seen)
-      {id, entries}
-    else
-      _ -> reject!("unsupported or inconsistent Rust drop site")
-    end
-  end
+  defp vector_site!(_, _, _), do: reject!("unsupported or inconsistent Vec drop signature")
 
   @doc false
   def primitive_scalar?(%{"Scalar" => "Bool"}), do: true
@@ -265,6 +335,144 @@ defmodule Lynx.Rust.DropModels do
 
   defp scalar_name(%{"Scalar" => %{"Integer" => integer}}),
     do: integer |> Map.values() |> hd() |> String.downcase()
+
+  defp result_site!(drop, ctx, seen) do
+    id = drop["fn_ptr"]["kind"]["Fun"]
+    if id in seen, do: reject!("recursive Result destructor dependency")
+    base = Map.delete(ctx, :substitutions)
+    actual = expand(drop["place"]["ty"], ctx)
+    actual_types = expand(drop["fn_ptr"]["generics"]["types"], ctx)
+    t = %{"TypeVar" => %{"Free" => 0}}
+    e = %{"TypeVar" => %{"Free" => 1}}
+
+    with %{"Adt" => %{"id" => result_id, "builtin" => nil, "generics" => actual_args}} <- actual,
+         true <-
+           Lynx.Rust.LLBC.result_type?(result_id, %{
+             translated: ctx.translated,
+             references: ctx.refs
+           }),
+         true <-
+           Lynx.Rust.NativeDropLowering.same_runtime_type?(actual_args, arguments(actual_types)),
+         true <- arguments?(Map.put(drop["fn_ptr"]["generics"], "types", []), 1),
+         true <- Enum.all?(actual_types, &nonobservable_payload?(&1, base)),
+         %{
+           "generics" => params,
+           "signature" => %{
+             "is_unsafe" => true,
+             "abi" => "Rust",
+             "is_variadic" => false,
+             "inputs" => [input],
+             "output" => output
+           },
+           "item_meta" => %{"name" => name, "opacity" => "Transparent", "has_errors" => false},
+           "src" => %{
+             "TraitImpl" => %{
+               "impl_ref" => %{"id" => impl_id, "generics" => impl_args},
+               "trait_ref" => %{"id" => trait, "generics" => trait_args},
+               "item_id" => 0,
+               "reuses_default" => false
+             }
+           },
+           "body" => %{
+             "Structured" => %{
+               "locals" => %{"arg_count" => 1, "locals" => locals},
+               "body" => body
+             }
+           }
+         } <- ctx.functions[id],
+         true <- parameters?(Map.put(params, "outlives", []), 1, 2),
+         true <- vector_outlives?(expand(params, base)["outlives"], t, e),
+         generic_self = %{
+           "Adt" => %{"id" => result_id, "builtin" => nil, "generics" => arguments([t, e])}
+         },
+         true <-
+           expand(input, base) == %{"Ref" => [%{"Var" => %{"Free" => 0}}, generic_self, "Mut"]},
+         true <- unit?(expand(output, base)),
+         true <- destruct_trait?(trait, base),
+         true <- expand(trait_args, base) == arguments([generic_self]),
+         true <- expand(impl_args, base) == arguments([t, e]),
+         true <-
+           name ==
+             path(~w(core result Result)) ++
+               [%{"Impl" => %{"Trait" => impl_id}}, %{"Builtin" => ["DropGlue", 0]}],
+         %{
+           "src" => "Destruct",
+           "item_meta" => %{"name" => impl_name},
+           "generics" => impl_params,
+           "is_negative" => false,
+           "is_unsafe" => false,
+           "consts" => [],
+           "types" => [],
+           "implied_trait_refs" => [],
+           "impl_trait" => impl_trait,
+           "methods" => [method]
+         } <- ctx.impls[impl_id],
+         true <- impl_name == path(~w(core result Result)) ++ [%{"Impl" => %{"Trait" => impl_id}}],
+         true <- parameters?(impl_params, 0, 2),
+         true <-
+           expand(impl_trait, base) == %{"id" => trait, "generics" => arguments([generic_self])},
+         %{
+           "params" => method_params,
+           "kind" => %{"TraitMethod" => [^trait, 0]},
+           "skip_binder" => %{"id" => ^id, "generics" => method_args}
+         } <- method,
+         true <- parameters?(method_params, 1, 0),
+         true <-
+           expand(method_args, base) ==
+             Map.put(arguments([t, e]), "regions", [%{"Var" => %{"Bound" => [0, 0]}}]),
+         true <- Enum.map(locals, & &1["index"]) == Enum.to_list(0..(length(locals) - 1)) do
+      body_ctx = Map.put(base, :substitutions, actual_types)
+      local_types = Map.new(locals, &{&1["index"], expand(&1["ty"], body_ctx)})
+
+      unless unit?(local_types[0]) and
+               Lynx.Rust.NativeDropLowering.same_runtime_type?(
+                 local_types[1],
+                 %{"Ref" => ["Erased", actual, "Mut"]}
+               ),
+             do: reject!("inconsistent Result drop locals")
+
+      entries = block!(body, Map.put(body_ctx, :locals, local_types), [id | seen])
+
+      {id,
+       Map.put(entries, id, %{
+         definition_id: id,
+         rust_name: render_name(name),
+         type: "core::result::Result",
+         self: actual,
+         first_party: false,
+         status: :audited_erasure,
+         implementation_verified: false,
+         dependencies: Map.keys(entries),
+         label:
+           "Compiler-generated Result drop checked at concrete payload types; scalar/Copy payloads or logical String deallocation only; native allocator and deallocation correctness unverified"
+       })}
+    else
+      _ ->
+        reject!(
+          "unsupported or inconsistent Result drop: concrete destruction-free payloads and actual compiler glue required"
+        )
+    end
+  end
+
+  defp nonobservable_payload?(type, ctx) do
+    case nondestructive_element(type, ctx) do
+      {_, _} ->
+        true
+
+      nil ->
+        case type do
+          %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
+            type = ctx.types[id]
+
+            type != nil and type["item_meta"]["name"] == path(~w(alloc string String)) and
+              type["kind"] == "Opaque" and parameters?(type["generics"], 0, 0) and
+              Constants.empty_arguments?(args)
+
+          _ ->
+            false
+        end
+    end
+  end
 
   # Rust's builtin Copy trait cannot coexist with Drop. This validates the
   # compiler trait/implementation identities and an unconditional, lifetime-only
@@ -610,8 +818,9 @@ defmodule Lynx.Rust.DropModels do
       Enum.all?(data["branches"], fn
         [constant, branch] ->
           case constant_value(constant, ctx.constants) do
-            [%{"Discriminant" => [^adt, variant]}, type] ->
-              Enum.any?(variants, &(&1["id"] == variant)) and valid_branch.(branch) and
+            [%{"Discriminant" => [discriminant_adt, variant]}, type] ->
+              expand(discriminant_adt, ctx) == adt and Enum.any?(variants, &(&1["id"] == variant)) and
+                valid_branch.(branch) and
                 expand(type, ctx) == %{"Scalar" => %{"Integer" => %{"Signed" => "Isize"}}}
 
             _ ->
@@ -724,7 +933,18 @@ defmodule Lynx.Rust.DropModels do
     indexed
   end
 
-  defp expand(type, ctx), do: CallModels.expand(type, ctx.refs)
+  defp expand(type, ctx) do
+    substitute(CallModels.expand(type, ctx.refs), ctx[:substitutions])
+  end
+
+  defp substitute(type, nil), do: type
+  defp substitute(%{"TypeVar" => %{"Free" => index}} = type, args), do: Enum.at(args, index, type)
+
+  defp substitute(map, args) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {k, substitute(v, args)} end)
+
+  defp substitute(list, args) when is_list(list), do: Enum.map(list, &substitute(&1, args))
+  defp substitute(value, _), do: value
   defp local!(id, ctx), do: Map.get(ctx.locals, id) || reject!("missing drop glue local")
   defp path(parts), do: Enum.map(parts, &%{"Ident" => [&1, 0]})
   defp first_party?([%{"Ident" => [crate, _]} | _], ctx), do: crate in ctx.first_party

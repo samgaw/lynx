@@ -12,6 +12,11 @@ pub fn batch_length<T>(input: &Batch<T>) -> usize {
     input.values.len()
 }
 
+/// Classifies a protocol outcome while releasing any owned diagnostic text.
+pub fn result_is_ok(input: Result<u64, String>) -> bool {
+    input.is_ok()
+}
+
 /// Replaces the first byte, leaving an empty input unchanged.
 pub fn replace_slice_first(input: &mut [u8], value: u8) -> bool {
     if input.is_empty() {
