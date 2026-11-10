@@ -86,7 +86,7 @@ defmodule Lynx.Rust.LockModels do
             Map.put(
               model,
               :label,
-              "Uncontended std RwLock::#{method} model: shared reader leases or an exclusive writer; poisoned acquisition returns the acquired guard in PoisonError; conflicting acquisition and reader-limit exhaustion are verification cutoffs, not OS errors or successful completion; blocking, OS priority, fairness, native threads, std and FFI correctness remain unverified"
+              "Logical blocking std RwLock::#{method} model: shared reader leases or an exclusive writer; a conflicting foreign owner blocks, queued writers retain typed context-bound request tickets, and successful acquisition removes its own ticket atomically; poisoned acquisition returns the acquired guard in PoisonError; new reads with a queued writer, self-conflicting acquisition, invalid tickets and reader-limit exhaustion are verification cutoffs; OS priority, fairness, native thread correspondence, std and FFI correctness remain unverified"
             )
       end)
     else

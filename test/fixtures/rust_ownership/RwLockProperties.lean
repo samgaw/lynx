@@ -19,7 +19,8 @@ theorem shared_then_exclusive (value : Bool) (schedule : List ScheduleChoice) :
     (rw_probe value).run initial schedule =
       (.ok (!value), {initial with nativeRefCounter := 5}) := by
   cases value <;>
-    simp [rw_probe, toggle_app, initial, NativeRwLock.new, NativeRwLock.read,
+    simp (config := {maxSteps := 500000}) [Result.wait_run,rw_probe, toggle_app, initial, NativeRwLock.new, NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType,
       NativeRwLock.write, NativeRwLock.acquireRead, NativeRwLock.acquireWrite,
       NativeRwLock.releaseRead, NativeRwLock.releaseWrite, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents,

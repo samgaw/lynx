@@ -865,8 +865,9 @@ structure State (α : Type) where
   if h : fields.size = 4 then
     let .tuple readers := fields[0]'(by omega) | none
     let readers ← readers.toList.mapM decodeLease
-    let writer ← if fields[1]'(by omega) == .atom "unlocked" then some none
-      else some <$> decodeLease (fields[1]'(by omega))
+    let writer ← match fields[1]'(by omega) with
+      | .atom "unlocked" => some none
+      | term => some <$> decodeLease term
     let poisoned ← match fields[2]'(by omega) with
       | .atom "poisoned" => some true | .atom "unpoisoned" => some false | _ => none
     let value ← NativeCodec.decode (fields[3]'(by omega))
@@ -888,8 +889,8 @@ structure State (α : Type) where
   let id ← NativeM.allocate (typeName α) (contents ⟨[],none,false,value⟩)
   return ⟨id⟩
 
-/-- Conflicting acquisitions exhaust verification until waiting-writer admission
-and OS priority are represented. Exhaustion is never a Rust error or completion. -/
+/-- Ready-only acquisition transition. Public read/write operations below handle
+blocking; an unavailable primitive transition cannot manufacture a guard. -/
 @[expose] def acquireRead {α : Type} [NativeCodec α] (lock : NativeRwLock α) (env : Environment) :
     Except Exception (core.result.Result (NativeRwReadGuard α) (NativePoisonError (NativeRwReadGuard α))) × Environment :=
   match state lock env with
@@ -915,12 +916,101 @@ and OS priority are represented. Exhaustion is never a Rust error or completion.
     let after := store lock {value with writer := some (token,env.currentPid)} env
     (.ok (if value.poisoned then .Err ⟨guard⟩ else .Ok guard), {after with nativeRefCounter := token})
 
+/-- Pending writers are logical scheduler bookkeeping, not Rust allocations. -/
+@[expose] def writerRequestType {α : Type} [NativeCodec α] (lock : NativeRwLock α) : String :=
+  "rwlock-writer<" ++ typeName α ++ ">"
+
+@[expose] def writerWaiting {α : Type} [NativeCodec α] (lock : NativeRwLock α)
+    (env : Environment) : Bool :=
+  env.nativeHeap.any fun cell => cell.2.1 == writerRequestType lock &&
+    match cell.2.2 with
+    | .tuple fields => match fields.toList with
+      | [.nativeReference id, .pid _] => id == lock.id
+      | _ => false
+    | _ => false
+
+/-- The current supported subset does not choose an OS reader/writer priority.
+New reads with a queued writer exhaust verification rather than assume barging.
+A reader waits while another context owns the write lease. -/
+@[expose] def pollRead {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
+    Environment → Option (Except Exception (core.result.Result (NativeRwReadGuard α)
+      (NativePoisonError (NativeRwReadGuard α))) × Environment) := fun env =>
+  if writerWaiting lock env then some (.error .exhausted, env) else
+  match state lock env with
+  | none => some (.error .exhausted, env)
+  | some value => match value.writer with
+    | none => some (acquireRead lock env)
+    | some (_, context) =>
+      if context == env.currentPid then some (.error .exhausted, env) else none
+
+inductive WriteStep (α : Type) where
+  | acquired : Except Exception (core.result.Result (NativeRwWriteGuard α)
+      (NativePoisonError (NativeRwWriteGuard α))) → WriteStep α
+  | waiting : Nat → WriteStep α
+
+/-- An initial blocked write atomically registers its request. Other contexts
+can then observe pending writers without a guessed OS priority policy. -/
+@[expose] def prepareWrite {α : Type} [NativeCodec α] (lock : NativeRwLock α) (env : Environment) :
+    WriteStep α × Environment :=
+  match state lock env with
+  | none => (.acquired (.error .exhausted), env)
+  | some value =>
+    if (value.readers.any fun lease => lease.2 == env.currentPid) ||
+        (value.writer.any fun lease => lease.2 == env.currentPid) then
+      (.acquired (.error .exhausted), env)
+    else if value.writer.isNone && value.readers.isEmpty then
+      let (reply, updated) := acquireWrite lock env
+      (.acquired reply, updated)
+    else
+      let ticket := env.nativeRefCounter + 1
+      if env.nativeHeap.any (fun cell => cell.1 == ticket) then
+        (.acquired (.error .exhausted), env)
+      else (.waiting ticket, {env with
+        nativeRefCounter := ticket
+        nativeHeap := (ticket, writerRequestType lock,
+          .tuple #[.nativeReference lock.id, .pid env.currentPid]) :: env.nativeHeap})
+
+@[expose] def pollWrite {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
+    Environment → Option (WriteStep α × Environment) := fun env => some (prepareWrite lock env)
+
+/-- Decode a unique pending request without Erlang numeric equality. -/
+@[expose] def validWriterRequest {α : Type} [NativeCodec α] (lock : NativeRwLock α)
+    (ticket : Nat) (env : Environment) : Bool :=
+  match env.nativeHeap.filter (fun cell => cell.1 == ticket) with
+  | [(_, tag, .tuple fields)] =>
+    tag == writerRequestType lock && match fields.toList with
+      | [.nativeReference id, .pid context] => id == lock.id && context == env.currentPid
+      | _ => false
+  | _ => false
+
+/-- A registered writer stays blocked while any lease is held. Acquisition and
+removing its own request are atomic; other requests remain queued. No FIFO or
+fairness guarantee is asserted. Invalid tickets and recursive ownership exhaust. -/
+@[expose] def pollWaitingWrite {α : Type} [NativeCodec α] (lock : NativeRwLock α)
+    (ticket : Nat) :
+    Environment → Option (Except Exception (core.result.Result (NativeRwWriteGuard α)
+      (NativePoisonError (NativeRwWriteGuard α))) × Environment) := fun env =>
+  if !validWriterRequest lock ticket env then
+    some (.error .exhausted, env)
+  else match state lock env with
+  | none => some (.error .exhausted, env)
+  | some value =>
+    if (value.readers.any fun lease => lease.2 == env.currentPid) ||
+        (value.writer.any fun lease => lease.2 == env.currentPid) then
+      some (.error .exhausted, env)
+    else if value.writer.isSome || !value.readers.isEmpty then none
+    else
+      let (reply, updated) := acquireWrite lock env
+      some (reply, {updated with nativeHeap := updated.nativeHeap.filter (fun cell => cell.1 != ticket)})
+
 @[expose] def read {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
     NativeM (core.result.Result (NativeRwReadGuard α) (NativePoisonError (NativeRwReadGuard α))) :=
-  .nativeModify (acquireRead lock) Result.ofExcept
+  .wait (pollRead lock) Result.ofExcept
 @[expose] def write {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
     NativeM (core.result.Result (NativeRwWriteGuard α) (NativePoisonError (NativeRwWriteGuard α))) :=
-  .nativeModify (acquireWrite lock) Result.ofExcept
+  .wait (pollWrite lock) fun step => match step with
+    | .acquired reply => Result.ofExcept reply
+    | .waiting ticket => .wait (pollWaitingWrite lock ticket) Result.ofExcept
 
 @[expose] def releaseRead {α : Type} [NativeCodec α] (guard : NativeRwReadGuard α) : NativeM Unit :=
   .nativeModify (fun env => match state guard.lock env with
@@ -950,7 +1040,7 @@ and OS priority are represented. Exhaustion is never a Rust error or completion.
   .nativeGet fun env =>
     match state lock env with
     | some value =>
-      if value.readers.isEmpty && value.writer.isNone then do
+      if value.readers.isEmpty && value.writer.isNone && !writerWaiting lock env then do
         let _ ← NativeM.removeCell (typeName α) lock.id
         return ()
       else .error .exhausted

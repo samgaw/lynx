@@ -16,7 +16,8 @@ theorem adapter_next {β : Type} (value : Bool) (next : Term → Result β)
         next encoded).run initial schedule =
       (next (Rustler.encodeBool (!value))).run {initial with nativeRefCounter := 5} schedule := by
   cases value <;>
-    simp [facade, Rustler.executeNative, Result.handle, Result.bind, rw_probe, toggle_app, initial, NativeRwLock.new, NativeRwLock.read,
+    simp (config := {maxSteps := 500000}) [facade, Rustler.executeNative, Result.wait_run, Result.handle, Result.bind, rw_probe, toggle_app, initial, NativeRwLock.new, NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType,
       NativeRwLock.write, NativeRwLock.acquireRead, NativeRwLock.acquireWrite,
       NativeRwLock.releaseRead, NativeRwLock.releaseWrite, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents,

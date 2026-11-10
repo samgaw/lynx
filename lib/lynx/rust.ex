@@ -396,6 +396,13 @@ defmodule Lynx.Rust do
   Rustler 0.39 `ResourceArc` allocation, clone, immutable dereference, explicit
   release and local scope cleanup are supported for monomorphic first-party
   payloads with native codecs and compiler-certified `needs_drop = false`.
+  Runtime RwLock operations support shared readers and exclusive writers.
+  A foreign writer blocks a read; a conflicting writer registers a typed request
+  and waits for existing leases to be released. Acquisition retires only its own
+  request atomically. New reads with a queued writer stop verification because
+  OS admission priority is not represented. Self-conflicting acquisition and
+  invalid requests also stop verification. These are logical execution contexts;
+  native thread correspondence, FIFO ordering and OS fairness are not established.
   Such payloads may contain primitive-valued RwLock fields and nested admitted
   structs. Their logical lock identities remain shared across cloned handles and
   NIF calls. Final release or failed registration retires these logical cells

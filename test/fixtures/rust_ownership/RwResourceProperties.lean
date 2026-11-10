@@ -30,7 +30,8 @@ theorem shared_cycle (value : Bool) (schedule : List ScheduleChoice) :
       NativeResourceArc.ownedState, NativeResourceArc.ownerState, NativeResourceArc.ownership,
       NativeResourceArc.retiredState, NativeResourceArc.typeName, NativeResourceArc.handleType,
       NativeResourceArc.referenceLimit, NativeResourceCleanup.cleanup, NativeResourceCleanup.observable,
-      NativeRwLock.new, NativeRwLock.read, NativeRwLock.write,
+      NativeRwLock.new, NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType, NativeRwLock.write,
       NativeRwLock.acquireRead, NativeRwLock.acquireWrite,
       NativeRwLock.releaseRead, NativeRwLock.releaseWrite, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents, NativeRwLock.decodeState,
@@ -39,7 +40,7 @@ theorem shared_cycle (value : Bool) (schedule : List ScheduleChoice) :
       NativeOwnedDrop.drop, NativeM.allocate, NativeM.removeCell, NativeM.capturePanic,
       NativeM.ok, NativeM.fail, NativeM.lift, NativeCodec.encode, NativeCodec.decode, NativeCodec.typeName,
       NativeRwLock.typeName, reference_eq, List.eraseDups_cons, List.eraseDups_nil,
-      Result.handle, Result.bind, Result.ofExcept]
+      Result.wait_run, Result.handle, Result.bind, Result.ofExcept]
 set_option maxHeartbeats 1000000 in
 theorem unregistered (value : Bool) (schedule : List ScheduleChoice) :
     (rw_resource_cycle value).run {} schedule =
@@ -51,7 +52,8 @@ theorem unregistered (value : Bool) (schedule : List ScheduleChoice) :
       NativeResourceArc.ownedState, NativeResourceArc.ownerState, NativeResourceArc.ownership,
       NativeResourceArc.retiredState, NativeResourceArc.typeName, NativeResourceArc.handleType,
       NativeResourceArc.referenceLimit, NativeResourceCleanup.cleanup, NativeResourceCleanup.observable,
-      NativeRwLock.new, NativeRwLock.read, NativeRwLock.write,
+      NativeRwLock.new, NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType, NativeRwLock.write,
       NativeRwLock.acquireRead, NativeRwLock.acquireWrite,
       NativeRwLock.releaseRead, NativeRwLock.releaseWrite, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents, NativeRwLock.decodeState,
@@ -60,7 +62,7 @@ theorem unregistered (value : Bool) (schedule : List ScheduleChoice) :
       NativeOwnedDrop.drop, NativeM.allocate, NativeM.removeCell, NativeM.capturePanic,
       NativeM.ok, NativeM.fail, NativeM.lift, NativeCodec.encode, NativeCodec.decode, NativeCodec.typeName,
       NativeRwLock.typeName, reference_eq, List.eraseDups_cons, List.eraseDups_nil,
-      Result.handle, Result.bind, Result.ofExcept]
+      Result.wait_run, Result.handle, Result.bind, Result.ofExcept]
 
 set_option maxHeartbeats 1000000 in
 theorem reject_registered (value accepted : Bool) (schedule : List ScheduleChoice) :
@@ -74,7 +76,8 @@ theorem reject_registered (value accepted : Bool) (schedule : List ScheduleChoic
       NativeResourceArc.ownedState, NativeResourceArc.ownerState, NativeResourceArc.ownership,
       NativeResourceArc.retiredState, NativeResourceArc.typeName, NativeResourceArc.handleType,
       NativeResourceArc.referenceLimit, NativeResourceCleanup.cleanup, NativeResourceCleanup.observable,
-      NativeRwLock.new, NativeRwLock.read, NativeRwLock.write,
+      NativeRwLock.new, NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType, NativeRwLock.write,
       NativeRwLock.acquireRead, NativeRwLock.acquireWrite,
       NativeRwLock.releaseRead, NativeRwLock.releaseWrite, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents, NativeRwLock.decodeState,
@@ -83,6 +86,6 @@ theorem reject_registered (value accepted : Bool) (schedule : List ScheduleChoic
       NativeOwnedDrop.drop, NativeM.allocate, NativeM.removeCell, NativeM.capturePanic,
       NativeM.ok, NativeM.fail, NativeM.lift, NativeCodec.encode, NativeCodec.decode, NativeCodec.typeName,
       NativeRwLock.typeName, reference_eq, List.eraseDups_cons, List.eraseDups_nil,
-      Result.handle, Result.bind, Result.ofExcept]
+      Result.wait_run, Result.handle, Result.bind, Result.ofExcept]
 
 end RwShared.Properties
