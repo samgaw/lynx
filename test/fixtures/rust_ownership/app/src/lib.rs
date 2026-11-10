@@ -36,6 +36,14 @@ pub fn guard_panic(mut guard: std::sync::MutexGuard<'_, bool>, accepted: bool) {
     ownership_base::mutate_before_check(&mut guard, accepted);
 }
 
+/// Calls the actual borrowed transition without exposing native ownership.
+///
+/// # Panics
+/// Rejection propagates after updating the borrowed value.
+pub fn checked_value(value: &mut bool, accepted: bool) {
+    ownership_base::mutate_before_check(value, accepted);
+}
+
 /// Acquires and disposes a local mutex around the composed guarded operation.
 ///
 /// # Panics

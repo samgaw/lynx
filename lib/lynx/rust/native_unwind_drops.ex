@@ -3,7 +3,7 @@ defmodule Lynx.Rust.NativeUnwindDrops do
   alias Lynx.Rust.{LLBC, NativeDrops}
   @name [%{"Ident" => ["LynxCompilerUnwind", 0]}, %{"Ident" => ["drop", 0]}]
 
-  # This declaration is a compiler adapter for a validated std destructor site,
+  # This declaration is a compiler adapter for a validated native destructor site,
   # not an extracted Rust implementation. Its model is always reported external.
   def prepare!(document) do
     functions = document["translated"]["fun_decls"]
@@ -66,7 +66,7 @@ defmodule Lynx.Rust.NativeUnwindDrops do
         lean: "Lynx.NativeUnwindDrop.drop",
         native_unwind_dispose: true,
         label:
-          "Compiler unwind adapter for validated std MutexGuard/Mutex destructor dictionaries; commits the latest borrowed guard payload, unlocks and poisons on panic, or disposes an unlocked mutex; nonpanicking entry and guard acquisition, including incoming guards, and no nested cleanup calls required; std, physical thread context, allocation and FFI correctness unverified"
+          "Compiler unwind adapter for validated std MutexGuard/Mutex and Rustler ResourceArc destructor dictionaries; commits the latest borrowed guard payload, unlocks and poisons on panic, disposes an unlocked mutex, or releases one destructor-free resource owner while preserving aliases and VM pins; nonpanicking entry and guard acquisition, including incoming guards, and no nested cleanup calls required; std, Rustler, physical thread context, allocation and FFI correctness unverified"
       })
     else
       _ -> nil
