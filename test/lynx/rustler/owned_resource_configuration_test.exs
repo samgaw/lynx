@@ -11,8 +11,12 @@ defmodule Lynx.Rustler.OwnedResourceConfigurationTest do
     end
   end
 
-  test "requires runtime execution and an explicit boolean cleanup selection" do
-    for options <- [[owned_drops: true], [execution: :runtime, owned_drops: :all]] do
+  test "separates runtime resource cleanup from pure explicit destruction" do
+    for options <- [
+          [owned_drops: true],
+          [execution: :runtime, owned_drops: :all],
+          [execution: :runtime, owned_drops: :explicit]
+        ] do
       assert_raise ArgumentError, ~r/owned resource cleanup requires runtime execution/, fn ->
         Lynx.Rustler.prepare!("/unused", "unused", options)
       end
@@ -20,7 +24,11 @@ defmodule Lynx.Rustler.OwnedResourceConfigurationTest do
 
     manifest = %{module: "Elixir.OwnedResourceConfiguration", bindings: [], exports: []}
 
-    for options <- [[owned_drops: true], [execution: :runtime, owned_drops: :all]] do
+    for options <- [
+          [owned_drops: true],
+          [execution: :runtime, owned_drops: :all],
+          [execution: :runtime, owned_drops: :explicit]
+        ] do
       assert_raise ArgumentError, ~r/owned resource cleanup requires runtime execution/, fn ->
         Lynx.Rustler.Adapter.external!(
           manifest,
