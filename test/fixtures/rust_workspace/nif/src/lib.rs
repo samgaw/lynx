@@ -449,6 +449,43 @@ fn raise_nonzero(input: rustler::Term<'_>) -> rustler::NifResult<bool> {
     }
 }
 
+/// A deferred error payload with an actual first-party Encoder.
+#[cfg(feature = "boxed-errors")]
+struct BoxedErrorPayload {
+    value: u64,
+    should_panic: bool,
+}
+
+#[cfg(feature = "boxed-errors")]
+impl rustler::Encoder for BoxedErrorPayload {
+    fn encode<'a>(&self, env: rustler::Env<'a>) -> rustler::Term<'a> {
+        if experiment_analysis::restore(self.should_panic) {
+            panic!();
+        }
+        <u64 as rustler::Encoder>::encode(&self.value, env)
+    }
+}
+
+/// Constructs an error without invoking its payload Encoder.
+#[cfg(feature = "boxed-errors")]
+#[rustler::nif]
+fn boxed_error(value: u64, should_panic: bool) -> rustler::NifResult<bool> {
+    Err(rustler::Error::RaiseTerm(Box::new(BoxedErrorPayload {
+        value,
+        should_panic,
+    })))
+}
+
+/// Returns the deferred payload inside an ordinary error tuple.
+#[cfg(feature = "boxed-errors")]
+#[rustler::nif(name = "boxed_term", schedule = "DirtyCpu")]
+fn boxed_returned(value: u64, should_panic: bool) -> rustler::NifResult<bool> {
+    Err(rustler::Error::Term(Box::new(BoxedErrorPayload {
+        value,
+        should_panic,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -469,6 +506,7 @@ mod tests {
                 + usize::from(cfg!(feature = "custom-decoder"))
                 + 3 * usize::from(cfg!(feature = "nif-result"))
                 + 2 * usize::from(cfg!(feature = "validated-decoder"))
+                + 2 * usize::from(cfg!(feature = "boxed-errors"))
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
@@ -590,6 +628,20 @@ mod tests {
                     "validated_result".to_owned(),
                     1,
                     rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
+        }
+        if cfg!(feature = "boxed-errors") {
+            expected.extend([
+                (
+                    "boxed_error".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+                (
+                    "boxed_term".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
                 ),
             ]);
         }

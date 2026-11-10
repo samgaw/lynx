@@ -10,12 +10,14 @@ defmodule Lynx.Rustler do
   first-party structs/enums whose actual `Encoder` implementations can be
   extracted. Derived `NifTuple` return Encoders also use their actual expanded
   Rust implementations, with an explicit tuple-construction FFI model. This does
-  not enable custom or derived argument Decoders.
+  not by itself enable derived argument Decoders. Pure custom argument Decoders
+  use their actual extracted bodies with the supported primitive decoder models.
   The compiler resolves their types, encoder roots and generated atom
   caches automatically; no per-export Lean adapter or name mapping is required.
   Supported stateless runtime encoders include atoms, u64, strings, borrowed str,
-  shared references, pairs and Vec. Custom arguments, `NifResult<T>` and other
-  unsupported signatures fail explicitly. Immutable `rustler::Binary<'_>` values can be passed and returned
+  shared references, pairs and Vec. Pure custom arguments and `NifResult<T>` use
+  extracted implementations and modelled return conversion; unsupported signatures
+  fail explicitly. Immutable `rustler::Binary<'_>` values can be passed and returned
   using an explicit FFI type model. The immutable `as_slice` accessor and standard
   slice length have explicitly reported external models; other Binary methods
   remain rejected.
@@ -90,9 +92,13 @@ defmodule Lynx.Rustler do
   Atom/RaiseAtom construction are validated against the compiled enum and lowered
   to explicit foreign primitives. Atom names must be ASCII literals of at most
   255 bytes. Atom returns a value; RaiseAtom raises when converted on return.
-  Atom creation and allocation success remain trusted FFI assumptions. Other
-  constructors, Error inspection, dynamic payloads and runtime NifResult
-  conversion are rejected.
+  `Term`/`RaiseTerm` admit an owned boxed Encoder with an actual first-party
+  implementation on a monomorphic scalar-field struct and callback-free compiler
+  drop metadata. Encoding is deferred until return conversion. A panic there
+  escapes Rustler's computation catch and exhausts verification. Atom creation,
+  allocation, native reclamation and FFI correctness remain trusted boundaries.
+  Error inspection, other payload layouts and runtime NifResult conversion are
+  rejected.
 
   Options:
 
@@ -126,8 +132,9 @@ defmodule Lynx.Rustler do
       the initial primitive model admits u64 decoding and opaque forwarding of
       its error. Pure BadArg and bounded ASCII literal Atom/RaiseAtom construction
       are validated against the actual enum metadata and literal provenance.
-      Other constructors, Error inspection, dynamic payloads and runtime custom
-      Decoders are rejected.
+      Admitted boxed Term/RaiseTerm payloads retain their actual Encoder dictionary
+      and deferred conversion. Error inspection, unadmitted payload layouts and
+      runtime custom Decoders are rejected.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
@@ -361,7 +368,7 @@ defmodule Lynx.Rustler do
                  lean: "Lynx.Rustler.DecoderError",
                  import: bridge,
                  label:
-                   "Opaque Rustler Error conversion outcome for supported primitive decoders; forwarding and validated BadArg/ASCII literal atom construction admitted; inspection and other constructors unsupported"
+                   "Opaque Rustler Error conversion outcome for supported primitive decoders; forwarding, validated BadArg/ASCII literal atom and admitted deferred boxed Encoder construction; Error inspection unsupported"
                }
              ],
              else: []
@@ -397,7 +404,7 @@ defmodule Lynx.Rustler do
         external_types: models,
         external_calls:
           if(binary?, do: [:rustler_binary_as_slice], else: []) ++
-            if(custom?, do: [:rustler_encoders], else: []) ++
+            if(custom? or decoders? or returns?, do: [:rustler_encoders], else: []) ++
             if(decoders? or returns?, do: [:rustler_decoders], else: []),
         rustler_atoms: if(custom?, do: :discover, else: [])
       )

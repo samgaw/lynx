@@ -686,6 +686,7 @@ defmodule Lynx.Rust.Extraction do
         ] ++
         root_args ++
         includes ++
+        Enum.flat_map(Lynx.Rustler.EncoderModels.metadata_includes(models), &["--include", &1]) ++
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++
         Enum.flat_map(models, &["--opaque", &1.rust]) ++
         Enum.flat_map(opaque, &["--opaque", &1]) ++

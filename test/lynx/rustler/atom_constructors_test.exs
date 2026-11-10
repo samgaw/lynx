@@ -11,10 +11,10 @@ defmodule Lynx.Rustler.AtomConstructorsTest do
 
   test "retains compiled literal loads and opaque types while modelling only the constructors",
        ctx do
-    {doc, %{atoms: atoms} = proof} =
+    {doc, %{values: values} = proof} =
       ErrorConstructors.lower!(ctx.document, ctx.layout, @crates, "Snapshot")
 
-    assert Enum.sort(Enum.map(atoms.entries, &{&1.variant, &1.literal})) == [
+    assert Enum.sort(Enum.map(values.entries, &{&1.variant, &1.literal})) == [
              {"Atom", "zero"},
              {"RaiseAtom", "zero"}
            ]
@@ -26,7 +26,7 @@ defmodule Lynx.Rustler.AtomConstructorsTest do
              Map.values(ErrorConstructors.models!(doc, proof))
 
     refute ErrorConstructors.needed?(doc, @crates)
-    [entry | _] = atoms.entries
+    [entry | _] = values.entries
 
     doc =
       update_in(
@@ -105,7 +105,7 @@ defmodule Lynx.Rustler.AtomConstructorsTest do
     doc = replace_variant(ctx.document, atom["id"], raised["id"])
 
     assert_raise CompileError,
-                 ~r/Error::RaiseTerm construction: dynamic Encoder payloads require verified dispatch, deferred encoding, panic and destruction semantics/,
+                 ~r/Rustler RaiseTerm requires a validated boxed Encoder/,
                  fn ->
                    ErrorConstructors.lower!(doc, ctx.layout, @crates)
                  end

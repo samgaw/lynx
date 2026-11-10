@@ -112,30 +112,46 @@ defmodule Lynx.Rustler.EncoderModels do
 
   def resolve(_, _, _), do: nil
 
+  # Keep the trait's compiler vtable layout available when stateless Rustler
+  # models are requested. This selects interface metadata, not foreign bodies.
+  def metadata_includes(models) do
+    if Enum.any?(models, &(&1.rust == "rustler::env::Env" and &1.lean == "Lynx.Rustler.Env")),
+      do: ["rustler::types::Encoder"],
+      else: []
+  end
+
+  def encoder_trait?(id, translated, refs), do: trait?(id, context(translated, refs))
+
+  def implementation_method?(function, self, translated, refs) do
+    ctx = context(translated, refs)
+
+    with %{
+           "TraitImpl" => %{"impl_ref" => %{"id" => impl_id}, "trait_ref" => %{"id" => trait}}
+         } <- function["src"],
+         %{} = impl <- declaration(ctx, "trait_impls", impl_id) do
+      trait?(trait, ctx) and
+        impl["src"] == "Normal" and impl["is_negative"] == false and
+        impl["is_unsafe"] == false and
+        impl["consts"] == [] and impl["types"] == [] and impl["implied_trait_refs"] == [] and
+        expand(impl["impl_trait"], ctx) == %{"id" => trait, "generics" => arguments([self])} and
+        Enum.all?(Map.values(impl["generics"]), &(&1 == [])) and
+        parameters?(function["generics"], 2, 0, trait, ctx) and
+        function["generics"]["outlives"] == [] and
+        signature?(function, self, 0, ctx) and
+        FormatModels.method_identity?(function, impl, trait, ctx)
+    else
+      _ -> false
+    end
+  end
+
   def binding!(type_id, audit, translation) do
-    ctx = context(audit.translated, audit.references)
     self = %{"Adt" => %{"id" => type_id, "builtin" => nil, "generics" => arguments([])}}
 
     candidates =
-      Enum.filter(audit.functions, fn function ->
-        with %{
-               "TraitImpl" => %{"impl_ref" => %{"id" => impl_id}, "trait_ref" => %{"id" => trait}}
-             } <- function["src"],
-             %{} = impl <- declaration(ctx, "trait_impls", impl_id) do
-          trait?(trait, ctx) and
-            impl["src"] == "Normal" and impl["is_negative"] == false and
-            impl["is_unsafe"] == false and
-            impl["consts"] == [] and impl["types"] == [] and impl["implied_trait_refs"] == [] and
-            expand(impl["impl_trait"], ctx) == %{"id" => trait, "generics" => arguments([self])} and
-            Enum.all?(Map.values(impl["generics"]), &(&1 == [])) and
-            parameters?(function["generics"], 2, 0, trait, ctx) and
-            function["generics"]["outlives"] == [] and
-            signature?(function, self, 0, ctx) and
-            FormatModels.method_identity?(function, impl, trait, ctx)
-        else
-          _ -> false
-        end
-      end)
+      Enum.filter(
+        audit.functions,
+        &implementation_method?(&1, self, audit.translated, audit.references)
+      )
 
     with [function] <- candidates,
          [%{"is_opaque" => false, "lean_name" => encoder}] <-

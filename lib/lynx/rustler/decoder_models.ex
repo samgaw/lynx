@@ -61,7 +61,7 @@ defmodule Lynx.Rustler.DecoderModels do
 
           function ->
             {:error, function,
-             "Rustler Error construction or inspection is unsupported here; only opaque error forwarding and validated BadArg/ASCII literal Atom/RaiseAtom construction are supported"}
+             "Rustler Error construction or inspection is unsupported here; only opaque error forwarding and validated BadArg, ASCII literal Atom/RaiseAtom and admitted boxed Encoder construction are supported"}
         end
     end
   end

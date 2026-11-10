@@ -1,4 +1,4 @@
-defmodule Lynx.Rustler.AtomConstructors do
+defmodule Lynx.Rustler.ValueConstructors do
   @moduledoc false
   alias Lynx.Rust.{CallModels, Constants, LLBC, LLBCJson}
   alias Lynx.Rustler.ErrorLiterals
@@ -19,6 +19,8 @@ defmodule Lynx.Rustler.AtomConstructors do
     initial = %{
       document: document,
       refs: refs,
+      layout: layout,
+      full: full,
       types: document["translated"]["type_decls"],
       globals:
         LLBCJson.restore_global_constant_values!(
@@ -84,24 +86,96 @@ defmodule Lynx.Rustler.AtomConstructors do
   defp variants!(full, layout) do
     refs = LLBC.type_references!(layout)
 
-    for name <- ~w(Atom RaiseAtom), into: %{} do
-      variants = full["kind"]["Enum"]
+    literals =
+      for name <- ~w(Atom RaiseAtom), into: %{} do
+        variants = full["kind"]["Enum"]
 
-      case Enum.filter(variants, &(&1["name"] == name)) do
-        [%{"id" => id, "fields" => [%{"is_positional" => true, "ty" => type}]} = variant]
-        when is_integer(id) and id >= 0 ->
-          unless Enum.at(variants, id) == variant && ErrorLiterals.static_string?(type, refs),
-            do:
-              raise(
-                ArgumentError,
-                "inconsistent compiled Rustler #{name} variant or string field"
-              )
+        case Enum.filter(variants, &(&1["name"] == name)) do
+          [%{"id" => id, "fields" => [%{"is_positional" => true, "ty" => type}]} = variant]
+          when is_integer(id) and id >= 0 ->
+            unless Enum.at(variants, id) == variant && ErrorLiterals.static_string?(type, refs),
+              do:
+                raise(
+                  ArgumentError,
+                  "inconsistent compiled Rustler #{name} variant or string field"
+                )
 
-          {id, name}
+            {id, name}
 
-        _ ->
-          raise ArgumentError, "missing compiled Rustler #{name} string constructor"
+          _ ->
+            raise ArgumentError, "missing compiled Rustler #{name} string constructor"
+        end
       end
+
+    payloads =
+      for variant <- full["kind"]["Enum"],
+          variant["name"] in ~w(Term RaiseTerm),
+          into: %{},
+          do: {variant["id"], variant["name"]}
+
+    Map.merge(literals, payloads)
+  end
+
+  defp payload_operation([%{"Move" => %{"ty" => type}} = operand], name, state) do
+    variants = state.full["kind"]["Enum"]
+
+    case Enum.filter(variants, &(&1["name"] == name)) do
+      [%{"id" => id, "fields" => [%{"is_positional" => true, "ty" => field}]} = variant] ->
+        full_refs = LLBC.type_references!(state.layout)
+
+        if Enum.at(variants, id) == variant &&
+             boxed_encoder?(field, state.layout, full_refs, :static) &&
+             boxed_encoder?(type, state.document, state.refs, :local),
+           do: {:ok, %{literal: nil, inputs: [type], arguments: [operand]}},
+           else: :error
+
+      _ ->
+        :error
+    end
+  end
+
+  defp payload_operation(_, _, _), do: :error
+
+  defp boxed_encoder?(type, document, refs, lifetime) do
+    with %{"Adt" => %{"id" => box, "builtin" => "Box", "generics" => args}} <-
+           CallModels.expand(type, refs),
+         [dyn] <- args["types"],
+         true <- Constants.empty_arguments?(%{args | "types" => []}),
+         [%{"item_meta" => %{"name" => name}}] <-
+           Enum.filter(document["translated"]["type_decls"], &(&1 && &1["def_id"] == box)),
+         true <- name == Enum.map(~w(alloc boxed Box), &%{"Ident" => [&1, 0]}),
+         %{
+           "DynTrait" => %{
+             "binder" => %{
+               "kind" => "Dyn",
+               "skip_binder" => %{"TypeVar" => %{"Bound" => [0, 0]}},
+               "params" => params
+             }
+           }
+         } <- dyn,
+         [%{"index" => 0}] <- params["types"],
+         true <-
+           params["regions"] == [] && params["const_generics"] == [] &&
+             params["trait_type_constraints"] == [],
+         [
+           %{
+             "origin" => "Dyn",
+             "trait_" => %{"skip_binder" => %{"id" => trait, "generics" => trait_args}}
+           }
+         ] <- params["trait_clauses"],
+         true <- trait_args == %{@args | "types" => [%{"TypeVar" => %{"Bound" => [1, 0]}}]},
+         true <- Lynx.Rustler.EncoderModels.encoder_trait?(trait, document["translated"], refs),
+         [
+           %{
+             "regions" => [],
+             "outlives" => [],
+             "skip_binder" => [%{"Lub" => %{"TypeVar" => %{"Bound" => [1, 0]}}}, region]
+           }
+         ] <- params["outlives"] do
+      region == "Static" ||
+        (lifetime == :local && match?(%{"Body" => n} when is_integer(n) and n >= 0, region))
+    else
+      _ -> false
     end
   end
 
@@ -147,23 +221,39 @@ defmodule Lynx.Rustler.AtomConstructors do
         "Adt" => %{"id" => state.error["def_id"], "builtin" => nil, "generics" => @args}
       }
 
-      literal =
-        case operands do
-          [operand] -> ErrorLiterals.read(operand, prefix, state)
-          _ -> :error
+      operation =
+        if name in ~w(Term RaiseTerm) do
+          payload_operation(operands, name, state)
+        else
+          case operands do
+            [operand] ->
+              case ErrorLiterals.read(operand, prefix, state) do
+                {:ok, text} -> {:ok, %{literal: text, inputs: [], arguments: []}}
+                _ -> :error
+              end
+
+            _ ->
+              :error
+          end
         end
 
       unless type["builtin"] == nil && Constants.empty_arguments?(type["generics"]) &&
-               CallModels.expand(place["ty"], state.refs) == expected && match?({:ok, _}, literal),
+               CallModels.expand(place["ty"], state.refs) == expected &&
+               match?({:ok, _}, operation),
              do:
                LLBC.failure!(
                  function,
                  state.document["translated"],
-                 "Rustler #{name} requires a validated ASCII literal of at most 255 bytes and its compiled Error type"
+                 if(name in ~w(Term RaiseTerm),
+                   do:
+                     "Rustler #{name} requires a validated boxed Encoder and its compiled Error type",
+                   else:
+                     "Rustler #{name} requires a validated ASCII literal of at most 255 bytes and its compiled Error type"
+                 )
                )
 
-      {:ok, text} = literal
-      {entry, state} = entry(name, text, state)
+      {:ok, operation} = operation
+      {entry, state} = entry(name, operation, state)
 
       resume = %{
         "span" => stmt["span"],
@@ -177,7 +267,7 @@ defmodule Lynx.Rustler.AtomConstructors do
           "func" => %{
             "Regular" => %{"kind" => %{"Fun" => entry.declaration["def_id"]}, "generics" => @args}
           },
-          "args" => [],
+          "args" => operation.arguments,
           "safety" => "Inherit"
         },
         "dest" => place,
@@ -188,7 +278,7 @@ defmodule Lynx.Rustler.AtomConstructors do
         caller: function["def_id"],
         statement: stmt["id"],
         variant: name,
-        literal: text,
+        literal: operation.literal,
         span: stmt["span"]
       }
 
@@ -201,11 +291,25 @@ defmodule Lynx.Rustler.AtomConstructors do
 
   defp constructor(stmt, _, state, function), do: walk(stmt, state, function)
 
-  defp entry(name, text, state) do
+  defp entry(name, operation, state) do
+    text = operation.literal
+
     case Enum.find(state.entries, &(&1.variant == name && &1.literal == text)) do
       nil ->
         index = length(state.entries)
-        path = @error ++ [%{"Ident" => ["Lynx#{name}Literal#{index}", 0]}]
+        {inputs, state} = primitive_inputs(operation.inputs, state)
+
+        path =
+          @error ++
+            [
+              %{
+                "Ident" => [
+                  "Lynx#{name}#{if text == nil, do: "Payload", else: "Literal"}#{index}",
+                  0
+                ]
+              }
+            ]
+
         type = %{"Adt" => %{"id" => state.error["def_id"], "builtin" => nil, "generics" => @args}}
 
         decl = %{
@@ -219,18 +323,44 @@ defmodule Lynx.Rustler.AtomConstructors do
             "is_unsafe" => false,
             "abi" => "Rust",
             "is_variadic" => false,
-            "inputs" => [],
-            "output" => %{"Value" => [state.reference + index, type]}
+            "inputs" => inputs,
+            "output" => %{"Value" => [state.reference, type]}
           }
         }
 
         entry = %{variant: name, literal: text, declaration: decl, index: index}
-        {entry, %{state | entries: state.entries ++ [entry]}}
+        {entry, %{state | entries: state.entries ++ [entry], reference: state.reference + 1}}
 
       entry ->
         {entry, state}
     end
   end
+
+  defp primitive_inputs([], state), do: {[], state}
+
+  # Aeneas represents an owned unsized value with erased lifetime names.
+  # Normalize only the foreign primitive's input signature,
+  # after validating the actual static Error field and owned Box<dyn Encoder>.
+  # Keep original executable operands/types intact and allocate fresh type IDs.
+  defp primitive_inputs([type], state) do
+    %{"Adt" => box} = unshare(type, state.refs)
+    [dynamic] = box["generics"]["types"]
+    %{"DynTrait" => predicate} = unshare(dynamic, state.refs)
+
+    predicate =
+      update_in(predicate, ["binder", "params", "outlives"], fn [bound] ->
+        [update_in(bound, ["skip_binder"], fn [self, _region] -> [self, "Erased"] end)]
+      end)
+
+    dynamic = %{"Value" => [state.reference, %{"DynTrait" => predicate}]}
+    box = put_in(box, ["generics", "types"], [dynamic])
+
+    {[%{"Value" => [state.reference + 1, %{"Adt" => box}]}],
+     %{state | reference: state.reference + 2}}
+  end
+
+  defp unshare(%{"Value" => [_, type]}, _), do: type
+  defp unshare(%{"Deduplicated" => id}, refs), do: Map.fetch!(refs, id)
 
   def models!(document, proof, prefix) do
     Map.new(proof.entries, fn entry ->
@@ -243,12 +373,22 @@ defmodule Lynx.Rustler.AtomConstructors do
             "missing or inconsistent validated Rustler atom primitive declaration"
           )
 
-      name = "rustler::error::Error::Lynx#{entry.variant}Literal#{entry.index}"
+      name =
+        "rustler::error::Error::Lynx#{entry.variant}#{if entry.literal == nil, do: "Payload", else: "Literal"}#{entry.index}"
 
       {decl["def_id"],
        %{
          rust_name: name,
-         lean: prefix <> ".ErrorConstants.literal_#{entry.index}",
+         lean:
+           if(entry.literal == nil,
+             do:
+               "Lynx.Rustler." <>
+                 if(entry.variant == "Term",
+                   do: "termErrorOutcome",
+                   else: "raiseTermErrorOutcome"
+                 ),
+             else: prefix <> ".ErrorConstants.literal_#{entry.index}"
+           ),
          builtin: false,
          can_fail: false,
          lift: false,
@@ -257,16 +397,28 @@ defmodule Lynx.Rustler.AtomConstructors do
          implementation_verified: false,
          status: :modelled,
          label:
-           "Rustler #{entry.variant}(#{inspect(entry.literal)}) constructor validated against compiled enum and literal; return conversion modelled; atom allocation and native FFI unverified"
+           if(entry.literal == nil,
+             do:
+               "Rustler #{entry.variant} constructor validated against compiled enum and boxed Encoder; encoding deferred through actual extracted dictionaries; native allocation, reclamation and FFI unverified",
+             else:
+               "Rustler #{entry.variant}(#{inspect(entry.literal)}) constructor validated against compiled enum and literal; return conversion modelled; atom creation, allocation and native FFI unverified"
+           )
        }}
     end)
   end
 
   def install!(proof, output, prefix, bridge) do
+    case Enum.reject(proof.entries, &(&1.literal == nil)) do
+      [] -> []
+      literals -> install_literals!(literals, output, prefix, bridge)
+    end
+  end
+
+  defp install_literals!(literals, output, prefix, bridge) do
     name = prefix <> ".ErrorConstants"
 
     definitions =
-      Enum.map_join(proof.entries, "\n", fn entry ->
+      Enum.map_join(literals, "\n", fn entry ->
         operation =
           if entry.variant == "Atom", do: "atomErrorOutcome", else: "raiseAtomErrorOutcome"
 
