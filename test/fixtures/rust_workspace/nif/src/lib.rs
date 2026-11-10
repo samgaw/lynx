@@ -316,14 +316,26 @@ pub fn tuple_fields(input: rustler::Term<'_>) -> rustler::NifResult<Vec<rustler:
 
 /// A protocol flag decoded by an actual first-party Decoder implementation.
 #[cfg(feature = "custom-decoder")]
-struct ProtocolFlag {
+pub struct ProtocolFlag {
     enabled: bool,
+}
+
+/// Calls a statically selected Decoder without assuming its implementation.
+#[cfg(feature = "custom-decoder")]
+fn decode_via<'a, T: rustler::Decoder<'a>>(input: rustler::Term<'a>) -> rustler::NifResult<T> {
+    T::decode(input)
+}
+
+/// Internal first-party dictionary composition; not a NIF export.
+#[cfg(feature = "custom-decoder")]
+pub fn decode_flag_via(input: rustler::Term<'_>) -> rustler::NifResult<ProtocolFlag> {
+    decode_via::<ProtocolFlag>(input)
 }
 
 #[cfg(feature = "custom-decoder")]
 impl<'a> rustler::Decoder<'a> for ProtocolFlag {
     fn decode(term: rustler::Term<'a>) -> rustler::NifResult<Self> {
-        match <u64 as rustler::Decoder<'a>>::decode(term) {
+        match decode_via::<u64>(term) {
             Ok(value) => Ok(Self {
                 enabled: value != 0,
             }),

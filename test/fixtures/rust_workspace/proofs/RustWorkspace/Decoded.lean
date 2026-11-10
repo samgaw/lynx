@@ -14,12 +14,21 @@ theorem restore_spec (value : Bool) : experiment_analysis.restore value = RustM.
 theorem decoder_success (input : Lynx.Term) (value : U64)
     (decoded : Lynx.Rustler.decodeUnsigned .U64 64 input = .ok value) :
     __DECODER__ input = RustM.ok (.Ok { enabled := value != 0#u64 }) := by
-  simp [__DECODER__, Lynx.Rustler.Decoding.u64, decoded]
+  simp [__DECODER__, experiment_nif.decode_via, Lynx.Rustler.Decoding.u64, decoded]
 
 theorem decoder_error (input : Lynx.Term) (error : Lynx.Exception)
     (rejected : Lynx.Rustler.decodeUnsigned .U64 64 input = .error error) :
     __DECODER__ input = RustM.ok (.Err (.error error)) := by
-  simp [__DECODER__, Lynx.Rustler.Decoding.u64, rejected]
+  simp [__DECODER__, experiment_nif.decode_via, Lynx.Rustler.Decoding.u64, rejected]
+
+theorem generic_flag_spec (input : Lynx.Term) :
+    experiment_nif.decode_flag_via input = __DECODER__ input := by rfl
+
+theorem generic_flag_success (input : Lynx.Term) (value : U64)
+    (decoded : Lynx.Rustler.decodeUnsigned .U64 64 input = .ok value) :
+    experiment_nif.decode_flag_via input = RustM.ok (.Ok { enabled := value != 0#u64 }) := by
+  rw [generic_flag_spec]
+  exact decoder_success input value decoded
 
 theorem decoder_range (value : Int) (outside : ¬ (0 ≤ value ∧ value < 2^64)) :
     __DECODER__ (.integer value) = RustM.ok (.Err (.error (.error (.atom "badarg")))) := by

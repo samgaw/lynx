@@ -536,6 +536,11 @@ inductive DecoderError where
   | error : Exception → DecoderError
   | encoded : Bool → (Env → RustM NativeTerm) → DecoderError
 
+/-- Static Rustler Decoder dictionary. First-party methods are extracted bodies;
+only catalogued native primitives use reported FFI models. -/
+structure Decoder (Self : Type) where
+  decode : NativeTerm → RustM (core.result.Result Self DecoderError)
+
 /-- Error payload encoders execute during Rustler return conversion. Panics here
 escape the computation's catch_unwind boundary, so they exhaust verification
 rather than becoming a catchable nif_panicked result. -/

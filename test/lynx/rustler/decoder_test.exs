@@ -26,8 +26,13 @@ defmodule Lynx.Rustler.DecoderTest do
 
       source =
         if @unpatched do
-          "#![feature(register_tool)]\n#![register_tool(verify)]\n" <>
-            String.replace(source, "fn decoded_flag(", "#[verify::start_from]\nfn decoded_flag(")
+          ("#![feature(register_tool)]\n#![register_tool(verify)]\n" <>
+             source)
+          |> String.replace("fn decoded_flag(", "#[verify::start_from]\nfn decoded_flag(")
+          |> String.replace(
+            "pub fn decode_flag_via(",
+            "#[verify::start_from]\npub fn decode_flag_via("
+          )
         else
           source
         end
@@ -58,6 +63,7 @@ defmodule Lynx.Rustler.DecoderTest do
         root_attribute: if(@unpatched, do: "verify::start_from"),
         cargo: [features: ["custom-decoder"]],
         only: [decoded_flag: 2],
+        proof_roots: ["experiment_nif::decode_flag_via"],
         build_dir: Path.join(tmp, "build"),
         lean_project: project,
         module_prefix: "Decoded.Extraction"
@@ -86,7 +92,7 @@ defmodule Lynx.Rustler.DecoderTest do
             proof_modules: ["Decoded.Properties"],
             required_properties:
               Enum.map(
-                ~w(invert_spec restore_spec decoder_success decoder_error decoder_range facade_spec),
+                ~w(invert_spec restore_spec decoder_success decoder_error decoder_range generic_flag_spec generic_flag_success facade_spec),
                 &("Decoded.Properties." <> &1)
               )
           ]
@@ -109,6 +115,16 @@ defmodule Lynx.Rustler.DecoderTest do
                prepared.verification.external_models,
                &String.contains?(&1, "u64 Decoder FFI")
              )
+
+      internal =
+        Enum.find(
+          prepared.extraction.translation["functions"],
+          &(&1["rust_name"] == "experiment_nif::decode_flag_via")
+        )
+
+      assert decoder_id in prepared.extraction.audit.trait_dependencies[internal["def_id"]]
+
+      refute Enum.any?(prepared.bindings.exports, fn {name, _, _} -> name == "decode_flag_via" end)
 
       missing = %{
         prepared.extraction.audit
