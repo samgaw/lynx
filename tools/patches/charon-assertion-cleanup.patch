@@ -1,0 +1,79 @@
+diff --git i/charon/src/transform/resugar/reconstruct_asserts.rs w/charon/src/transform/resugar/reconstruct_asserts.rs
+index 1402250e59e6..40ea2bb28887 100644
+--- i/charon/src/transform/resugar/reconstruct_asserts.rs
++++ w/charon/src/transform/resugar/reconstruct_asserts.rs
+@@ -18,7 +18,24 @@ impl UllbcPass for Transform {
+         // Start by computing the set of blocks which are actually panics.
+         // Remark: doing this in two steps because reading the blocks at random
+         // while doing in-place updates is not natural to do in Rust.
+-        let panics = b.as_abort_map();
++        let mut panics = b.as_abort_map();
++        // An Assert statement cannot represent the original panic's unwind edge.
++        // Keep the branch when unwinding can execute cleanup or terminate.
++        panics.retain(|id, _| match b.body[*id].terminator.kind {
++            TerminatorKind::Panic { on_unwind, .. } => {
++                let cleanup = &b.body[on_unwind];
++                matches!(cleanup.terminator.kind, TerminatorKind::UnwindResume)
++                    && cleanup.statements.iter().all(|statement| {
++                        matches!(
++                            statement.kind,
++                            StatementKind::Nop
++                                | StatementKind::StorageLive(_)
++                                | StatementKind::StorageDead(_)
++                        )
++                    })
++            }
++            _ => true,
++        });
+
+         for block in b.body.iter_mut() {
+             if let TerminatorKind::Switch { data, branches } = &block.terminator.kind
+diff --git i/charon/tests/crate_data.rs w/charon/tests/crate_data.rs
+index 9c9115671cd9..adceefa71c7d 100644
+--- i/charon/tests/crate_data.rs
++++ w/charon/tests/crate_data.rs
+@@ -1242,3 +1242,44 @@ fn reuses_default_only_for_default_copies() -> anyhow::Result<()> {
+     assert_eq!(seen, 5, "3 impl methods and 2 impl consts");
+     Ok(())
+ }
++
++#[test]
++fn reconstructed_assertions_preserve_observable_unwind_cleanup() -> anyhow::Result<()> {
++    let crate_data = translate(
++        r#"//@ charon-args=--preset=aeneas --precise-drops --desugar-drops --start-from=test_crate::run
++        struct Flip<'a>(&'a mut bool);
++        impl Drop for Flip<'_> {
++            fn drop(&mut self) { *self.0 = !*self.0; }
++        }
++        pub fn run(value: &mut bool, accepted: bool) {
++            let _guard = Flip(value);
++            assert!(accepted);
++        }
++        "#,
++    )?;
++    let function = crate_data
++        .fun_decls
++        .iter()
++        .find(|function| function.item_meta.name.debug_repr(&crate_data) == "test_crate::run")
++        .expect("missing run implementation");
++    let body = &function.body.as_structured().expect("structured body").body;
++    let mut panics = 0;
++    body.dyn_visit_in_body(|statement: &Statement| {
++        assert!(!matches!(statement.kind, StatementKind::Assert { .. }));
++        if let StatementKind::Panic { on_unwind, .. } = &statement.kind {
++            panics += 1;
++            let mut cleanup_calls = 0;
++            on_unwind.dyn_visit_in_body(|cleanup: &Statement| {
++                if matches!(cleanup.kind, StatementKind::Call { .. }) {
++                    cleanup_calls += 1;
++                }
++            });
++            assert!(
++                cleanup_calls > 0,
++                "panic lost its destructor cleanup: {on_unwind:#?}"
++            );
++        }
++    });
++    assert_eq!(panics, 1, "expected the original guarded panic");
++    Ok(())
++}
