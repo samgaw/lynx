@@ -30,3 +30,12 @@ impl Drop for Flip<'_> {
 pub fn flip(value: &mut bool) {
     let _guard = Flip(value);
 }
+
+/// Flips the borrowed flag on both normal exit and panic.
+///
+/// # Panics
+/// Panics when `accepted` is false, running the guard's destructor.
+pub fn checked_flip(value: &mut bool, accepted: bool) {
+    let _guard = Flip(value);
+    assert!(accepted);
+}

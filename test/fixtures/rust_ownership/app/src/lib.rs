@@ -17,3 +17,13 @@ pub fn scoped_flip(mut value: bool) -> bool {
     ownership_base::flip(&mut value);
     value
 }
+
+/// Composes a fallible borrowed call with the caller's scope guard.
+///
+/// # Panics
+/// Propagates rejection after updating both original borrowed flags.
+pub fn compose(first: &mut bool, second: &mut bool, accepted: bool) {
+    let _guard = ownership_base::Flip(second);
+    ownership_base::checked_flip(first, accepted);
+    *first = !*first;
+}

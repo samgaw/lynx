@@ -141,6 +141,24 @@ defmodule Lynx.Rust.LLBC do
         do: Lynx.Rust.OwnershipDispatch.audit!(functions, translated, refs, primitive_models),
         else: %{unsafe: MapSet.new(), calls: %{}, dependencies: %{}}
 
+    {document, captured_unwind} =
+      if Keyword.get(opts, :unwind, :reject) == :captured do
+        unless ownership,
+          do: raise(ArgumentError, "captured unwind requires explicit ownership")
+
+        Lynx.Rust.CapturedUnwind.lower!(document, functions, refs)
+      else
+        {document, []}
+      end
+
+    translated = document["translated"]
+    refs = references(document, %{})
+
+    functions =
+      if Keyword.get(opts, :unwind, :reject) == :captured,
+        do: Enum.map(functions, &Enum.at(translated["fun_decls"], &1["def_id"])),
+        else: functions
+
     if ownership, do: Lynx.Rust.OwnershipUnwind.audit!(functions, translated, refs)
 
     # The backend can discard unused foreign metadata. Keep a synthesized
@@ -353,6 +371,7 @@ defmodule Lynx.Rust.LLBC do
     %{
       document: document,
       explicit_ownership: ownership && Map.drop(ownership, [:document]),
+      captured_unwind: captured_unwind,
       compiler_primitives: primitive_models,
       functions: ordinary,
       library_helpers: Enum.map(library_helpers, & &1["def_id"]),
