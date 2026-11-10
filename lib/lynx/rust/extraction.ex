@@ -46,8 +46,19 @@ defmodule Lynx.Rust.Extraction do
     unwind = Keyword.get(opts, :unwind, :reject)
     Lynx.Rust.NativeUnwind.charon_arguments(unwind)
 
-    if unwind != :reject and Keyword.get(opts, :execution, :pure) != :runtime,
+    if unwind == :assertions and Keyword.get(opts, :execution, :pure) != :runtime,
       do: raise(ArgumentError, "assertion unwind requires runtime execution")
+
+    if unwind == :captured and
+         (Keyword.get(opts, :execution, :pure) != :pure or
+            Keyword.get(opts, :owned_drops, false) != :explicit),
+       do:
+         raise(
+           ArgumentError,
+           "captured unwind requires pure execution and owned_drops: :explicit"
+         )
+
+    Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools)
 
     if Enum.any?(
          [:rustler_encoders, :rustler_decoders],
@@ -542,6 +553,7 @@ defmodule Lynx.Rust.Extraction do
     %{
       audit: audit,
       explicit_ownership: audit.explicit_ownership,
+      captured_unwind: audit.captured_unwind,
       compiler_drop_queries: compiler_drop_queries,
       rustler_constructors: rustler_constructors,
       native_expect_aliases: native_expect_aliases,

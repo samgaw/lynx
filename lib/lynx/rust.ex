@@ -72,6 +72,18 @@ defmodule Lynx.Rust do
   or stateful destructor correctness. `owned_drops: true` retains the separate
   runtime-only compiler lowering.
 
+  `unwind: :captured, owned_drops: :explicit` preserves borrowed updates on panic
+  using the cleanup-preserving Charon installation (`--captured`). Aeneas and its
+  Lean library remain unmodified. Fallible ordinary functions return an explicit
+  `core.result.Result`: `Ok` contains the Rust return value; `Err ()` denotes panic
+  after actual compiler cleanup. This is an exceptional-exit model, not a change
+  to the native Rust API. Original and captured signatures appear in the report.
+  Actual nonpanicking destructor bodies compose across crates. Initially, captured
+  functions require scalar or unit outputs and no type or trait parameters;
+  indirect/external fallible calls, panicking cleanup, reconstructed overflow and
+  bounds operations and generic/formatted panic payloads are rejected. This mode does not verify native exception
+  unwinding, allocation or FFI correctness.
+
   Compiler temporaries that copy a mutable reference without retagging can be
   normalized when their only use is a dereference in the immediately following
   scalar assignment. The original pointer target and write are preserved, and

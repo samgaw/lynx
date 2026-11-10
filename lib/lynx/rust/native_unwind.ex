@@ -5,6 +5,7 @@ defmodule Lynx.Rust.NativeUnwind do
   # Reuse the Aeneas preset's operations without the two assertion-resugaring
   # passes, which can erase cleanup. This is deliberately an explicit opt-in.
   def charon_arguments(:reject), do: ["--preset=aeneas"]
+  def charon_arguments(:captured), do: ["--preset=aeneas", "--start-from", "core::result::Result"]
 
   def charon_arguments(:assertions) do
     [
@@ -29,6 +30,17 @@ defmodule Lynx.Rust.NativeUnwind do
     do: raise(ArgumentError, "unsupported Rust unwind model: #{inspect(other)}")
 
   def backend_arguments!(:reject, _tools), do: []
+
+  def backend_arguments!(:captured, tools) do
+    unless "charon_cleanup_edges=preserved-v1" in String.split(
+             File.read!(Path.join(tools, "lynx-toolchain")),
+             "\n"
+           ),
+           do:
+             raise(ArgumentError, "captured unwind requires the cleanup-preserving Charon build")
+
+    []
+  end
 
   def backend_arguments!(:assertions, tools) do
     unless File.read!(Path.join(tools, "lynx-toolchain")) =~ "assertion-unwind-v1",

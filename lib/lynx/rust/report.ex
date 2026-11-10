@@ -230,6 +230,13 @@ defmodule Lynx.Rust.Report do
             ],
             else: []
           ) ++
+          if(Map.get(extraction, :captured_unwind, []) != [],
+            do: [
+              "Lynx explicit exceptional-exit lowering: Result.Err Unit denotes supported static-string Rust panic after actual compiler cleanup; borrowed updates preserved; nonpanicking calls certified from implementation bodies",
+              "Captured panic tags omit payload text; native panic hooks, unwinder, allocation and FFI correctness remain unverified"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :native_drops, []) != [],
             do: ["Lynx audited owned-place consuming-drop lowering to core::mem::drop"],
             else: []
@@ -244,6 +251,7 @@ defmodule Lynx.Rust.Report do
       native_drop_lowering: Map.get(extraction, :native_drops, []),
       native_guard_storage: Map.get(extraction, :native_guard_storage, []),
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
+      captured_unwind: Map.get(extraction, :captured_unwind, []),
       unwind: Map.get(extraction, :unwind, :reject),
       files: Map.get(extraction, :files, :reject),
       futures: Map.get(extraction, :futures, :reject),
