@@ -69,7 +69,7 @@ theorem factory_next {β : Type} (value : Bool) (next : Term → Result β)
       NativeM.resumeCaptured, NativeM.capturePanic, NativeM.allocate, NativeM.ok,
       NativeCodec.encode, NativeCodec.decode, NativeCodec.typeName, NativeRwLock.typeName,
       NativeRwLock.contents, reference_eq, List.eraseDups_cons, List.eraseDups_nil,
-      Result.handle, Result.bind, Result.ofExcept]
+      Result.wait_run, Result.handle, Result.bind, Result.ofExcept]
 set_option maxHeartbeats 1000000 in
 theorem toggle_next {β : Type} (value : Bool) (counter : Nat) (bounded : 5 ≤ counter)
     (next : Term → Result β) (schedule : List ScheduleChoice) :
@@ -88,7 +88,8 @@ theorem toggle_next {β : Type} (value : Bool) (counter : Nat) (bounded : 5 ≤ 
             NativeResourceArc.clone, NativeResourceArc.deref, NativeResourceArc.releaseOwned,
       NativeResourceArc.ownedState, NativeResourceArc.ownerState, NativeResourceArc.ownership,
       NativeResourceArc.retiredState, NativeResourceArc.typeName, NativeResourceArc.handleType,
-      NativeResourceArc.referenceLimit,       NativeRwLock.read, NativeRwLock.write,
+      NativeResourceArc.referenceLimit,       NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType, NativeRwLock.write,
       NativeRwLock.acquireRead, NativeRwLock.acquireWrite,
       NativeRwLock.releaseRead, NativeRwLock.releaseWrite, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents, NativeRwLock.decodeState,
@@ -96,7 +97,7 @@ theorem toggle_next {β : Type} (value : Bool) (counter : Nat) (bounded : 5 ≤ 
       NativeRwReadGuard.deref, NativeRwWriteGuard.deref_mut, NativePoisonError.into_inner,
       NativeOwnedDrop.drop, NativeM.removeCell,       NativeM.ok, NativeM.lift, NativeCodec.roundtrip, NativeCodec.typeName,
       NativeRwLock.typeName, reference_eq, List.eraseDups_cons, List.eraseDups_nil,
-      Result.handle, Result.ofExcept, NativeResourceArc.decode_eq, NativeResourceArc.termType, NativeResourceArc.vmCells,
+      Result.wait_run, Result.handle, Result.ofExcept, NativeResourceArc.decode_eq, NativeResourceArc.termType, NativeResourceArc.vmCells,
       facade_toggle, facade_read, Rustler.executeNative, pinned, Nat.add_assoc]
 
 set_option maxHeartbeats 1000000 in
@@ -117,13 +118,14 @@ theorem read_next {β : Type} (value : Bool) (counter : Nat) (bounded : 5 ≤ co
             NativeResourceArc.clone, NativeResourceArc.deref, NativeResourceArc.releaseOwned,
       NativeResourceArc.ownedState, NativeResourceArc.ownerState, NativeResourceArc.ownership,
       NativeResourceArc.retiredState, NativeResourceArc.typeName, NativeResourceArc.handleType,
-      NativeResourceArc.referenceLimit,       NativeRwLock.read,       NativeRwLock.acquireRead,       NativeRwLock.releaseRead, NativeRwLock.dispose,
+      NativeResourceArc.referenceLimit,       NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType,       NativeRwLock.acquireRead,       NativeRwLock.releaseRead, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents, NativeRwLock.decodeState,
       NativeRwLock.decodeLease, NativeRwLock.lease, NativeRwLock.readerLimit,
       NativeRwReadGuard.deref, NativePoisonError.into_inner,
       NativeOwnedDrop.drop, NativeM.removeCell,       NativeM.ok, NativeCodec.roundtrip, NativeCodec.typeName,
       NativeRwLock.typeName, reference_eq, List.eraseDups_cons, List.eraseDups_nil,
-      Result.handle, Result.ofExcept, NativeResourceArc.decode_eq, NativeResourceArc.termType, NativeResourceArc.vmCells,
+      Result.wait_run, Result.handle, Result.ofExcept, NativeResourceArc.decode_eq, NativeResourceArc.termType, NativeResourceArc.vmCells,
       facade_read, Rustler.executeNative, pinned, Nat.add_assoc]
 
 set_option maxHeartbeats 1000000 in
@@ -141,7 +143,8 @@ theorem checked_next {β : Type} (value accepted : Bool) (next : Term → Result
       NativeResourceArc.ownedState, NativeResourceArc.ownerState, NativeResourceArc.ownership,
       NativeResourceArc.retiredState, NativeResourceArc.typeName, NativeResourceArc.handleType,
       NativeResourceArc.referenceLimit, NativeResourceCleanup.cleanup, NativeResourceCleanup.observable,
-      NativeRwLock.new, NativeRwLock.read, NativeRwLock.write,
+      NativeRwLock.new, NativeRwLock.read, NativeRwLock.pollRead, NativeRwLock.pollWrite, NativeRwLock.prepareWrite,
+      NativeRwLock.writerWaiting, NativeRwLock.writerRequestType, NativeRwLock.write,
       NativeRwLock.acquireRead, NativeRwLock.acquireWrite,
       NativeRwLock.releaseRead, NativeRwLock.releaseWrite, NativeRwLock.dispose,
       NativeRwLock.state, NativeRwLock.store, NativeRwLock.contents, NativeRwLock.decodeState,
@@ -150,7 +153,7 @@ theorem checked_next {β : Type} (value accepted : Bool) (next : Term → Result
       NativeOwnedDrop.drop, NativeM.allocate, NativeM.removeCell, NativeM.capturePanic,
       NativeM.ok, NativeM.fail, NativeM.lift, NativeCodec.encode, NativeCodec.decode, NativeCodec.typeName,
       NativeRwLock.typeName, reference_eq, List.eraseDups_cons, List.eraseDups_nil,
-      Result.handle, Result.bind, Result.ofExcept]
+      Result.wait_run, Result.handle, Result.bind, Result.ofExcept]
 
 
 end RwShared.Properties

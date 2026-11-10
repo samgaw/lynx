@@ -166,7 +166,7 @@ defmodule Lynx.Rustler.RwResourceTest do
       |> String.replace("LynxOwnershipFixture", "LynxRwResourceFixture")
       |> String.replace(
         "\nend\n",
-        "\n  def shared_new(_value), do: :erlang.nif_error(:not_loaded)\n  def shared_toggle(_resource), do: :erlang.nif_error(:not_loaded)\n  def shared_read(_resource), do: :erlang.nif_error(:not_loaded)\n  def shared_checked(_value, _accepted), do: :erlang.nif_error(:not_loaded)\nend\n"
+        "\n  def shared_new(_value), do: :erlang.nif_error(:not_loaded)\n  def shared_update(_resource), do: :erlang.nif_error(:not_loaded)\n  def shared_toggle(_resource), do: :erlang.nif_error(:not_loaded)\n  def shared_read(_resource), do: :erlang.nif_error(:not_loaded)\n  def shared_checked(_value, _accepted), do: :erlang.nif_error(:not_loaded)\nend\n"
       )
     )
 

@@ -302,3 +302,34 @@ fn rw_value(resource: rustler::ResourceArc<RwResource>) -> bool {
 fn rw_checked_request(value: bool, accepted: bool) -> bool {
     rw_resource_reject(value, accepted)
 }
+
+/// Returns the value written by this critical section, before unlocking.
+#[cfg(feature = "rw-resource")]
+pub fn rw_resource_update(resource: rustler::ResourceArc<RwResource>) -> bool {
+    let mut writer = match resource.state.write() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    ownership_app::toggle(&mut writer);
+    let result = *writer;
+    drop(writer);
+    drop(resource);
+    result
+}
+
+/// Updates one shared resource under an exclusive lease.
+#[cfg(feature = "rw-resource")]
+#[rustler::nif(name = "shared_update", schedule = "DirtyCpu")]
+#[lynx::rw_resource]
+fn rw_update(resource: rustler::ResourceArc<RwResource>) -> bool {
+    rw_resource_update(resource)
+}
+
+/// Retains a separate owner of the same resource identity.
+#[cfg(feature = "rw-resource")]
+#[lynx::rw_resource]
+pub fn rw_resource_clone(
+    resource: &rustler::ResourceArc<RwResource>,
+) -> rustler::ResourceArc<RwResource> {
+    resource.clone()
+}
