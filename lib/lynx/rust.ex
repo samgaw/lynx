@@ -78,7 +78,7 @@ defmodule Lynx.Rust do
   `core.result.Result`: `Ok` contains the Rust return value; `Err ()` denotes panic
   after actual compiler cleanup. This is an exceptional-exit model, not a change
   to the native Rust API. Original and captured signatures appear in the report.
-  Actual nonpanicking destructor bodies compose across crates. Initially, captured
+  Actual nonpanicking destructor bodies compose across crates. Pure captured
   functions require scalar or unit outputs and no type or trait parameters;
   indirect/external fallible calls, panicking cleanup, reconstructed overflow and
   bounds operations and generic/formatted panic payloads are rejected. This mode does not verify native exception
@@ -98,12 +98,15 @@ defmodule Lynx.Rust do
   Captured runtime cleanup also releases destructor-free Rustler ResourceArc
   owners, preserving other Rust aliases and VM pins. The payload requires the
   existing compiler drop query and default Resource callbacks; custom cleanup is
-  rejected. Resource construction inside supported scalar/unit functions captures
+  rejected. Resource construction inside supported functions captures
   the modelled registration panic and follows the original caller cleanup. Its
   successful owned result remains tracked until consumed or released; unrelated
   caller-owned mutexes are disposed on either exceptional exit. Allocation and
-  native unwinding remain trusted boundaries. Fallible functions returning owned
-  handles remain unsupported and unselected exports are reported explicitly.
+  native unwinding remain trusted boundaries. Monomorphic fallible functions can
+  return destructor-free ResourceArc values, retaining their original signatures
+  for Rustler encoding. The runtime backend retains extracted type annotations
+  for fresh record payloads. Other owned return types remain unsupported and
+  unselected exports are reported explicitly.
 
   Compiler temporaries that copy a mutable reference without retagging can be
   normalized when their only use is a dereference in the immediately following
