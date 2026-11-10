@@ -45,3 +45,14 @@ fn captured(value: bool, accepted: bool) -> bool {
     ownership_app::compose(&mut first, &mut second, accepted);
     first
 }
+
+/// Executes a checked critical section and its actual compiler cleanup.
+///
+/// # Panics
+/// Rejection releases the poisoned guard and disposes the local mutex.
+#[cfg(feature = "guard-unwind")]
+#[rustler::nif(name = "guarded_value", schedule = "DirtyCpu")]
+#[lynx::guard_unwind]
+fn guarded(value: bool, accepted: bool) -> bool {
+    ownership_app::local_guard_panic(value, accepted)
+}
