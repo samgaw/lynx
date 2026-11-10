@@ -2,6 +2,35 @@ defmodule Lynx.Rust.NativeLifetimesTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.NativeLifetimes
 
+  test "primitive comparisons preserve live owners without admitting arithmetic panics" do
+    for op <- ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge Add Sub Mul Div Rem Shl Shr) do
+      operation = %{
+        "kind" => %{
+          "Assign" => [
+            place(3),
+            %{"BinaryOp" => [op, %{"Copy" => place(3)}, %{"Copy" => place(3)}]}
+          ]
+        }
+      }
+
+      audit(
+        [create(1), operation, dispose(1), create(0), returned()],
+        op in ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge)
+      )
+
+      audit([create(1), operation, create(0), returned()], false)
+    end
+  end
+
+  test "primitive negation preserves the obligation to consume a live owner" do
+    operation = %{
+      "kind" => %{"Assign" => [place(3), %{"UnaryOp" => ["Not", %{"Copy" => place(3)}]}]}
+    }
+
+    audit([create(1), operation, dispose(1), create(0), returned()], true)
+    audit([create(1), operation, create(0), returned()], false)
+  end
+
   test "loop exits retain transferred owners and backedges cannot retain them" do
     for {body, tail, accepted} <- [
           {[create(0), edge("Break", 0)], [returned()], true},
