@@ -25,25 +25,29 @@ defmodule Lynx.Rust.NativeCodecs do
       schema = schema!(type, audit, Map.new(plan, &{&1["def_id"], &1}))
 
       cleanup =
-        if get_in(audit.translated, ["options", "owned_drops"]) == true do
-          if type["needs_drop"] == false do
-            :trivial
-          else
-            payload = %{
-              "Adt" => %{
-                "id" => type["def_id"],
-                "builtin" => nil,
-                "generics" => Lynx.Rust.ResourceModels.args([])
+        if Lynx.Rust.ResourceLifetimes.enabled?(audit.translated) do
+          {:logical, Lynx.Rust.ResourceLifetimes.cleanup_fields!(type, audit)}
+        else
+          if get_in(audit.translated, ["options", "owned_drops"]) == true do
+            if type["needs_drop"] == false do
+              :trivial
+            else
+              payload = %{
+                "Adt" => %{
+                  "id" => type["def_id"],
+                  "builtin" => nil,
+                  "generics" => Lynx.Rust.ResourceModels.args([])
+                }
               }
-            }
 
-            case Lynx.Rust.NativeOwnedDrops.function_for(
-                   payload,
-                   audit.translated,
-                   audit.references
-                 ) do
-              nil -> nil
-              function -> function["def_id"]
+              case Lynx.Rust.NativeOwnedDrops.function_for(
+                     payload,
+                     audit.translated,
+                     audit.references
+                   ) do
+                nil -> nil
+                function -> function["def_id"]
+              end
             end
           end
         end
@@ -262,7 +266,7 @@ defmodule Lynx.Rust.NativeCodecs do
             cases value
             simp [NativeCodec.roundtrip]
 
-        #{if type.native_cleanup == :trivial, do: "instance : NativeResourceCleanup #{identifier!(lean)} where\n  cleanup _ := .ok ()\n  observable := false", else: ""}
+        #{cleanup_definition(type.native_cleanup, identifier!(lean))}
 
         @[simp] theorem #{quote!("typeName::" <> rust)} :
             NativeCodec.typeName (α := #{identifier!(lean)}) = #{JSON.encode!(type.native_tag)} := rfl
@@ -272,6 +276,23 @@ defmodule Lynx.Rust.NativeCodecs do
         raise ArgumentError, "missing or ambiguous native heap type correspondence: #{id}"
     end
   end
+
+  defp cleanup_definition(:trivial, lean),
+    do:
+      "instance : NativeResourceCleanup #{lean} where\n  cleanup _ := .ok ()\n  observable := false"
+
+  defp cleanup_definition({:logical, []}, lean), do: cleanup_definition(:trivial, lean)
+
+  defp cleanup_definition({:logical, fields}, lean) do
+    calls =
+      Enum.map_join(fields, "\n    ", fn {field, operation} ->
+        "#{operation} value.#{quote!(field)}"
+      end)
+
+    "instance : NativeResourceCleanup #{lean} where\n  cleanup value := do\n    #{calls}\n    return ()\n  observable := false"
+  end
+
+  defp cleanup_definition(_, _), do: ""
 
   # Exact names and recursively expanded field shapes, never extraction-local IDs.
   # A changed layout cannot decode a cell from a different extraction context.

@@ -993,6 +993,26 @@ fallback. Each concrete resource requires a validated payload cleanup instance. 
 class NativeOwnedDrop (α : Type) where
   drop : α → NativeM Unit
 
+/-- Unwind dispatch for no-drop resource payloads with owned logical cells. -/
+class NativeResourceUnwindDrop (α : Type) where
+  drop : α → NativeM Unit
+
+instance {α : Type} [NativeCodec α] : NativeResourceUnwindDrop (NativeMutex α) where
+  drop := NativeUnwindDrop.drop
+instance {α : Type} [NativeCodec α] : NativeResourceUnwindDrop (NativeGuard α) where
+  drop := NativeUnwindDrop.drop
+instance {α : Type} [NativeCodec α] : NativeResourceUnwindDrop (NativeRwReadGuard α) where
+  drop := NativeUnwindDrop.drop
+instance {α : Type} [NativeCodec α] : NativeResourceUnwindDrop (NativeRwWriteGuard α) where
+  drop := NativeUnwindDrop.drop
+
+instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeRwLock α) where
+  drop := NativeRwLock.dispose
+instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeRwReadGuard α) where
+  drop := NativeRwLock.releaseRead
+instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeRwWriteGuard α) where
+  drop guard := NativeRwLock.releaseWrite guard false
+
 instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeMutex α) where
   drop := NativeMutex.dispose
 
@@ -1149,6 +1169,11 @@ Physical allocation success and the VM callback remain explicit FFI boundaries. 
       NativeResourceCleanup.cleanup value
       NativeM.fail .panic
 
+/-- Capture registration panic after retiring the moved no-drop payload's cells. -/
+@[expose] def newManagedCaptured {α : Type} [NativeCodec α] [NativeResourceCleanup α]
+    (value : α) : NativeM (core.result.Result (NativeResourceArc α) Unit) :=
+  NativeM.capturePanic (newOwned value)
+
 /-- Retirement and callback-policy selection are atomic. Synchronous cleanup
 requires explicit admission; deferred cleanup is queued separately from the
 Rust call's return. OTP does not guarantee callback completion on release. -/
@@ -1158,6 +1183,10 @@ Rust call's return. OTP does not guarantee callback completion on release. -/
   match final with
   | none => Result.ok ()
   | some value => NativeResourceCleanup.cleanup value
+
+instance {α : Type} [NativeCodec α] [NativeResourceCleanup α] :
+    NativeResourceUnwindDrop (NativeResourceArc α) where
+  drop := releaseOwned
 
 /-- Claim pending work once. Running callbacks are observable as busy rather
 than complete. Dispatch is an explicit environment action, not a BEAM process

@@ -396,6 +396,11 @@ defmodule Lynx.Rust do
   Rustler 0.39 `ResourceArc` allocation, clone, immutable dereference, explicit
   release and local scope cleanup are supported for monomorphic first-party
   payloads with native codecs and compiler-certified `needs_drop = false`.
+  Such payloads may contain primitive-valued RwLock fields and nested admitted
+  structs. Their logical lock identities remain shared across cloned handles and
+  NIF calls. Final release or failed registration retires these logical cells
+  through generated cleanup; this does not invent a Rust destructor or verify a
+  VM callback. Unsupported payload fields and custom destruction remain rejected.
   Concrete Resource dictionaries must inherit the default callbacks and flags.
   Resource payloads share a heap identity; each Rust-owned handle has a distinct
   consuming token. Properties must state loader registration explicitly using

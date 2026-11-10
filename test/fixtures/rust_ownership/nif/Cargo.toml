@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [features]
 rwlock = []
+rw-resource = []
 borrowed-guard = []
 captured-unwind = []
 guard-unwind = []

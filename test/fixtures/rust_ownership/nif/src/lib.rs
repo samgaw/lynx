@@ -201,3 +201,104 @@ pub fn rw_probe(value: bool) -> bool {
 fn rw_scope(value: bool) -> bool {
     rw_probe(value)
 }
+
+/// Shared read/write state carried by a Rustler resource.
+#[cfg(feature = "rw-resource")]
+pub struct RwResource {
+    pub state: std::sync::RwLock<bool>,
+}
+#[cfg(feature = "rw-resource")]
+#[rustler::resource_impl]
+impl rustler::Resource for RwResource {}
+
+/// Creates a resource owning a new read/write lock.
+#[cfg(feature = "rw-resource")]
+pub fn rw_resource_new(value: bool) -> rustler::ResourceArc<RwResource> {
+    rustler::ResourceArc::new(RwResource {
+        state: std::sync::RwLock::new(value),
+    })
+}
+
+/// Mutates through a cloned owner and reads through the original owner.
+#[cfg(feature = "rw-resource")]
+pub fn rw_resource_toggle(resource: rustler::ResourceArc<RwResource>) -> bool {
+    let retained = resource.clone();
+    let mut writer = match retained.state.write() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    ownership_app::toggle(&mut writer);
+    drop(writer);
+    drop(retained);
+    let reader = match resource.state.read() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let result = *reader;
+    drop(reader);
+    drop(resource);
+    result
+}
+
+/// Reads the shared state without modifying it.
+#[cfg(feature = "rw-resource")]
+pub fn rw_resource_read(resource: rustler::ResourceArc<RwResource>) -> bool {
+    let reader = match resource.state.read() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let result = *reader;
+    drop(reader);
+    drop(resource);
+    result
+}
+
+/// Rejects a request while retaining the resource until panic cleanup.
+///
+/// # Panics
+/// Rejection releases the resource before propagating the panic.
+#[cfg(feature = "rw-resource")]
+pub fn rw_resource_reject(value: bool, accepted: bool) -> bool {
+    let resource = rw_resource_new(value);
+    assert!(accepted);
+    rw_resource_toggle(resource)
+}
+
+/// Executes a complete owned lifecycle independently of NIF exposure.
+#[cfg(feature = "rw-resource")]
+#[lynx::rw_resource]
+pub fn rw_resource_cycle(value: bool) -> bool {
+    rw_resource_toggle(rw_resource_new(value))
+}
+
+/// Returns the new shared state as a VM-owned resource term.
+#[cfg(feature = "rw-resource")]
+#[rustler::nif(name = "shared_new")]
+#[lynx::rw_resource]
+fn rw_new(value: bool) -> rustler::ResourceArc<RwResource> {
+    rw_resource_new(value)
+}
+
+/// Flips shared contents through a retained Rust owner.
+#[cfg(feature = "rw-resource")]
+#[rustler::nif(name = "shared_toggle", schedule = "DirtyCpu")]
+#[lynx::rw_resource]
+fn rw_flip(resource: rustler::ResourceArc<RwResource>) -> bool {
+    rw_resource_toggle(resource)
+}
+
+/// Observes the shared contents through a separately decoded owner.
+#[cfg(feature = "rw-resource")]
+#[rustler::nif(name = "shared_read")]
+#[lynx::rw_resource]
+fn rw_value(resource: rustler::ResourceArc<RwResource>) -> bool {
+    rw_resource_read(resource)
+}
+
+/// Exercises the wrapper's panic conversion after resource cleanup.
+#[cfg(feature = "rw-resource")]
+#[rustler::nif(name = "shared_checked", schedule = "DirtyCpu")]
+#[lynx::rw_resource]
+fn rw_checked_request(value: bool, accepted: bool) -> bool {
+    rw_resource_reject(value, accepted)
+}

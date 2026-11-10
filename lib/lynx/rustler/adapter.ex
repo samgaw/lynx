@@ -50,7 +50,9 @@ defmodule Lynx.Rustler.Adapter do
     Lynx.Rustler.Bindings.validate_ownership!(manifest, owned)
 
     release =
-      if owned == true, do: "Lynx.NativeOwnedDrop.drop", else: "Lynx.NativeResourceArc.release"
+      if owned == true or Keyword.get(opts, :logical_resource_cleanup, false),
+        do: "Lynx.NativeOwnedDrop.drop",
+        else: "Lynx.NativeResourceArc.release"
 
     declarations =
       Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution, resources, release))
