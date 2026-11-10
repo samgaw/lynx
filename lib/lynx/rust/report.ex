@@ -21,7 +21,10 @@ defmodule Lynx.Rust.Report do
       do: raise(ArgumentError, "cannot report failed Rust proofs as verified")
 
     properties = Lynx.Rust.Proofs.properties!(reports)
+    primitive_models = Map.get(extraction.audit, :compiler_primitives, [])
+    primitive_ids = MapSet.new(primitive_models, & &1.function_id)
     models = extraction.implementations
+    implementation_models = Map.drop(models, MapSet.to_list(primitive_ids))
 
     by_name =
       Map.new(models, fn {_id, implementation} ->
@@ -45,6 +48,20 @@ defmodule Lynx.Rust.Report do
          ])}
       end)
 
+    external =
+      Enum.reduce(primitive_models, external, fn primitive, models_by_id ->
+        implementation = Map.fetch!(models, primitive.function_id)
+
+        Map.put(models_by_id, primitive.function_id, %{
+          definition_id: primitive.function_id,
+          rust_name: implementation["rust_name"],
+          lean: implementation["lean_name"],
+          label: primitive.label,
+          status: :modelled,
+          implementation_verified: false
+        })
+      end)
+
     constants = Map.get(extraction, :constants, %{})
 
     initializer_names =
@@ -56,18 +73,31 @@ defmodule Lynx.Rust.Report do
 
     implementations =
       for implementation <- Map.values(models) do
-        source = implementation["source"] || %{}
+        source =
+          if MapSet.member?(primitive_ids, implementation["def_id"]),
+            do: %{},
+            else: implementation["source"] || %{}
 
         %{
           rust_name: implementation["rust_name"],
           lean_name: implementation["lean_name"],
           definition_id: implementation["def_id"],
-          status: :extracted,
-          source_kind:
-            if(implementation["def_id"] in extraction.audit.library_helpers,
-              do: :included_library_helper,
-              else: :workspace
+          status:
+            if(MapSet.member?(primitive_ids, implementation["def_id"]),
+              do: :modelled,
+              else: :extracted
             ),
+          source_kind:
+            cond do
+              MapSet.member?(primitive_ids, implementation["def_id"]) ->
+                :compiler_primitive
+
+              implementation["def_id"] in extraction.audit.library_helpers ->
+                :included_library_helper
+
+              true ->
+                :workspace
+            end,
           file:
             if(is_binary(source["file"]), do: Path.expand(source["file"], directory), else: nil),
           line: source["begin_line"],
@@ -87,7 +117,9 @@ defmodule Lynx.Rust.Report do
       |> Enum.sort_by(& &1.rust_name)
 
     verified =
-      for property <- properties, lean_name <- property["implementations"] do
+      for property <- properties,
+          lean_name <- property["implementations"],
+          not MapSet.member?(primitive_ids, Map.fetch!(by_name, lean_name)["def_id"]) do
         implementation = Map.fetch!(by_name, lean_name)
         source = Enum.find(implementations, &(&1.lean_name == lean_name))
 
@@ -100,7 +132,7 @@ defmodule Lynx.Rust.Report do
           contracts_used: property["contracts_used"],
           implementation_dependencies:
             dependencies[implementation["def_id"]]
-            |> Enum.filter(&Map.has_key?(models, &1))
+            |> Enum.filter(&Map.has_key?(implementation_models, &1))
             |> Enum.map(&Map.fetch!(models, &1))
         })
       end
@@ -109,7 +141,11 @@ defmodule Lynx.Rust.Report do
       for property <- verified,
           callees =
             Enum.filter(
-              implementation_dependencies(property.definition_id, dependencies, models),
+              implementation_dependencies(
+                property.definition_id,
+                dependencies,
+                implementation_models
+              ),
               &(crate(&1["rust_name"]) != crate(property.rust_name))
             ),
           callees != [] do
@@ -169,6 +205,12 @@ defmodule Lynx.Rust.Report do
       fingerprint: extraction.fingerprint,
       trusted_boundary:
         @trusted ++
+          if(Map.get(extraction, :explicit_ownership),
+            do: [
+              "Lynx compiler ownership trait naming and validated NoopDestruct dictionary adaptation"
+            ],
+            else: []
+          ) ++
           Lynx.Rustler.ErrorConstructors.boundary(Map.get(extraction, :rustler_constructors)) ++
           if(Enum.any?(Map.values(extraction.audit.external_calls), & &1[:native_wake_operation]),
             do: [
@@ -190,6 +232,8 @@ defmodule Lynx.Rust.Report do
             do: ["Lynx compiler-generated structural drop erasure audit"],
             else: []
           ),
+      compiler_primitives: primitive_models,
+      explicit_ownership: Map.get(extraction, :explicit_ownership),
       compiler_drop_queries: Map.get(extraction, :compiler_drop_queries, []),
       native_drop_lowering: Map.get(extraction, :native_drops, []),
       native_guard_storage: Map.get(extraction, :native_guard_storage, []),
@@ -208,7 +252,7 @@ defmodule Lynx.Rust.Report do
             ],
             else: []
           ) ++
-          if(Map.get(extraction, :owned_drops, false),
+          if(Map.get(extraction, :owned_drops, false) == true,
             do: [
               "Compiler-generated owning ADT destruction: actual optimized rustc drop MIR with checked self-pointer erasure; admitted native field destructors remain explicit models; native layout, allocation and FFI correctness unverified"
             ],

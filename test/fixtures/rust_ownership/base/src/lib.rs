@@ -7,9 +7,7 @@ pub struct Audit {
 }
 impl Drop for Audit {
     fn drop(&mut self) {
-        if self.code == 7 {
-            panic!("invalid code");
-        }
+        assert!(self.code != 7);
     }
 }
 /// Consumes a value and executes its destructor.

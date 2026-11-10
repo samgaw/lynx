@@ -75,13 +75,60 @@ defmodule Lynx.Rust.ExplicitOwnershipTest do
     end
   end
 
+  test "normal audit closes supplied ownership dictionaries and rejects broken dependencies" do
+    doc = @fixture |> File.read!() |> JSON.decode!()
+    audit = Lynx.Rust.LLBC.audit!(doc, ["lynx_explicit_scalar"], explicit_ownership: true)
+    deps = Lynx.Rust.LLBC.dependencies(audit)
+    assert audit.drops == %{erasures: %{}, sites: %{}}
+    assert 19 in deps[20]
+    assert Enum.any?(audit.compiler_primitives, &(&1.function_id in deps[20]))
+
+    untracked =
+      alter(doc, fn
+        %{"kind" => %{"BuiltinOrAuto" => %{"builtin_data" => "NoopDestruct"}}} = ref ->
+          put_in(ref, ["kind", "BuiltinOrAuto", "builtin_data"], "UntrackedDestruct")
+
+        other ->
+          other
+      end)
+
+    wrong_self =
+      alter(doc, fn
+        %{"kind" => %{"BuiltinOrAuto" => %{"builtin_data" => "NoopDestruct"}}} = ref ->
+          put_in(ref, ["trait_decl_ref", "generics", "types"], [%{"Deduplicated" => 0}])
+
+        other ->
+          other
+      end)
+
+    for bad <- [
+          untracked,
+          wrong_self,
+          put_in(doc, ["translated", "fun_decls", Access.at(20), "signature", "is_unsafe"], true)
+        ] do
+      assert_raise ArgumentError, ~r/explicit Rust ownership/, fn ->
+        Lynx.Rust.LLBC.audit!(bad, ["lynx_explicit_scalar"], explicit_ownership: true)
+      end
+    end
+
+    missing = put_in(doc, ["translated", "fun_decls", Access.at(19), "body"], "Opaque")
+
+    assert_raise CompileError, ~r/missing or unsupported first-party implementation/, fn ->
+      Lynx.Rust.LLBC.audit!(missing, ["lynx_explicit_scalar"], explicit_ownership: true)
+    end
+  end
+
   @tag timeout: 900_000
   @tag :tmp_dir
   @tag skip: is_nil(@tools) && "set LYNX_UNPATCHED_AENEAS_DIR for explicit ownership proofs"
   test "kernel-checks actual scalar and cross-crate observable destruction", %{tmp_dir: tmp} do
     tools = System.fetch_env!("LYNX_UNPATCHED_AENEAS_DIR")
     workspace = Path.join(tmp, "workspace")
-    File.cp_r!(@workspace, workspace)
+    File.mkdir_p!(workspace)
+
+    for path <- ~w(Cargo.toml Cargo.lock base app),
+        do: File.cp_r!(Path.join(@workspace, path), Path.join(workspace, path))
+
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "Ownership"))
     packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
@@ -91,121 +138,82 @@ defmodule Lynx.Rust.ExplicitOwnershipTest do
     property = Path.join(project, "Ownership/Properties.lean")
     File.write!(property, properties)
 
+    options = [
+      roots: ["ownership_app::run", "ownership_app::run_scalar"],
+      owned_drops: :explicit,
+      tools: tools,
+      build_dir: Path.join(tmp, "build"),
+      lean_project: project,
+      module_prefix: "Ownership",
+      proof_modules: ["Ownership.Properties"],
+      required_properties:
+        Enum.map(
+          ~w(consume_contract scalar_finishes run_panics run_returns),
+          &("Ownership.Properties." <> &1)
+        )
+    ]
+
     verify = fn ->
-      context = Lynx.Rust.Cargo.build!(workspace, "ownership-app", Path.join(tmp, "build"))
-      raw = Path.join(project, "Source.llbc")
+      result = Lynx.Rust.verify!(workspace, "ownership-app", options)
+      assert [%{status: :ok}] = result.reports
+      assert Enum.any?(result.verification.guarantees, &(&1.kind == :cross_crate_contract))
+      assert result.verification.structural_drops == []
+      refute result.verification.compiler_primitives == []
 
-      args =
-        [
-          "rustc",
-          "--sysroot",
-          "default",
-          "--preset",
-          "aeneas",
-          "--precise-drops",
-          "--desugar-drops",
-          "--start-from",
-          "ownership_app::run",
-          "--start-from",
-          "ownership_app::run_scalar",
-          "--include",
-          "ownership_app",
-          "--include",
-          "ownership_base",
-          "--opaque",
-          "core",
-          "--opaque",
-          "alloc",
-          "--opaque",
-          "std",
-          "--dest-file",
-          raw,
-          "--"
-        ] ++
-          Lynx.Rust.Cargo.extraction_arguments(context, project)
+      assert Enum.all?(
+               result.verification.compiler_primitives,
+               &(&1.implementation_verified == false)
+             )
 
-      {output, status} =
-        System.cmd(Path.join(tools, "charon"), args,
-          cd: context.record["directory"],
-          env: Lynx.Rust.Cargo.environment(context),
-          stderr_to_stdout: true
-        )
+      refute Enum.any?(result.verification.guarantees, &(&1.source_kind == :compiler_primitive))
 
-      assert status == 0, output
-      doc = File.read!(raw) |> JSON.decode!()
-      adapted = ExplicitOwnership.prepare!(doc)
-      backend = Path.join(project, "Ownership.llbc")
-      File.write!(backend, LLBCJson.encode_like!(adapted.document, raw))
+      assert Enum.any?(
+               result.verification.unverified_external_calls,
+               &(&1.implementation_verified == false and &1.label =~ "NoopDestruct")
+             )
 
-      {output, status} =
-        System.cmd(
-          Path.join(tools, "aeneas"),
-          [
-            "-backend",
-            "lean",
-            "-split-files",
-            "-emit-json",
-            "-abort-on-error",
-            "-warnings-as-errors",
-            "-dest",
-            project,
-            "-subdir",
-            "Ownership",
-            backend
-          ],
-          stderr_to_stdout: true
-        )
-
-      assert status == 0, output
-      translated = File.read!(Path.join(project, "translation.json")) |> JSON.decode!()
-
-      ids =
-        for f <- doc["translated"]["fun_decls"],
-            f && is_map(f["body"]) &&
-              hd(f["item_meta"]["name"]) in [
-                %{"Ident" => ["ownership_app", 0]},
-                %{"Ident" => ["ownership_base", 0]}
-              ],
-            do: f["def_id"]
-
-      implementations =
-        Map.new(Enum.filter(translated["functions"], &(&1["def_id"] in ids)), &{&1["def_id"], &1})
-
-      assert Enum.all?(Map.values(implementations), &(&1["is_opaque"] == false))
-      Lynx.Rust.Project.ensure!(project, "Ownership", tools)
-      Lynx.Rust.Project.build!(project, ["Ownership.Properties"])
+      refute Enum.any?(result.verification.guarantees, fn guarantee ->
+               Enum.any?(
+                 guarantee.implementation_dependencies,
+                 &String.contains?(&1["rust_name"], "LynxCompilerOwnership")
+               )
+             end)
 
       input =
-        Lynx.Rust.Proofs.file!(
-          %{
-            module: "Ownership",
-            implementations: implementations,
-            audit_modules: ["Ownership.Types", "Ownership.Funs"]
-          },
-          ["Ownership.Properties"],
-          required_properties:
-            Enum.map(
-              ~w(consume_contract scalar_finishes run_panics run_returns),
-              &("Ownership.Properties." <> &1)
-            )
+        Lynx.Rust.Proofs.file!(result.extraction, options[:proof_modules],
+          required_properties: options[:required_properties]
         )
 
-      input =
-        Map.put(
-          input,
-          "cache_key",
-          Lynx.Rust.Fingerprint.digest(
-            File.read!(backend) <> properties <> File.read!(Path.join(tools, "lynx-toolchain"))
-          )
-        )
-
-      {input, adapted}
+      {input, result.extraction}
     end
 
-    {input, adapted} = verify.()
-    refute adapted.primitive_models == []
+    {input, extraction} = verify.()
+    refute extraction.explicit_ownership.primitive_models == []
+    raw = project |> Path.join("Ownership.llbc") |> File.read!() |> JSON.decode!()
+    functions = raw["translated"]["fun_decls"]
+
+    glue =
+      Enum.find_index(functions, fn f ->
+        f && Lynx.Rust.DropModels.generated?(f) &&
+          hd(f["item_meta"]["name"]) == %{"Ident" => ["ownership_base", 0]}
+      end)
+
+    assert is_integer(glue)
+
+    for bad <- [
+          put_in(raw, ["translated", "fun_decls", Access.at(glue), "src"], "Normal"),
+          put_in(raw, ["translated", "fun_decls", Access.at(glue), "body"], "Opaque")
+        ] do
+      assert_raise ArgumentError, ~r/explicit Rust ownership/, fn ->
+        Lynx.Rust.LLBC.audit!(bad, ["ownership_app", "ownership_base"], explicit_ownership: true)
+      end
+    end
+
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [input])
-    assert [%{status: :ok, cached: true}] = Lynx.Commands.verify!(project, [input])
+
+    assert [%{status: :ok, cached: true}] =
+             Lynx.Rust.verify!(workspace, "ownership-app", options).reports
+
     export = Path.join(tmp, "ownership.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [input], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
@@ -221,10 +229,38 @@ defmodule Lynx.Rust.ExplicitOwnershipTest do
       assert [%{status: :error}] = Lynx.Commands.verify!(project, [input])
     end
 
+    File.write!(
+      property,
+      properties <>
+        """
+
+        theorem Ownership.Properties.noop_only (value : U64) :
+            LynxCompilerOwnership.noop value = RustM.ok value := by rfl
+        """
+    )
+
+    Lynx.Rust.Project.build!(project, ["Ownership.Properties"])
+
+    primitive_only =
+      Lynx.Rust.Proofs.file!(extraction, options[:proof_modules],
+        required_properties: ["Ownership.Properties.noop_only"]
+      )
+
+    assert [%{status: :error, diagnostics: diagnostics}] =
+             Lynx.Commands.verify!(project, [primitive_only])
+
+    assert Enum.any?(
+             diagnostics,
+             &String.contains?(&1.message, "has no extracted implementation")
+           )
+
     File.write!(property, properties)
     source = Path.join(workspace, "base/src/lib.rs")
-    File.write!(source, String.replace(File.read!(source), "self.code == 7", "self.code == 8"))
+    original = File.read!(source)
+    File.write!(source, String.replace(original, "self.code != 7", "self.code != 8"))
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn -> verify.() end
+    File.write!(source, original)
+    assert {_, _} = verify.()
   end
 
   defp erase_witness(

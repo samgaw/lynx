@@ -154,6 +154,7 @@ defmodule Lynx.Rust.NativeOwnedDrops do
   end
 
   def arguments!(false, _), do: []
+  def arguments!(:explicit, _), do: ["--precise-drops", "--desugar-drops"]
 
   def arguments!(true, tools) do
     versions = File.read!(Path.join(tools, "lynx-toolchain")) |> String.split("\n")
