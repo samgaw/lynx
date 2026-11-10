@@ -86,10 +86,13 @@ defmodule Lynx.Rustler do
   validity and environment copying at the explicit FFI boundary. In pure mode,
   `NifResult<T>` and `Result<T, rustler::Error>` return the successful payload
   directly, following Rustler's NifReturnable specialization. Supported decoder
-  errors retain their original return/exception outcome. Pure BadArg construction
-  is validated against the compiled enum and lowered to an explicit foreign
-  primitive. Other constructors, Error inspection, dynamic payloads and runtime
-  NifResult conversion are rejected.
+  errors retain their original return/exception outcome. Pure BadArg and literal
+  Atom/RaiseAtom construction are validated against the compiled enum and lowered
+  to explicit foreign primitives. Atom names must be ASCII literals of at most
+  255 bytes. Atom returns a value; RaiseAtom raises when converted on return.
+  Atom creation and allocation success remain trusted FFI assumptions. Other
+  constructors, Error inspection, dynamic payloads and runtime NifResult
+  conversion are rejected.
 
   Options:
 
@@ -121,9 +124,10 @@ defmodule Lynx.Rustler do
       `:optimized`. Custom input Decoders default to `:elaborated`, retaining
       compiler drop elaboration. Their actual first-party bodies are extracted;
       the initial primitive model admits u64 decoding and opaque forwarding of
-      its error. Pure BadArg construction is validated against the actual enum
-      metadata and lowered to an explicit foreign primitive. Other constructors,
-      Error inspection, dynamic payloads and runtime custom Decoders are rejected.
+      its error. Pure BadArg and bounded ASCII literal Atom/RaiseAtom construction
+      are validated against the actual enum metadata and literal provenance.
+      Other constructors, Error inspection, dynamic payloads and runtime custom
+      Decoders are rejected.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
@@ -357,7 +361,7 @@ defmodule Lynx.Rustler do
                  lean: "Lynx.Rustler.DecoderError",
                  import: bridge,
                  label:
-                   "Opaque Rustler Error conversion outcome for supported primitive decoders; forwarding and validated BadArg construction admitted; inspection and other constructors unsupported"
+                   "Opaque Rustler Error conversion outcome for supported primitive decoders; forwarding and validated BadArg/ASCII literal atom construction admitted; inspection and other constructors unsupported"
                }
              ],
              else: []

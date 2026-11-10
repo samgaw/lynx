@@ -15,10 +15,17 @@ defmodule Lynx.Rustler.ErrorConstructors do
     end
   end
 
-  # This models a foreign constructor operation, not a Rust function body.
-  # Keep the foreign Error opaque: no dummy fields or variant erasure. Only the
-  # exact, compiled zero-field BadArg constructor can become this infallible call.
-  def lower!(document, layout, first_party) do
+  # Model validated foreign constructor operations, not Rust function bodies.
+  # Keep Error opaque: no dummy fields or erasure of its unsupported variants.
+  def lower!(document, layout, first_party, prefix \\ "Rust") do
+    {document, badarg} = lower_badarg!(document, layout, first_party)
+    {document, atoms} = Lynx.Rustler.AtomConstructors.lower!(document, layout, first_party)
+
+    {document,
+     if(atoms, do: %{badarg: badarg, atoms: Map.put(atoms, :prefix, prefix)}, else: badarg)}
+  end
+
+  defp lower_badarg!(document, layout, first_party) do
     if "rustler" in first_party,
       do:
         raise(
@@ -153,10 +160,24 @@ defmodule Lynx.Rustler.ErrorConstructors do
 
   def boundary(nil), do: []
 
+  def boundary(%{atoms: _} = proof),
+    do:
+      boundary(proof.badarg) ++
+        [
+          "Lynx validated lowering of foreign Rustler atom error constructors; atom creation and allocation success assumed at native FFI boundary"
+        ]
+
   def boundary(_proof),
     do: ["Lynx validated lowering of foreign Rustler BadArg constructor operations"]
 
   def models!(_document, nil), do: %{}
+
+  def models!(document, %{atoms: atoms, badarg: badarg}),
+    do:
+      Map.merge(
+        models!(document, badarg),
+        Lynx.Rustler.AtomConstructors.models!(document, atoms, atoms.prefix)
+      )
 
   def models!(document, proof) do
     unless Enum.at(document["translated"]["fun_decls"], proof.function_id) == proof.declaration,
@@ -182,6 +203,13 @@ defmodule Lynx.Rustler.ErrorConstructors do
       }
     }
   end
+
+  def install!(%{atoms: atoms}, output, prefix, models) do
+    bridge = Enum.find(models, &(&1.rust == "rustler::error::Error"))
+    Lynx.Rustler.AtomConstructors.install!(atoms, output, prefix, bridge.import)
+  end
+
+  def install!(_, _, _, _), do: []
 
   defp walk(
          %{

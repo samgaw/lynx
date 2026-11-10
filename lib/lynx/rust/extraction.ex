@@ -176,7 +176,7 @@ defmodule Lynx.Rust.Extraction do
           )
 
         {lowered, proof} =
-          Lynx.Rustler.ErrorConstructors.lower!(document, layout.document, first_party)
+          Lynx.Rustler.ErrorConstructors.lower!(document, layout.document, first_party, module)
 
         {lowered,
          if(proof,
@@ -389,6 +389,9 @@ defmodule Lynx.Rust.Extraction do
         path
       end
 
+    constructor_modules =
+      Lynx.Rustler.ErrorConstructors.install!(rustler_constructors, output, module, models)
+
     model_args =
       if models == [] and map_size(backend_calls) == 0 do
         []
@@ -441,9 +444,12 @@ defmodule Lynx.Rust.Extraction do
         )
 
         ["-external-names", path] ++
-          if(models == [],
+          if(models == [] and constructor_modules == [],
             do: [],
-            else: ["-extra-includes", Enum.map_join(models, ",", & &1.import)]
+            else: [
+              "-extra-includes",
+              Enum.join(Enum.map(models, & &1.import) ++ constructor_modules, ",")
+            ]
           )
       end
 
@@ -498,7 +504,10 @@ defmodule Lynx.Rust.Extraction do
 
     codec_hashes =
       Enum.map(
-        [module <> ".Funs" | formatting_modules ++ codec_modules ++ operation_modules],
+        [
+          module <> ".Funs"
+          | formatting_modules ++ codec_modules ++ operation_modules ++ constructor_modules
+        ],
         fn name ->
           {name,
            Lynx.Rust.Fingerprint.file!(
@@ -566,7 +575,9 @@ defmodule Lynx.Rust.Extraction do
           [module <> ".Types", module <> ".Funs"] ++
             runtime_modules ++
             formatting_modules ++
-            codec_modules ++ operation_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
+            codec_modules ++
+            operation_modules ++
+            constructor_modules ++ Lynx.Rust.BytesModels.modules(audit, module)
         )
     }
   end

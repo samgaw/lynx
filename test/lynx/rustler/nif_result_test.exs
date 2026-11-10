@@ -206,12 +206,12 @@ defmodule Lynx.Rustler.NifResultTest do
         String.replace(
           source,
           "Err(error) => Err(error)",
-          "Err(_) => Err(rustler::Error::RaiseAtom(\"unsupported\"))"
+          "Err(_) => Err(rustler::Error::RaiseAtom(\"λ\"))"
         )
 
       File.write!(native, constructed)
 
-      assert_raise CompileError, ~r/Rustler Error construction or inspection/, fn ->
+      assert_raise CompileError, ~r/Rustler RaiseAtom requires a validated ASCII literal/, fn ->
         Lynx.Rustler.prepare!(options)
       end
 

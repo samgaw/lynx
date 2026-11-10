@@ -23,6 +23,7 @@ custom-encoder = []
 custom-decoder = []
 nif-result = []
 validated-decoder = []
+atom-errors = ["validated-decoder"]
 
 [dependencies]
 experiment-analysis = { path = "../analysis" }

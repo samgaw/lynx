@@ -537,6 +537,11 @@ require separate semantics. This does not identify every Rustler Error with BadA
 Other constructors and Error inspection require separate admitted semantics. -/
 @[expose] def badArgOutcome : DecoderError := .error (.error (.atom "badarg"))
 
+/-- Error construction stores an outcome; Rustler converts it only on return.
+Atom creation and allocation success remain assumptions at the native FFI boundary. -/
+@[expose] def atomErrorOutcome (value : String) : DecoderError := .ok (.atom value)
+@[expose] def raiseAtomErrorOutcome (value : String) : DecoderError := .error (.error (.atom value))
+
 namespace Decoding
 
 @[expose] def u64 (term : NativeTerm) : RustM (core.result.Result U64 DecoderError) :=
