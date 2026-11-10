@@ -158,6 +158,10 @@ theorem binaryAsSlice_outOfBounds (bytes : Binary)
   simp only [binaryAsSlice, List.length_map, Array.length_toList, ByteArray.size_data]
   exact dite_eq_right outside
 
+/-- Rustler's Term Decoder accepts its input unchanged. Native term validity
+and environment copies remain at the explicit FFI boundary. -/
+@[expose] def decodeTerm (input : Term) : Except Exception NativeTerm := .ok input
+
 /-- Rustler's signed integer decoder followed by Rust's narrowing `as` cast.
 For i8/i16, Rustler 0.38/0.39 decode i32 and then truncates; i32/i64 do not narrow. -/
 @[expose] def decodeSigned (ty : IScalarTy) (decoderBits : Nat) :

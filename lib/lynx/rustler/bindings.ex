@@ -8,6 +8,11 @@ defmodule Lynx.Rustler.Bindings do
   def custom?(list) when is_list(list), do: Enum.any?(list, &custom?/1)
   def custom?(_), do: false
 
+  def nif_result?(%{"nif_result" => _}), do: true
+  def nif_result?(map) when is_map(map), do: Enum.any?(Map.values(map), &nif_result?/1)
+  def nif_result?(list) when is_list(list), do: Enum.any?(list, &nif_result?/1)
+  def nif_result?(_), do: false
+
   # Expanded paths can be aliases. The compiled function's actual result type
   # determines identity; only monomorphic first-party structs/enums qualify.
   def resolve!(manifest, document, first_party, models \\ []) do
@@ -191,29 +196,32 @@ defmodule Lynx.Rustler.Bindings do
     end
   end
 
-  defp result!(%{"result" => [ok, err]}, type, audit, mode, translation) do
-    case Lynx.Rust.CallModels.expand(type, audit.references) do
-      %{
-        "Adt" => %{
-          "id" => id,
-          "builtin" => nil,
-          "generics" => %{
-            "types" => [ok_type, err_type],
-            "regions" => [],
-            "const_generics" => [],
-            "trait_refs" => []
-          }
-        }
-      } ->
-        unless LLBC.result_type?(id, audit),
-          do: raise(ArgumentError, "NIF result is not the extracted core::result::Result")
+  defp result!(%{"nif_result" => ok}, type, audit, mode, translation) do
+    case result_arguments(type, audit) do
+      {:ok, ok_type, err_type} ->
+        unless rustler_error?(err_type, audit),
+          do: raise(ArgumentError, "NifResult requires the actual Rustler Error return type")
 
-        %{
-          "result" => [
-            result!(ok, ok_type, audit, mode, translation),
-            result!(err, err_type, audit, mode, translation)
-          ]
-        }
+        %{"nif_result" => result!(ok, ok_type, audit, mode, translation)}
+
+      _ ->
+        raise ArgumentError, "Rustler and compiled NifResult signatures differ"
+    end
+  end
+
+  defp result!(%{"result" => [ok, err]}, type, audit, mode, translation) do
+    case result_arguments(type, audit) do
+      {:ok, ok_type, err_type} ->
+        if rustler_error?(err_type, audit) do
+          %{"nif_result" => result!(ok, ok_type, audit, mode, translation)}
+        else
+          %{
+            "result" => [
+              result!(ok, ok_type, audit, mode, translation),
+              result!(err, err_type, audit, mode, translation)
+            ]
+          }
+        end
 
       _ ->
         raise ArgumentError, "Rustler and compiled Result signatures differ"
@@ -246,6 +254,42 @@ defmodule Lynx.Rustler.Bindings do
       do: raise(ArgumentError, "Rustler and LLBC signatures differ: result type")
 
     schema
+  end
+
+  defp result_arguments(type, audit) do
+    case Lynx.Rust.CallModels.expand(type, audit.references) do
+      %{
+        "Adt" => %{
+          "id" => id,
+          "builtin" => nil,
+          "generics" => %{
+            "types" => [ok_type, err_type],
+            "regions" => [],
+            "const_generics" => [],
+            "trait_refs" => []
+          }
+        }
+      } ->
+        unless LLBC.result_type?(id, audit),
+          do: raise(ArgumentError, "NIF result is not the extracted core::result::Result")
+
+        {:ok, ok_type, err_type}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp rustler_error?(type, audit) do
+    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
+           Lynx.Rust.CallModels.expand(type, audit.references),
+         true <- Lynx.Rust.Constants.empty_arguments?(args),
+         %{"item_meta" => %{"name" => name}} <-
+           Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id)) do
+      name == Enum.map(~w(rustler error Error), &%{"Ident" => [&1, 0]})
+    else
+      _ -> false
+    end
   end
 
   defp native!(hint, type, audit, mode) do
