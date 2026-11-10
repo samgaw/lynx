@@ -64,7 +64,23 @@ defmodule Lynx.Rust.CapturedUnwind do
           %{output: output, type: %{"Value" => [next, %{"Adt" => adt}]}, adt: adt}}, next + 1}
       end)
 
-    plans = Map.new(plans)
+    external_plans =
+      for {helper, %{native_captured_source: source, native_captured_source_name: name}} <- models,
+          into: %{} do
+        original = Enum.at(translated["fun_decls"], source)
+        wrapper = Enum.at(translated["fun_decls"], helper)
+
+        {source,
+         %{
+           helper: helper,
+           source_name: name,
+           output: original["signature"]["output"],
+           type: wrapper["signature"]["output"],
+           adt: %{"id" => result["def_id"], "builtin" => nil}
+         }}
+      end
+
+    plans = Map.merge(Map.new(plans), external_plans)
 
     {changed, {records, _}} =
       Enum.map_reduce(functions, {[], next + map_size(plans) + 1}, fn function, {records, next} ->
@@ -84,6 +100,7 @@ defmodule Lynx.Rust.CapturedUnwind do
             unit: unit,
             owners: Enum.any?(locals, &owner?(CallModels.expand(&1["ty"], refs))),
             old: old,
+            external_captures: [],
             locals: locals ++ [Map.put(hd(locals), "index", old)],
             next: next
           }
@@ -104,7 +121,8 @@ defmodule Lynx.Rust.CapturedUnwind do
             original_signature: function["signature"],
             captured_signature: changed["signature"],
             panic: :result_err_unit,
-            nonpanicking_dependencies: MapSet.to_list(safe) |> Enum.sort()
+            nonpanicking_dependencies: MapSet.to_list(safe) |> Enum.sort(),
+            external_captures: Enum.reverse(state.external_captures)
           }
 
           {changed, {[record | records], state.next}}
@@ -209,6 +227,10 @@ defmodule Lynx.Rust.CapturedUnwind do
         if cleanup,
           do: reject!(state, "cleanup may panic again; native unwind termination is unsupported")
 
+        unless match?(%{"on_unwind" => %{"statements" => [_ | _]}}, call),
+          do: reject!(state, "captured fallible call is missing its compiler unwind exit")
+
+        {plan, call, state} = instantiate_capture(plan, call, s, state)
         {local, state} = local(plan.type, s, state)
         {live, state} = statement(s, %{"StorageLive" => local["kind"]["Local"]}, state)
         original = call["dest"]
@@ -293,6 +315,27 @@ defmodule Lynx.Rust.CapturedUnwind do
     edge = Map.put(call["on_unwind"], "statements", [resume])
     statement(s, %{"Call" => Map.put(call, "on_unwind", edge)}, state)
   end
+
+  defp instantiate_capture(%{helper: helper} = plan, call, statement, state) do
+    output = call["dest"]["ty"]
+    adt = Map.put(plan.adt, "generics", arguments([output, state.unit]))
+    type = %{"Value" => [state.next, %{"Adt" => adt}]}
+
+    record = %{
+      statement: statement["id"],
+      source: get_in(call, ["call", "func", "Regular", "kind", "Fun"]),
+      source_name: plan.source_name,
+      wrapper: helper,
+      span: statement["span"]
+    }
+
+    call = put_in(call, ["call", "func", "Regular", "kind", "Fun"], helper)
+
+    {%{plan | output: output, type: type, adt: adt}, call,
+     %{state | next: state.next + 1, external_captures: [record | state.external_captures]}}
+  end
+
+  defp instantiate_capture(plan, call, _, state), do: {plan, call, state}
 
   defp finish(s, variant, state) do
     {prefix, value, state} =

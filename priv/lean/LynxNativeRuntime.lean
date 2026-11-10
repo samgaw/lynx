@@ -72,6 +72,25 @@ preserving its heap updates for the Rustler catch boundary. -/
     resumeCaptured (ok (.Err ()) : NativeM (core.result.Result α Unit)) =
       fail .panic := by simp [resumeCaptured, ok]
 
+/-- Capture the native Rust panic marker while preserving effects before failure.
+Other exceptions and verification exhaustion retain their original meaning. -/
+@[expose] def capturePanic {α : Type} (computation : NativeM α) :
+    NativeM (core.result.Result α Unit) :=
+  Result.handle (do let value ← computation; ok (.Ok value)) fun error =>
+    match error with
+    | .error (.atom "rust_panicked") => ok (.Err ())
+    | error => .error error
+
+@[simp] theorem capturePanic_ok {α : Type} (value : α) :
+    capturePanic (ok value) = ok (.Ok value) := by simp [capturePanic, ok, Result.handle]
+
+@[simp] theorem capturePanic_panic {α : Type} :
+    capturePanic (fail .panic : NativeM α) = ok (.Err ()) := by
+  simp [capturePanic, fail, ok, Result.handle]
+
+@[simp] theorem capturePanic_exhausted {α : Type} :
+    capturePanic (.error .exhausted : NativeM α) = .error .exhausted := rfl
+
 /-- A successful standard `Result::expect` transfers the actual Ok payload.
 The error path cannot establish a Rust outcome: Debug formatting, error
 destruction and unwind require separate models before that path is supported. -/
@@ -950,6 +969,12 @@ instance {α : Type} [NativeCodec α] : NativeDrop (NativeResourceArc α) where
 destructor-free resource. Custom payload cleanup requires a separate model. -/
 instance {α : Type} [NativeCodec α] : NativeUnwindDrop (NativeResourceArc α) where
   drop := release
+
+/-- Closed compiler adapter for ResourceArc construction with a destructor-free
+payload. Its registration panic is handled by the caller's extracted cleanup. -/
+@[expose] def newCaptured {α : Type} [NativeCodec α] (value : α) :
+    NativeM (core.result.Result (NativeResourceArc α) Unit) :=
+  NativeM.capturePanic (new value)
 
 /-- Registration failure unwinds the still-owned argument before reporting panic.
 Physical allocation success and the VM callback remain explicit FFI boundaries. -/

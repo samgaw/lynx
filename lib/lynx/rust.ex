@@ -98,9 +98,12 @@ defmodule Lynx.Rust do
   Captured runtime cleanup also releases destructor-free Rustler ResourceArc
   owners, preserving other Rust aliases and VM pins. The payload requires the
   existing compiler drop query and default Resource callbacks; custom cleanup is
-  rejected. Resource construction can panic on missing registration and remains
-  outside captured extraction. Reports identify unselected constructor exports;
-  existing handles can enter through the verified resource decoder.
+  rejected. Resource construction inside supported scalar/unit functions captures
+  the modelled registration panic and follows the original caller cleanup. Its
+  successful owned result remains tracked until consumed or released; unrelated
+  caller-owned mutexes are disposed on either exceptional exit. Allocation and
+  native unwinding remain trusted boundaries. Fallible functions returning owned
+  handles remain unsupported and unselected exports are reported explicitly.
 
   Compiler temporaries that copy a mutable reference without retagging can be
   normalized when their only use is a dereference in the immediately following

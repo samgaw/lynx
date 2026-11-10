@@ -38,7 +38,9 @@ defmodule Lynx.Rust.CallModels do
                 Lynx.Rust.GuardModels.resolve(function, translated, refs) ||
                 Lynx.Rust.NativeDrops.resolve(function, translated, refs) ||
                 if(:captured_unwind_drops in enabled,
-                  do: Lynx.Rust.NativeUnwindDrops.resolve(function, translated, refs)
+                  do:
+                    Lynx.Rust.NativeUnwindDrops.resolve(function, translated, refs) ||
+                      Lynx.Rust.NativePanicCapture.resolve(function, translated, refs)
                 )
           ) ||
             Lynx.Rust.BoxModels.resolve(function, translated, refs) ||

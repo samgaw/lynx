@@ -100,3 +100,37 @@ fn checked_resource(resource: rustler::ResourceArc<UnwindResource>, accepted: bo
 fn resource_seed(value: bool) -> rustler::ResourceArc<UnwindResource> {
     rustler::ResourceArc::new(UnwindResource { value })
 }
+
+/// Creates and consumes an owner around the actual cross-crate computation.
+///
+/// # Panics
+/// Registration failure or rejection propagates after applicable owner cleanup.
+#[cfg(feature = "resource-unwind")]
+pub fn create_checked_resource(value: bool, accepted: bool) -> bool {
+    let resource = rustler::ResourceArc::new(UnwindResource { value });
+    checked_resource_inner(resource, accepted)
+}
+
+/// Keeps another owned cell live across construction and both exceptional exits.
+///
+/// # Panics
+/// Registration failure or rejection disposes the resource and unrelated mutex.
+#[cfg(feature = "resource-unwind")]
+#[lynx::resource_create]
+pub fn create_with_mutex(mutex: std::sync::Mutex<bool>, value: bool, accepted: bool) -> bool {
+    let resource = rustler::ResourceArc::new(UnwindResource { value });
+    let result = checked_resource_inner(resource, accepted);
+    drop(mutex);
+    result
+}
+
+/// Allocates its own resource before invoking the checked computation.
+///
+/// # Panics
+/// Registration failure and rejection are converted by the generated NIF wrapper.
+#[cfg(feature = "resource-unwind")]
+#[rustler::nif(name = "resource_created", schedule = "DirtyCpu")]
+#[lynx::resource_create]
+fn created(value: bool, accepted: bool) -> bool {
+    create_checked_resource(value, accepted)
+}
