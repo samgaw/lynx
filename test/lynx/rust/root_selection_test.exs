@@ -125,4 +125,56 @@ defmodule Lynx.Rust.RootSelectionTest do
       end
     end
   end
+
+  test "path selection cannot silently omit a requested local implementation" do
+    root = "demo::_::wrapper::_::calculate"
+    assert :ok = RootSelection.validate!(document([body()]), [root], nil, ["demo"])
+
+    for functions <- [[], [Map.put(body(), "body", "Opaque")], [body(), body()]] do
+      assert_raise ArgumentError, ~r/selected by path/, fn ->
+        RootSelection.validate!(document(functions), [root], nil, ["demo"])
+      end
+    end
+  end
+
+  test "dependency roots are checked against their actual bodies in either selection mode" do
+    dependency =
+      put_in(
+        body(),
+        ["item_meta", "name"],
+        Enum.map(~w(dependency calculate), &%{"Ident" => [&1, 0]})
+      )
+
+    for attribute <- [nil, "verify::root"] do
+      assert :ok =
+               RootSelection.validate!(
+                 document([dependency]),
+                 ["dependency::calculate"],
+                 attribute,
+                 ["demo"],
+                 ["demo", "dependency"]
+               )
+
+      assert_raise ArgumentError, ~r/dependency::calculate selected by path/, fn ->
+        RootSelection.validate!(
+          document([body()]),
+          ["dependency::calculate"],
+          attribute,
+          ["demo"],
+          ["demo", "dependency"]
+        )
+      end
+    end
+  end
+
+  test "external models and nonliteral trait selectors retain their existing resolution" do
+    assert :ok =
+             RootSelection.validate!(
+               document([]),
+               ["core::mem::drop", "{impl Trait for Demo}::method"],
+               nil,
+               ["demo"],
+               ["demo"]
+             )
+  end
 end

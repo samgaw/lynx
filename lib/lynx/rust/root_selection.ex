@@ -19,15 +19,16 @@ defmodule Lynx.Rust.RootSelection do
     attribute!(attribute)
 
     ["--start-from-attribute=" <> attribute] ++
-      Enum.flat_map(Enum.reject(roots, &attribute_root?(&1, local_crates)), &["--start-from", &1])
+      Enum.flat_map(Enum.reject(roots, &literal_root?(&1, local_crates)), &["--start-from", &1])
   end
 
-  def validate!(_document, _roots, nil, _local_crates), do: :ok
+  def validate!(document, roots, attribute, local_crates),
+    do: validate!(document, roots, attribute, local_crates, local_crates)
 
-  def validate!(document, roots, attribute, local_crates) do
+  def validate!(document, roots, attribute, local_crates, workspace_crates) do
     functions = Enum.reject(document["translated"]["fun_decls"], &is_nil/1)
 
-    for root <- roots, attribute_root?(root, local_crates) do
+    for root <- roots, literal_root?(root, workspace_crates) do
       expected = String.split(root, "::")
 
       expected =
@@ -48,15 +49,21 @@ defmodule Lynx.Rust.RootSelection do
         end)
 
       unless match?([%{"body" => body}] when is_map(body), matches) do
-        raise ArgumentError,
-              "missing, ambiguous or opaque Rust root #{root} selected by #[#{attribute}]; mark the implementation or an ancestor that calls it"
+        detail =
+          if attribute && literal_root?(root, local_crates),
+            do:
+              "selected by #[#{attribute}]; mark the implementation or an ancestor that calls it",
+            else:
+              "selected by path; every requested workspace function must have an extracted implementation"
+
+        raise ArgumentError, "missing, ambiguous or opaque Rust root #{root} #{detail}"
       end
     end
 
     :ok
   end
 
-  defp attribute_root?(root, local_crates) do
+  defp literal_root?(root, local_crates) do
     Regex.match?(@path, root) and
       hd(String.split(root, "::")) in ["crate" | local_crates]
   end

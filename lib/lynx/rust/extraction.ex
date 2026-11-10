@@ -703,9 +703,13 @@ defmodule Lynx.Rust.Extraction do
     document = read_llbc!(llbc, diagnostics)
     validate_target!(document)
 
-    Lynx.Rust.RootSelection.validate!(document, roots, attribute, [
-      context.artifact["target"]["name"]
-    ])
+    Lynx.Rust.RootSelection.validate!(
+      document,
+      roots,
+      attribute,
+      [context.artifact["target"]["name"]],
+      first_party
+    )
 
     models =
       models ++

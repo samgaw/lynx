@@ -26,7 +26,7 @@ defmodule Lynx.Rust.CollectionsTest do
         Enum.map(
           ~w(replace_first slice_length replace_at batch_length result_is_ok),
           &("experiment_analysis::" <> &1)
-        ),
+        ) ++ ["experiment_core::collections::batch_length"],
       mir: :elaborated,
       lean_project: project,
       module_prefix: "Collections.Extraction",

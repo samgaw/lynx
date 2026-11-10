@@ -52,7 +52,8 @@ defmodule Lynx.Rust do
   Required option `:roots` lists Rust paths. Optional `:root_attribute` selects
   annotated local implementations and their reachable dependencies using Charon's
   attribute selector, avoiding its nested-path resolver. Every requested literal
-  local path must still resolve to one extracted body. Ordinary trait
+  first-party workspace function path must resolve to one extracted body with
+  either selection mode, including explicitly selected dependency functions. Ordinary trait
   implementation patterns continue to use path selection. This can be used with
   release binaries without Lynx's nested-function selection patch.
 
