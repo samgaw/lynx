@@ -59,6 +59,11 @@ defmodule Lynx.Rustler.ResourceReturnTest do
       Path.join(project, "Returned/Properties.lean")
     )
 
+    File.cp!(
+      Path.join(@fixture, "ResourceFrameProperties.lean"),
+      Path.join(project, "Returned/Framed.lean")
+    )
+
     properties =
       File.read!(Path.join(@fixture, "ResourceReturnNifProperties.lean"))
       |> String.replace("__ALLOCATE__", allocated["lean_name"])
@@ -67,13 +72,18 @@ defmodule Lynx.Rustler.ResourceReturnTest do
     File.write!(Path.join(project, "Returned/NifProperties.lean"), properties)
 
     required =
-      ~w(mutate checked allocate allocate_registered allocate_unregistered encoded_return decoded_return adapter_roundtrip)
+      ~w(mutate checked allocate allocate_registered allocate_unregistered encoded_return encoded_next decoded_return adapter_roundtrip)
 
     options =
       options ++
         [
-          proof_modules: ["Returned.Properties", "Returned.NifProperties"],
-          required_properties: Enum.map(required, &("Returned.Properties." <> &1))
+          proof_modules: ["Returned.Properties", "Returned.Framed", "Returned.NifProperties"],
+          required_properties:
+            Enum.map(required, &("Returned.Properties." <> &1)) ++
+              Enum.map(
+                ~w(allocate_next allocate_twice rejected_after_return),
+                &("Returned.Framed." <> &1)
+              )
         ]
 
     prepared = Lynx.Rustler.prepare!(options)
@@ -108,6 +118,14 @@ defmodule Lynx.Rustler.ResourceReturnTest do
       assert catch_error(apply(native, :resource_allocate, [value, false])) == :nif_panicked
     end
 
+    first = apply(native, :resource_allocate, [true, true])
+    second = apply(native, :resource_allocate, [false, true])
+    assert apply(native, :resource_checked, [first, true])
+    refute apply(native, :resource_checked, [second, true])
+    assert catch_error(apply(native, :resource_allocate, [false, false])) == :nif_panicked
+    assert apply(native, :resource_checked, [first, true])
+    refute apply(native, :resource_checked, [second, true])
+
     for args <- [[7, true], [true, 7]],
         do: assert_raise(ArgumentError, fn -> apply(native, :resource_allocate, args) end)
 
@@ -115,7 +133,7 @@ defmodule Lynx.Rustler.ResourceReturnTest do
       Code.compile_file(Path.join(workspace, "elixir/resource_return_laws.ex"))
 
     for law <-
-          ~w(returns_true returns_false rejects_after_creation rejects_first_argument rejects_second_argument rejects_later_decoding retains_handle)a,
+          ~w(returns_true returns_false rejects_after_creation rejects_first_argument rejects_second_argument rejects_later_decoding retains_handle independent_handles preserves_prior_handle)a,
         do: assert(apply(law_module, law, []))
 
     export = Path.join(tmp, "resource-return.export")
@@ -123,7 +141,7 @@ defmodule Lynx.Rustler.ResourceReturnTest do
     reports = Lynx.Laws.verify([beam], opts ++ [export: export])
     errors = for report <- reports, report.status != :ok, do: report.diagnostics
     assert errors == [], inspect(errors, limit: :infinity)
-    assert length(Enum.flat_map(reports, & &1.theorems)) == 7
+    assert length(Enum.flat_map(reports, & &1.theorems)) == 9
     assert Enum.all?(Lynx.Laws.verify([beam], opts), &(&1.status == :ok and &1.cached))
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)

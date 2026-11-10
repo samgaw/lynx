@@ -6,6 +6,12 @@ public section
 open Aeneas Aeneas.Std Lynx ownership_nif
 namespace Returned.Properties
 
+theorem resource_reference_eq (left right : Nat) :
+    (Term.nativeReference left == Term.nativeReference right) = (left == right) := by
+  apply Bool.eq_iff_iff.mpr
+  rw [Term.beq_iff_compare_eq, Term.compare_eq_reference]
+  simp
+
 theorem allocations_distinct : (Term.nativeReference 3 == Term.nativeReference 1) = false := by
   apply Bool.eq_false_iff.mpr
   intro equal
@@ -64,6 +70,35 @@ theorem encoded_return (value accepted : Bool) :
       NativeResourceArc.release owner
       Result.ok term) id).run initial [] =
     if accepted then (.ok (.nativeReference 6), pinned value 6)
+    else (.error (.error (.atom "nif_panicked")), {initial with nativeRefCounter := 2}) := by
+  have different : (Term.nativeReference 3 == Term.nativeReference 1) = false := by
+    apply Bool.eq_false_iff.mpr
+    intro equal
+    have same := (Term.compare_eq_reference _ _).mp ((Term.beq_iff_compare_eq _ _).mp equal)
+    cases same
+  cases value <;> cases accepted <;> simp [initial, pinned, NativeResourceArc.vmCells, allocate,
+    __ALLOCATE__,
+    NativeM.resumeCaptured, NativeM.capturePanic, NativeM.ok, NativeM.fail,
+    Rustler.executeNative, Result.handle, NativeResourceArc.newCaptured,
+    NativeResourceArc.new, NativeResourceArc.deref, NativeResourceArc.release,
+    NativeResourceArc.takeOwner, NativeResourceArc.ownerState, NativeResourceArc.retiredState,
+    NativeResourceArc.ownership, NativeResourceArc.handleType, NativeResourceArc.typeName,
+    NativeResourceArc.termType, NativeResourceArc.referenceLimit, NativeResourceArc.clone,
+    NativeResourceArc.encode_eq, NativeResourceArc.decode_eq, NativeCodec.roundtrip,
+    NativeM.allocate, List.filter, List.map, different]
+
+set_option maxRecDepth 4096 in
+set_option maxHeartbeats 1000000 in
+theorem encoded_next {β : Type} (value accepted : Bool) (next : Term → Result β)
+    (schedule : List ScheduleChoice) :
+    (do
+      let encoded ← Rustler.executeNative (do
+        let owner ← NativeM.resumeCaptured (__ALLOCATE__ value accepted)
+        let term ← NativeResourceArc.encode owner
+        NativeResourceArc.release owner
+        Result.ok term) id
+      next encoded).run initial schedule =
+    if accepted then (next (.nativeReference 6)).run (pinned value 6) schedule
     else (.error (.error (.atom "nif_panicked")), {initial with nativeRefCounter := 2}) := by
   have different : (Term.nativeReference 3 == Term.nativeReference 1) = false := by
     apply Bool.eq_false_iff.mpr
