@@ -57,6 +57,7 @@ defmodule Lynx.Rustler.DecoderModels do
       %{
         rust_name: "rustler::types::primitive::{rustler::types::Decoder<'_, u64>}::decode",
         lean: "Lynx.Rustler.Decoding.u64",
+        decoder_trait: function["src"]["TraitImpl"]["trait_ref"]["id"],
         builtin: false,
         can_fail: true,
         lift: false,
@@ -105,6 +106,37 @@ defmodule Lynx.Rustler.DecoderModels do
             {:error, function,
              "Rustler Error construction or inspection is unsupported here; only opaque error forwarding and validated BadArg, ASCII literal Atom/RaiseAtom and admitted boxed Encoder construction are supported"}
         end
+    end
+  end
+
+  def decoder_trait?(id, translated, refs),
+    do: trait?(id, %{translated: translated, refs: refs})
+
+  def decoder_method?(function, self, translated, refs),
+    do: method?(function, self, %{translated: translated, refs: refs, traits: %{}})
+
+  def external_names(audit) do
+    if Enum.any?(Map.values(audit.external_calls), &Map.has_key?(&1, :decoder_trait)) or
+         Enum.any?(Map.values(audit.decoder_dispatch.calls), &(&1 != [])) do
+      %{
+        "trait_decls" => [
+          %{
+            "rust_pattern" => "rustler::types::Decoder",
+            "extract_name" => "Lynx.Rustler.Decoder",
+            "constructor" => "Lynx.Rustler.Decoder.mk"
+          }
+        ],
+        "trait_items" => [
+          %{
+            "trait" => "rustler::types::Decoder",
+            "kind" => "method",
+            "rust" => "decode",
+            "extract" => "decode"
+          }
+        ]
+      }
+    else
+      %{}
     end
   end
 

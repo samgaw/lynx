@@ -141,6 +141,16 @@ defmodule Lynx.Rust.LLBC do
       end
     end
 
+    decoder_dispatch =
+      if :rustler_decoders in Keyword.get(opts, :external_calls, []) do
+        case Lynx.Rustler.DecoderDispatch.audit(functions, available_models, translated, refs) do
+          {:ok, result} -> result
+          {:error, function, message} -> failure!(function, translated, message)
+        end
+      else
+        %{dependencies: %{}, calls: %{}}
+      end
+
     direct_calls = Enum.flat_map(functions, &calls(&1["body"]))
 
     modelled =
@@ -194,6 +204,11 @@ defmodule Lynx.Rust.LLBC do
     trait_dependencies =
       Map.merge(trait_dependencies, vtable_dependencies, fn _, a, b -> Enum.uniq(a ++ b) end)
 
+    trait_dependencies =
+      Map.merge(trait_dependencies, decoder_dispatch.dependencies, fn _, left, right ->
+        Enum.uniq(left ++ right)
+      end)
+
     modelled =
       available_models
       |> Map.take(direct_calls ++ (trait_dependencies |> Map.values() |> List.flatten()))
@@ -211,7 +226,8 @@ defmodule Lynx.Rust.LLBC do
 
     allowed = %{
       functions: MapSet.new(Enum.map(functions, & &1["def_id"]) ++ Map.keys(modelled)),
-      constants: constants
+      constants: constants,
+      trait_calls: decoder_dispatch.calls
     }
 
     for function <- functions do
@@ -272,6 +288,7 @@ defmodule Lynx.Rust.LLBC do
       constant_initializers: initializers,
       callback_dependencies: callback_dependencies,
       trait_dependencies: trait_dependencies,
+      decoder_dispatch: decoder_dispatch,
       drops: drops,
       constants: constants,
       external_functions: external,
@@ -511,8 +528,9 @@ defmodule Lynx.Rust.LLBC do
               "unverified external Rust call #{callee_label(id, translated)} (function #{id})"
             )
 
-      _ ->
-        failure!(function, translated, "unsupported indirect Rust call")
+      func ->
+        unless func in Map.get(ids.trait_calls, function["def_id"], []),
+          do: failure!(function, translated, "unsupported indirect Rust call")
     end
 
     Enum.each(Map.values(node), &check_calls!(&1, ids, function, translated))
