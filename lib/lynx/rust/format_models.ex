@@ -236,6 +236,10 @@ defmodule Lynx.Rust.FormatModels do
          } <- function do
       case {unsafe, name} do
         {false,
+         [%{"Ident" => ["alloc", 0]}, %{"Ident" => ["fmt", 0]}, %{"Ident" => ["format", 0]}]} ->
+          allocated_format_model(function, ctx)
+
+        {false,
          [
            %{"Ident" => ["alloc", 0]},
            %{"Ident" => ["string", 0]},
@@ -278,6 +282,25 @@ defmodule Lynx.Rust.FormatModels do
         _ ->
           nil
       end
+    else
+      _ -> nil
+    end
+  end
+
+  defp allocated_format_model(function, ctx) do
+    sig = expand(function["signature"], ctx)
+
+    with "Normal" <- function["src"],
+         true <- plain_parameters?(function["generics"], 1, 0),
+         [args] <- sig["inputs"],
+         true <- named_type?(args, ~w(core fmt Arguments), [region(0)], ctx),
+         true <- named_type?(sig["output"], ~w(alloc string String), [], ctx) do
+      model(
+        "alloc::fmt::format",
+        "Aeneas.Std.alloc.fmt.format",
+        false,
+        "Bounded allocated default-format model invoking checked arguments and actual renderers; formatter errors panic; oversized output exhausts verification; Rust alloc implementation and native allocation unverified"
+      )
     else
       _ -> nil
     end

@@ -26,6 +26,24 @@ theorem describe_spec (value : U64)
     argument_analysis.describe value = .ok ("n=" ++ toString value.val) := by
   simp [argument_analysis.describe, Lynx.RustFormatting.alloc.string.ToString.to_string,
     renderer_spec value "" first_bound final_bound]
+theorem formatted_spec (value : U64)
+    (first_bound : ("".utf8ByteSize + "n=".utf8ByteSize) ≤ 4294967295)
+    (final_bound : ("".utf8ByteSize + "n=".utf8ByteSize + (toString value.val).utf8ByteSize) ≤ 4294967295)
+    (native_bound : ("n=" ++ toString value.val).utf8ByteSize ≤ Isize.max.toNat) :
+    argument_analysis.formatted value = .ok ("n=" ++ toString value.val) := by
+  have program : (Lynx.RustFormatting.Formatting.bytes [192#u8, 0#u8]).toList = [192, 0] := by decide +kernel
+  simp [argument_analysis.formatted, argument_analysis.core.hint.must_use, Array.make, Lynx.RustFormatting.alloc.fmt.format,
+    Lynx.RustFormatting.core.fmt.rt.Argument.new_display, Lynx.RustFormatting.core.fmt.Arguments.new,
+    program, Lynx.RustFormatting.Formatting.validTemplate, Lynx.RustFormatting.Formatting.run,
+    renderer_spec value "" first_bound final_bound] <;> simp_all [String.utf8ByteSize_append]
+
+theorem rejected_spec (value : U64) : argument_analysis.rejected value = RustM.fail .panic := by
+  have program : (Lynx.RustFormatting.Formatting.bytes [192#u8, 0#u8]).toList = [192, 0] := by decide +kernel
+  simp [argument_analysis.rejected, argument_analysis.core.hint.must_use, Array.make, Lynx.RustFormatting.alloc.fmt.format,
+    Lynx.RustFormatting.core.fmt.rt.Argument.new_display, Lynx.RustFormatting.core.fmt.Arguments.new,
+    program, Lynx.RustFormatting.Formatting.validTemplate, Lynx.RustFormatting.Formatting.run,
+    argument_analysis.argument_base.Rejected.Insts.CoreFmtDisplay.fmt]
+
 theorem zero_spec : argument_analysis.describe 0#u64 = .ok "n=0" := by
   have zero : toString (0#u64).val = "0" := by
     change Nat.repr 0 = "0"

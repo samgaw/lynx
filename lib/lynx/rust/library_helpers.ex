@@ -5,7 +5,22 @@ defmodule Lynx.Rust.LibraryHelpers do
   # Inclusion is not a specification or an approval of its behavior: its actual
   # body goes through the same call audit, extraction and kernel checking as a
   # workspace function. Other dependency functions remain outside this scope.
-  def includes, do: ["thiserror::display"]
+  def includes, do: ["thiserror::display", "core::hint::must_use"]
+
+  def selected?(
+        %{
+          "src" => "Normal",
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["hint", 0]},
+              %{"Ident" => ["must_use", 0]}
+            ]
+          }
+        },
+        _
+      ),
+      do: true
 
   def selected?(
         %{

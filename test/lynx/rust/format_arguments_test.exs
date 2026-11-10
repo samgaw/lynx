@@ -30,9 +30,18 @@ defmodule Lynx.Rust.FormatArgumentsTest do
     original = """
     pub struct Count(pub u64);
     impl std::fmt::Display for Count {
-        #[expect(clippy::useless_borrows_in_formatting, reason = "Exercise the shared-reference Display dictionary")]
+        #[expect(
+            clippy::useless_borrows_in_formatting,
+            reason = "Exercise the shared-reference Display dictionary"
+        )]
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "n={}", &self.0)
+        }
+    }
+    pub struct Rejected(pub u64);
+    impl std::fmt::Display for Rejected {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Err(std::fmt::Error)
         }
     }
     """
@@ -49,7 +58,15 @@ defmodule Lynx.Rust.FormatArgumentsTest do
     """)
 
     File.write!(Path.join(workspace, "analysis/src/lib.rs"), """
-    pub fn describe(value: u64) -> String { argument_base::Count(value).to_string() }
+    pub fn describe(value: u64) -> String {
+        argument_base::Count(value).to_string()
+    }
+    pub fn formatted(value: u64) -> String {
+        format!("{}", argument_base::Count(value))
+    }
+    pub fn rejected(value: u64) -> String {
+        format!("{}", argument_base::Rejected(value))
+    }
     """)
 
     {output, status} =
@@ -74,7 +91,12 @@ defmodule Lynx.Rust.FormatArgumentsTest do
     )
 
     options = [
-      roots: ["argument_analysis::describe"],
+      roots: [
+        "argument_analysis::describe",
+        "argument_analysis::formatted",
+        "argument_analysis::rejected"
+      ],
+      mir: :elaborated,
       lean_project: project,
       module_prefix: "Arguments.Extraction",
       build_dir: Path.join(tmp, "build"),
@@ -82,21 +104,25 @@ defmodule Lynx.Rust.FormatArgumentsTest do
       required_properties: [
         "Arguments.renderer_spec",
         "Arguments.describe_spec",
-        "Arguments.zero_spec"
+        "Arguments.zero_spec",
+        "Arguments.formatted_spec",
+        "Arguments.rejected_spec"
       ]
     ]
 
     result = Lynx.Rust.verify!(workspace, "argument-analysis", options)
 
     calls = result.verification.unverified_external_calls
-    assert length(calls) == 6
+    assert length(calls) == 7
     assert Enum.all?(calls, &(&1.status == :modelled and not &1.implementation_verified))
     assert Enum.any?(calls, &String.contains?(&1.rust_name, "Display<u64>"))
 
-    assert Enum.any?(result.verification.guarantees, fn row ->
-             row.kind == :cross_crate_contract and row.theorem == "Arguments.describe_spec" and
-               "Arguments.renderer_spec" in row.contracts_used
-           end)
+    for theorem <- ["Arguments.describe_spec", "Arguments.formatted_spec"] do
+      assert Enum.any?(result.verification.guarantees, fn row ->
+               row.kind == :cross_crate_contract and row.theorem == theorem and
+                 "Arguments.renderer_spec" in row.contracts_used
+             end)
+    end
 
     assert "Arguments.NativeFormatting" in result.extraction.audit_modules
 
@@ -120,6 +146,27 @@ defmodule Lynx.Rust.FormatArgumentsTest do
       assert_raise CompileError, fn ->
         LLBC.audit!(broken, ["argument_base", "argument_analysis"])
       end
+    end
+
+    helper =
+      Enum.find(
+        result.extraction.audit.functions,
+        &(&1["item_meta"]["name"] ==
+            Enum.map(~w(core hint must_use), fn part -> %{"Ident" => [part, 0]} end))
+      )
+
+    assert helper["def_id"] in result.extraction.audit.library_helpers
+    assert is_map(helper["body"])
+
+    opaque_helper =
+      update_in(document, ["translated", "fun_decls"], fn functions ->
+        Enum.map(functions, fn f ->
+          if f && f["def_id"] == helper["def_id"], do: %{f | "body" => "Opaque"}, else: f
+        end)
+      end)
+
+    assert_raise CompileError, ~r/missing or unsupported first-party implementation/, fn ->
+      LLBC.audit!(opaque_helper, ["argument_base", "argument_analysis"])
     end
 
     export = Path.join(tmp, "display.export")
