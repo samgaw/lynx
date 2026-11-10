@@ -61,11 +61,15 @@ defmodule Lynx.Rust.Constants do
 
   def link!(declarations, translation) do
     for {id, global} <- declarations,
-        initializer_id(global) != nil or global["lynx_scalar_model"],
+        initializer_id(global) != nil or not is_nil(global["lynx_scalar_model"]) or
+          not is_nil(global["lynx_vtable"]),
         into: %{} do
       matches = Enum.filter(Map.get(translation, "globals", []), &(&1["def_id"] == id))
 
       case {global["lynx_scalar_model"], global["global_kind"], matches} do
+        {nil, "VTable", []} ->
+          {id, Lynx.Rust.VTables.link!(global, translation)}
+
         {%{} = model, "NamedConst", []} ->
           {id,
            model
