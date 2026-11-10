@@ -380,7 +380,16 @@ fn validate_nonzero(input: rustler::Term<'_>) -> rustler::NifResult<bool> {
     match <u64 as rustler::Decoder<'_>>::decode(input) {
         Ok(value) => {
             if value == 0 {
-                Err(rustler::Error::BadArg)
+                {
+                    #[cfg(feature = "atom-errors")]
+                    {
+                        Err(rustler::Error::Atom("zero"))
+                    }
+                    #[cfg(not(feature = "atom-errors"))]
+                    {
+                        Err(rustler::Error::BadArg)
+                    }
+                }
             } else {
                 Ok(experiment_analysis::restore(value != 0))
             }
@@ -415,7 +424,29 @@ fn validated_flag(input: ValidatedFlag) -> bool {
 #[cfg(feature = "validated-decoder")]
 #[rustler::nif]
 fn validated_result(input: rustler::Term<'_>) -> rustler::NifResult<bool> {
-    validate_nonzero(input)
+    #[cfg(feature = "atom-errors")]
+    {
+        raise_nonzero(input)
+    }
+    #[cfg(not(feature = "atom-errors"))]
+    {
+        validate_nonzero(input)
+    }
+}
+
+/// Raises a literal atom only when the facade returns this constructed error.
+#[cfg(feature = "atom-errors")]
+fn raise_nonzero(input: rustler::Term<'_>) -> rustler::NifResult<bool> {
+    match <u64 as rustler::Decoder<'_>>::decode(input) {
+        Ok(value) => {
+            if value == 0 {
+                Err(rustler::Error::RaiseAtom("zero"))
+            } else {
+                Ok(experiment_analysis::restore(value != 0))
+            }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
