@@ -66,6 +66,11 @@ pub fn consume_guard_panic(mutex: std::sync::Mutex<bool>, accepted: bool) -> boo
     true
 }
 
+/// Toggles a borrowed flag without panicking.
+pub fn toggle(value: &mut bool) {
+    ownership_base::toggle(value);
+}
+
 #[cfg(test)]
 mod tests {
     use super::guard_panic;

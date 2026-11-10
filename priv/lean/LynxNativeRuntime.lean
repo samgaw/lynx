@@ -805,6 +805,169 @@ end Lynx.NativeGuard
 
 namespace Lynx
 
+/-- A standard read/write lock's logical shared-cell identity. -/
+structure NativeRwLock (α : Type) where
+  id : Nat
+
+structure NativeRwReadGuard (α : Type) where
+  lock : NativeRwLock α
+  token : Nat
+  ownerContext : PID
+  value : α
+
+structure NativeRwWriteGuard (α : Type) where
+  lock : NativeRwLock α
+  token : Nat
+  ownerContext : PID
+  value : α
+
+namespace NativeRwReadGuard
+@[expose] def deref {α : Type} (guard : NativeRwReadGuard α) : α := guard.value
+end NativeRwReadGuard
+namespace NativeRwWriteGuard
+@[expose] def deref {α : Type} (guard : NativeRwWriteGuard α) : α := guard.value
+@[expose] def deref_mut {α : Type} (guard : NativeRwWriteGuard α) : α × (α → NativeRwWriteGuard α) :=
+  (guard.value, fun value => {guard with value})
+end NativeRwWriteGuard
+
+namespace NativeRwLock
+@[expose] def typeName (α : Type) [NativeCodec α] : String := "rwlock<" ++ NativeCodec.typeName (α := α) ++ ">"
+instance {α : Type} [NativeCodec α] : NativeCodec (NativeRwLock α) where
+  typeName := "handle<" ++ typeName α ++ ">"
+  encode lock := .nativeReference lock.id
+  decode | .nativeReference id => some ⟨id⟩ | _ => none
+  decode_encode lock := by cases lock; rfl
+
+/-- Logical leases are unique, execution-context-bound capabilities. -/
+structure State (α : Type) where
+  readers : List (Nat × PID)
+  writer : Option (Nat × PID)
+  poisoned : Bool
+  value : α
+
+@[expose] def readerLimit : Nat := 1024
+@[expose] def lease (token : Nat) (context : PID) : Term := .tuple #[.nativeReference token, .pid context]
+@[expose] def decodeLease (term : Term) : Option (Nat × PID) := do
+  let .tuple fields := term | none
+  if h : fields.size = 2 then
+    let .nativeReference token := fields[0]'(by omega) | none
+    let .pid context := fields[1]'(by omega) | none
+    some (token,context)
+  else none
+
+@[expose] def contents {α : Type} [NativeCodec α] (state : State α) : Term :=
+  .tuple #[.tuple (state.readers.map (fun (token,context) => lease token context)).toArray,
+    (match state.writer with | none => .atom "unlocked" | some (token,context) => lease token context),
+    .atom (if state.poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode state.value]
+
+@[expose] def decodeState {α : Type} [NativeCodec α] (term : Term) : Option (State α) := do
+  let .tuple fields := term | none
+  if h : fields.size = 4 then
+    let .tuple readers := fields[0]'(by omega) | none
+    let readers ← readers.toList.mapM decodeLease
+    let writer ← if fields[1]'(by omega) == .atom "unlocked" then some none
+      else some <$> decodeLease (fields[1]'(by omega))
+    let poisoned ← match fields[2]'(by omega) with
+      | .atom "poisoned" => some true | .atom "unpoisoned" => some false | _ => none
+    let value ← NativeCodec.decode (fields[3]'(by omega))
+    if readers.length ≤ readerLimit && (readers.map Prod.fst).eraseDups.length == readers.length &&
+        (writer.isNone || readers.isEmpty) then
+      some ⟨readers,writer,poisoned,value⟩
+    else none
+  else none
+
+@[expose] def state {α : Type} [NativeCodec α] (lock : NativeRwLock α) (env : Environment) : Option (State α) := do
+  let [(_,tag,term)] := env.nativeHeap.filter (fun cell => cell.1 == lock.id) | none
+  if tag == typeName α then decodeState term else none
+
+@[expose] def store {α : Type} [NativeCodec α] (lock : NativeRwLock α) (value : State α) (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == lock.id then (lock.id,typeName α,contents value) else cell}
+
+@[expose] def new {α : Type} [NativeCodec α] (value : α) : NativeM (NativeRwLock α) := do
+  let id ← NativeM.allocate (typeName α) (contents ⟨[],none,false,value⟩)
+  return ⟨id⟩
+
+/-- Conflicting acquisitions exhaust verification until waiting-writer admission
+and OS priority are represented. Exhaustion is never a Rust error or completion. -/
+@[expose] def acquireRead {α : Type} [NativeCodec α] (lock : NativeRwLock α) (env : Environment) :
+    Except Exception (core.result.Result (NativeRwReadGuard α) (NativePoisonError (NativeRwReadGuard α))) × Environment :=
+  match state lock env with
+  | none => (.error .exhausted,env)
+  | some value =>
+    let token := env.nativeRefCounter + 1
+    if value.writer.isSome || value.readers.length ≥ readerLimit ||
+        (value.readers.any fun lease => lease.1 == token) ||
+        (env.nativeHeap.any fun cell => cell.1 == token) then (.error .exhausted,env) else
+    let guard : NativeRwReadGuard α := ⟨lock,token,env.currentPid,value.value⟩
+    let after := store lock {value with readers := (token,env.currentPid) :: value.readers} env
+    (.ok (if value.poisoned then .Err ⟨guard⟩ else .Ok guard), {after with nativeRefCounter := token})
+
+@[expose] def acquireWrite {α : Type} [NativeCodec α] (lock : NativeRwLock α) (env : Environment) :
+    Except Exception (core.result.Result (NativeRwWriteGuard α) (NativePoisonError (NativeRwWriteGuard α))) × Environment :=
+  match state lock env with
+  | none => (.error .exhausted,env)
+  | some value =>
+    let token := env.nativeRefCounter + 1
+    if value.writer.isSome || !value.readers.isEmpty ||
+        (env.nativeHeap.any fun cell => cell.1 == token) then (.error .exhausted,env) else
+    let guard : NativeRwWriteGuard α := ⟨lock,token,env.currentPid,value.value⟩
+    let after := store lock {value with writer := some (token,env.currentPid)} env
+    (.ok (if value.poisoned then .Err ⟨guard⟩ else .Ok guard), {after with nativeRefCounter := token})
+
+@[expose] def read {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
+    NativeM (core.result.Result (NativeRwReadGuard α) (NativePoisonError (NativeRwReadGuard α))) :=
+  .nativeModify (acquireRead lock) Result.ofExcept
+@[expose] def write {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
+    NativeM (core.result.Result (NativeRwWriteGuard α) (NativePoisonError (NativeRwWriteGuard α))) :=
+  .nativeModify (acquireWrite lock) Result.ofExcept
+
+@[expose] def releaseRead {α : Type} [NativeCodec α] (guard : NativeRwReadGuard α) : NativeM Unit :=
+  .nativeModify (fun env => match state guard.lock env with
+    | none => (Except.error .exhausted,env)
+    | some value =>
+      if guard.ownerContext == env.currentPid && value.writer.isNone &&
+          (guard.token,guard.ownerContext) ∈ value.readers then
+        (Except.ok (),store guard.lock
+          {value with readers := value.readers.filter (fun lease => lease.1 != guard.token)} env)
+      else (Except.error .exhausted,env)) Result.ofExcept
+
+/-- Only a writer commits its reconstructed payload or poisons on unwind. -/
+@[expose] def releaseWrite {α : Type} [NativeCodec α] (guard : NativeRwWriteGuard α)
+    (unwinding : Bool := false) : NativeM Unit :=
+  .nativeModify (fun env => match state guard.lock env with
+    | none => (Except.error .exhausted,env)
+    | some value =>
+      if guard.ownerContext == env.currentPid && value.writer == some (guard.token,guard.ownerContext) then
+        (Except.ok (),store guard.lock
+          {value with
+            writer := none
+            poisoned := value.poisoned || unwinding
+            value := guard.value} env)
+      else (Except.error .exhausted,env)) Result.ofExcept
+
+@[expose] def dispose {α : Type} [NativeCodec α] (lock : NativeRwLock α) : NativeM Unit :=
+  .nativeGet fun env =>
+    match state lock env with
+    | some value =>
+      if value.readers.isEmpty && value.writer.isNone then do
+        let _ ← NativeM.removeCell (typeName α) lock.id
+        return ()
+      else .error .exhausted
+    | none => .error .exhausted
+end NativeRwLock
+
+instance {α : Type} [NativeCodec α] : NativeDrop (NativeRwLock α) where
+  drop := NativeRwLock.dispose
+instance {α : Type} [NativeCodec α] : NativeDrop (NativeRwReadGuard α) where
+  drop := NativeRwLock.releaseRead
+instance {α : Type} [NativeCodec α] : NativeDrop (NativeRwWriteGuard α) where
+  drop guard := NativeRwLock.releaseWrite guard false
+instance {α : Type} [NativeCodec α] : NativeUnwindDrop (NativeRwReadGuard α) where
+  drop := NativeRwLock.releaseRead
+instance {α : Type} [NativeCodec α] : NativeUnwindDrop (NativeRwWriteGuard α) where
+  drop guard := NativeRwLock.releaseWrite guard true
+
 /-- One linear Rust reference to a shared resource. Payloads reside in the heap,
 not in individual handles. VM-held references require a separate adapter. -/
 structure NativeResourceArc (α : Type) where

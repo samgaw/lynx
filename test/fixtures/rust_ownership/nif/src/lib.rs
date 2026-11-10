@@ -158,3 +158,46 @@ pub fn allocate_resource(value: bool, accepted: bool) -> rustler::ResourceArc<Un
 fn allocated(value: bool, accepted: bool) -> rustler::ResourceArc<UnwindResource> {
     allocate_resource(value, accepted)
 }
+
+/// Exercises actual shared and exclusive standard lock guards.
+#[cfg(feature = "rwlock")]
+pub fn rw_probe(value: bool) -> bool {
+    let lock = std::sync::RwLock::new(value);
+    let first = match lock.read() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let second = match lock.read() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let before = *first == *second;
+    drop(second);
+    drop(first);
+    let mut writer = match lock.write() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    ownership_app::toggle(&mut writer);
+    drop(writer);
+    let reader = match lock.read() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let after = *reader;
+    drop(reader);
+    #[expect(
+        clippy::drop_non_drop,
+        reason = "Ends the owned lock's lifetime before the final Boolean branch."
+    )]
+    drop(lock);
+    before && after
+}
+
+/// Exposes a shared/read and exclusive/write computation.
+#[cfg(feature = "rwlock")]
+#[rustler::nif(name = "rw_checked", schedule = "DirtyCpu")]
+#[lynx::rwlock]
+fn rw_scope(value: bool) -> bool {
+    rw_probe(value)
+}

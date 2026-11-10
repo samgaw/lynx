@@ -107,7 +107,8 @@ defmodule Lynx.Rust.GuardDrops do
     }
 
     name =
-      path(~w(std sync poison mutex MutexGuard)) ++ [%{"Impl" => %{"Trait" => impl["def_id"]}}]
+      LockModels.guard_path(LockModels.guard_kind(find(translated["type_decls"], guard), refs)) ++
+        [%{"Impl" => %{"Trait" => impl["def_id"]}}]
 
     with %{
            "src" => "Destruct",
@@ -191,7 +192,6 @@ defmodule Lynx.Rust.GuardDrops do
   defp bound(left, right),
     do: %{"regions" => [], "outlives" => [], "skip_binder" => [left, right]}
 
-  defp path(parts), do: Enum.map(parts, &%{"Ident" => [&1, 0]})
   defp find(items, id), do: Enum.find(items, &(&1 && &1["def_id"] == id))
   defp expand_trait(%{"Value" => [_, value]}, _), do: value
   defp expand_trait(%{"Deduplicated" => id}, refs), do: Map.get(refs, id)

@@ -109,7 +109,7 @@ defmodule Lynx.Rust.NativeCodecs do
       %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => [payload]} = args}} ->
         type = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
-        unless Lynx.Rust.MutexModels.type?(type) and
+        unless (Lynx.Rust.MutexModels.type?(type) or Lynx.Rust.RwLockModels.type?(type)) and
                  args == Lynx.Rust.ResourceModels.args([payload]),
                do: raise(ArgumentError, "unsupported native heap handle identity")
 
@@ -297,10 +297,17 @@ defmodule Lynx.Rust.NativeCodecs do
       %{"Adt" => %{"id" => id, "generics" => %{"types" => [payload]}}} ->
         declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
-        unless Lynx.Rust.MutexModels.type?(declaration),
-          do: raise(ArgumentError, "unsupported heap handle schema")
+        unless Lynx.Rust.MutexModels.type?(declaration) or
+                 Lynx.Rust.RwLockModels.type?(declaration),
+               do: raise(ArgumentError, "unsupported heap handle schema")
 
-        ["std::sync::Mutex", schema_type!(payload, audit, types)]
+        [
+          if(Lynx.Rust.MutexModels.type?(declaration),
+            do: "std::sync::Mutex",
+            else: "std::sync::RwLock"
+          ),
+          schema_type!(payload, audit, types)
+        ]
 
       %{"Adt" => %{"id" => id}} ->
         cond do
