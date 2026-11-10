@@ -10,6 +10,8 @@ defmodule Lynx.Rust.MirTest do
 
     assert Mir.arguments!(owned_drops: true, execution: :runtime) == ["--mir", "optimized"]
     assert Mir.arguments!(owned_drops: true, execution: :runtime, futures: :cancelling) == []
+    assert Mir.arguments!(execution: :runtime, unwind: :captured) == ["--mir", "elaborated"]
+    assert Mir.arguments!(owned_drops: :explicit, unwind: :captured) == []
   end
 
   test "rejects unsupported or conflicting stage choices before native preparation" do

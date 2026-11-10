@@ -77,7 +77,10 @@ defmodule Lynx.Rust.LLBC do
         do: Lynx.Rust.ExplicitOwnership.prepare!(document)
 
     {document, reference_copies} =
-      if ownership, do: Lynx.Rust.ReferenceCopies.lower!(ownership.document), else: {document, []}
+      if ownership || Keyword.get(opts, :unwind) == :captured,
+        do:
+          Lynx.Rust.ReferenceCopies.lower!(if(ownership, do: ownership.document, else: document)),
+        else: {document, []}
 
     ownership = if ownership, do: Map.put(ownership, :reference_copies, reference_copies)
     translated = document["translated"]
@@ -143,10 +146,22 @@ defmodule Lynx.Rust.LLBC do
 
     {document, captured_unwind} =
       if Keyword.get(opts, :unwind, :reject) == :captured do
-        unless ownership,
+        unless ownership || Keyword.get(opts, :execution, :pure) == :runtime,
           do: raise(ArgumentError, "captured unwind requires explicit ownership")
 
-        Lynx.Rust.CapturedUnwind.lower!(document, functions, refs)
+        models =
+          Lynx.Rust.CallModels.resolve(
+            external,
+            translated,
+            refs,
+            Keyword.get(opts, :external_calls, []),
+            Keyword.get(opts, :execution, :pure)
+          )
+
+        Lynx.Rust.CapturedUnwind.lower!(document, functions, refs,
+          models: models,
+          runtime: Keyword.get(opts, :execution, :pure) == :runtime
+        )
       else
         {document, []}
       end
@@ -372,6 +387,7 @@ defmodule Lynx.Rust.LLBC do
       document: document,
       explicit_ownership: ownership && Map.drop(ownership, [:document]),
       captured_unwind: captured_unwind,
+      reference_copies: reference_copies,
       compiler_primitives: primitive_models,
       functions: ordinary,
       library_helpers: Enum.map(library_helpers, & &1["def_id"]),

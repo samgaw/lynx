@@ -1052,9 +1052,14 @@ defmodule Lynx.Rust.NativeLifetimes do
              (MapSet.member?(ctx.nonpanicking, id) and
                 (MapSet.equal?(remaining, live) or
                    MapSet.member?(ctx.implementations, id) or
-                   (model && (model[:native_dispose] || model[:native_replace]))))),
+                   (model &&
+                      (model[:native_dispose] || model[:native_replace] ||
+                         model[:native_transfer]))))),
        do: reject!(ctx)
 
+    # A validated nonpanicking transfer may move a PoisonError into its guard
+    # while unrelated owners remain live. Track the returned owner normally;
+    # this does not waive the cleanup checks for fallible transfers.
     destination!(dest, remaining, ctx)
   end
 

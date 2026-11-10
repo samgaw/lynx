@@ -6,6 +6,13 @@ defmodule Lynx.Rust.Extraction do
   def run!(context, tools, roots, output, module, opts \\ []) do
     Lynx.Rust.Mir.validate!(opts)
 
+    if :captured_unwind_drops in Keyword.get(opts, :external_calls, []),
+      do:
+        raise(
+          ArgumentError,
+          "captured unwind destruction is compiler-managed, not a user-selected external model"
+        )
+
     for key <- Keyword.keys(opts),
         key not in [
           :external_types,
@@ -50,12 +57,14 @@ defmodule Lynx.Rust.Extraction do
       do: raise(ArgumentError, "assertion unwind requires runtime execution")
 
     if unwind == :captured and
-         (Keyword.get(opts, :execution, :pure) != :pure or
-            Keyword.get(opts, :owned_drops, false) != :explicit),
+         {Keyword.get(opts, :execution, :pure), Keyword.get(opts, :owned_drops, false)} not in [
+           {:pure, :explicit},
+           {:runtime, false}
+         ],
        do:
          raise(
            ArgumentError,
-           "captured unwind requires pure execution and owned_drops: :explicit"
+           "captured unwind requires pure explicit ownership or runtime execution without owned_drops"
          )
 
     Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools)
@@ -203,13 +212,14 @@ defmodule Lynx.Rust.Extraction do
 
     runtime_call_models =
       Keyword.get(opts, :external_calls, []) ++
+        if(unwind == :captured, do: [:captured_unwind_drops], else: []) ++
         file_models ++
         if Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
           do: [:native_wakers],
           else: []
 
     {document, nonpanicking_borrows} =
-      if Keyword.get(opts, :execution, :pure) == :runtime,
+      if Keyword.get(opts, :execution, :pure) == :runtime and unwind != :captured,
         do:
           Lynx.Rust.NativeBorrows.prune_owned_calls!(
             document,
@@ -240,11 +250,11 @@ defmodule Lynx.Rust.Extraction do
 
     {document, native_drops} =
       if Keyword.get(opts, :execution, :pure) == :runtime,
-        do: Lynx.Rust.NativeDropLowering.lower!(document, first_party),
+        do: Lynx.Rust.NativeDropLowering.lower!(document, first_party, unwind: unwind),
         else: {document, []}
 
     {document, nonpanicking} =
-      if Keyword.get(opts, :execution, :pure) == :runtime,
+      if Keyword.get(opts, :execution, :pure) == :runtime and unwind != :captured,
         do: Lynx.Rust.NativeUnwind.nonpanicking_drops!(document),
         else: {document, []}
 
@@ -258,14 +268,15 @@ defmodule Lynx.Rust.Extraction do
     # its callers as nonpanicking. Recheck their original unwind cleanup rather
     # than erasing a raw destructor or assuming that an opaque call is safe.
     {document, nonpanicking_after_drops} =
-      if Keyword.get(opts, :execution, :pure) == :runtime and native_drops != [],
-        do:
-          Lynx.Rust.NativeBorrows.prune_owned_calls!(
-            document,
-            first_party,
-            runtime_call_models
-          ),
-        else: {document, []}
+      if Keyword.get(opts, :execution, :pure) == :runtime and native_drops != [] and
+           unwind != :captured,
+         do:
+           Lynx.Rust.NativeBorrows.prune_owned_calls!(
+             document,
+             first_party,
+             runtime_call_models
+           ),
+         else: {document, []}
 
     native_unwind =
       nonpanicking_borrows ++
@@ -303,6 +314,7 @@ defmodule Lynx.Rust.Extraction do
 
     requested_calls =
       Keyword.get(opts, :external_calls, []) ++
+        if(unwind == :captured, do: [:captured_unwind_drops], else: []) ++
         file_models ++
         if(Keyword.get(opts, :futures, :reject) in [:polling, :suspending, :cancelling],
           do: [:native_wakers],
@@ -339,7 +351,7 @@ defmodule Lynx.Rust.Extraction do
     document = audit.document
 
     backend_llbc =
-      if audit.explicit_ownership do
+      if audit.explicit_ownership || unwind == :captured do
         path = Path.rootname(llbc) <> ".ownership.llbc"
         File.write!(path, Lynx.Rust.LLBCJson.encode_like!(document, llbc))
         path
@@ -554,6 +566,7 @@ defmodule Lynx.Rust.Extraction do
       audit: audit,
       explicit_ownership: audit.explicit_ownership,
       captured_unwind: audit.captured_unwind,
+      reference_copies: audit.reference_copies,
       compiler_drop_queries: compiler_drop_queries,
       rustler_constructors: rustler_constructors,
       native_expect_aliases: native_expect_aliases,

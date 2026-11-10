@@ -379,6 +379,14 @@ defmodule Lynx.Rust.LLBCJson do
         keys == ["call", "dest", "on_unwind"] ->
           ["call", "dest", "on_unwind"]
 
+        # Exceptional-exit lowering can introduce the first switch in a crate.
+        # These are the exact pinned structured Switch and SwitchData schemas.
+        keys == ["branches", "data"] ->
+          ["data", "branches"]
+
+        keys == ["branches", "fallback", "scrutinee"] ->
+          ["scrutinee", "branches", "fallback"]
+
         length(keys) <= 1 ->
           keys
 

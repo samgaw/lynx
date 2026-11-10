@@ -211,7 +211,9 @@ defmodule Lynx.Rust.Report do
             ],
             else: []
           ) ++
-          if(get_in(extraction, [:explicit_ownership, :reference_copies]) not in [nil, []],
+          if(
+            get_in(extraction, [:explicit_ownership, :reference_copies]) not in [nil, []] or
+              Map.get(extraction, :reference_copies, []) != [],
             do: [
               "Lynx adjacent single-dereference unretagged mutable-reference copy normalization"
             ],
@@ -252,6 +254,7 @@ defmodule Lynx.Rust.Report do
       native_guard_storage: Map.get(extraction, :native_guard_storage, []),
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
       captured_unwind: Map.get(extraction, :captured_unwind, []),
+      reference_copies: Map.get(extraction, :reference_copies, []),
       unwind: Map.get(extraction, :unwind, :reject),
       files: Map.get(extraction, :files, :reject),
       futures: Map.get(extraction, :futures, :reject),
