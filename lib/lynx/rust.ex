@@ -65,7 +65,9 @@ defmodule Lynx.Rust do
   bodies, including panics. Supplied dictionaries must resolve to actual audited
   method bodies or reported compiler NoopDestruct primitives over supported
   closed types. Untracked dictionaries, opaque methods, raw pointer operations
-  and unsupported dictionary shapes are rejected. This mode uses unmodified
+  and unsupported dictionary shapes are rejected. Unwind paths must contain
+  only storage retirement and resumption; observable cleanup and reconstructed
+  fallible operations with owned locals are rejected. This mode uses unmodified
   extraction tools and does not establish native allocation, FFI, unwind cleanup
   or stateful destructor correctness. `owned_drops: true` retains the separate
   runtime-only compiler lowering.
