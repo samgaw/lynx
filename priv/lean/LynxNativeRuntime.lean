@@ -1831,6 +1831,31 @@ private theorem frame_tokens (frame : List (Nat × String × Term)) (limit id : 
   have := bound tag id contents
   omega
 
+/-- A bounded resource frame has no cell at a future allocation identity. -/
+theorem FrameBelow.cell_absent {α : Type} [NativeCodec α] {frame : List (Nat × String × Term)}
+    {limit id : Nat} (bounded : FrameBelow α limit frame) (fresh : limit < id) :
+    frame.filter (fun cell => cell.1 == id) = [] :=
+  frame_filter_id frame limit id (fun cell member => (bounded cell member).1) fresh
+
+/-- Retiring a fresh owner cannot remove cells from an earlier resource frame. -/
+theorem FrameBelow.erase_fresh {α : Type} [NativeCodec α] {frame : List (Nat × String × Term)}
+    {limit id : Nat} (bounded : FrameBelow α limit frame) (fresh : limit < id) :
+    frame.filter (fun cell => cell.1 != id) = frame :=
+  frame_filter_ne frame limit id (fun cell member => (bounded cell member).1) fresh
+
+/-- The allocator's collision check succeeds above every framed identity. -/
+theorem FrameBelow.key_unused {α : Type} [NativeCodec α] {frame : List (Nat × String × Term)}
+    {limit id : Nat} (bounded : FrameBelow α limit frame) (fresh : limit < id) :
+    frame.any (fun cell => cell.1 == id) = false :=
+  frame_any_id frame limit id (fun cell member => (bounded cell member).1) fresh
+
+/-- Earlier resource owners cannot alias a freshly allocated resource. -/
+theorem FrameBelow.ownership_absent {α : Type} [NativeCodec α]
+    {frame : List (Nat × String × Term)} {limit id : Nat}
+    (bounded : FrameBelow α limit frame) (fresh : limit < id) :
+    frame.filter (fun cell => cell.2.1 == handleType α && cell.2.2 == .nativeReference id) = [] :=
+  frame_tokens frame limit id bounded fresh
+
 private theorem frame_owner_bound (frame : List (Nat × String × Term)) (limit : Nat)
     {α : Type} [NativeCodec α] (bounded : FrameBelow α limit frame)
     (cell : Nat × String × Term) (member : cell ∈ frame) (owner : NativeResourceArc α)
