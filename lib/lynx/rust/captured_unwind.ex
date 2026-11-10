@@ -46,12 +46,13 @@ defmodule Lynx.Rust.CapturedUnwind do
                  function["src"] == "Normal" and function["generics"]["types"] == [] and
                  function["generics"]["trait_clauses"] == [] and
                  (DropModels.primitive_scalar?(CallModels.expand(output, refs)) or
-                    CallModels.expand(output, refs) == CallModels.expand(unit, refs)),
+                    CallModels.expand(output, refs) == CallModels.expand(unit, refs) or
+                    resource_output?(output, translated, refs, runtime)),
                do:
                  LLBC.failure!(
                    function,
                    translated,
-                   "captured unwind requires a monomorphic ordinary function with scalar or unit output; fallible trait methods are unsupported"
+                   "captured unwind requires a monomorphic ordinary function with scalar, unit or destructor-free ResourceArc output; fallible trait methods are unsupported"
                  )
 
         adt = %{
@@ -151,6 +152,22 @@ defmodule Lynx.Rust.CapturedUnwind do
     {lists, state} = Enum.map_reduce(statements, state, &lower(&1, &2, cleanup))
     {Map.put(block, "statements", List.flatten(lists)), state}
   end
+
+  defp resource_output?(output, translated, refs, true) do
+    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
+           CallModels.expand(output, refs),
+         type when not is_nil(type) <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
+         true <- Lynx.Rust.ResourceModels.type?(type),
+         %{"types" => [payload]} <- args,
+         true <- args == Lynx.Rust.ResourceModels.args([payload]) do
+      Lynx.Rust.NativeDrops.destructor_free?(payload, translated, refs)
+    else
+      _ -> false
+    end
+  end
+
+  defp resource_output?(_, _, _, _), do: false
 
   defp lower(%{"kind" => "Return"} = s, state, false), do: finish(s, 0, state)
   defp lower(%{"kind" => "UnwindResume"} = s, state, true), do: finish(s, 1, state)

@@ -11,6 +11,7 @@ borrowed-guard = []
 captured-unwind = []
 guard-unwind = []
 resource-unwind = []
+resource-return = ["resource-unwind"]
 
 [dependencies]
 ownership-app = { path = "../app" }

@@ -89,6 +89,7 @@ pub fn checked_resource_inner(
 #[cfg(feature = "resource-unwind")]
 #[rustler::nif(name = "resource_checked", schedule = "DirtyCpu")]
 #[lynx::resource_unwind]
+#[cfg_attr(feature = "resource-return", lynx::resource_return)]
 fn checked_resource(resource: rustler::ResourceArc<UnwindResource>, accepted: bool) -> bool {
     let retained = resource.clone();
     checked_resource_inner(retained, accepted)
@@ -133,4 +134,27 @@ pub fn create_with_mutex(mutex: std::sync::Mutex<bool>, value: bool, accepted: b
 #[lynx::resource_create]
 fn created(value: bool, accepted: bool) -> bool {
     create_checked_resource(value, accepted)
+}
+
+/// Returns the result of the actual cross-crate transition in a fresh owner.
+///
+/// # Panics
+/// Registration failure or rejection releases every owner acquired so far.
+#[cfg(feature = "resource-return")]
+pub fn allocate_resource(value: bool, accepted: bool) -> rustler::ResourceArc<UnwindResource> {
+    let original = rustler::ResourceArc::new(UnwindResource { value });
+    let mut result = original.value;
+    ownership_app::checked_value(&mut result, accepted);
+    rustler::ResourceArc::new(UnwindResource { value: result })
+}
+
+/// Exposes an owned result to the Rustler resource encoder.
+///
+/// # Panics
+/// Rejection propagates after releasing the constructor's temporary owner.
+#[cfg(feature = "resource-return")]
+#[rustler::nif(name = "resource_allocate", schedule = "DirtyCpu")]
+#[lynx::resource_return]
+fn allocated(value: bool, accepted: bool) -> rustler::ResourceArc<UnwindResource> {
+    allocate_resource(value, accepted)
 }
