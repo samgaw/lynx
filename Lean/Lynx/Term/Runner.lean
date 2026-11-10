@@ -82,7 +82,12 @@ private def schedule : List ScheduleChoice → ScheduleChoice × List ScheduleCh
 /-- The root's environment while it is live, and its last one once it ends. -/
 private def track (root : PID) (env : Environment) : Config α → Environment
   | .start env _ _ => env
-  | .running state _ _ _ => if state.alive root then state.view root else env
+  | .running state _ _ _ =>
+      let view := if state.alive root then state.view root else env
+      { view with nativeRefCounter := state.nativeRefCounter
+                  nativeHeap := state.nativeHeap
+                  nativeResourceTypes := state.nativeResourceTypes
+                  nativeFinalizerMode := state.nativeFinalizerMode }
 
 /-- Follow steps until none remain, with the root's last environment. -/
 private def execute (root : PID) (env : Environment) (config : Config α) (current : PID)
@@ -308,6 +313,50 @@ theorem run_reaches (computation : Result α) (env : Environment) (choices : Lis
   change Term.Runner.run (.wait poll next) env choices = _
   rw [Term.Runner.run, ready]
   rfl
+
+/-- A lone blocked native operation deadlocks; it cannot become a Rust error
+or successful completion by consuming scheduler choices. -/
+theorem wait_blocked_run (poll : Environment → Option (β × Environment))
+    (next : β → Result α) (env : Environment) (blocked : poll env = none)
+    (choices : List ScheduleChoice) :
+    (Result.wait poll next).run env choices = (.deadlock, env) := by
+  let state := Concurrent.State.initial env
+  let pool : Term.Runner.Pool α := .process env.currentPid (.wait poll next) some
+  have view : state.nativeView env.currentPid = env := by
+    cases env
+    simp [state, Concurrent.State.initial, Concurrent.State.nativeView,
+      Concurrent.State.view, Concurrent.State.process]
+  have noSignal : (state.process env.currentPid).signal = none := by
+    simp [state, Concurrent.State.process, Concurrent.State.initial]
+  have noReady (accept : PID → Bool) : Term.Runner.findReady state accept pool = none := by
+    simp [pool, Term.Runner.findReady, view, blocked, noSignal]
+  have noTimeout (accept : PID → Bool) : Term.Runner.findTimeout state accept pool = none := by
+    simp [pool, Term.Runner.findTimeout]
+  have requested (choice : ScheduleChoice) :
+      Term.Runner.requested state env.currentPid pool choice = none := by
+    cases choice <;> simp [Term.Runner.requested, Term.Runner.runnable, noReady, noTimeout]
+  have selected (preferred : ScheduleChoice) (choices : List ScheduleChoice) :
+      Term.Runner.choose pool state env.currentPid preferred choices = ([], none) := by
+    induction choices generalizing preferred with
+    | nil => simp [Term.Runner.choose, requested, Term.Runner.runnable, noReady, noTimeout]
+    | cons choice rest ih => simp [Term.Runner.choose, requested, ih]
+  change Term.Runner.run (.wait poll next) env choices = _
+  rw [Term.Runner.run, blocked, Term.Runner.execute]
+  rw [selected]
+  simp [Term.Runner.stop, Term.Runner.restore, Term.Runner.isEmpty,
+    Concurrent.State.view, Concurrent.State.process, Concurrent.State.initial]
+
+/-- Evaluate a single native wait at its actual environment before simplifying
+its continuation. No scheduler implementation imports are needed by callers. -/
+theorem wait_run (poll : Environment → Option (β × Environment))
+    (next : β → Result α) (env : Environment) (choices : List ScheduleChoice) :
+    (Result.wait poll next).run env choices =
+      match poll env with
+      | some (value, updated) => (next value).run updated choices
+      | none => (.deadlock, env) := by
+  split
+  · exact wait_ready_run _ _ _ _ _ (by assumption) choices
+  · exact wait_blocked_run _ _ _ (by assumption) choices
 
 /-- A total environment transition is one ready scheduler operation. This
 keeps its read and update indivisible without hiding any caller continuation. -/
