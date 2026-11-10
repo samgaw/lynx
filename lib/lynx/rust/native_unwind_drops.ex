@@ -63,7 +63,11 @@ defmodule Lynx.Rust.NativeUnwindDrops do
          %{} = model <- NativeDrops.resolve(source, translated, refs) do
       Map.merge(model, %{
         rust_name: "LynxCompilerUnwind::drop",
-        lean: "Lynx.NativeUnwindDrop.drop",
+        lean:
+          if(Lynx.Rust.ResourceLifetimes.enabled?(translated),
+            do: "Lynx.NativeResourceUnwindDrop.drop",
+            else: "Lynx.NativeUnwindDrop.drop"
+          ),
         native_unwind_dispose: true,
         label:
           "Compiler unwind adapter for validated std MutexGuard/Mutex, RwLock guard and Rustler ResourceArc destructor dictionaries; commits the latest borrowed guard payload, unlocks and poisons on panic for mutex or writer guards; read guards release only their lease without poisoning; disposes an unlocked mutex, or releases one destructor-free resource owner while preserving aliases and VM pins; nonpanicking entry and guard acquisition, including incoming guards, and no nested cleanup calls required; std, Rustler, physical thread context, allocation and FFI correctness unverified"

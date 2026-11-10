@@ -557,7 +557,12 @@ defmodule Lynx.Rust.NativeLifetimes do
                join_obligations(first.live, ctx)
              )
            ),
-           do: reject!(ctx)
+           do:
+             LLBC.failure!(
+               ctx.function,
+               ctx.translated,
+               "native owner lifetime has inconsistent branch ownership: #{inspect(Enum.map([first | rest], &MapSet.to_list(&1.live)))}"
+             )
 
     # Only the return slot may hold different native variants at a join.
     live = Enum.reduce(rest, first.live, &MapSet.union(&1.live, &2))

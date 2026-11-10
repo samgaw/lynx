@@ -33,6 +33,8 @@ defmodule Lynx.Rust.ResourceModels do
          true <- sig["inputs"] == if(method == "new", do: [variable()], else: [reference(self)]),
          true <- sig["output"] == if(method == "deref", do: reference(variable()), else: self),
          true <- identity?(f, method, self, resource["def_id"], t, refs) do
+      logical = Lynx.Rust.ResourceLifetimes.enabled?(t)
+
       rust =
         if method == "new",
           do: "rustler::resource::arc::{rustler::resource::arc::ResourceArc<@T>}::new",
@@ -42,7 +44,7 @@ defmodule Lynx.Rust.ResourceModels do
       %{
         rust_name: rust,
         lean:
-          "Lynx.NativeResourceArc.#{if method == "new" and get_in(t, ["options", "owned_drops"]) == true, do: "newOwned", else: method}",
+          "Lynx.NativeResourceArc.#{if method == "new" and (get_in(t, ["options", "owned_drops"]) == true or logical), do: "newOwned", else: method}",
         builtin: false,
         can_fail: true,
         lift: true,
@@ -51,14 +53,23 @@ defmodule Lynx.Rust.ResourceModels do
         native_resource_type: arc["def_id"],
         resource_trait: resource["def_id"],
         resource_operation: method,
-        native_transfer: method == "new" and get_in(t, ["options", "owned_drops"]) == true,
+        native_transfer:
+          method == "new" and
+            (get_in(t, ["options", "owned_drops"]) == true or
+               logical),
         native_cutoff_only: method != "new",
+        native_logical_resource_cleanup: logical,
         label:
-          if(get_in(t, ["options", "owned_drops"]) == true,
+          if(logical,
             do:
-              "Rustler 0.39 ResourceArc with extracted payload cleanup: shared identity and reference tokens; retaining an owner atomically updates its logical token and count without a scheduler boundary; registration failure disposes its moved payload; owner release and final-owner selection are atomic in the logical heap; observable final cleanup requires an explicit nativeFinalizerMode: synchronous is an external timing assumption; deferred retires the Arc and queues a unique callback for explicit runFinalizer dispatch; unspecified timing exhausts verification; compiler-certified trivial cleanup has no observable timing; callback completion runs the validated compiler destructor; VM callback scheduling, GC, allocation and FFI correctness remain unverified trusted boundaries",
+              "Rustler 0.39 ResourceArc with compiler-certified no-drop payload: shared identity and linear owner tokens; nested primitive RwLock cells remain shared across clones and are retired on final ownership release or registration panic; generated logical cleanup is not a Rust destructor or a VM callback; custom destruction is rejected; std/Rustler implementations, allocation, native unwinding and FFI remain unverified",
             else:
-              "Rustler 0.39 Rust-owned ResourceArc model: explicit registration precondition, distinct linear ownership tokens, shared immutable destructor-free payload and bounded reference count; retaining an owner atomically updates its logical token and count without a scheduler boundary; owner release consumes its token and updates the count atomically; inherited Resource callback flags modeled false; VM pins, custom callbacks, physical allocation and FFI unverified"
+              if(get_in(t, ["options", "owned_drops"]) == true,
+                do:
+                  "Rustler 0.39 ResourceArc with extracted payload cleanup: shared identity and reference tokens; retaining an owner atomically updates its logical token and count without a scheduler boundary; registration failure disposes its moved payload; owner release and final-owner selection are atomic in the logical heap; observable final cleanup requires an explicit nativeFinalizerMode: synchronous is an external timing assumption; deferred retires the Arc and queues a unique callback for explicit runFinalizer dispatch; unspecified timing exhausts verification; compiler-certified trivial cleanup has no observable timing; callback completion runs the validated compiler destructor; VM callback scheduling, GC, allocation and FFI correctness remain unverified trusted boundaries",
+                else:
+                  "Rustler 0.39 Rust-owned ResourceArc model: explicit registration precondition, distinct linear ownership tokens, shared immutable destructor-free payload and bounded reference count; retaining an owner atomically updates its logical token and count without a scheduler boundary; owner release consumes its token and updates the count atomically; inherited Resource callback flags modeled false; VM pins, custom callbacks, physical allocation and FFI unverified"
+              )
           )
       }
     else

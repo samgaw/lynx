@@ -12,7 +12,9 @@ defmodule Lynx.Rust.NativeDrops do
       %{
         rust_name: "core::mem::drop",
         lean:
-          if(get_in(translated, ["options", "owned_drops"]) == true,
+          if(
+            get_in(translated, ["options", "owned_drops"]) == true or
+              Lynx.Rust.ResourceLifetimes.enabled?(translated),
             do: "Lynx.NativeOwnedDrop.drop",
             else: "Lynx.NativeDrop.drop"
           ),

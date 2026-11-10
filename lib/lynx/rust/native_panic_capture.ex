@@ -99,7 +99,11 @@ defmodule Lynx.Rust.NativePanicCapture do
            } do
       Map.merge(model, %{
         rust_name: "LynxCompilerCapture::resource_new",
-        lean: "Lynx.NativeResourceArc.newCaptured",
+        lean:
+          if(Lynx.Rust.ResourceLifetimes.enabled?(t),
+            do: "Lynx.NativeResourceArc.newManagedCaptured",
+            else: "Lynx.NativeResourceArc.newCaptured"
+          ),
         native_cutoff_only: true,
         native_captured_source: source["def_id"],
         native_captured_source_name: model.rust_name,

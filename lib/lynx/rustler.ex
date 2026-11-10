@@ -60,7 +60,11 @@ defmodule Lynx.Rustler do
   remain unsupported. Top-level ResourceArc arguments and results are supported
   with runtime execution when their concrete payloads occur in audited
   new/clone/deref or consuming drop calls. Payloads are destructor-free by default; `owned_drops: true` also permits
-  checked structural cleanup of directly owned mutex and File fields. Encoding
+  checked structural cleanup of directly owned mutex and File fields. No-drop
+  payloads may also contain primitive-valued RwLock fields, shared across resource
+  clones and successive NIF calls. Their derived logical retirement requires no
+  handwritten adapter or Rust destructor; native lock, allocation and VM callback
+  correspondence remain unverified. Encoding
   retains a logical VM pin and decoding acquires an independent Rust owner. VM pins stay
   live for the proof: garbage collection, process-death cleanup, serialization and
   distributed resource terms remain unsupported. Resource fields nested inside
@@ -459,6 +463,8 @@ defmodule Lynx.Rustler do
       Lynx.Rustler.Adapter.external!(bindings, extraction.implementations,
         execution: execution,
         owned_drops: Keyword.get(opts, :owned_drops, false),
+        logical_resource_cleanup:
+          Lynx.Rust.ResourceLifetimes.enabled?(extraction.audit.translated),
         resource_types: Enum.map(registrations.types, & &1.tag),
         audit_modules: extraction.audit_modules,
         proof_modules: proofs,
