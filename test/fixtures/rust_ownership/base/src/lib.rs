@@ -48,3 +48,8 @@ pub fn mutate_before_check(value: &mut bool, accepted: bool) {
     *value = !*value;
     assert!(accepted);
 }
+
+/// Toggles a borrowed flag without panicking.
+pub fn toggle(value: &mut bool) {
+    *value = !*value;
+}

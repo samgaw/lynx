@@ -32,6 +32,7 @@ defmodule Lynx.Rust.CallModels do
                       Lynx.Rust.FileDrops.resolve(function, translated, refs)
                 ) ||
                 Lynx.Rust.MutexModels.resolve(function, translated, refs) ||
+                Lynx.Rust.RwLockModels.resolve(function, translated, refs) ||
                 Lynx.Rust.ResourceModels.resolve(function, translated, refs) ||
                 Lynx.Rust.LockModels.resolve(function, translated, refs) ||
                 Lynx.Rust.PoisonModels.resolve(function, translated, refs) ||

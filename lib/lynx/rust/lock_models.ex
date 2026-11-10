@@ -25,9 +25,12 @@ defmodule Lynx.Rust.LockModels do
                }
              }
            },
-           %{"Ident" => ["lock", 0]}
+           %{"Ident" => [method, 0]}
          ] <- name,
-         true <- [a, b, c, d] == path(@base),
+         true <- [a, b, c] == path(~w(std sync poison)),
+         family <- if(d == %{"Ident" => ["mutex", 0]}, do: :mutex, else: :rwlock),
+         true <- d == %{"Ident" => [if(family == :mutex, do: "mutex", else: "rwlock"), 0]},
+         true <- {family, method} in [{:mutex, "lock"}, {:rwlock, "read"}, {:rwlock, "write"}],
          true <- params?(parent_params, 0, []),
          true <- params?(CallModels.expand(params, refs), 1, [outlives()]),
          %{"Adt" => %{"id" => mutex, "builtin" => nil, "generics" => args}} <-
@@ -36,13 +39,23 @@ defmodule Lynx.Rust.LockModels do
          true <-
            Enum.any?(
              translated["type_decls"],
-             &(&1 && &1["def_id"] == mutex && MutexModels.type?(&1))
+             &(&1 && &1["def_id"] == mutex &&
+                 if(family == :mutex,
+                   do: MutexModels.type?(&1),
+                   else: Lynx.Rust.RwLockModels.type?(&1)
+                 ))
            ),
          true <-
            CallModels.expand(sig["inputs"], refs) == [
              %{"Ref" => [region(), adt(mutex, [variable()]), "Shared"]}
            ],
-         guard when not is_nil(guard) <- Enum.find(translated["type_decls"], &guard?(&1, refs)),
+         kind =
+           if(family == :mutex,
+             do: :mutex,
+             else: if(method == "read", do: :rw_read, else: :rw_write)
+           ),
+         guard when not is_nil(guard) <-
+           Enum.find(translated["type_decls"], &(guard_kind(&1, refs) == kind)),
          poison when not is_nil(poison) <- Enum.find(translated["type_decls"], &poison?/1),
          %{"Adt" => %{"id" => result, "generics" => result_args, "builtin" => nil}} <-
            CallModels.expand(sig["output"], refs),
@@ -50,25 +63,40 @@ defmodule Lynx.Rust.LockModels do
          guard_type = adt(guard["def_id"], [variable()], [region()]),
          true <- result_args == arguments([guard_type, adt(poison["def_id"], [guard_type])]) do
       %{
-        rust_name: "std::sync::poison::mutex::{std::sync::poison::mutex::Mutex<@T>}::lock",
-        lean: "Lynx.NativeMutex.lock",
+        rust_name:
+          "std::sync::poison::#{family}::{std::sync::poison::#{family}::#{if family == :mutex, do: "Mutex", else: "RwLock"}<@T>}::#{method}",
+        lean: "Lynx.#{if family == :mutex, do: "NativeMutex", else: "NativeRwLock"}.#{method}",
         builtin: false,
         can_fail: true,
         native_cutoff_only: true,
         lift: true,
-        native_mutex_type: mutex,
+        native_lock_type: mutex,
+        native_guard_kind: kind,
         native_guard_type: guard["def_id"],
         native_poison_type: poison["def_id"],
         native_codec_input: true,
         label:
           "Blocking Mutex::lock model: atomic shared-cell acquisition; poisoned acquisition returns an owned guard in PoisonError; recursive acquisition and malformed identities exhaust verification; logical execution contexts are local Lynx processes; native async/thread migration, Rust std and FFI implementation correctness unverified"
       }
+      |> Map.put(if(family == :mutex, do: :native_mutex_type, else: :native_rwlock_type), mutex)
+      |> then(fn model ->
+        if family == :mutex,
+          do: model,
+          else:
+            Map.put(
+              model,
+              :label,
+              "Uncontended std RwLock::#{method} model: shared reader leases or an exclusive writer; poisoned acquisition returns the acquired guard in PoisonError; conflicting acquisition and reader-limit exhaustion are verification cutoffs, not OS errors or successful completion; blocking, OS priority, fairness, native threads, std and FFI correctness remain unverified"
+            )
+      end)
     else
       _ -> nil
     end
   end
 
-  def guard?(
+  def guard?(type, refs), do: guard_kind(type, refs) != nil
+
+  def guard_kind(
         %{
           "src" => "Normal",
           "kind" => "Opaque",
@@ -76,12 +104,38 @@ defmodule Lynx.Rust.LockModels do
           "item_meta" => %{"name" => name}
         },
         refs
-      ),
-      do:
-        name == path(@base ++ ["MutexGuard"]) and
-          params?(CallModels.expand(params, refs), 1, [outlives(), outlives()])
+      ) do
+    params = CallModels.expand(params, refs)
 
-  def guard?(_, _), do: false
+    cond do
+      name == path(@base ++ ["MutexGuard"]) and params?(params, 1, [outlives(), outlives()]) ->
+        :mutex
+
+      name == path(~w(std sync poison rwlock RwLockReadGuard)) and
+          params?(params, 1, [outlives()]) ->
+        :rw_read
+
+      name == path(~w(std sync poison rwlock RwLockWriteGuard)) and
+          params?(params, 1, [outlives(), outlives()]) ->
+        :rw_write
+
+      true ->
+        nil
+    end
+  end
+
+  def guard_kind(_, _), do: nil
+
+  def guard_name(:mutex), do: "MutexGuard"
+  def guard_name(:rw_read), do: "RwLockReadGuard"
+  def guard_name(:rw_write), do: "RwLockWriteGuard"
+  def guard_module(:mutex), do: "NativeGuard"
+  def guard_module(:rw_read), do: "NativeRwReadGuard"
+  def guard_module(:rw_write), do: "NativeRwWriteGuard"
+  def guard_path(:mutex), do: path(@base ++ ["MutexGuard"])
+
+  def guard_path(kind) when kind in [:rw_read, :rw_write],
+    do: path(~w(std sync poison rwlock) ++ [guard_name(kind)])
 
   def poison?(%{
         "src" => "Normal",
@@ -96,18 +150,35 @@ defmodule Lynx.Rust.LockModels do
   def type_models(models, prefix) do
     module = (prefix |> String.split(".") |> hd()) <> ".NativeRuntime"
 
-    for {key, rust, lean} <- [
-          {:native_guard_type, "std::sync::poison::mutex::MutexGuard", "Lynx.NativeGuard"},
-          {:native_poison_type, "std::sync::poison::PoisonError", "Lynx.NativePoisonError"}
+    guards =
+      for kind <- [:mutex, :rw_read, :rw_write],
+          Enum.any?(models, fn {_, model} ->
+            (model[:native_guard_type] != nil and
+               Map.get(model, :native_guard_kind, :mutex) == kind) or
+              kind in Map.get(model, :native_guard_kinds, [])
+          end),
+          do: %{
+            rust: Enum.map_join(guard_path(kind), "::", fn %{"Ident" => [part, 0]} -> part end),
+            lean: "Lynx." <> guard_module(kind),
+            import: module,
+            label:
+              "Validated standard guard identity and borrowed view; ownership audited separately; std/native layout and FFI unverified"
+          }
+
+    poison =
+      if Enum.any?(models, fn {_, model} -> model[:native_poison_type] end),
+        do: [
+          %{
+            rust: "std::sync::poison::PoisonError",
+            lean: "Lynx.NativePoisonError",
+            import: module,
+            label:
+              "Poisoned acquisition retains the acquired guard; std/native layout and FFI unverified"
+          }
         ],
-        Enum.any?(models, fn {_, model} -> model[key] end),
-        do: %{
-          rust: rust,
-          lean: lean,
-          import: module,
-          label:
-            "Validated native guard/poisoned-acquisition representation; Rust std and native layout unverified"
-        }
+        else: []
+
+    guards ++ poison
   end
 
   defp params?(

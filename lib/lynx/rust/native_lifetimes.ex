@@ -9,7 +9,8 @@ defmodule Lynx.Rust.NativeLifetimes do
     native_types =
       for type <- translated["type_decls"],
           type &&
-            (MutexModels.type?(type) or LockModels.guard?(type, refs) or
+            (MutexModels.type?(type) or Lynx.Rust.RwLockModels.type?(type) or
+               LockModels.guard?(type, refs) or
                Lynx.Rust.ResourceModels.type?(type) or
                (Lynx.Rust.FileModels.file_type?(translated, type["def_id"]) and
                   Enum.any?(models, fn {_, model} -> model[:native_file_drop] == true end)) or

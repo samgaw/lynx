@@ -370,6 +370,7 @@ defmodule Lynx.Rust.Extraction do
     models =
       models ++
         Lynx.Rust.MutexModels.type_models(audit.external_calls, module) ++
+        Lynx.Rust.RwLockModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.LockModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.ResourceModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.FileModels.type_models(audit.external_calls, module) ++

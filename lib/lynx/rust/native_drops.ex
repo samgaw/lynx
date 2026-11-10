@@ -5,9 +5,10 @@ defmodule Lynx.Rust.NativeDrops do
   def resolve(function, translated, refs) do
     with true <- consuming_function?(function, translated, refs),
          mutex = Enum.find(translated["type_decls"], &(&1 && MutexModels.type?(&1))),
+         rwlock = Enum.find(translated["type_decls"], &(&1 && Lynx.Rust.RwLockModels.type?(&1))),
          guard = Enum.find(translated["type_decls"], &LockModels.guard?(&1, refs)),
          resource = Enum.find(translated["type_decls"], &ResourceModels.type?/1),
-         true <- mutex != nil or guard != nil or resource != nil do
+         true <- mutex != nil or rwlock != nil or guard != nil or resource != nil do
       %{
         rust_name: "core::mem::drop",
         lean:
@@ -26,17 +27,35 @@ defmodule Lynx.Rust.NativeDrops do
             do:
               "Consuming native destruction with validated nonpanicking structural resource payload cleanup linked to actual compiler drop MIR; mutex cell reclamation and resource owner retirement are atomic in the logical heap; observable final resource cleanup requires explicit synchronous timing or deferred callback dispatch, while unspecified timing exhausts verification; release acknowledgement does not imply callback completion; mutex and guard primitives, Rust std, allocation, VM callbacks and FFI remain modeled boundaries; custom resource destructor unwind unsupported",
             else:
-              "Consuming destruction model: Mutex with a destructor-free payload atomically removes its own live unlocked cell of either poison status without overwriting unrelated native state; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; Rust-owned ResourceArc atomically consumes one token and reclaims a destructor-free allocation on final release under default Resource callbacks; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind requires compiler-scoped captured cleanup; projected/custom payload destruction unsupported"
+              "Consuming destruction model: Mutex with a destructor-free payload atomically removes its own live unlocked cell of either poison status without overwriting unrelated native state; normal MutexGuard release commits its reconstructed payload and unlocks the owned cell without dropping the payload; RwLock with a compiler-certified destructor-free payload retires its unlocked identity, read guards release only their lease and write guards commit their reconstructed payload; Rust-owned ResourceArc atomically consumes one token and reclaims a destructor-free allocation on final release under default Resource callbacks; invalid identities exhaust verification; Rust std, allocation and FFI correctness unverified; guard unwind requires compiler-scoped captured cleanup; projected/custom payload destruction unsupported"
           )
       }
       |> then(fn model ->
         if mutex, do: Map.put(model, :native_mutex_type, mutex["def_id"]), else: model
       end)
       |> then(fn model ->
-        if guard, do: Map.put(model, :native_guard_type, guard["def_id"]), else: model
+        if guard do
+          model
+          |> Map.put(:native_guard_type, guard["def_id"])
+          |> Map.put(:native_guard_kind, LockModels.guard_kind(guard, refs))
+          |> Map.put(
+            :native_guard_kinds,
+            Enum.flat_map(translated["type_decls"], fn type ->
+              case LockModels.guard_kind(type, refs) do
+                nil -> []
+                kind -> [kind]
+              end
+            end)
+          )
+        else
+          model
+        end
       end)
       |> then(fn model ->
         if resource, do: Map.put(model, :native_resource_type, resource["def_id"]), else: model
+      end)
+      |> then(fn model ->
+        if rwlock, do: Map.put(model, :native_rwlock_type, rwlock["def_id"]), else: model
       end)
     else
       _ -> nil
@@ -82,7 +101,8 @@ defmodule Lynx.Rust.NativeDrops do
         Enum.any?(
           translated["type_decls"],
           &(&1 && &1["def_id"] == id &&
-              (MutexModels.type?(&1) or LockModels.guard?(&1, refs) or ResourceModels.type?(&1) or
+              (MutexModels.type?(&1) or Lynx.Rust.RwLockModels.type?(&1) or
+                 LockModels.guard?(&1, refs) or ResourceModels.type?(&1) or
                  (Lynx.Rust.FileModels.file_type?(translated, id) or
                     Lynx.Rust.FileModels.error_type?(translated, id))))
         )
@@ -114,10 +134,11 @@ defmodule Lynx.Rust.NativeDrops do
           LockModels.guard?(type, refs) ->
             GuardDrops.site(drop, translated, refs)
 
-          type && MutexModels.type?(type) ->
+          type && (MutexModels.type?(type) or Lynx.Rust.RwLockModels.type?(type)) ->
             with true <-
                    (destructor_free?(payload, translated, refs) or
-                      file_payload?(payload, translated, refs)) and args == arguments([payload]),
+                      (MutexModels.type?(type) and file_payload?(payload, translated, refs))) and
+                     args == arguments([payload]),
                  "Precise" <- drop["kind"],
                  %{"kind" => %{"Fun" => fid}, "generics" => call_args} <- drop["fn_ptr"],
                  %{
@@ -142,7 +163,7 @@ defmodule Lynx.Rust.NativeDrops do
               {:ok,
                %{
                  function: fid,
-                 native_kind: :mutex,
+                 native_kind: if(MutexModels.type?(type), do: :mutex, else: :rwlock),
                  impl: impl_id,
                  trait: trait,
                  payload: hd(call_args["types"]),
@@ -208,6 +229,7 @@ defmodule Lynx.Rust.NativeDrops do
         do: raise(ArgumentError, "native consuming calls during unwind are not yet translated")
 
       if not GuardDrops.call?(generics, translated, refs, traits) and
+           not rwlock_noop_call?(generics, translated, refs, traits) and
            not ResourceDrops.call?(generics, translated, refs, traits) and
            not (translated[:native_file_drop] &&
                   Lynx.Rust.FileDrops.call?(generics, translated, refs, traits)) do
@@ -222,13 +244,18 @@ defmodule Lynx.Rust.NativeDrops do
              true <-
                Enum.any?(
                  translated["type_decls"],
-                 &(&1 && &1["def_id"] == mutex && MutexModels.type?(&1))
+                 &(&1 && &1["def_id"] == mutex &&
+                     (MutexModels.type?(&1) or Lynx.Rust.RwLockModels.type?(&1)))
                ),
              %{"types" => [payload], "regions" => [], "const_generics" => [], "trait_refs" => []} <-
                args,
              true <-
                destructor_free?(payload, translated, refs) or
                  (translated[:native_file_drop] == true and
+                    Enum.any?(
+                      translated["type_decls"],
+                      &(&1 && &1["def_id"] == mutex && MutexModels.type?(&1))
+                    ) and
                     file_payload?(payload, translated, refs)),
              %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <- dictionary,
              %{
@@ -269,11 +296,52 @@ defmodule Lynx.Rust.NativeDrops do
 
   defp inspect_calls!(_, _, _, _, _, _), do: :ok
 
+  defp rwlock_noop_call?(generics, translated, refs, traits) do
+    with %{
+           "types" => [self],
+           "regions" => [],
+           "const_generics" => [],
+           "trait_refs" => [dictionary]
+         } <- generics,
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
+           CallModels.expand(self, refs),
+         %{"types" => [payload]} <- args,
+         true <- args == arguments([payload]),
+         true <-
+           Enum.any?(
+             translated["type_decls"],
+             &(&1 && &1["def_id"] == id && Lynx.Rust.RwLockModels.type?(&1))
+           ),
+         true <- destructor_free?(payload, translated, refs),
+         %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <-
+           dictionary,
+         dictionary = expand_trait(dictionary, traits),
+         %{
+           "kind" => %{
+             "BuiltinOrAuto" => %{
+               "builtin_data" => "NoopDestruct",
+               "parent_trait_refs" => [],
+               "types" => [],
+               "vtable" => nil
+             }
+           },
+           "trait_decl_ref" => decl
+         } <- dictionary,
+         true <- destruct?(decl["id"], translated, refs),
+         true <-
+           CallModels.expand(decl["generics"], refs) == arguments([CallModels.expand(self, refs)]) do
+      true
+    else
+      _ -> false
+    end
+  end
+
   defp mutex_impl?(impl, mutex, trait, translated, refs) do
     self = %{"Adt" => %{"id" => mutex, "builtin" => nil, "generics" => arguments([variable()])}}
 
     expected_name =
-      path(~w(std sync poison mutex Mutex)) ++ [%{"Impl" => %{"Trait" => impl["def_id"]}}]
+      Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == mutex))["item_meta"]["name"] ++
+        [%{"Impl" => %{"Trait" => impl["def_id"]}}]
 
     with %{
            "src" => "Destruct",

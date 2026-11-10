@@ -1,7 +1,6 @@
 defmodule Lynx.Rust.GuardModels do
   @moduledoc false
   alias Lynx.Rust.{CallModels, LockModels}
-  @base ~w(std sync poison mutex)
 
   # These are borrowed views, not acquisitions or releases. Aeneas's backward
   # function reconstructs the guard after a mutable borrow ends.
@@ -24,8 +23,10 @@ defmodule Lynx.Rust.GuardModels do
          trait_name = if(method == "deref", do: "Deref", else: "DerefMut"),
          true <- trait["item_meta"]["name"] == path(~w(core ops deref) ++ [trait_name]),
          true <- trait["is_unsafe"] == false and trait["src"] == "Normal",
-         guard when not is_nil(guard) <-
-           Enum.find(translated["type_decls"], &LockModels.guard?(&1, refs)),
+         [%{"Ref" => [_, %{"Adt" => %{"id" => guard_id}}, _]}] <- sig["inputs"],
+         guard when not is_nil(guard) <- find(translated["type_decls"], guard_id),
+         kind when not is_nil(kind) <- LockModels.guard_kind(guard, refs),
+         true <- method != "deref_mut" or kind != :rw_read,
          self = adt(guard["def_id"]),
          expected_trait = %{"id" => trait_id, "generics" => arguments([self, variable()])},
          true <- trait_ref == expected_trait,
@@ -35,7 +36,7 @@ defmodule Lynx.Rust.GuardModels do
              "generics" => arguments([variable()], [region(0)])
            },
          true <- parameters?(params, 2, bounds()),
-         name = path(@base) ++ [%{"Impl" => %{"Trait" => impl_id}}],
+         name = Enum.take(LockModels.guard_path(kind), 4) ++ [%{"Impl" => %{"Trait" => impl_id}}],
          true <- function["item_meta"]["name"] == name ++ path([method]),
          impl = CallModels.expand(impl, refs),
          true <- impl["item_meta"]["name"] == name and impl["src"] == "Normal",
@@ -56,16 +57,19 @@ defmodule Lynx.Rust.GuardModels do
          mutability = if(method == "deref", do: "Shared", else: "Mut"),
          true <- sig["inputs"] == [%{"Ref" => [region(1), self, mutability]}],
          true <- sig["output"] == %{"Ref" => [region(1), variable(), mutability]} do
+      family = if kind == :mutex, do: "mutex", else: "rwlock"
+
       %{
         rust_name:
-          "std::sync::poison::mutex::{core::ops::deref::#{trait_name}<std::sync::poison::mutex::MutexGuard<'0, @T>, @T>}::#{method}",
-        lean: "Lynx.NativeGuard.#{method}",
+          "std::sync::poison::#{family}::{core::ops::deref::#{trait_name}<std::sync::poison::#{family}::#{LockModels.guard_name(kind)}<'0, @T>, @T>}::#{method}",
+        lean: "Lynx.#{LockModels.guard_module(kind)}.#{method}",
+        native_guard_kind: kind,
         builtin: false,
         can_fail: false,
         lift: method == "deref_mut",
         native_guard_type: guard["def_id"],
         label:
-          "Borrowed MutexGuard payload view with mutable-borrow reconstruction; ownership and release remain separately audited; Rust std unsafe pointer dereference and FFI correctness unverified"
+          "Borrowed #{LockModels.guard_name(kind)} payload view#{if method == "deref_mut", do: " with mutable-borrow reconstruction", else: ""}; ownership and release remain separately audited; Rust std unsafe pointer dereference and FFI correctness unverified"
       }
     else
       _ -> nil
@@ -88,8 +92,9 @@ defmodule Lynx.Rust.GuardModels do
          function when not is_nil(function) <-
            find(translated["fun_decls"], method["skip_binder"]["id"]),
          %{"Ident" => ["deref", 0]} <- List.last(function["item_meta"]["name"]),
-         %{lean: "Lynx.NativeGuard.deref"} <- resolve(function, translated, refs),
-         true <- parent_impl["impl_trait"]["id"] == decl["id"] do
+         %{lean: lean} <- resolve(function, translated, refs),
+         true <- lean in ["Lynx.NativeGuard.deref", "Lynx.NativeRwWriteGuard.deref"],
+         true <- CallModels.expand(parent_impl["impl_trait"], refs) == decl do
       true
     else
       _ -> false
