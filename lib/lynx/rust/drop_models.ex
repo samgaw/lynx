@@ -4,6 +4,25 @@ defmodule Lynx.Rust.DropModels do
 
   @string_model "Logical heap String deallocation model: no observable value, mutation or panic; allocator effects, exhaustion and native deallocation correctness are unverified"
 
+  # Select the actual compiler Copy implementation, not a name-based no-drop
+  # promise. Charon supports this trait-first selector without local patches.
+  def metadata_arguments(models) do
+    if Enum.any?(
+         models,
+         &(&1.rust == "rustler::term::Term" and
+             &1.lean == "Lynx.Rustler.NativeTerm")
+       ) do
+      [
+        "--start-from",
+        "{impl core::marker::Copy for rustler::term::Term}",
+        "--include",
+        "core::marker::Copy"
+      ]
+    else
+      []
+    end
+  end
+
   def generated?(%{"item_meta" => %{"name" => name}}) when is_list(name),
     do: match?(%{"Builtin" => ["DropGlue", 0]}, List.last(name))
 
@@ -90,8 +109,9 @@ defmodule Lynx.Rust.DropModels do
 
   # Charon preserves both the element and allocator parameters on Vec's
   # generated drop even though it removes the allocator from the Vec type.
-  # Erasure is restricted to primitive scalars and Global: neither has an element/custom
-  # allocator destructor. Native deallocation remains an explicit heap model.
+  # Erasure requires scalar elements or an unconditional compiler Copy witness,
+  # and Global: neither has an element/custom allocator destructor. Native
+  # deallocation remains an explicit heap model.
   defp site!(
          %{
            "kind" => "Precise",
@@ -110,12 +130,12 @@ defmodule Lynx.Rust.DropModels do
          _seen
        )
        when is_integer(region) do
-    scalar = expand(element, ctx)
+    element_type = expand(element, ctx)
     t = %{"TypeVar" => %{"Free" => 0}}
     a = %{"TypeVar" => %{"Free" => 1}}
     vector_name = path(~w(alloc vec Vec))
 
-    with true <- primitive_scalar?(scalar),
+    with {element_name, element_basis} <- nondestructive_element(element_type, ctx),
          %{"Adt" => %{"id" => allocator_id, "builtin" => nil, "generics" => allocator_args}} <-
            expand(allocator, ctx),
          true <- Constants.empty_arguments?(allocator_args),
@@ -125,7 +145,8 @@ defmodule Lynx.Rust.DropModels do
            allocator_name == path(~w(alloc alloc Global)) and parameters?(allocator_params, 0, 0),
          %{"Adt" => %{"id" => vector_id, "builtin" => nil, "generics" => actual_args}} = self <-
            expand(annotation, ctx),
-         true <- actual_args == arguments([scalar]),
+         true <-
+           Lynx.Rust.NativeDropLowering.same_runtime_type?(actual_args, arguments([element_type])),
          %{
            "item_meta" => %{"name" => ^vector_name},
            "generics" => vector_params,
@@ -197,14 +218,15 @@ defmodule Lynx.Rust.DropModels do
          id => %{
            definition_id: id,
            rust_name: render_name(function["item_meta"]["name"]),
-           type: "alloc::vec::Vec<#{scalar_name(scalar)}>",
+           type: "alloc::vec::Vec<#{element_name}>",
+           element_drop_basis: element_basis,
            self: self,
            first_party: false,
            status: :modelled,
            implementation_verified: false,
            dependencies: [],
            label:
-             "Logical heap Vec<#{scalar_name(scalar)}>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
+             "Logical heap Vec<#{element_name}>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
          }
        }}
     else
@@ -243,6 +265,53 @@ defmodule Lynx.Rust.DropModels do
 
   defp scalar_name(%{"Scalar" => %{"Integer" => integer}}),
     do: integer |> Map.values() |> hd() |> String.downcase()
+
+  # Rust's builtin Copy trait cannot coexist with Drop. This validates the
+  # compiler trait/implementation identities and an unconditional, lifetime-only
+  # instantiation; Clone is never invoked or modelled as a pure operation.
+  defp nondestructive_element(element, ctx) do
+    if primitive_scalar?(element) do
+      {scalar_name(element), :primitive_scalar}
+    else
+      with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- element,
+           %{"item_meta" => %{"name" => name}, "generics" => params} <- ctx.types[id],
+           regions when is_list(regions) <- args["regions"],
+           true <- args == Map.put(arguments([]), "regions", regions),
+           true <- parameters?(params, length(regions), 0),
+           [trait] <-
+             Enum.filter(ctx.translated["trait_decls"], fn trait ->
+               trait != nil and trait["item_meta"]["name"] == path(~w(core marker Copy)) and
+                 trait["item_meta"]["lang_item"] == "Copy" and
+                 trait["item_meta"]["has_errors"] == false and
+                 trait["src"] == "Normal" and trait["is_unsafe"] == false and
+                 trait["methods"] == [] and trait["types"] == [] and trait["consts"] == [] and
+                 parameters?(trait["generics"], 0, 1)
+             end),
+           generic_self =
+             put_in(
+               element,
+               ["Adt", "generics", "regions"],
+               Enum.map(indices(length(regions)), &%{"Var" => %{"Free" => &1}})
+             ),
+           [impl] <-
+             Enum.filter(ctx.translated["trait_impls"], fn impl ->
+               impl != nil and
+                 expand(impl["impl_trait"], ctx) ==
+                   %{"id" => trait["def_id"], "generics" => arguments([generic_self])}
+             end),
+           true <-
+             impl["src"] == "Normal" and impl["is_negative"] == false and
+               impl["is_unsafe"] == false and impl["methods"] == [] and impl["types"] == [] and
+               impl["consts"] == [] and impl["item_meta"]["has_errors"] == false and
+               List.last(impl["item_meta"]["name"]) == %{"Impl" => %{"Trait" => impl["def_id"]}} and
+               parameters?(impl["generics"], length(regions), 0) do
+        {render_name(name),
+         %{kind: :compiler_copy, trait_id: trait["def_id"], implementation_id: impl["def_id"]}}
+      else
+        _ -> nil
+      end
+    end
+  end
 
   defp vector_outlives?(outlives, t, a),
     do:

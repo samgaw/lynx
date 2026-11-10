@@ -314,6 +314,15 @@ pub fn tuple_fields(input: rustler::Term<'_>) -> rustler::NifResult<Vec<rustler:
     rustler::types::tuple::get_tuple(input)
 }
 
+/// Observes tuple arity and destroys only the temporary vector of copyable handles.
+#[cfg(feature = "custom-decoder")]
+pub fn tuple_size(input: rustler::Term<'_>) -> rustler::NifResult<usize> {
+    match rustler::types::tuple::get_tuple(input) {
+        Ok(fields) => Ok(fields.len()),
+        Err(error) => Err(error),
+    }
+}
+
 /// A protocol flag decoded by an actual first-party Decoder implementation.
 #[cfg(feature = "custom-decoder")]
 pub struct ProtocolFlag {

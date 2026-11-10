@@ -686,6 +686,7 @@ defmodule Lynx.Rust.Extraction do
           llbc
         ] ++
         root_args ++
+        Lynx.Rust.DropModels.metadata_arguments(models) ++
         includes ++
         Enum.flat_map(Lynx.Rustler.EncoderModels.metadata_includes(models), &["--include", &1]) ++
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++
