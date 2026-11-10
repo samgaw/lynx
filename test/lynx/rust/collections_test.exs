@@ -24,6 +24,7 @@ defmodule Lynx.Rust.CollectionsTest do
     options = [
       roots:
         Enum.map(~w(replace_first slice_length replace_at), &("experiment_analysis::" <> &1)),
+      mir: :elaborated,
       lean_project: project,
       module_prefix: "Collections.Extraction",
       build_dir: Path.join(tmp, "build"),
@@ -53,6 +54,11 @@ defmodule Lynx.Rust.CollectionsTest do
                  &1.theorem == "Collections.Properties.composition")
            )
 
+    assert Enum.any?(
+             result.verification.external_models,
+             &String.contains?(&1, "Standard Vec Deref shared slice-view model")
+           )
+
     reject_metadata(result.extraction)
 
     repeated = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
@@ -68,6 +74,15 @@ defmodule Lynx.Rust.CollectionsTest do
     original = File.read!(source)
     changed = String.replace(original, "input[0] = value;", "input[0] = 0;")
     assert changed != original
+    File.write!(source, changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    end
+
+    # A wrong shared view must invalidate its own universal length contract too.
+    changed = String.replace(original, "(slice.len(), input)", "(slice.len() + 1, input)")
+    refute changed == original
     File.write!(source, changed)
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
