@@ -11,3 +11,9 @@ pub fn run(code: u64) {
 pub fn run_scalar(code: u64) {
     ownership_base::consume(code);
 }
+
+/// Observes a guard's mutation after a cross-crate borrowed call returns.
+pub fn scoped_flip(mut value: bool) -> bool {
+    ownership_base::flip(&mut value);
+    value
+}

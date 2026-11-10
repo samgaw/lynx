@@ -76,7 +76,10 @@ defmodule Lynx.Rust.LLBC do
       if Keyword.get(opts, :explicit_ownership, false),
         do: Lynx.Rust.ExplicitOwnership.prepare!(document)
 
-    document = if ownership, do: ownership.document, else: document
+    {document, reference_copies} =
+      if ownership, do: Lynx.Rust.ReferenceCopies.lower!(ownership.document), else: {document, []}
+
+    ownership = if ownership, do: Map.put(ownership, :reference_copies, reference_copies)
     translated = document["translated"]
     primitive_models = if ownership, do: ownership.primitive_models, else: []
     primitive_ids = MapSet.new(primitive_models, & &1.function_id)
@@ -139,6 +142,21 @@ defmodule Lynx.Rust.LLBC do
       if ownership,
         do: Lynx.Rust.OwnershipDispatch.audit!(functions, translated, refs, primitive_models),
         else: %{unsafe: MapSet.new(), calls: %{}, dependencies: %{}}
+
+    # The backend can discard unused foreign metadata. Keep a synthesized
+    # compiler primitive in implementation linking only when an actual audited
+    # call supplies or invokes its dictionary; never omit a workspace body.
+    used_primitives =
+      ownership_dispatch.dependencies |> Map.values() |> List.flatten() |> MapSet.new()
+
+    functions =
+      Enum.reject(functions, fn function ->
+        MapSet.member?(primitive_ids, function["def_id"]) and
+          not MapSet.member?(used_primitives, function["def_id"])
+      end)
+
+    primitive_models =
+      Enum.filter(primitive_models, &MapSet.member?(used_primitives, &1.function_id))
 
     {initializers, ordinary} =
       Enum.split_with(

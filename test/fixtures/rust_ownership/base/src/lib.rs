@@ -15,3 +15,18 @@ impl Drop for Audit {
 /// # Panics
 /// Propagates a panic from the value's destructor.
 pub fn consume<T>(_value: T) {}
+
+/// A scope guard that updates the original borrowed flag at destruction.
+#[derive(Debug)]
+pub struct Flip<'a>(pub &'a mut bool);
+
+impl Drop for Flip<'_> {
+    fn drop(&mut self) {
+        *self.0 = !*self.0;
+    }
+}
+
+/// Flips the borrowed flag by executing the guard's actual destructor.
+pub fn flip(value: &mut bool) {
+    let _guard = Flip(value);
+}
