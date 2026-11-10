@@ -91,6 +91,7 @@ defmodule Lynx.Rust.DropTest do
 
     options = [
       roots: ["drop_analysis::classify"],
+      mir: :elaborated,
       lean_project: project,
       module_prefix: "DropProofs.Extraction",
       build_dir: Path.join(tmp, "build"),
