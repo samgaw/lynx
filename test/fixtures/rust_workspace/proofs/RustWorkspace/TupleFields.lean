@@ -22,4 +22,15 @@ theorem oversized_spec (fields : Array Lynx.Term)
     experiment_nif.tuple_fields (.tuple fields) = RustM.fail .undef := by
   simpa [experiment_nif.tuple_fields] using Lynx.Rustler.Decoding.getTuple_exhausted fields outside
 
+theorem size_spec (fields : Array Lynx.Term)
+    (bounds : fields.toList.length ≤ Usize.max ∧ fields.toList.length ≤ Isize.max.toNat ∧
+      fields.toList.length ≤ 16777215) :
+    experiment_nif.tuple_size (.tuple fields) =
+      RustM.ok (.Ok (alloc.vec.Vec.len (alloc.vec.Vec.from fields.toList bounds.1))) := by
+  simp [experiment_nif.tuple_size, Lynx.Rustler.Decoding.getTuple_fields fields bounds]
+
+theorem size_rejected_spec (input : Lynx.Term) (notTuple : ∀ fields, input ≠ .tuple fields) :
+    experiment_nif.tuple_size input = RustM.ok (.Err Lynx.Rustler.badArgOutcome) := by
+  simp [experiment_nif.tuple_size, Lynx.Rustler.Decoding.getTuple_not_tuple input notTuple]
+
 end TupleFields.Properties

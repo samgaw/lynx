@@ -132,7 +132,9 @@ defmodule Lynx.Rustler do
     * `:mir` — pure extraction MIR stage: `:promoted`, `:elaborated` or
       `:optimized`. Custom input Decoders default to `:elaborated`, retaining
       compiler drop elaboration. Their actual first-party bodies are extracted;
-      the FFI models admit bounded tuple-field extraction, u64 decoding and opaque forwarding of
+      temporary tuple-field vectors require a validated unconditional compiler Copy
+      witness before their logical cleanup can be erased. The FFI models admit
+      bounded tuple-field extraction, u64 decoding and opaque forwarding of
       its error. Pure BadArg and bounded ASCII literal Atom/RaiseAtom construction
       are validated against the actual enum metadata and literal provenance.
       Admitted boxed Term/RaiseTerm payloads retain their actual Encoder dictionary

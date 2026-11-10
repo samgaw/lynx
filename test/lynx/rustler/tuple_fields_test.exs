@@ -30,17 +30,12 @@ defmodule Lynx.Rustler.TupleFieldsTest do
 
       source =
         "#![feature(register_tool)]\n#![register_tool(verify)]\n" <>
-          Enum.reduce(~w(tuple_fields decoded_flag), File.read!(native), fn name, s ->
+          Enum.reduce(~w(tuple_fields tuple_size decoded_flag), File.read!(native), fn name, s ->
             String.replace(s, "fn #{name}(", "#[verify::start_from]\nfn #{name}(")
           end)
 
-      # tuple_fields is public; place its attribute before the visibility token.
-      source =
-        String.replace(
-          source,
-          "pub #[verify::start_from]\nfn tuple_fields",
-          "#[verify::start_from]\npub fn tuple_fields"
-        )
+      # Internal proof roots are public; keep attributes before visibility.
+      source = String.replace(source, "pub #[verify::start_from]", "#[verify::start_from]\npub")
 
       File.write!(native, source)
       project = Path.join(tmp, "proofs")
@@ -63,14 +58,14 @@ defmodule Lynx.Rustler.TupleFieldsTest do
         root_attribute: "verify::start_from",
         cargo: [features: ["custom-decoder"]],
         only: [decoded_flag: 2],
-        proof_roots: ["experiment_nif::tuple_fields"],
+        proof_roots: ["experiment_nif::tuple_fields", "experiment_nif::tuple_size"],
         build_dir: Path.join(tmp, "build"),
         lean_project: project,
         module_prefix: "TupleFields.Extraction",
         proof_modules: ["TupleFields.Properties"],
         required_properties:
           Enum.map(
-            ~w(fields_spec rejected_spec oversized_spec),
+            ~w(fields_spec rejected_spec oversized_spec size_spec size_rejected_spec),
             &("TupleFields.Properties." <> &1)
           )
       ]
@@ -90,6 +85,12 @@ defmodule Lynx.Rustler.TupleFieldsTest do
                &(&1.rust_name == "rustler::types::tuple::get_tuple" and
                    &1.implementation_verified == false)
              )
+
+      assert Enum.any?(verified.verification.structural_drops, fn entry ->
+               entry.type == "alloc::vec::Vec<rustler::term::Term>" and
+                 entry.element_drop_basis.kind == :compiler_copy and
+                 entry.implementation_verified == false
+             end)
 
       assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok and &1.cached))
 
@@ -121,9 +122,18 @@ defmodule Lynx.Rustler.TupleFieldsTest do
         String.replace(
           source,
           "rustler::types::tuple::get_tuple(input)",
-          "Err(rustler::Error::BadArg)"
+          "Err(rustler::Error::BadArg)",
+          global: false
         )
 
+      refute changed == source
+      File.write!(native, changed)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+      changed = String.replace(source, "Ok(fields.len())", "Ok(fields.len() + 1)")
       refute changed == source
       File.write!(native, changed)
 
