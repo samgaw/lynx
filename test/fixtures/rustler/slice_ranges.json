@@ -1,0 +1,1548 @@
+{
+  "charon_version": "0.1.304",
+  "functions": [
+    {
+      "body": "Opaque",
+      "def_id": 18,
+      "generics": {
+        "const_generics": [],
+        "outlives": [
+          {
+            "outlives": [],
+            "regions": [],
+            "skip_binder": [
+              {
+                "Lub": {
+                  "TypeVar": {
+                    "Free": 0
+                  }
+                }
+              },
+              {
+                "Var": {
+                  "Free": 0
+                }
+              }
+            ]
+          }
+        ],
+        "regions": [
+          {
+            "index": 0,
+            "late_bound": true,
+            "mutability": "Unknown",
+            "name": null,
+            "variance": "Invariant"
+          }
+        ],
+        "trait_clauses": [],
+        "trait_type_constraints": [],
+        "types": [
+          {
+            "index": 0,
+            "name": "T",
+            "variance": "Unknown"
+          }
+        ]
+      },
+      "item_meta": {
+        "diagnostic_item": null,
+        "has_errors": false,
+        "is_extern": false,
+        "is_local": false,
+        "lang_item": null,
+        "name": [
+          {
+            "Ident": [
+              "core",
+              0
+            ]
+          },
+          {
+            "Ident": [
+              "slice",
+              0
+            ]
+          },
+          {
+            "Ident": [
+              "index",
+              0
+            ]
+          },
+          {
+            "Impl": {
+              "Trait": 5
+            }
+          },
+          {
+            "Ident": [
+              "get",
+              0
+            ]
+          }
+        ],
+        "opacity": "Opaque",
+        "started_from": false
+      },
+      "signature": {
+        "abi": "Rust",
+        "inputs": [
+          {
+            "Adt": {
+              "builtin": null,
+              "generics": {
+                "const_generics": [],
+                "regions": [],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  }
+                ]
+              },
+              "id": 4
+            }
+          },
+          {
+            "Ref": [
+              {
+                "Var": {
+                  "Free": 0
+                }
+              },
+              {
+                "Slice": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  },
+                  null
+                ]
+              },
+              "Shared"
+            ]
+          }
+        ],
+        "is_unsafe": false,
+        "is_variadic": false,
+        "output": {
+          "Adt": {
+            "builtin": null,
+            "generics": {
+              "const_generics": [],
+              "regions": [],
+              "trait_refs": [],
+              "types": [
+                {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Slice": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        null
+                      ]
+                    },
+                    "Shared"
+                  ]
+                }
+              ]
+            },
+            "id": 5
+          }
+        }
+      },
+      "src": {
+        "TraitImpl": {
+          "impl_ref": {
+            "generics": {
+              "const_generics": [],
+              "regions": [],
+              "trait_refs": [],
+              "types": [
+                {
+                  "TypeVar": {
+                    "Free": 0
+                  }
+                }
+              ]
+            },
+            "id": 5
+          },
+          "item_id": 0,
+          "reuses_default": false,
+          "trait_ref": {
+            "generics": {
+              "const_generics": [],
+              "regions": [],
+              "trait_refs": [],
+              "types": [
+                {
+                  "Adt": {
+                    "builtin": null,
+                    "generics": {
+                      "const_generics": [],
+                      "regions": [],
+                      "trait_refs": [],
+                      "types": [
+                        {
+                          "Scalar": {
+                            "Integer": {
+                              "Unsigned": "Usize"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "id": 4
+                  }
+                },
+                {
+                  "Slice": [
+                    {
+                      "TypeVar": {
+                        "Free": 0
+                      }
+                    },
+                    null
+                  ]
+                },
+                {
+                  "Slice": [
+                    {
+                      "TypeVar": {
+                        "Free": 0
+                      }
+                    },
+                    null
+                  ]
+                }
+              ]
+            },
+            "id": 2
+          }
+        }
+      }
+    },
+    {
+      "body": "Opaque",
+      "def_id": 29,
+      "generics": {
+        "const_generics": [],
+        "outlives": [
+          {
+            "outlives": [],
+            "regions": [],
+            "skip_binder": [
+              {
+                "Lub": {
+                  "TypeVar": {
+                    "Free": 0
+                  }
+                }
+              },
+              {
+                "Var": {
+                  "Free": 0
+                }
+              }
+            ]
+          }
+        ],
+        "regions": [
+          {
+            "index": 0,
+            "late_bound": true,
+            "mutability": "Unknown",
+            "name": null,
+            "variance": "Invariant"
+          }
+        ],
+        "trait_clauses": [],
+        "trait_type_constraints": [],
+        "types": [
+          {
+            "index": 0,
+            "name": "T",
+            "variance": "Unknown"
+          }
+        ]
+      },
+      "item_meta": {
+        "diagnostic_item": null,
+        "has_errors": false,
+        "is_extern": false,
+        "is_local": false,
+        "lang_item": null,
+        "name": [
+          {
+            "Ident": [
+              "core",
+              0
+            ]
+          },
+          {
+            "Ident": [
+              "slice",
+              0
+            ]
+          },
+          {
+            "Ident": [
+              "index",
+              0
+            ]
+          },
+          {
+            "Impl": {
+              "Trait": 8
+            }
+          },
+          {
+            "Ident": [
+              "get",
+              0
+            ]
+          }
+        ],
+        "opacity": "Opaque",
+        "started_from": false
+      },
+      "signature": {
+        "abi": "Rust",
+        "inputs": [
+          {
+            "Adt": {
+              "builtin": null,
+              "generics": {
+                "const_generics": [],
+                "regions": [],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  }
+                ]
+              },
+              "id": 7
+            }
+          },
+          {
+            "Ref": [
+              {
+                "Var": {
+                  "Free": 0
+                }
+              },
+              {
+                "Slice": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  },
+                  null
+                ]
+              },
+              "Shared"
+            ]
+          }
+        ],
+        "is_unsafe": false,
+        "is_variadic": false,
+        "output": {
+          "Adt": {
+            "builtin": null,
+            "generics": {
+              "const_generics": [],
+              "regions": [],
+              "trait_refs": [],
+              "types": [
+                {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Slice": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        null
+                      ]
+                    },
+                    "Shared"
+                  ]
+                }
+              ]
+            },
+            "id": 5
+          }
+        }
+      },
+      "src": {
+        "TraitImpl": {
+          "impl_ref": {
+            "generics": {
+              "const_generics": [],
+              "regions": [],
+              "trait_refs": [],
+              "types": [
+                {
+                  "TypeVar": {
+                    "Free": 0
+                  }
+                }
+              ]
+            },
+            "id": 8
+          },
+          "item_id": 0,
+          "reuses_default": false,
+          "trait_ref": {
+            "generics": {
+              "const_generics": [],
+              "regions": [],
+              "trait_refs": [],
+              "types": [
+                {
+                  "Adt": {
+                    "builtin": null,
+                    "generics": {
+                      "const_generics": [],
+                      "regions": [],
+                      "trait_refs": [],
+                      "types": [
+                        {
+                          "Scalar": {
+                            "Integer": {
+                              "Unsigned": "Usize"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "id": 7
+                  }
+                },
+                {
+                  "Slice": [
+                    {
+                      "TypeVar": {
+                        "Free": 0
+                      }
+                    },
+                    null
+                  ]
+                },
+                {
+                  "Slice": [
+                    {
+                      "TypeVar": {
+                        "Free": 0
+                      }
+                    },
+                    null
+                  ]
+                }
+              ]
+            },
+            "id": 2
+          }
+        }
+      }
+    }
+  ],
+  "translated": {
+    "trait_decls": [
+      {
+        "def_id": 2,
+        "is_unsafe": true,
+        "item_meta": {
+          "diagnostic_item": "SliceIndex",
+          "has_errors": false,
+          "is_extern": false,
+          "is_local": false,
+          "lang_item": null,
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "slice",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "index",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "SliceIndex",
+                0
+              ]
+            }
+          ],
+          "opacity": "Opaque",
+          "started_from": false
+        }
+      }
+    ],
+    "trait_impls": [
+      {
+        "consts": [],
+        "def_id": 5,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "T",
+              "variance": "Unknown"
+            }
+          ]
+        },
+        "impl_trait": {
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": [
+              {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": [
+                      {
+                        "Scalar": {
+                          "Integer": {
+                            "Unsigned": "Usize"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "id": 4
+                }
+              },
+              {
+                "Slice": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  },
+                  null
+                ]
+              },
+              {
+                "Slice": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  },
+                  null
+                ]
+              }
+            ]
+          },
+          "id": 2
+        },
+        "implied_trait_refs": [],
+        "is_negative": false,
+        "is_unsafe": true,
+        "methods": [
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                0
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 18
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                1
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 19
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                2
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 20
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                3
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 21
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                4
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 9
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                5
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 10
+            }
+          }
+        ],
+        "src": "Normal",
+        "types": [
+          null
+        ]
+      },
+      {
+        "consts": [],
+        "def_id": 8,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "T",
+              "variance": "Unknown"
+            }
+          ]
+        },
+        "impl_trait": {
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": [
+              {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": [
+                      {
+                        "Scalar": {
+                          "Integer": {
+                            "Unsigned": "Usize"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "id": 7
+                }
+              },
+              {
+                "Slice": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  },
+                  null
+                ]
+              },
+              {
+                "Slice": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  },
+                  null
+                ]
+              }
+            ]
+          },
+          "id": 2
+        },
+        "implied_trait_refs": [],
+        "is_negative": false,
+        "is_unsafe": true,
+        "methods": [
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                0
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 29
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                1
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 30
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                2
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 31
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                3
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 32
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                4
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 33
+            }
+          },
+          {
+            "kind": {
+              "TraitMethod": [
+                2,
+                5
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                ]
+              },
+              "id": 34
+            }
+          }
+        ],
+        "src": "Normal",
+        "types": [
+          null
+        ]
+      }
+    ],
+    "type_decls": [
+      {
+        "def_id": 0,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": []
+        },
+        "item_meta": {
+          "diagnostic_item": null,
+          "has_errors": false,
+          "is_extern": false,
+          "is_local": false,
+          "lang_item": null,
+          "name": [
+            {
+              "Builtin": [
+                {
+                  "Tuple": 0
+                },
+                0
+              ]
+            }
+          ],
+          "opacity": "Transparent",
+          "started_from": false
+        },
+        "kind": "Opaque",
+        "src": {
+          "Builtin": "Tuple"
+        }
+      },
+      {
+        "def_id": 4,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "Idx",
+              "variance": "Covariant"
+            }
+          ]
+        },
+        "item_meta": {
+          "diagnostic_item": null,
+          "has_errors": false,
+          "is_extern": false,
+          "is_local": false,
+          "lang_item": "Range",
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "ops",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "range",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Range",
+                0
+              ]
+            }
+          ],
+          "opacity": "Transparent",
+          "started_from": false
+        },
+        "kind": {
+          "Struct": [
+            {
+              "is_positional": false,
+              "name": "start",
+              "ty": {
+                "TypeVar": {
+                  "Free": 0
+                }
+              }
+            },
+            {
+              "is_positional": false,
+              "name": "end",
+              "ty": {
+                "TypeVar": {
+                  "Free": 0
+                }
+              }
+            }
+          ]
+        },
+        "src": "Normal"
+      },
+      {
+        "def_id": 5,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "T",
+              "variance": "Covariant"
+            }
+          ]
+        },
+        "item_meta": {
+          "diagnostic_item": "Option",
+          "has_errors": false,
+          "is_extern": false,
+          "is_local": false,
+          "lang_item": "Option",
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "option",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Option",
+                0
+              ]
+            }
+          ],
+          "opacity": "Transparent",
+          "started_from": false
+        },
+        "kind": {
+          "Enum": [
+            {
+              "discriminant": {
+                "Signed": [
+                  "Isize",
+                  "0"
+                ]
+              },
+              "fields": [],
+              "id": 0,
+              "name": "None"
+            },
+            {
+              "discriminant": {
+                "Signed": [
+                  "Isize",
+                  "1"
+                ]
+              },
+              "fields": [
+                {
+                  "is_positional": true,
+                  "name": "_0",
+                  "ty": {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                }
+              ],
+              "id": 1,
+              "name": "Some"
+            }
+          ]
+        },
+        "src": "Normal"
+      },
+      {
+        "def_id": 6,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "B",
+              "variance": "Covariant"
+            },
+            {
+              "index": 1,
+              "name": "C",
+              "variance": "Covariant"
+            }
+          ]
+        },
+        "item_meta": {
+          "diagnostic_item": "ControlFlow",
+          "has_errors": false,
+          "is_extern": false,
+          "is_local": false,
+          "lang_item": null,
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "ops",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "control_flow",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "ControlFlow",
+                0
+              ]
+            }
+          ],
+          "opacity": "Transparent",
+          "started_from": false
+        },
+        "kind": {
+          "Enum": [
+            {
+              "discriminant": {
+                "Signed": [
+                  "Isize",
+                  "0"
+                ]
+              },
+              "fields": [
+                {
+                  "is_positional": true,
+                  "name": "_0",
+                  "ty": {
+                    "TypeVar": {
+                      "Free": 1
+                    }
+                  }
+                }
+              ],
+              "id": 0,
+              "name": "Continue"
+            },
+            {
+              "discriminant": {
+                "Signed": [
+                  "Isize",
+                  "1"
+                ]
+              },
+              "fields": [
+                {
+                  "is_positional": true,
+                  "name": "_0",
+                  "ty": {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                }
+              ],
+              "id": 1,
+              "name": "Break"
+            }
+          ]
+        },
+        "src": "Normal"
+      },
+      {
+        "def_id": 7,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "Idx",
+              "variance": "Covariant"
+            }
+          ]
+        },
+        "item_meta": {
+          "diagnostic_item": null,
+          "has_errors": false,
+          "is_extern": false,
+          "is_local": false,
+          "lang_item": "RangeFrom",
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "ops",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "range",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "RangeFrom",
+                0
+              ]
+            }
+          ],
+          "opacity": "Transparent",
+          "started_from": false
+        },
+        "kind": {
+          "Struct": [
+            {
+              "is_positional": false,
+              "name": "start",
+              "ty": {
+                "TypeVar": {
+                  "Free": 0
+                }
+              }
+            }
+          ]
+        },
+        "src": "Normal"
+      }
+    ]
+  }
+}
