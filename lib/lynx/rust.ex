@@ -14,6 +14,12 @@ defmodule Lynx.Rust do
   not proofs of Rust core's implementation. Other slice/string operations remain
   rejected unless separately supported.
 
+  Shared `str::as_bytes`, `str::len` and `str::is_empty` reuse the existing
+  Aeneas byte-slice representation. Views preserve bytes and lengths count bytes,
+  including multi-byte Unicode text. The standard-library conversion and native
+  layout remain reported models; owned/mutable strings and character-safe slicing
+  are not included in this subset.
+
   Fixed-width signed/unsigned integers from 8 through 128 bits also support
   `to_le_bytes`, `to_be_bytes`, `from_le_bytes` and `from_be_bytes` through
   Aeneas's existing bit-vector models. Admission checks the exact scalar,
