@@ -146,6 +146,10 @@ defmodule Lynx.Rustler do
       runtime custom Decoders are rejected.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
+    * `:branching` — `:join` by default, or `:duplicate` to retain separate symbolic
+      branch contexts instead of joining them. Requires the branch-duplication
+      backend. Loop joins and invariant checks remain enabled; duplicated
+      continuations can increase generated code size.
     * `:execution` — `:pure` by default, or `:runtime` to retain modeled native
       state and blocking waits in Lynx's runtime. Runtime bindings use concurrent
       purity, preserve effects before panic and convert `rust_panicked` to
@@ -224,6 +228,7 @@ defmodule Lynx.Rustler do
       :required_properties,
       :execution,
       :futures,
+      :branching,
       :unwind,
       :owned_drops,
       :files
@@ -235,6 +240,7 @@ defmodule Lynx.Rustler do
 
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     Lynx.Rust.Mir.validate!(opts)
+    Lynx.Rust.Branching.validate!(opts)
     proof_roots = Keyword.get(opts, :proof_roots, [])
 
     unless is_list(proof_roots) and
@@ -422,6 +428,7 @@ defmodule Lynx.Rustler do
         root_attribute: opts[:root_attribute],
         mir: mir,
         futures: Keyword.get(opts, :futures, :reject),
+        branching: Keyword.get(opts, :branching, :join),
         files: Keyword.get(opts, :files, :reject),
         owned_drops: Keyword.get(opts, :owned_drops, false),
         unwind: Keyword.get(opts, :unwind, :reject),

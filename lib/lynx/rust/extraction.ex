@@ -5,6 +5,7 @@ defmodule Lynx.Rust.Extraction do
   # clients must kernel-check their properties and audit the generated modules.
   def run!(context, tools, roots, output, module, opts \\ []) do
     Lynx.Rust.Mir.validate!(opts)
+    Lynx.Rust.Branching.validate!(opts)
 
     if :captured_unwind_drops in Keyword.get(opts, :external_calls, []),
       do:
@@ -23,6 +24,7 @@ defmodule Lynx.Rust.Extraction do
           :execution,
           :unwind,
           :futures,
+          :branching,
           :files,
           :owned_drops
         ],
@@ -68,6 +70,7 @@ defmodule Lynx.Rust.Extraction do
          )
 
     Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools)
+    Lynx.Rust.Branching.backend_arguments!(opts, tools)
 
     if Enum.any?(
          [:rustler_encoders, :rustler_decoders],
@@ -515,6 +518,7 @@ defmodule Lynx.Rust.Extraction do
       Path.join(tools, "aeneas"),
       runtime_args ++
         Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools) ++
+        Lynx.Rust.Branching.backend_arguments!(opts, tools) ++
         model_args ++
         [
           "-backend",
@@ -539,6 +543,8 @@ defmodule Lynx.Rust.Extraction do
 
     translation_bytes =
       if formatting_aliases == [], do: translation_bytes, else: JSON.encode!(translation)
+
+    Lynx.Rust.Branching.validate_metadata!(translation, opts)
 
     implementations =
       Lynx.Rust.LLBC.link!(audit, translation,

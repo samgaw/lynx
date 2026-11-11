@@ -92,15 +92,41 @@ pub fn try_cycle(value: bool) -> (bool, bool, bool, bool) {
     result
 }
 
+/// Mutates a guard returned by another crate and observes its released contents.
+pub fn returned_guard_flip(value: bool) -> bool {
+    let mutex = std::sync::Mutex::new(value);
+    let mut guard = match ownership_base::acquire_or_wait(&mutex) {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    ownership_base::toggle(&mut guard);
+    drop(guard);
+    let reader = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let result = *reader;
+    drop(reader);
+    drop(mutex);
+    result
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{guard_panic, try_cycle};
+    use super::{guard_panic, returned_guard_flip, try_cycle};
     use std::sync::Mutex;
 
     #[test]
     fn nonblocking_cycle_preserves_rejected_updates() {
         for initial in [false, true] {
             assert_eq!(try_cycle(initial), (false, initial, true, !initial));
+        }
+    }
+
+    #[test]
+    fn returned_guard_commits_before_readback() {
+        for initial in [false, true] {
+            assert_eq!(returned_guard_flip(initial), !initial);
         }
     }
 

@@ -1,0 +1,73 @@
+--- a/src/Config.ml
++++ b/src/Config.ml
+@@ -601,6 +601,10 @@
+     the match/switch/etc. *)
+ let recover_joins = ref true
+
++(** Retain distinct branch contexts and duplicate their continuations instead
++    of joining them. Loop fixed-point computation still uses its usual joins. *)
++let join_branches = ref true
++
+ (** When analyzing types, for instance to check whether they use erased regions
+     or not, we ignore dynamic traits.
+
+--- a/src/Main.ml
++++ b/src/Main.ml
+@@ -215,6 +215,10 @@
+         Arg.Clear recover_joins,
+         " Report an error whenever joining contexts fails rather than \
+          duplicating the code after the branching statement" );
++      ( "-duplicate-branches",
++        Arg.Clear join_branches,
++        " Duplicate branch continuations instead of joining symbolic contexts; \
++         loop joins and all invariant checks remain enabled" );
+       ( "-color",
+         Arg.Set log_with_colors,
+         " Use colors when printing log messages" );
+--- a/src/EmitJson.ml
++++ b/src/EmitJson.ml
+@@ -107,6 +107,7 @@
+ type envelope = {
+   result_monad : string;
+   effectful_calls_preserved : bool;
++  branch_joins : bool;
+   assertion_unwind_input : bool;
+   aeneas_version : string;
+   charon_version : string;
+@@ -389,6 +390,7 @@
+         crate_name;
+         result_monad = Config.lean_result_name ();
+         effectful_calls_preserved = Config.effectful_result_monad ();
++        branch_joins = !Config.join_branches;
+         assertion_unwind_input = !Config.assertion_unwind_input;
+         functions = List.rev state.function_entries;
+         types = List.rev state.type_entries;
+--- a/src/interp/InterpStatements.ml
++++ b/src/interp/InterpStatements.ml
+@@ -922,7 +922,7 @@
+               | [ e_true; e_false ] -> cf_bool (e_true, e_false)
+               | _ -> [%internal_error] span
+             in
+-            if join then
++            if join && !Config.join_branches then
+               try eval_switch_with_join config span cc ctx0 ctx_resl
+               with Errors.RFailure ->
+                 (* If the join threw a recoverable error we do not join
+@@ -979,7 +979,7 @@
+               cf_int (el, e_otherwise)
+             in
+             let cf = cc_comp cc cf in
+-            if join then
++            if join && !Config.join_branches then
+               (* Join the contexts *)
+               try eval_switch_with_join config span cf ctx0 resl
+               with Errors.RFailure ->
+@@ -1038,7 +1038,7 @@
+             in
+             let ctx_resl, cf = comp_seqs __FILE__ __LINE__ span resl in
+             let cc = cc_comp cf_expand cf in
+-            if join then (* Join the contexts *)
++            if join && !Config.join_branches then (* Join the contexts *)
+               try eval_switch_with_join config span cc ctx0 ctx_resl
+               with Errors.RFailure ->
+                 (* If the join threw a recoverable error we do not join

@@ -1,5 +1,19 @@
 //! Owned values with observable destruction.
 
+/// Tries acquisition first, retaining the owned guard in either acquired result.
+///
+/// # Panics
+/// Recursive fallback to blocking acquisition can panic or deadlock.
+pub fn acquire_or_wait(
+    mutex: &std::sync::Mutex<bool>,
+) -> std::sync::LockResult<std::sync::MutexGuard<'_, bool>> {
+    match mutex.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(std::sync::TryLockError::Poisoned(error)) => Err(error),
+        Err(std::sync::TryLockError::WouldBlock) => mutex.lock(),
+    }
+}
+
 /// Toggles protected contents if an immediate acquisition succeeds.
 /// A contended attempt leaves the protected contents unchanged.
 pub fn try_toggle(mutex: &std::sync::Mutex<bool>) -> bool {
