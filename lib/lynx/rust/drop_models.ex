@@ -7,20 +7,16 @@ defmodule Lynx.Rust.DropModels do
   # Select the actual compiler Copy implementation, not a name-based no-drop
   # promise. Charon supports this trait-first selector without local patches.
   def metadata_arguments(models) do
-    if Enum.any?(
-         models,
-         &(&1.rust == "rustler::term::Term" and
-             &1.lean == "Lynx.Rustler.NativeTerm")
-       ) do
-      [
-        "--start-from",
-        "{impl core::marker::Copy for rustler::term::Term}",
-        "--include",
-        "core::marker::Copy"
-      ]
-    else
-      []
-    end
+    targets =
+      for {rust, lean} <- [
+            {"rustler::term::Term", "Lynx.Rustler.NativeTerm"},
+            {"rustler::types::atom::Atom", "Lynx.Rustler.Atom"}
+          ],
+          Enum.any?(models, &(&1.rust == rust and &1.lean == lean)),
+          do: rust
+
+    Enum.flat_map(targets, &["--start-from", "{impl core::marker::Copy for #{&1}}"]) ++
+      if(targets == [], do: [], else: ["--include", "core::marker::Copy"])
   end
 
   def generated?(%{"item_meta" => %{"name" => name}}) when is_list(name),
@@ -376,6 +372,96 @@ defmodule Lynx.Rust.DropModels do
   # destruction semantics are admitted. This never certifies erasure itself.
   @doc false
   def validate_result_glue!(drop, function, translated, refs) do
+    ctx = glue_context(function, translated, refs)
+    unless drop["kind"] == "Precise", do: reject!("imprecise Result destructor")
+    place!(drop["place"], ctx)
+    result_glue!(drop, ctx)
+  end
+
+  # Validates binding to a monomorphic opaque SDK destructor. This does not
+  # establish cleanup semantics or permit erasing the drop; the caller must
+  # provide a separately reported partial model for this foreign type.
+  @doc false
+  def validate_opaque_glue!(drop, function, translated, refs, expected_name) do
+    ctx = glue_context(function, translated, refs)
+    unless drop["kind"] == "Precise", do: reject!("imprecise opaque external destructor")
+    place!(drop["place"], ctx)
+    actual = expand(drop["place"]["ty"], ctx)
+    id = get_in(drop, ["fn_ptr", "kind", "Fun"])
+
+    with %{"Adt" => %{"id" => type, "builtin" => nil, "generics" => args}} <- actual,
+         true <- args == arguments([]),
+         %{
+           "kind" => "Opaque",
+           "item_meta" => %{"name" => ^expected_name},
+           "generics" => type_params
+         } <- ctx.types[type],
+         true <- parameters?(type_params, 0, 0),
+         true <- arguments?(drop["fn_ptr"]["generics"], 1),
+         [region] <- drop["fn_ptr"]["generics"]["regions"],
+         true <- scoped_region?(region, function),
+         %{
+           "body" => "Opaque",
+           "item_meta" => %{"name" => name, "opacity" => "Opaque", "has_errors" => false},
+           "generics" => params,
+           "signature" => %{
+             "is_unsafe" => true,
+             "abi" => "Rust",
+             "is_variadic" => false,
+             "inputs" => [input],
+             "output" => output
+           },
+           "src" => %{
+             "TraitImpl" => %{
+               "impl_ref" => %{"id" => impl_id, "generics" => impl_args},
+               "trait_ref" => %{"id" => trait, "generics" => trait_args},
+               "item_id" => 0,
+               "reuses_default" => false
+             }
+           }
+         } <- ctx.functions[id],
+         true <-
+           name ==
+             expected_name ++
+               [%{"Impl" => %{"Trait" => impl_id}}, %{"Builtin" => ["DropGlue", 0]}],
+         true <- parameters?(params, 1, 0),
+         true <- expand(input, ctx) == %{"Ref" => [%{"Var" => %{"Free" => 0}}, actual, "Mut"]},
+         true <- unit?(expand(output, ctx)),
+         true <- destruct_trait?(trait, ctx),
+         true <- expand(trait_args, ctx) == arguments([actual]),
+         true <- expand(impl_args, ctx) == arguments([]),
+         %{
+           "src" => "Destruct",
+           "is_unsafe" => false,
+           "is_negative" => false,
+           "generics" => impl_params,
+           "impl_trait" => impl_trait,
+           "consts" => [],
+           "types" => [],
+           "implied_trait_refs" => [],
+           "methods" => [method]
+         } <- ctx.impls[impl_id],
+         true <- parameters?(impl_params, 0, 0),
+         true <- expand(impl_trait, ctx) == %{"id" => trait, "generics" => arguments([actual])},
+         true <- method?(method, id, trait) do
+      %{id: id}
+    else
+      _ -> reject!("missing or inconsistent opaque external drop glue")
+    end
+  end
+
+  defp scoped_region?(%{"Body" => index}, function) when is_integer(index) and index >= 0 do
+    count = get_in(function, ["body", "Structured", "bound_body_regions"])
+    is_integer(count) and index < count
+  end
+
+  defp scoped_region?(%{"Var" => %{"Free" => index}}, function)
+       when is_integer(index) and index >= 0,
+       do: Enum.any?(function["generics"]["regions"], &(&1["index"] == index))
+
+  defp scoped_region?(_, _), do: false
+
+  defp glue_context(function, translated, refs) do
     ctx = %{
       translated: translated,
       refs: refs,
@@ -390,9 +476,7 @@ defmodule Lynx.Rust.DropModels do
 
     locals = function["body"]["Structured"]["locals"]["locals"]
     ctx = Map.put(ctx, :locals, Map.new(locals, &{&1["index"], expand(&1["ty"], ctx)}))
-    unless drop["kind"] == "Precise", do: reject!("imprecise Result destructor")
-    place!(drop["place"], ctx)
-    result_glue!(drop, ctx)
+    ctx
   end
 
   defp result_glue!(drop, ctx) do
@@ -522,6 +606,15 @@ defmodule Lynx.Rust.DropModels do
             false
         end
     end
+  end
+
+  @doc false
+  def nondestructive_payload(type, translated, refs) do
+    nondestructive_element(type, %{
+      translated: translated,
+      refs: refs,
+      types: declarations(translated["type_decls"])
+    })
   end
 
   # Rust's builtin Copy trait cannot coexist with Drop. This validates the

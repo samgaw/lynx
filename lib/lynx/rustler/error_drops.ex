@@ -27,6 +27,9 @@ defmodule Lynx.Rustler.ErrorDrops do
 
   defp result_drop?(%{"Drop" => %{"place" => %{"ty" => type}}}, error, translated, refs) do
     case CallModels.expand(type, refs) do
+      %{"Adt" => %{"id" => ^error, "builtin" => nil, "generics" => @args}} ->
+        true
+
       %{"Adt" => %{"id" => result, "builtin" => nil, "generics" => %{"types" => [_, payload]}}} ->
         payload == %{"Adt" => %{"id" => error, "builtin" => nil, "generics" => @args}} &&
           LLBC.result_type?(result, %{translated: translated, references: refs})
@@ -80,7 +83,11 @@ defmodule Lynx.Rustler.ErrorDrops do
     functions = translated["fun_decls"]
 
     reserved =
-      [@name, @error ++ [%{"Ident" => ["LynxDropErrResult", 0]}]] ++
+      [
+        @name,
+        @error ++ [%{"Ident" => ["LynxDropErrResult", 0]}],
+        @error ++ [%{"Ident" => ["LynxDropCopyResult", 0]}]
+      ] ++
         Enum.map(@scalars, fn scalar ->
           @error ++ [%{"Ident" => ["LynxDropScalarResult" <> scalar, 0]}]
         end)
@@ -155,6 +162,7 @@ defmodule Lynx.Rustler.ErrorDrops do
           :error -> "dropDecoderError"
           {:scalar_result, scalar} -> "dropScalarResult" <> scalar
           :result -> "dropErrResult"
+          :copy_result -> "dropScalarResult"
         end
 
       name = List.last(declaration["item_meta"]["name"])["Ident"] |> hd()
@@ -171,11 +179,17 @@ defmodule Lynx.Rustler.ErrorDrops do
          status: :modelled,
          implementation_verified: false,
          label:
-           "Validated compiler Result drop with opaque Rustler Error: BadArg/Atom/RaiseAtom errors complete; " <>
-             if(match?({:scalar_result, _}, mode),
-               do: "compiler-validated scalar Ok payloads complete without effects; ",
-               else: "unknown Ok payloads exhaust verification; "
-             ) <>
+           "Validated compiler Error/Result drop with opaque Rustler Error: BadArg/Atom/RaiseAtom errors complete; " <>
+             cond do
+               match?({:scalar_result, _}, mode) ->
+                 "compiler-validated scalar Ok payloads complete without effects; "
+
+               mode == :copy_result ->
+                 "compiler-validated Copy Ok payloads complete without effects; "
+
+               true ->
+                 "unknown Ok payloads exhaust verification; "
+             end <>
              "boxed errors exhaust verification; compiler glue, SDK, allocator and native FFI unverified"
        }}
     end)
@@ -263,7 +277,16 @@ defmodule Lynx.Rustler.ErrorDrops do
   defp walk(value, state, function), do: children(value, state, function)
 
   defp lower_drop(%{"kind" => %{"Drop" => drop}} = statement, state, function, mode) do
+    error_id = state.error["def_id"]
+
     case CallModels.expand(drop["place"]["ty"], state.refs) do
+      %{"Adt" => %{"id" => ^error_id, "builtin" => nil, "generics" => @args}} ->
+        glue =
+          DropModels.validate_opaque_glue!(drop, function, state.translated, state.refs, @error)
+
+        state = declaration(state, nil, :error)
+        replace_drop(statement, state, function, :error, drop["place"], nil, glue)
+
       %{
         "Adt" => %{
           "id" => result,
@@ -283,76 +306,36 @@ defmodule Lynx.Rustler.ErrorDrops do
           scalar_type = CallModels.expand(payload, state.refs)
 
           mode =
-            if mode == :result and DropModels.primitive_scalar?(scalar_type),
-              do: {:scalar_result, scalar_name(scalar_type)},
-              else: mode
+            cond do
+              mode != :result ->
+                mode
+
+              DropModels.primitive_scalar?(scalar_type) ->
+                {:scalar_result, scalar_name(scalar_type)}
+
+              DropModels.nondestructive_payload(scalar_type, state.translated, state.refs) != nil ->
+                :copy_result
+
+              true ->
+                mode
+            end
 
           state = declaration(state, result, mode)
-          declaration = state.declarations[mode]
 
           error_place = %{
             "kind" => %{"Projection" => [drop["place"], %{"Field" => [1, 0]}]},
             "ty" => error_type
           }
 
-          local = length(state.locals)
-          unit = declaration["signature"]["output"]
-          dest = %{"kind" => %{"Local" => local}, "ty" => unit}
-
-          locals =
-            state.locals ++
-              [
-                %{
-                  "index" => local,
-                  "name" => nil,
-                  "span" => statement["span"],
-                  "ty" => unit,
-                  "drop_flag_for" => nil
-                }
-              ]
-
-          # Successful supported errors cannot unwind. Unsupported payloads
-          # fail with verification exhaustion, never a fabricated Rust panic.
-          resume = %{
-            "span" => statement["span"],
-            "id" => state.next + 1,
-            "kind" => "UnwindResume",
-            "comments_before" => []
-          }
-
-          call = %{
-            "call" => %{
-              "func" => %{
-                "Regular" => %{
-                  "kind" => %{"Fun" => declaration["def_id"]},
-                  "generics" =>
-                    if(mode in [:error] or match?({:scalar_result, _}, mode),
-                      do: @args,
-                      else: %{@args | "types" => [payload]}
-                    )
-                }
-              },
-              "args" => [%{"Move" => if(mode == :error, do: error_place, else: drop["place"])}],
-              "safety" => "Inherit"
-            },
-            "dest" => dest,
-            "on_unwind" => %{
-              "span" => statement["span"],
-              "id" => state.next,
-              "statements" => [resume]
-            }
-          }
-
-          site = %{
-            caller: function["def_id"],
-            statement: statement["id"],
-            span: statement["span"],
-            compiler_drop: glue.id,
-            mode: mode
-          }
-
-          {%{statement | "kind" => %{"Call" => call}},
-           %{state | locals: locals, next: state.next + 2, sites: [site | state.sites]}}
+          replace_drop(
+            statement,
+            state,
+            function,
+            mode,
+            if(mode == :error, do: error_place, else: drop["place"]),
+            payload,
+            glue
+          )
         else
           children(statement, state, function)
         end
@@ -375,6 +358,68 @@ defmodule Lynx.Rustler.ErrorDrops do
            }
 
   defp discriminant?(_, _, _, _), do: false
+
+  defp replace_drop(statement, state, function, mode, input_place, payload, glue) do
+    declaration = state.declarations[mode]
+    local = length(state.locals)
+    unit = declaration["signature"]["output"]
+    dest = %{"kind" => %{"Local" => local}, "ty" => unit}
+
+    locals =
+      state.locals ++
+        [
+          %{
+            "index" => local,
+            "name" => nil,
+            "span" => statement["span"],
+            "ty" => unit,
+            "drop_flag_for" => nil
+          }
+        ]
+
+    # Successful supported errors cannot unwind. Unsupported payloads
+    # fail with verification exhaustion, never a fabricated Rust panic.
+    resume = %{
+      "span" => statement["span"],
+      "id" => state.next + 1,
+      "kind" => "UnwindResume",
+      "comments_before" => []
+    }
+
+    call = %{
+      "call" => %{
+        "func" => %{
+          "Regular" => %{
+            "kind" => %{"Fun" => declaration["def_id"]},
+            "generics" =>
+              if(mode in [:error] or match?({:scalar_result, _}, mode),
+                do: @args,
+                else: %{@args | "types" => [payload]}
+              )
+          }
+        },
+        "args" => [%{"Move" => input_place}],
+        "safety" => "Inherit"
+      },
+      "dest" => dest,
+      "on_unwind" => %{
+        "span" => statement["span"],
+        "id" => state.next,
+        "statements" => [resume]
+      }
+    }
+
+    site = %{
+      caller: function["def_id"],
+      statement: statement["id"],
+      span: statement["span"],
+      compiler_drop: glue.id,
+      mode: mode
+    }
+
+    {%{statement | "kind" => %{"Call" => call}},
+     %{state | locals: locals, next: state.next + 2, sites: [site | state.sites]}}
+  end
 
   defp cleanup_drop(
          %{"kind" => %{"Switch" => %{"data" => data, "branches" => [ok, err]}}},
@@ -501,7 +546,11 @@ defmodule Lynx.Rustler.ErrorDrops do
              [
                %{
                  "Ident" => [
-                   if(scalar, do: "LynxDropScalarResult" <> scalar, else: "LynxDropErrResult"),
+                   cond do
+                     scalar -> "LynxDropScalarResult" <> scalar
+                     mode == :copy_result -> "LynxDropCopyResult"
+                     true -> "LynxDropErrResult"
+                   end,
                    0
                  ]
                }
