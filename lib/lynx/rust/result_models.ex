@@ -68,8 +68,9 @@ defmodule Lynx.Rust.ResultModels do
 
   # Aeneas's map_err model invokes the actual FnOnce implementation, but does
   # not drop an unused callback on Ok. Admit only empty or scalar environments
-  # with the actual NoopDestruct dictionary. Non-scalar owned captures, borrowed
-  # captures and user-written FnOnce implementations need additional semantics.
+  # with the actual NoopDestruct dictionary. Shared references to scalar data
+  # are also harmless to drop. Other owned/borrowed environments and user-written
+  # FnOnce implementations need additional semantics.
   def resolve(
         %{
           "body" => "Opaque",
@@ -114,11 +115,11 @@ defmodule Lynx.Rust.ResultModels do
         builtin: true,
         can_fail: true,
         lift: false,
-        callback: :scalar_captures,
+        callback: :compiler_fn_once,
         fn_once_trait: fn_once_id,
         destruct_trait: destruct_id,
         label:
-          "Aeneas Result::map_err with an extracted FnOnce callback with empty or scalar captures and validated NoopDestruct; Rust core implementation not verified"
+          "Aeneas Result::map_err with an extracted FnOnce callback with empty or scalar captures or shared references to scalar/slice values and validated NoopDestruct; Rust core implementation not verified"
       }
     else
       _ -> nil
@@ -181,13 +182,13 @@ defmodule Lynx.Rust.ResultModels do
         builtin: false,
         can_fail: true,
         lift: false,
-        callback: :scalar_captures,
+        callback: :compiler_fn_once,
         fn_once_trait: fn_once_id,
         destruct_trait: destruct_id,
         option_callback_type: id,
         model_hash: Lynx.Rust.OptionModels.fingerprint(),
         label:
-          "Option::and_then model with actual extracted compiler FnOnce with empty or scalar captures and validated NoopDestruct; Rust core implementation not verified"
+          "Option::and_then model with actual extracted compiler FnOnce with empty or scalar captures or shared references to scalar/slice values and validated NoopDestruct; Rust core implementation not verified"
       }
     else
       _ -> nil
@@ -521,7 +522,7 @@ defmodule Lynx.Rust.ResultModels do
        ) do
     direct =
       case context.models[id] do
-        %{callback: :scalar_captures} = model -> [callback!(args, model, context)]
+        %{callback: :compiler_fn_once} = model -> [callback!(args, model, context)]
         _ -> []
       end
 
@@ -558,7 +559,7 @@ defmodule Lynx.Rust.ResultModels do
          true <- lifetime_parameters?(params, type_args),
          identity = identity_arguments(params),
          instantiate = &CallModels.instantiate(expand.(&1), type_args),
-         true <- scalar_captures?(fields, expand),
+         true <- supported_captures?(fields, expand, length(params["regions"])),
          %{
            "kind" => "FnOnce",
            "closure_body" => %{"id" => body_id, "generics" => body_args},
@@ -643,21 +644,40 @@ defmodule Lynx.Rust.ResultModels do
     else
       _ ->
         raise ArgumentError,
-              "Rust combinator requires an extracted compiler FnOnce callback with empty or scalar captures, matching signature, implementation identity and NoopDestruct"
+              "Rust combinator requires an extracted compiler FnOnce callback with empty or scalar captures or shared references to scalar/slice values, matching signature, implementation identity and NoopDestruct"
     end
   end
 
-  # Scalar values have no destructor, allocation or reference ownership to lose
-  # when the standard combinator skips its callback. The independent compiler
-  # NoopDestruct dictionary and actual FnOnce body remain mandatory above.
-  defp scalar_captures?(fields, expand) when is_list(fields) do
+  # These fields neither own allocations nor release resources when skipped.
+  # Shared references only reach immutable scalar data; mutable/interior state
+  # and owned aggregates stay outside the subset. Region IDs belong to the
+  # closure declaration's binder, not an unrelated caller's body binder.
+  # The compiler NoopDestruct dictionary and actual callback remain mandatory.
+  defp supported_captures?(fields, expand, regions) when is_list(fields) do
     Enum.all?(fields, fn
-      %{"ty" => type} -> Lynx.Rust.DropModels.primitive_scalar?(expand.(type))
+      %{"ty" => type} -> capture_type?(expand.(type), regions, false)
       _ -> false
     end)
   end
 
-  defp scalar_captures?(_, _), do: false
+  defp supported_captures?(_, _, _), do: false
+
+  defp capture_type?(%{"Ref" => [region, type, "Shared"]}, regions, _) do
+    capture_region?(region, regions) and capture_type?(type, regions, true)
+  end
+
+  defp capture_type?(%{"Slice" => [element, nil]}, _, true),
+    do: Lynx.Rust.DropModels.primitive_scalar?(element)
+
+  defp capture_type?(type, _, _), do: Lynx.Rust.DropModels.primitive_scalar?(type)
+
+  defp capture_region?("Static", _), do: true
+
+  defp capture_region?(%{"Var" => %{"Free" => index}}, regions)
+       when is_integer(index) and index >= 0,
+       do: index < regions
+
+  defp capture_region?(_, _), do: false
 
   defp callback_arguments(
          %{"types" => [input, output, closure]} = args,

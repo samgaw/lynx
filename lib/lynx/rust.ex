@@ -29,13 +29,14 @@ defmodule Lynx.Rust do
   these models' verified boundary.
 
   `Option::and_then` and `Result::map_err` support compiler-generated callbacks
-  with empty environments or owned bool/fixed-width integer captures, including
+  with empty environments, owned bool/fixed-width integer captures, or shared
+  references to these scalars or their slices, including
   borrowed arguments with validated region-only lifetime bounds. Their reported
   standard-library models invoke the actual extracted callback on `Some`/`Err`
   and preserve `None`/`Ok` without invoking it. The skipped callback must have
-  validated no-op destruction. Non-scalar owned captures, borrowed captures and
-  arbitrary FnOnce implementations remain rejected; callback panics remain Rust
-  failures.
+  validated no-op destruction. Mutable references, references to non-scalar data,
+  owned aggregates, generic captures and arbitrary FnOnce implementations remain
+  rejected; callback panics remain Rust failures.
 
   Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
   Aeneas's value and borrow-update models. Shared `Vec::len` observations support

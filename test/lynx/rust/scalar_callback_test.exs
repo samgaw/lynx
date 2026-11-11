@@ -19,16 +19,16 @@ defmodule Lynx.Rust.ScalarCallbackTest do
 
     body = get_in(ctx.closure, ["src", "Closure", "info", "closure_body", "id"])
     assert Enum.any?(dependencies, fn {_, ids} -> ids == [body] end)
-    assert Enum.any?(ctx.models, fn {_, model} -> model[:callback] == :scalar_captures end)
+    assert Enum.any?(ctx.models, fn {_, model} -> model[:callback] == :compiler_fn_once end)
     assert %{"Struct" => [%{"ty" => type}]} = ctx.closure["kind"]
 
     assert CallModels.expand(type, ctx.refs) ==
              %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
   end
 
-  test "rejects borrowed, generic, owned aggregate and malformed captures", ctx do
+  test "rejects mutable, generic, owned aggregate and malformed captures", ctx do
     for field <- [
-          %{"ty" => %{"Ref" => ["Static", %{"Scalar" => "Bool"}, "Shared"]}},
+          %{"ty" => %{"Ref" => ["Static", %{"Scalar" => "Bool"}, "Mut"]}},
           %{"ty" => %{"TypeVar" => %{"Free" => 0}}},
           %{"ty" => %{"Adt" => %{"id" => 999_999, "builtin" => nil, "generics" => %{}}}},
           %{}

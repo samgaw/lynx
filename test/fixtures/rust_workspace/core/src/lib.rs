@@ -79,5 +79,5 @@ pub fn order_pair(left: u64, right: u64) -> (u64, u64) {
 
 /// Applies a scalar context mask to an error while preserving successful payloads.
 pub fn mask_error(input: Result<u64, u64>, mask: u64) -> Result<u64, u64> {
-    input.map_err(move |error| error ^ mask)
+    input.map_err(|error| error ^ mask)
 }
