@@ -87,6 +87,14 @@ if [ "$verification_profile" = runtime ]; then
   git -C "$source_dir" apply "$script_dir/patches/charon-pin-as-mut.patch"
 fi
 cd "$source_dir/charon"
+# Use one explicit location for builds, tests and the installed artifacts.
+# Normalize relative environment paths before later directory changes.
+verification_target_dir=${CARGO_TARGET_DIR:-"$source_dir/charon/target"}
+case "$verification_target_dir" in
+  /*) ;;
+  *) verification_target_dir="$PWD/$verification_target_dir" ;;
+esac
+export CARGO_TARGET_DIR="$verification_target_dir"
 rustup run nightly-2026-09-17 cargo build --locked --release \
   --no-default-features --features rustc --bin charon --bin charon-driver
 if [ "$verification_profile" = captured ]; then
@@ -114,7 +122,7 @@ if [ "$verification_profile" = runtime ]; then
   IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
     --no-default-features --features rustc --test crate_data -- pin_as_mut_reborrows_only_standard_mutable_references
 fi
-cp target/release/charon target/release/charon-driver "$install_dir/"
+cp "$verification_target_dir/release/charon" "$verification_target_dir/release/charon-driver" "$install_dir/"
 if [ "$verification_profile" = captured ]; then
   printf '%s\n' 'profile=captured' 'aeneas=build-2b9e3ea' \
     'charon=7b462d9159db2ed3015162352183906a30bfafc6+cleanup-edges-v1' \
