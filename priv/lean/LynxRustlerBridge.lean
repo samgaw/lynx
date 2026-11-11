@@ -667,6 +667,65 @@ end Encoding
 
 namespace Decoding
 
+/-- Only static-borrow/scalar SDK errors have supported destruction.
+Boxed errors may own first-party values with effectful destructors. -/
+@[expose] def dropDecoderError : DecoderError → RustM Unit
+  | .ok _ | .error _ => .ok ()
+  | .encoded _ _ => .fail .undef
+
+@[simp] theorem dropDecoderError_static (value : Term) :
+    dropDecoderError (.ok value) = .ok () := rfl
+
+@[simp] theorem dropDecoderError_error (error : Exception) :
+    dropDecoderError (.error error) = .ok () := rfl
+
+@[simp] theorem dropDecoderError_boxed (raises : Bool)
+    (encode : Env → RustM NativeTerm) :
+    dropDecoderError (.encoded raises encode) = .fail .undef := rfl
+
+/-- Partial model of consuming a Result containing a foreign Rustler Error.
+Only static-borrow/scalar error variants have no observable destruction. A
+successful payload or boxed error may run user code and remains unsupported. -/
+@[expose] def dropErrResult {T : Type} : core.result.Result T DecoderError → RustM Unit
+  | .Err (.ok _) | .Err (.error _) => .ok ()
+  | .Err (.encoded _ _) | .Ok _ => .fail .undef
+
+@[simp] theorem dropErrResult_static {T : Type} (value : Term) :
+    dropErrResult (T := T) (.Err (.ok value)) = .ok () := rfl
+
+@[simp] theorem dropErrResult_error {T : Type} (error : Exception) :
+    dropErrResult (T := T) (.Err (.error error)) = .ok () := rfl
+
+@[simp] theorem dropErrResult_boxed {T : Type} (raises : Bool)
+    (encode : Env → RustM NativeTerm) :
+    dropErrResult (T := T) (.Err (.encoded raises encode)) = .fail .undef := rfl
+
+@[simp] theorem dropErrResult_success {T : Type} (value : T) :
+    dropErrResult (.Ok value : core.result.Result T DecoderError) = .fail .undef := rfl
+
+/-- Rustler encodes the key even if the receiver is not a map. The call-site
+ audit only admits key values whose destruction has no observable effects. -/
+@[expose] def mapGet {K : Type} (encoder : Encoder K) (term : NativeTerm) (key : K) :
+    RustM (core.result.Result NativeTerm DecoderError) := do
+  let encoded ← encoder.encode key ()
+  match term with
+  | .map entries => match Term.mapLookup entries encoded with
+    | some value => .ok (.Ok value)
+    | none => .ok (.Err badArgOutcome)
+  | _ => .ok (.Err badArgOutcome)
+
+theorem mapGet_encoded {K : Type} (encoder : Encoder K) (key : K) (encoded : Term)
+    (encoded_key : encoder.encode key () = RustM.ok encoded) (entries : List (Term × Term)) :
+    mapGet encoder (.map entries) key = RustM.ok
+      (match Term.mapLookup entries encoded with
+        | some value => .Ok value | none => .Err badArgOutcome) := by
+  cases lookup : Term.mapLookup entries encoded <;> simp [mapGet, encoded_key, lookup]
+
+theorem mapGet_encoding_failure {K : Type} (encoder : Encoder K) (key : K)
+    (term : Term) (error : Aeneas.Std.Error) (failed : encoder.encode key () = RustM.fail error) :
+    mapGet encoder term key = RustM.fail error := by
+  simp [mapGet, failed]
+
 /-- Model of Rustler get_tuple: preserve field order and report BadArg for
 non-tuples. Oversized logical tuples exhaust verification. Native handles,
 vector allocation and the Rustler/NIF implementation remain trusted boundaries. -/

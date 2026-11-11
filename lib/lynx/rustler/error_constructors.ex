@@ -21,9 +21,12 @@ defmodule Lynx.Rustler.ErrorConstructors do
     {document, badarg} = lower_badarg!(document, layout, first_party)
     {document, values} = Lynx.Rustler.ValueConstructors.lower!(document, layout, first_party)
     reject_remaining!(document, layout, first_party)
+    {document, drops} = Lynx.Rustler.ErrorDrops.lower!(document, layout, first_party)
 
-    {document,
-     if(values, do: %{badarg: badarg, values: Map.put(values, :prefix, prefix)}, else: badarg)}
+    constructors =
+      if(values, do: %{badarg: badarg, values: Map.put(values, :prefix, prefix)}, else: badarg)
+
+    {document, if(drops, do: %{constructors: constructors, drops: drops}, else: constructors)}
   end
 
   defp reject_remaining!(document, layout, first_party) do
@@ -212,6 +215,13 @@ defmodule Lynx.Rustler.ErrorConstructors do
     end
   end
 
+  def boundary(%{constructors: constructors, drops: _}),
+    do:
+      boundary(constructors) ++
+        [
+          "Partial Rustler Result destruction model: boxed errors and Ok payloads exhaust verification; compiler glue and native SDK remain trusted"
+        ]
+
   def boundary(nil), do: []
 
   def boundary(%{values: _} = proof),
@@ -229,6 +239,10 @@ defmodule Lynx.Rustler.ErrorConstructors do
 
   def boundary(_proof),
     do: ["Lynx validated lowering of foreign Rustler BadArg constructor operations"]
+
+  def models!(document, %{constructors: constructors, drops: drops}),
+    do:
+      Map.merge(models!(document, constructors), Lynx.Rustler.ErrorDrops.models!(document, drops))
 
   def models!(_document, nil), do: %{}
 
@@ -263,6 +277,9 @@ defmodule Lynx.Rustler.ErrorConstructors do
       }
     }
   end
+
+  def install!(%{constructors: constructors}, output, prefix, models),
+    do: install!(constructors, output, prefix, models)
 
   def install!(%{values: values}, output, prefix, models) do
     bridge = Enum.find(models, &(&1.rust == "rustler::error::Error"))

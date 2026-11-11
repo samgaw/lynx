@@ -27,6 +27,23 @@ defmodule Lynx.Rustler.EncoderModels do
       ] ->
         map_constructor(function, parent, parent_params, ctx)
 
+      [
+        %{"Ident" => ["rustler", 0]},
+        %{"Ident" => ["types", 0]},
+        %{"Ident" => ["map", 0]},
+        %{
+          "Impl" => %{
+            "Ty" => %{
+              "kind" => "InherentImplBlock",
+              "params" => parent_params,
+              "skip_binder" => parent
+            }
+          }
+        },
+        %{"Ident" => ["map_get", 0]}
+      ] ->
+        map_get(function, parent, parent_params, ctx)
+
       _ ->
         Lynx.Rust.ResultModels.resolve_encoder_unwrap(function, translated, refs) ||
           Lynx.Rust.ResultModels.resolve_unused_encoder_debug(function, translated, refs) ||
@@ -79,6 +96,60 @@ defmodule Lynx.Rustler.EncoderModels do
       _ -> nil
     end
   end
+
+  defp map_get(function, parent, parent_params, ctx) do
+    params = expand(function["generics"], ctx)
+
+    with %{"Adt" => _} = term <- named(ctx, ~w(rustler term Term), [region(0)], []),
+         %{"Adt" => _} = error <- named(ctx, ~w(rustler error Error), [], []),
+         %{"Adt" => %{"id" => result_id}} = result <-
+           named(ctx, ~w(core result Result), [], [term, error]),
+         true <- LLBC.result_type?(result_id, %{translated: ctx.translated, references: ctx.refs}),
+         true <-
+           expand(parent, ctx) ==
+             named(ctx, ~w(rustler term Term), [%{"Var" => %{"Bound" => [0, 0]}}], []),
+         true <- map_params?(parent_params, 1, []),
+         [
+           %{
+             "clause_id" => 0,
+             "trait_" => %{
+               "regions" => [],
+               "outlives" => [],
+               "skip_binder" => %{"id" => encoder, "generics" => args}
+             }
+           }
+         ] <- params["trait_clauses"],
+         true <- args == arguments([variable(0)]) and trait?(encoder, ctx),
+         true <- parameters?(params, 1, 1, encoder, ctx) and params["outlives"] == [],
+         true <-
+           expand(function["signature"], ctx) == %{
+             "is_unsafe" => false,
+             "is_variadic" => false,
+             "abi" => "Rust",
+             "inputs" => [term, variable(0)],
+             "output" => result
+           } do
+      %{
+        rust_name: "rustler::types::map::{rustler::term::Term<'a>}::map_get",
+        lean: "Lynx.Rustler.Decoding.mapGet",
+        builtin: false,
+        can_fail: true,
+        lift: false,
+        encoder_trait: encoder,
+        encoder_slots: 1,
+        encoder_regions: 1,
+        encoder_copy_key: true,
+        label:
+          "Rustler map_get FFI model: executes the audited key Encoder before exact lookup; non-maps and missing keys return BadArg; only shared-reference, scalar or standard Copy Atom keys admitted; native handles, environment, allocation and Rustler/OTP primitives unverified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp copy_key?(%{"Ref" => [_, _, "Shared"]}, _ctx), do: true
+  defp copy_key?(%{"Scalar" => _}, _ctx), do: true
+  defp copy_key?(type, ctx), do: named?(type, ~w(rustler types atom Atom), [], ctx)
 
   defp map_params?(params, regions, outlives) do
     Enum.map(params["regions"], & &1["index"]) == indices(regions) and
@@ -440,7 +511,16 @@ defmodule Lynx.Rustler.EncoderModels do
 
           Enum.zip(args["trait_refs"], args["types"])
           |> Enum.flat_map(fn {ref, self} ->
-            reference!(ref, trait, expand(self, ctx), ctx, [])
+            self = expand(self, ctx)
+
+            if ctx.models[id][:encoder_copy_key] == true and not copy_key?(self, ctx),
+              do:
+                raise(
+                  ArgumentError,
+                  "Rustler map_get by-value key requires a shared reference, scalar or standard Copy Atom; owned key destruction is unsupported"
+                )
+
+            reference!(ref, trait, self, ctx, [])
           end)
 
         _ ->
