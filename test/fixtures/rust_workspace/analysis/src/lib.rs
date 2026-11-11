@@ -225,6 +225,44 @@ pub fn consumed_length(input: &[u8]) -> Option<u64> {
     consume_marker(input).map(|payload| payload.len() as u64)
 }
 
+/// Consumes a complete marker/payload/CRLF frame, rejecting truncated framing.
+pub fn consume_frame(input: &[u8]) -> Option<&[u8]> {
+    match consume_marker(input) {
+        Some(payload) => experiment_core::protocol::consume_suffix(payload, b"\r\n"),
+        None => None,
+    }
+}
+
+/// Returns the exact payload length of a complete frame.
+pub fn frame_length(input: &[u8]) -> Option<u64> {
+    consume_frame(input).map(|payload| payload.len() as u64)
+}
+
+/// Retains a suffix comparator's panic across the crate boundary.
+///
+/// # Panics
+/// Panics when the core comparator receives the reserved input token.
+pub fn checked_suffix() -> bool {
+    experiment_core::protocol::checked_suffix()
+}
+
+#[cfg(test)]
+mod framing_tests {
+    #[test]
+    fn framing_preserves_payload_and_rejects_incomplete_or_trailing_delimiters() {
+        assert_eq!(super::consume_frame(b"LYNX\0\xff\r\n"), Some(&[0, 255][..]));
+        assert_eq!(super::consume_frame(b"LYNX\r\n"), Some(&[][..]));
+        for bad in [
+            &b"LYNX\r"[..],
+            &b"LYNX"[..],
+            &b"LYNX\r\n\0"[..],
+            &b"LYNY\r\n"[..],
+        ] {
+            assert_eq!(super::consume_frame(bad), None);
+        }
+    }
+}
+
 /// Retains the consuming comparator's panic across the crate boundary.
 pub fn checked_consume() -> bool {
     experiment_core::protocol::checked_consume()

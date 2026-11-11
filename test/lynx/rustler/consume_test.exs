@@ -37,8 +37,14 @@ defmodule Lynx.Rustler.ConsumeTest do
       package: "experiment-nif",
       tools: @tools,
       sysroot: :full_mir,
-      cargo: [features: ["prefix-consume"]],
-      only: [payload_length: 1, checked_consume: 0, checked_recognize: 0],
+      cargo: [features: ["suffix-consume"]],
+      only: [
+        payload_length: 1,
+        checked_consume: 0,
+        checked_recognize: 0,
+        frame_payload_length: 1,
+        checked_suffix: 0
+      ],
       lean_project: project,
       module_prefix: "Consume.Extraction",
       build_dir: Path.join(tmp, "build")
@@ -54,7 +60,15 @@ defmodule Lynx.Rustler.ConsumeTest do
              "result" => %{"option" => "u64"}
            } = bindings["payload_length"]
 
-    for name <- ~w(checked_consume checked_recognize),
+    assert %{
+             "arity" => 1,
+             "flags" => 1,
+             "arguments" => ["binary"],
+             "result" => %{"option" => "u64"}
+           } =
+             bindings["frame_payload_length"]
+
+    for name <- ~w(checked_consume checked_recognize checked_suffix),
         do:
           assert(
             %{"arity" => 0, "flags" => 0, "arguments" => [], "result" => "bool"} = bindings[name]
@@ -76,18 +90,42 @@ defmodule Lynx.Rustler.ConsumeTest do
       |> String.replace("__RECOGNIZE__", bindings["checked_recognize"]["lean_name"])
     )
 
+    File.write!(
+      Path.join(project, "Consume/SuffixProperties.lean"),
+      File.read!(Path.join(@proofs, "Suffix.lean"))
+      |> String.replace("__ROOT__", "experiment_nif")
+      |> String.replace("__ANALYSIS__", "experiment_nif.experiment_analysis")
+      |> String.replace("__CORE__", "experiment_nif.experiment_core.protocol")
+    )
+
+    File.write!(
+      Path.join(project, "Consume/FrameProperties.lean"),
+      File.read!(Path.join(@proofs, "FrameNif.lean"))
+      |> String.replace("__FRAME__", bindings["frame_payload_length"]["lean_name"])
+      |> String.replace("__SUFFIX_PANIC__", bindings["checked_suffix"]["lean_name"])
+    )
+
     options =
       options ++
         [
-          proof_modules: ["Consume.Properties", "Consume.NativeProperties"],
+          proof_modules: [
+            "Consume.Properties",
+            "Consume.NativeProperties",
+            "Consume.SuffixProperties",
+            "Consume.FrameProperties"
+          ],
           required_properties:
             Enum.map(
-              ~w(consume_bytes conservation marker_bytes length_bytes empty_prefix comparator_panic recognize_without_panic),
+              ~w(consume_bytes conservation marker_bytes length_bytes empty_prefix comparator_panic recognize_without_panic suffix_bytes suffix_conservation empty_suffix frame_bytes frame_conservation frame_length_bound frame_length_bytes suffix_panic),
               &("Consume.Properties." <> &1)
             ) ++
               Enum.map(
                 ~w(facade_bytes payload exact_marker mismatch truncated comparator_panic recognition_order),
                 &("Consume.NativeProperties." <> &1)
+              ) ++
+              Enum.map(
+                ~w(frame_bytes payload empty trailing comparator_panic),
+                &("Consume.FrameProperties." <> &1)
               )
         ]
 
@@ -117,9 +155,20 @@ defmodule Lynx.Rustler.ConsumeTest do
     assert catch_error(apply(module, :checked_consume, [])) == :nif_panicked
     refute apply(module, :checked_recognize, [])
     assert catch_error(apply(module, :payload_length, [false])) == :badarg
+    assert apply(module, :frame_payload_length, [<<"LYNX", 0, 255, "\r\n">>]) == 2
+    assert apply(module, :frame_payload_length, ["LYNX\r\n"]) == 0
+
+    for bad <- ["LYNX\r", "LYNX\r\n\0"],
+        do: assert(apply(module, :frame_payload_length, [bad]) == nil)
+
+    assert catch_error(apply(module, :checked_suffix, [])) == :nif_panicked
     [{_, beam}] = Code.compile_file(Path.join(@fixture, "elixir/consume_laws.ex"))
+    [{_, framed_beam}] = Code.compile_file(Path.join(@fixture, "elixir/frame_laws.ex"))
     export = Path.join(tmp, "consume.export")
-    reports = Lynx.Laws.verify([beam], native: {Lynx.Rustler, options}, export: export)
+
+    reports =
+      Lynx.Laws.verify([beam, framed_beam], native: {Lynx.Rustler, options}, export: export)
+
     assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
     guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
 
@@ -127,7 +176,7 @@ defmodule Lynx.Rustler.ConsumeTest do
         do: assert(Enum.any?(guarantees, &(&1.kind == kind)))
 
     assert Enum.all?(
-             Lynx.Laws.verify([beam], native: {Lynx.Rustler, options}),
+             Lynx.Laws.verify([beam, framed_beam], native: {Lynx.Rustler, options}),
              &(&1.status == :ok and &1.cached)
            )
 

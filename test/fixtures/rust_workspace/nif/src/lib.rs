@@ -196,6 +196,20 @@ fn checked_recognize() -> bool {
     experiment_analysis::checked_recognize()
 }
 
+/// Returns the length after consuming the marker and final CRLF.
+#[cfg(feature = "suffix-consume")]
+#[rustler::nif(name = "frame_payload_length", schedule = "DirtyCpu")]
+fn frame_length(value: rustler::Binary<'_>) -> Option<u64> {
+    experiment_analysis::frame_length(value.as_slice())
+}
+
+/// Preserves the actual suffix comparator's panic.
+#[cfg(feature = "suffix-consume")]
+#[rustler::nif]
+fn checked_suffix() -> bool {
+    experiment_analysis::checked_suffix()
+}
+
 /// Reads a named protocol marker through a renamed zero-argument NIF.
 #[cfg(feature = "named-arrays")]
 #[rustler::nif(name = "wire_marker")]
@@ -649,6 +663,7 @@ mod tests {
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
+                + 2 * usize::from(cfg!(feature = "suffix-consume"))
                 + usize::from(cfg!(feature = "named-arrays"))
                 + usize::from(cfg!(feature = "named-slices"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
@@ -890,6 +905,18 @@ mod tests {
             ));
             expected.push((
                 "checked_recognize".to_owned(),
+                0,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "suffix-consume") {
+            expected.push((
+                "frame_payload_length".to_owned(),
+                1,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+            expected.push((
+                "checked_suffix".to_owned(),
                 0,
                 rustler::SchedulerFlags::Normal as u32,
             ));

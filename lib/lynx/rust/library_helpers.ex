@@ -15,6 +15,7 @@ defmodule Lynx.Rust.LibraryHelpers do
         do: [
           "core::slice::_::starts_with",
           "core::slice::_::strip_prefix",
+          "core::slice::_::strip_suffix",
           "core::slice::_::as_slice",
           "core::slice::SlicePattern"
         ],
@@ -36,7 +37,7 @@ defmodule Lynx.Rust.LibraryHelpers do
         } = function,
         translated
       )
-      when method in ["strip_prefix", "as_slice"],
+      when method in ["strip_prefix", "strip_suffix", "as_slice"],
       do: Lynx.Rust.SlicePatterns.selected?(function, translated)
 
   def selected?(

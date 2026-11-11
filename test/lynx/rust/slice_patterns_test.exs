@@ -65,6 +65,16 @@ defmodule Lynx.Rust.SlicePatternsTest do
     refute SlicePatterns.selected?(put_in(ctx.strip, ["signature", "abi"], "C"), ctx.t)
   end
 
+  test "suffix selection retains the same checked pattern interface", ctx do
+    suffix =
+      put_in(ctx.strip, ["item_meta", "name", Access.at(-1)], %{"Ident" => ["strip_suffix", 0]})
+
+    assert LibraryHelpers.selected?(suffix, ctx.t)
+    refute LibraryHelpers.selected?(put_in(suffix, ["signature", "is_unsafe"], true), ctx.t)
+    refute LibraryHelpers.selected?(put_in(suffix, ["generics", "trait_clauses"], []), ctx.t)
+    refute LibraryHelpers.selected?(Map.put(suffix, "body", "Opaque"), ctx.t)
+  end
+
   test "checks associated item and trait method signature", ctx do
     trait =
       ctx.strip["generics"]["trait_clauses"] |> hd() |> get_in(["trait_", "skip_binder", "id"])

@@ -32,8 +32,9 @@ defmodule Lynx.Rust.SlicePatterns do
            _,
            _,
            %{"Impl" => %{"Ty" => %{"params" => parent_params, "skip_binder" => parent}}},
-           %{"Ident" => ["strip_prefix", 0]}
+           %{"Ident" => [method, 0]}
          ] <- f["item_meta"]["name"],
+         true <- method in ["strip_prefix", "strip_suffix"],
          true <- params?(parent_params, 1, 0, 0, []),
          true <- expand(parent, refs) == slice(%{"TypeVar" => %{"Bound" => [0, 0]}}),
          true <- params?(p, 2, 2, 0, [0, 1]),

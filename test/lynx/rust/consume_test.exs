@@ -22,7 +22,8 @@ defmodule Lynx.Rust.ConsumeTest do
 
     for {source, target} <- [
           {"Consume.lean", "Properties.lean"},
-          {"ConsumeArray.lean", "ArrayProperties.lean"}
+          {"ConsumeArray.lean", "ArrayProperties.lean"},
+          {"Suffix.lean", "SuffixProperties.lean"}
         ] do
       File.write!(
         Path.join(project, "Consume/" <> target),
@@ -48,13 +49,13 @@ defmodule Lynx.Rust.ConsumeTest do
       build_dir: Path.join(tmp, "build"),
       roots:
         Enum.map(
-          ~w(consume_marker consume_array_marker consumed_length checked_consume checked_recognize),
+          ~w(consume_marker consume_array_marker consumed_length checked_consume checked_recognize consume_frame frame_length checked_suffix),
           &("experiment_analysis::" <> &1)
         ),
-      proof_modules: ["Consume.Properties", "Consume.ArrayProperties"],
+      proof_modules: ["Consume.Properties", "Consume.ArrayProperties", "Consume.SuffixProperties"],
       required_properties:
         Enum.map(
-          ~w(consume_bytes conservation marker_bytes array_bytes length_bytes empty_prefix comparator_panic recognize_without_panic),
+          ~w(consume_bytes conservation marker_bytes array_bytes length_bytes empty_prefix comparator_panic recognize_without_panic suffix_bytes suffix_conservation empty_suffix frame_bytes frame_conservation frame_length_bound frame_length_bytes suffix_panic),
           &("Consume.Properties." <> &1)
         )
     ]
@@ -75,7 +76,11 @@ defmodule Lynx.Rust.ConsumeTest do
     export = Path.join(tmp, "consume.export")
 
     file =
-      Lynx.Rust.Proofs.file!(result.extraction, ["Consume.Properties", "Consume.ArrayProperties"])
+      Lynx.Rust.Proofs.file!(result.extraction, [
+        "Consume.Properties",
+        "Consume.ArrayProperties",
+        "Consume.SuffixProperties"
+      ])
 
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
@@ -95,7 +100,9 @@ defmodule Lynx.Rust.ConsumeTest do
            "match input.strip_prefix(prefix) { Some(_) => Some(input), None => None }"},
           {"input.strip_prefix(b\"LYNX\")", "input.strip_prefix(b\"LYNY\")"},
           {"input.strip_prefix(&prefix)", "prefix.strip_prefix(&input)"},
-          {"self.0 != 255", "self.0 != 254"}
+          {"self.0 != 255", "self.0 != 254"},
+          {"input.strip_suffix(suffix)",
+           "match input.strip_suffix(suffix) { Some(_) => Some(input), None => None }"}
         ] do
       changed = String.replace(original, before, replacement)
       assert changed != original
