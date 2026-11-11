@@ -81,3 +81,27 @@ pub fn mutate_before_check(value: &mut bool, accepted: bool) {
 pub fn toggle(value: &mut bool) {
     *value = !*value;
 }
+
+/// Tries an exclusive update, preserving state when any lease conflicts.
+pub fn try_rw_toggle(lock: &std::sync::RwLock<bool>) -> bool {
+    let mut guard = match lock.try_write() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return false,
+    };
+    toggle(&mut guard);
+    drop(guard);
+    true
+}
+
+/// Returns acquisition success and the shared value, recovering poisoned leases.
+pub fn try_rw_read(lock: &std::sync::RwLock<bool>) -> (bool, bool) {
+    let guard = match lock.try_read() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return (false, false),
+    };
+    let value = *guard;
+    drop(guard);
+    (true, value)
+}

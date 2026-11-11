@@ -349,3 +349,11 @@ pub fn rw_resource_clone(
 ) -> rustler::ResourceArc<RwResource> {
     resource.clone()
 }
+
+/// Reports both nonblocking conflict modes and a committed shared update.
+#[cfg(feature = "try-rwlock")]
+#[rustler::nif(name = "try_rw_checked")]
+#[lynx::try_rwlock]
+fn try_rw_request(value: bool) -> (bool, bool, bool, bool) {
+    ownership_app::try_rw_cycle(value)
+}

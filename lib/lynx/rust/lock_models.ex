@@ -35,6 +35,8 @@ defmodule Lynx.Rust.LockModels do
              {:mutex, "lock"},
              {:mutex, "try_lock"},
              {:rwlock, "read"},
+             {:rwlock, "try_read"},
+             {:rwlock, "try_write"},
              {:rwlock, "write"}
            ],
          true <- params?(parent_params, 0, []),
@@ -58,13 +60,13 @@ defmodule Lynx.Rust.LockModels do
          kind =
            if(family == :mutex,
              do: :mutex,
-             else: if(method == "read", do: :rw_read, else: :rw_write)
+             else: if(method in ["read", "try_read"], do: :rw_read, else: :rw_write)
            ),
          guard when not is_nil(guard) <-
            Enum.find(translated["type_decls"], &(guard_kind(&1, refs) == kind)),
          poison when not is_nil(poison) <- Enum.find(translated["type_decls"], &poison?/1),
          error when not is_nil(error) <-
-           if(method == "try_lock",
+           if(method in ["try_lock", "try_read", "try_write"],
              do: Enum.find(translated["type_decls"], &try_error?(&1, poison["def_id"], refs)),
              else: poison
            ),
@@ -85,7 +87,8 @@ defmodule Lynx.Rust.LockModels do
         native_guard_kind: kind,
         native_guard_type: guard["def_id"],
         native_poison_type: poison["def_id"],
-        native_try_lock_type: if(method == "try_lock", do: error["def_id"]),
+        native_try_lock_type:
+          if(method in ["try_lock", "try_read", "try_write"], do: error["def_id"]),
         native_codec_input: true,
         label:
           "Blocking Mutex::lock model: atomic shared-cell acquisition; poisoned acquisition returns an owned guard in PoisonError; recursive acquisition and malformed identities exhaust verification; logical execution contexts are local Lynx processes; native async/thread migration, Rust std and FFI implementation correctness unverified"
@@ -98,6 +101,13 @@ defmodule Lynx.Rust.LockModels do
               model,
               :label,
               "Atomic Mutex::try_lock model: a held lock returns WouldBlock without mutation or allocation, including recursive attempts; an available poisoned lock returns Poisoned with the acquired owned guard; malformed identities exhaust verification; Rust std, OS/native threading and FFI correctness remain unverified"
+            )
+
+          method in ["try_read", "try_write"] ->
+            Map.put(
+              model,
+              :label,
+              "Atomic RwLock::#{method} model: conflicting held leases return WouldBlock without mutation or allocation; poisoned acquisition retains the acquired guard; queued writers, malformed identities and reader limits exhaust verification rather than choose an OS priority policy; Rust std, native threads and FFI remain unverified"
             )
 
           family == :mutex ->
