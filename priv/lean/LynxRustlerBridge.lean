@@ -605,6 +605,66 @@ Atom creation and allocation success remain assumptions at the native FFI bounda
 @[expose] def atomErrorOutcome (value : String) : DecoderError := .ok (.atom value)
 @[expose] def raiseAtomErrorOutcome (value : String) : DecoderError := .error (.error (.atom value))
 
+namespace Encoding
+
+/-- The error branch cannot count as a verified panic: formatting, destructor
+and unwind behavior must be supplied before it can be admitted. -/
+@[expose] def unwrapOk {T E : Type} : core.result.Result T E → RustM T
+  | .Ok value => .ok value
+  | .Err _ => .fail .undef
+
+/-- Elaboration-only dictionary for an unused error formatter. Callable uses
+are rejected by the closed LLBC audit, not interpreted as formatting. -/
+@[expose] def debugUnavailable (_ : DecoderError) (_ : core.fmt.Formatter) :
+    RustM (core.result.Result Unit core.fmt.Error × core.fmt.Formatter) := .fail .undef
+
+/-- Map keys use Erlang exact equality, including distinct integer/float keys. -/
+@[expose] def uniqueMapKeys : List Term → Bool
+  | [] => true
+  | key :: rest => !(rest.any fun other => Term.exactCompare key other == .eq) && uniqueMapKeys rest
+
+theorem uniqueMapKeys_duplicate (key : Term) : uniqueMapKeys [key, key] = false := by
+  simp [uniqueMapKeys]
+
+theorem uniqueMapKeys_integer_float (value : Int) (floating : Term.FiniteFloat) :
+    uniqueMapKeys [.integer value, .float floating] = true := by
+  simp [uniqueMapKeys]
+
+/-- Rustler checks lengths before calling enif_make_map_from_arrays. OTP rejects
+exact duplicate keys. Entry order represents bindings, not native iteration
+order; all map observations use Lynx's map semantics. Native allocation and
+handle/environment validity remain explicit FFI assumptions. -/
+@[expose] def mapFromTermArrays (_env : Env) (keys values : Slice NativeTerm) :
+    RustM (core.result.Result NativeTerm DecoderError) :=
+  if keys.val.length != values.val.length then .ok (.Err badArgOutcome)
+  else if keys.val.length > 16777215 then .fail .undef
+  else if uniqueMapKeys keys.val then .ok (.Ok (.map (keys.val.zip values.val)))
+  else .ok (.Err badArgOutcome)
+
+theorem mapFromTermArrays_mismatch (env : Env) (keys values : Slice NativeTerm)
+    (different : keys.val.length ≠ values.val.length) :
+    mapFromTermArrays env keys values = .ok (.Err badArgOutcome) := by
+  simp [mapFromTermArrays, different]
+
+theorem mapFromTermArrays_values (env : Env) (keys values : Slice NativeTerm)
+    (same : keys.val.length = values.val.length) (bound : keys.val.length ≤ 16777215)
+    (distinct : uniqueMapKeys keys.val = true) :
+    mapFromTermArrays env keys values = .ok (.Ok (.map (keys.val.zip values.val))) := by
+  simp [mapFromTermArrays, ← same, Nat.not_lt.mpr bound, distinct]
+
+theorem mapFromTermArrays_duplicate (env : Env) (keys values : Slice NativeTerm)
+    (same : keys.val.length = values.val.length) (bound : keys.val.length ≤ 16777215)
+    (duplicate : uniqueMapKeys keys.val = false) :
+    mapFromTermArrays env keys values = .ok (.Err badArgOutcome) := by
+  simp [mapFromTermArrays, ← same, Nat.not_lt.mpr bound, duplicate]
+
+theorem mapFromTermArrays_exhausted (env : Env) (keys values : Slice NativeTerm)
+    (same : keys.val.length = values.val.length) (large : 16777215 < keys.val.length) :
+    mapFromTermArrays env keys values = .fail .undef := by
+  simp [mapFromTermArrays, ← same, large]
+
+end Encoding
+
 namespace Decoding
 
 /-- Model of Rustler get_tuple: preserve field order and report BadArg for

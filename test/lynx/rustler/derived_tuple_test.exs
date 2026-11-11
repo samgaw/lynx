@@ -6,17 +6,35 @@ defmodule Lynx.Rustler.DerivedTupleTest do
   if is_nil(@tools),
     do: @moduletag(skip: "set LYNX_PURE_AENEAS_DIR or LYNX_AENEAS_DIR for derived Encoder proofs")
 
-  for {version, shape} <- [{"0.39.0", :tuple}, {"0.38.0", :tuple}, {"0.39.0", :list}] do
+  for {version, shape} <- [
+        {"0.39.0", :tuple},
+        {"0.38.0", :tuple},
+        {"0.39.0", :list},
+        {"0.39.0", :map},
+        {"0.38.0", :map},
+        {"0.39.0", :struct},
+        {"0.38.0", :struct}
+      ] do
     @tag :tmp_dir
+    @tag rustler_version: version
     @tag shape: shape
+    @tag map_constructor: shape in [:map, :struct]
     @tag type_audit: version == "0.39.0" and shape == :tuple
-    test "verifies the actual NifTuple #{shape} Encoder under Rustler #{version}", %{
+    test "verifies the actual derived #{shape} Encoder under Rustler #{version}", %{
       tmp_dir: tmp,
       shape: shape
     } do
       version = unquote(version)
-      function = if shape == :tuple, do: :derived_pair, else: :derived_list
-      property_name = if shape == :tuple, do: "DerivedTuple", else: "DerivedList"
+
+      function =
+        case shape do
+          :tuple -> :derived_pair
+          :list -> :derived_list
+          :map -> :derived_map
+          :struct -> :derived_struct
+        end
+
+      property_name = "Derived" <> (shape |> Atom.to_string() |> String.capitalize())
       suffix = if version == "0.39.0", do: "39", else: "38"
       native_module = "LynxDerived#{suffix}#{property_name}.Native"
       workspace = Path.join(tmp, "workspace")
@@ -79,13 +97,24 @@ defmodule Lynx.Rustler.DerivedTupleTest do
                  String.ends_with?(evidence.file, "nif/src/lib.rs") and
                  String.contains?(
                    evidence.rust_name,
-                   if(shape == :tuple, do: "OrderedFields", else: "OrderedList")
+                   %{
+                     tuple: "OrderedFields",
+                     list: "OrderedList",
+                     map: "OrderedMap",
+                     struct: "OrderedStruct"
+                   }[shape]
                  )
              end)
 
       assert Enum.any?(
                prepared.verification.external_models,
-               &String.contains?(&1, "tuple construction FFI model")
+               &String.contains?(
+                 &1,
+                 if(shape in [:map, :struct],
+                   do: "map construction FFI model",
+                   else: "tuple construction FFI model"
+                 )
+               )
              )
 
       if shape == :list do
@@ -182,7 +211,21 @@ defmodule Lynx.Rustler.DerivedTupleTest do
             {7, 7, {7, 7}},
             {0, 18_446_744_073_709_551_615, {0, 18_446_744_073_709_551_615}}
           ] do
-        expected = if shape == :list, do: {Tuple.to_list(expected)}, else: expected
+        expected =
+          case shape do
+            :list ->
+              {Tuple.to_list(expected)}
+
+            :map ->
+              %{low: elem(expected, 0), high: elem(expected, 1)}
+
+            :struct ->
+              %{__struct__: LynxOrderedFixture, low: elem(expected, 0), high: elem(expected, 1)}
+
+            :tuple ->
+              expected
+          end
+
         assert apply(native_atom, function, [left, right]) == expected
       end
 
@@ -199,7 +242,7 @@ defmodule Lynx.Rustler.DerivedTupleTest do
               law orders_fields(left, right),
                 requires: is_integer(left) and is_integer(right) and left >= 0 and right >= 0 and
                   left <= 18_446_744_073_709_551_615 and right <= 18_446_744_073_709_551_615,
-                expects: __NATIVE__.__FUNCTION__(left, right) == if(left <= right, do: __LEFT__, else: __RIGHT__),
+                expects: __OBSERVED__ == if(left <= right, do: __LEFT__, else: __RIGHT__),
                 proof: ~LEAN"""
                 cases left <;> cases right <;>
                   simp [«orders_fields:requires/2», Erlang.erlang.«is_integer/1»] at requires
@@ -233,6 +276,7 @@ defmodule Lynx.Rustler.DerivedTupleTest do
             end
             ''',
             [
+              "__OBSERVED__",
               "__NATIVE__",
               "__LAW__",
               "__FUNCTION__",
@@ -242,6 +286,20 @@ defmodule Lynx.Rustler.DerivedTupleTest do
               "__LIST_SIMPS__"
             ],
             fn
+              "__OBSERVED__" ->
+                call = "#{native_module}.#{function}(left, right)"
+
+                case shape do
+                  :map ->
+                    "{:erlang.map_get(:low, #{call}), :erlang.map_get(:high, #{call})}"
+
+                  :struct ->
+                    "{:erlang.map_get(:low, #{call}), :erlang.map_get(:high, #{call}), :erlang.map_get(:__struct__, #{call})}"
+
+                  _ ->
+                    call
+                end
+
               "__NATIVE__" ->
                 native_module
 
@@ -255,13 +313,30 @@ defmodule Lynx.Rustler.DerivedTupleTest do
                 property_name
 
               "__LIST_SIMPS__" ->
-                if(shape == :list, do: "RustWorkspace.DerivedList.pairValues,", else: "")
+                case shape do
+                  :list ->
+                    "RustWorkspace.DerivedList.pairValues,"
+
+                  mode when mode in [:map, :struct] ->
+                    "Erlang.erlang.«map_get/2», Lynx.Term.mapLookup,"
+
+                  _ ->
+                    ""
+                end
 
               "__LEFT__" ->
-                if(shape == :tuple, do: "{left, right}", else: "{[left, right]}")
+                case shape do
+                  :list -> "{[left, right]}"
+                  :struct -> "{left, right, LynxOrderedFixture}"
+                  _ -> "{left, right}"
+                end
 
               "__RIGHT__" ->
-                if(shape == :tuple, do: "{right, left}", else: "{[right, left]}")
+                case shape do
+                  :list -> "{[right, left]}"
+                  :struct -> "{right, left, LynxOrderedFixture}"
+                  _ -> "{right, left}"
+                end
             end
           )
         )
@@ -302,24 +377,40 @@ defmodule Lynx.Rustler.DerivedTupleTest do
       File.write!(property, original)
 
       swapped =
-        if shape == :tuple do
-          String.replace(
-            original_native,
-            "    low: u64,\n    high: u64,",
-            "    high: u64,\n    low: u64,"
-          )
-        else
-          String.replace(
-            original_native,
-            "values.push(low);\n    values.push(high);",
-            "values.push(high);\n    values.push(low);"
-          )
+        case shape do
+          :tuple ->
+            String.replace(
+              original_native,
+              "    low: u64,\n    high: u64,",
+              "    high: u64,\n    low: u64,"
+            )
+
+          :list ->
+            String.replace(
+              original_native,
+              "values.push(low);\n    values.push(high);",
+              "values.push(high);\n    values.push(low);"
+            )
+
+          :map ->
+            String.replace(
+              original_native,
+              "OrderedMap { low, high }",
+              "OrderedMap { low: high, high: low }"
+            )
+
+          :struct ->
+            String.replace(
+              original_native,
+              "#[module = \"LynxOrderedFixture\"]",
+              "#[module = \"LynxWrongFixture\"]"
+            )
         end
 
       refute swapped == original_native
       File.write!(native, swapped)
 
-      assert_raise RuntimeError, ~r/Derived(Tuple|List).lean:/, fn ->
+      assert_raise RuntimeError, ~r/Derived(Tuple|List|Map|Struct).lean:/, fn ->
         Lynx.Rustler.prepare!(options)
       end
 
@@ -336,7 +427,7 @@ defmodule Lynx.Rustler.DerivedTupleTest do
       refute changed == original_core
       File.write!(core, changed)
 
-      assert_raise RuntimeError, ~r/Derived(Tuple|List).lean:/, fn ->
+      assert_raise RuntimeError, ~r/Derived(Tuple|List|Map|Struct).lean:/, fn ->
         Lynx.Rustler.prepare!(options)
       end
 

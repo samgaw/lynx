@@ -256,6 +256,39 @@ fn derived_pair(left: u64, right: u64) -> OrderedFields {
     OrderedFields { low, high }
 }
 
+/// Ordered protocol fields encoded by the actual Rustler map derive.
+#[cfg(feature = "derived-map")]
+#[derive(Debug, rustler::NifMap)]
+struct OrderedMap {
+    low: u64,
+    high: u64,
+}
+
+/// Encodes the first-party ordering result as a map.
+#[cfg(feature = "derived-map")]
+#[rustler::nif]
+fn derived_map(left: u64, right: u64) -> OrderedMap {
+    let (low, high) = experiment_analysis::order_pair(left, right);
+    OrderedMap { low, high }
+}
+
+/// Ordered protocol fields with an Elixir struct tag from the actual derive.
+#[cfg(feature = "derived-struct")]
+#[derive(Debug, rustler::NifStruct)]
+#[module = "LynxOrderedFixture"]
+struct OrderedStruct {
+    low: u64,
+    high: u64,
+}
+
+/// Encodes the first-party ordering result with the compiled struct tag.
+#[cfg(feature = "derived-struct")]
+#[rustler::nif]
+fn derived_struct(left: u64, right: u64) -> OrderedStruct {
+    let (low, high) = experiment_analysis::order_pair(left, right);
+    OrderedStruct { low, high }
+}
+
 /// A derived tuple containing an encoded list.
 #[cfg(feature = "derived-list")]
 #[derive(Debug, rustler::NifTuple)]
@@ -560,6 +593,8 @@ mod tests {
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
+                + usize::from(cfg!(feature = "derived-map"))
+                + usize::from(cfg!(feature = "derived-struct"))
                 + usize::from(cfg!(feature = "derived-list"))
                 + usize::from(cfg!(feature = "derived-tagged"))
                 + usize::from(cfg!(feature = "checked-option"))
@@ -740,6 +775,14 @@ mod tests {
                 2,
                 rustler::SchedulerFlags::DirtyCpu as u32,
             ));
+        }
+        for (enabled, name) in [
+            (cfg!(feature = "derived-map"), "derived_map"),
+            (cfg!(feature = "derived-struct"), "derived_struct"),
+        ] {
+            if enabled {
+                expected.push((name.to_owned(), 2, rustler::SchedulerFlags::Normal as u32));
+            }
         }
         if cfg!(feature = "derived-tuple") {
             expected.push((

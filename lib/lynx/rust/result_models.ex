@@ -127,6 +127,59 @@ defmodule Lynx.Rust.ResultModels do
 
   def resolve(_, _, _), do: nil
 
+  # Encoder construction must prove Ok. Err formatting, panic hooks and error
+  # destruction are not modeled as successful or catchable computation.
+  def resolve_encoder_unwrap(function, translated, refs) do
+    with %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["core", 0]},
+               %{"Ident" => ["result", 0]},
+               %{
+                 "Impl" => %{
+                   "Ty" => %{
+                     "kind" => "InherentImplBlock",
+                     "skip_binder" => parent,
+                     "params" => parent_params
+                   }
+                 }
+               },
+               %{"Ident" => ["unwrap", 0]}
+             ]
+           },
+           "generics" => %{"regions" => [], "trait_clauses" => [debug]} = params
+         } <- function,
+         [input] <- CallModels.expand(sig["inputs"], refs),
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- input,
+         true <- LLBC.result_type?(id, %{translated: translated, references: refs}),
+         true <- args == arguments([variable(0), variable(1)]),
+         true <- free_parent(CallModels.expand(parent, refs)) == input,
+         true <- parameters?(parent_params, 2),
+         true <- parameters?(%{params | "trait_clauses" => []}, 2),
+         true <- CallModels.expand(sig["output"], refs) == variable(0),
+         {0, debug_id, [error]} <- clause(debug, refs),
+         true <- error == variable(1) and trait?(translated, debug_id, ~w(core fmt Debug), 1) do
+      %{
+        rust_name: "core::result::{core::result::Result<@T, @E>}::unwrap",
+        lean: "Lynx.Rustler.Encoding.unwrapOk",
+        backend_rust_name: "lynx_rustler::result_unwrap_ok",
+        encoder_unwrap_ok: true,
+        builtin: false,
+        can_fail: true,
+        lift: false,
+        keep_trait_clauses: [false],
+        native_cutoff_only: true,
+        label:
+          "Result::unwrap successful-Ok model: transfers the actual payload; Err formatting, hooks, error destruction and unwind exhaust verification; no panic or Rust core implementation correctness claim"
+      }
+    else
+      _ -> nil
+    end
+  end
+
   # A successful expect does not call Debug or drop an error. The Err path is
   # deliberately exhausted: formatting, destructors and unwind are not erased
   # into an apparently verified panic. This adapter is runtime-only.
@@ -203,13 +256,41 @@ defmodule Lynx.Rust.ResultModels do
   # LLBC excludes these entries from callable models: no Rust implementation may
   # rely on this unsupported formatter, directly or through an indirect call.
   def resolve_unused_io_debug(function, translated, refs) do
+    resolve_unused_error_debug(
+      function,
+      translated,
+      refs,
+      FileModels.error_declaration(translated),
+      ~w(core io error),
+      "core::io::error::{core::fmt::Debug<core::io::error::Error>}::fmt",
+      "Lynx.NativeIoError.debugUnavailable"
+    )
+  end
+
+  def resolve_unused_encoder_debug(function, translated, refs) do
+    error = named(translated["type_decls"], ~w(rustler error Error))
+
+    if match?(%{"kind" => "Opaque"}, error) do
+      resolve_unused_error_debug(
+        function,
+        translated,
+        refs,
+        error,
+        ~w(rustler error),
+        "rustler::error::{core::fmt::Debug<rustler::error::Error>}::fmt",
+        "Lynx.Rustler.Encoding.debugUnavailable"
+      )
+    end
+  end
+
+  defp resolve_unused_error_debug(function, translated, refs, declaration, scope, rust_name, lean) do
     with %{
            "body" => "Opaque",
            "src" => %{"TraitImpl" => source},
            "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
            "generics" => params
          } <- function,
-         %{"def_id" => error} <- FileModels.error_declaration(translated),
+         %{"def_id" => error} <- declaration,
          %{"def_id" => formatter} <- named(translated["type_decls"], ~w(core fmt Formatter)),
          %{"def_id" => fmt_error} <- named(translated["type_decls"], ~w(core fmt Error)),
          %{"def_id" => debug} <- named(translated["trait_decls"], ~w(core fmt Debug)),
@@ -220,8 +301,8 @@ defmodule Lynx.Rust.ResultModels do
            impl["src"] == "Normal" and impl["is_unsafe"] == false and impl["is_negative"] == false,
          true <- parameters?(impl["generics"], 0),
          true <-
-           Enum.take(impl["item_meta"]["name"], 3) ==
-             Enum.map(~w(core io error), &%{"Ident" => [&1, 0]}),
+           Enum.take(impl["item_meta"]["name"], length(scope)) ==
+             Enum.map(scope, &%{"Ident" => [&1, 0]}),
          true <-
            function["item_meta"]["name"] ==
              impl["item_meta"]["name"] ++ [%{"Ident" => ["fmt", 0]}],
@@ -263,15 +344,15 @@ defmodule Lynx.Rust.ResultModels do
            tuple?(unit, []) and result_error == adt(fmt_error) and
              args == arguments([unit, result_error]) do
       %{
-        rust_name: "core::io::error::{core::fmt::Debug<core::io::error::Error>}::fmt",
-        lean: "Lynx.NativeIoError.debugUnavailable",
+        rust_name: rust_name,
+        lean: lean,
         builtin: false,
         can_fail: true,
         lift: false,
         elaboration_only: true,
         native_cutoff_only: true,
         label:
-          "Unused standard I/O-error Debug dictionary elaboration only; formatter calls are unsupported and rejected; no formatting behavior verified"
+          "Unused standard error Debug dictionary elaboration only; formatter calls are unsupported and rejected; no formatting behavior verified"
       }
     else
       _ -> nil
@@ -295,7 +376,8 @@ defmodule Lynx.Rust.ResultModels do
   def lower_native_names!(document, models) do
     selected =
       Map.filter(models, fn {_, model} ->
-        model[:native_expect_ok] == true or model[:native_expect_some] == true
+        model[:native_expect_ok] == true or model[:native_expect_some] == true or
+          model[:encoder_unwrap_ok] == true
       end)
 
     {functions, found} =

@@ -1,23 +1,108 @@
 defmodule Lynx.Rustler.EncoderModels do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, Constants, FormatModels}
+  alias Lynx.Rust.{CallModels, Constants, FormatModels, LLBC}
 
   def resolve(
-        %{
-          "body" => "Opaque",
-          "src" => "Normal",
-          "item_meta" => %{
-            "name" => [
-              %{"Ident" => ["rustler", 0]},
-              %{"Ident" => ["types", 0]},
-              %{"Ident" => ["tuple", 0]},
-              %{"Ident" => ["make_tuple", 0]}
-            ]
-          }
-        } = function,
+        %{"body" => "Opaque", "src" => "Normal", "item_meta" => %{"name" => name}} = function,
         translated,
         refs
       ) do
+    ctx = context(translated, refs)
+
+    case name do
+      [
+        %{"Ident" => ["rustler", 0]},
+        %{"Ident" => ["types", 0]},
+        %{"Ident" => ["map", 0]},
+        %{
+          "Impl" => %{
+            "Ty" => %{
+              "kind" => "InherentImplBlock",
+              "params" => parent_params,
+              "skip_binder" => parent
+            }
+          }
+        },
+        %{"Ident" => ["map_from_term_arrays", 0]}
+      ] ->
+        map_constructor(function, parent, parent_params, ctx)
+
+      _ ->
+        Lynx.Rust.ResultModels.resolve_encoder_unwrap(function, translated, refs) ||
+          Lynx.Rust.ResultModels.resolve_unused_encoder_debug(function, translated, refs) ||
+          resolve_other(function, translated, refs)
+    end
+  end
+
+  def resolve(function, translated, refs),
+    do:
+      Lynx.Rust.ResultModels.resolve_unused_encoder_debug(function, translated, refs) ||
+        resolve_other(function, translated, refs)
+
+  defp map_constructor(function, parent, parent_params, ctx) do
+    params = expand(function["generics"], ctx)
+
+    with %{"Adt" => _} = env <- named(ctx, ~w(rustler env Env), [region(0)], []),
+         %{"Adt" => _} = term <- named(ctx, ~w(rustler term Term), [region(0)], []),
+         %{"Adt" => _} = error <- named(ctx, ~w(rustler error Error), [], []),
+         %{"Adt" => %{"id" => result_id}} = result <-
+           named(ctx, ~w(core result Result), [], [term, error]),
+         true <- LLBC.result_type?(result_id, %{translated: ctx.translated, references: ctx.refs}),
+         true <-
+           expand(parent, ctx) ==
+             named(ctx, ~w(rustler term Term), [%{"Var" => %{"Bound" => [0, 0]}}], []),
+         true <- map_params?(parent_params, 1, []),
+         true <-
+           map_params?(params, 3, [outlives(region(0), region(1)), outlives(region(0), region(2))]),
+         true <-
+           expand(function["signature"], ctx) == %{
+             "is_unsafe" => false,
+             "is_variadic" => false,
+             "abi" => "Rust",
+             "inputs" => [
+               env,
+               reference(region(1), %{"Slice" => [term, nil]}),
+               reference(region(2), %{"Slice" => [term, nil]})
+             ],
+             "output" => result
+           } do
+      %{
+        rust_name: "rustler::types::map::{rustler::term::Term<'a>}::map_from_term_arrays",
+        lean: "Lynx.Rustler.Encoding.mapFromTermArrays",
+        builtin: false,
+        can_fail: true,
+        lift: false,
+        label:
+          "Rustler map construction FFI model: equal slice lengths, exact distinct keys and ordered key/value pairing; length mismatch or duplicate keys returns BadArg; 16777215-entry verification cutoff; native handles, environment agreement, allocation, Rustler and OTP implementations remain unverified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp map_params?(params, regions, outlives) do
+    Enum.map(params["regions"], & &1["index"]) == indices(regions) and
+      params["types"] == [] and params["const_generics"] == [] and
+      params["trait_clauses"] == [] and params["trait_type_constraints"] == [] and
+      params["outlives"] == outlives
+  end
+
+  defp resolve_other(
+         %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["rustler", 0]},
+               %{"Ident" => ["types", 0]},
+               %{"Ident" => ["tuple", 0]},
+               %{"Ident" => ["make_tuple", 0]}
+             ]
+           }
+         } = function,
+         translated,
+         refs
+       ) do
     ctx = context(translated, refs)
     params = expand(function["generics"], ctx)
     signature = expand(function["signature"], ctx)
@@ -50,20 +135,20 @@ defmodule Lynx.Rustler.EncoderModels do
     end
   end
 
-  def resolve(
-        %{
-          "body" => "Opaque",
-          "item_meta" => %{
-            "name" =>
-              [
-                %{"Ident" => ["rustler", 0]},
-                %{"Ident" => ["types", 0]} | _
-              ] = name
-          }
-        } = function,
-        translated,
-        refs
-      ) do
+  defp resolve_other(
+         %{
+           "body" => "Opaque",
+           "item_meta" => %{
+             "name" =>
+               [
+                 %{"Ident" => ["rustler", 0]},
+                 %{"Ident" => ["types", 0]} | _
+               ] = name
+           }
+         } = function,
+         translated,
+         refs
+       ) do
     ctx = context(translated, refs)
 
     with [%{"Ident" => ["rustler", 0]}, %{"Ident" => ["types", 0]} | rest] <- name,
@@ -110,7 +195,7 @@ defmodule Lynx.Rustler.EncoderModels do
     end
   end
 
-  def resolve(_, _, _), do: nil
+  defp resolve_other(_, _, _), do: nil
 
   # Keep the trait's compiler vtable layout available when stateless Rustler
   # models are requested. This selects interface metadata, not foreign bodies.
