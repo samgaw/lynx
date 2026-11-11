@@ -8,9 +8,9 @@ defmodule Lynx.Rust do
   actually mentions; extracted bodies without properties are never called verified.
 
   The closed standard-library catalogue includes safe shared-slice indexing and
-  `split_at`, and a UTF-8 model for `core::str::from_utf8` up to 4096 bytes with
-  exact error offsets and sequence lengths. Larger inputs cause verification
-  exhaustion. These standard-library operations are explicitly reported models,
+  `split_at`, and a UTF-8 model for `core::str::from_utf8` with exact error
+  offsets and sequence lengths, without an artificial protocol-size cutoff.
+  These standard-library operations are explicitly reported models,
   not proofs of Rust core's implementation. Other slice/string operations remain
   rejected unless separately supported.
 

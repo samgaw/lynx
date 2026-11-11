@@ -10,11 +10,12 @@ defmodule Lynx.Rust.ProtocolTest do
       @moduletag(skip: "set LYNX_AENEAS_DIR or LYNX_UNPATCHED_AENEAS_DIR for Rust parser proofs")
 
   @tag tmp_dir: "process-#{System.pid()}"
-  test "proves bounded slice and UTF-8 operations independently of Rustler", %{tmp_dir: tmp} do
+  test "proves slice bounds and protocol-scale UTF-8 independently of Rustler", %{tmp_dir: tmp} do
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "Protocol"))
     File.cp!(Path.join(@proofs, "Core.lean"), Path.join(project, "Protocol/Properties.lean"))
     File.cp!(Path.join(@proofs, "Utf8Cases.lean"), Path.join(project, "Protocol/Utf8Cases.lean"))
+    File.cp!(Path.join(@proofs, "Utf8Scale.lean"), Path.join(project, "Protocol/Utf8Scale.lean"))
     packages(project)
 
     options = [
@@ -27,16 +28,19 @@ defmodule Lynx.Rust.ProtocolTest do
       lean_project: project,
       module_prefix: "Protocol.Extraction",
       build_dir: Path.join(tmp, "build"),
-      proof_modules: ["Protocol.Properties", "Protocol.Utf8Cases"],
+      proof_modules: ["Protocol.Properties", "Protocol.Utf8Cases", "Protocol.Utf8Scale"],
       required_properties:
         Enum.map(
-          ~w(first_spec first_empty split_panic split_spec utf8_valid utf8_error utf8_exhausted short wrong_version wrong_length accepted_shape parse_valid unicode_frame),
+          ~w(first_spec first_empty split_panic split_spec utf8_valid utf8_error short wrong_version wrong_length accepted_shape parse_valid unicode_frame),
           &("Protocol.Properties." <> &1)
-        )
+        ) ++ utf8_properties("Protocol")
     ]
 
     result = Lynx.Rust.verify!(@workspace, "experiment-core", options)
     assert [%{status: :ok}] = result.reports
+
+    warm = Lynx.Rust.verify!(@workspace, "experiment-core", options)
+    assert [%{status: :ok, cached: true}] = warm.reports
 
     assert Enum.any?(
              result.verification.unverified_external_calls,
@@ -53,7 +57,11 @@ defmodule Lynx.Rust.ProtocolTest do
     export = Path.join(tmp, "parser.export")
 
     file =
-      Lynx.Rust.Proofs.file!(result.extraction, ["Protocol.Properties", "Protocol.Utf8Cases"])
+      Lynx.Rust.Proofs.file!(result.extraction, [
+        "Protocol.Properties",
+        "Protocol.Utf8Cases",
+        "Protocol.Utf8Scale"
+      ])
 
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
@@ -67,6 +75,24 @@ defmodule Lynx.Rust.ProtocolTest do
     assert [%{status: :error, cached: false}] = poisoned = Lynx.Commands.verify!(project, [file])
     assert inspect(poisoned) =~ "unexpected axiom"
     File.write!(model_path, original_model)
+
+    scale_path = Path.join(project, "Protocol/Utf8Scale.lean")
+    original_scale = File.read!(scale_path)
+
+    wrong_offset =
+      String.replace(original_scale, "offset.val = n := by", "offset.val = n + 1 := by",
+        global: false
+      )
+
+    assert wrong_offset != original_scale
+    File.write!(scale_path, wrong_offset)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(@workspace, "experiment-core", options)
+    end
+
+    File.write!(scale_path, original_scale)
+    assert [%{status: :ok}] = Lynx.Rust.verify!(@workspace, "experiment-core", options).reports
 
     properties = Path.join(project, "Protocol/Properties.lean")
 
@@ -148,6 +174,21 @@ defmodule Lynx.Rust.ProtocolTest do
       |> then(&Regex.replace(~r/theorem first_spec.*?(?=theorem utf8_valid)/s, &1, ""))
 
     File.write!(Path.join(project, "ProtocolNative/Core.lean"), core)
+
+    scale =
+      File.read!(Path.join(@proofs, "Utf8Scale.lean"))
+      |> String.replace("Protocol.Extraction", "ProtocolNative.Extraction")
+      |> String.replace("Protocol.Utf8Scale", "ProtocolNative.Utf8Scale")
+      |> String.replace(
+        "experiment_core.protocol.utf8_status",
+        "experiment_nif.experiment_analysis.utf8_status"
+      )
+      |> String.replace(
+        "experiment_nif.experiment_analysis.utf8_status,",
+        "experiment_nif.experiment_analysis.utf8_status, experiment_nif.experiment_core.protocol.utf8_status,"
+      )
+
+    File.write!(Path.join(project, "ProtocolNative/Utf8Scale.lean"), scale)
     parse = Enum.find(prepared.bindings.bindings, &(&1["name"] == "parse_frame"))["lean_name"]
     status = Enum.find(prepared.bindings.bindings, &(&1["name"] == "utf8_status"))["lean_name"]
 
@@ -159,15 +200,20 @@ defmodule Lynx.Rust.ProtocolTest do
     options =
       options ++
         [
-          proof_modules: ["ProtocolNative.Core", "ProtocolNative.Properties"],
-          required_properties: [
-            "ProtocolNative.Core.wrong_version",
-            "ProtocolNative.Core.wrong_length",
-            "ProtocolNative.Core.accepted_shape",
-            "ProtocolNative.Core.parse_valid",
-            "ProtocolNative.Properties.facade_unicode",
-            "ProtocolNative.Properties.facade_short"
-          ]
+          proof_modules: [
+            "ProtocolNative.Core",
+            "ProtocolNative.Properties",
+            "ProtocolNative.Utf8Scale"
+          ],
+          required_properties:
+            [
+              "ProtocolNative.Core.wrong_version",
+              "ProtocolNative.Core.wrong_length",
+              "ProtocolNative.Core.accepted_shape",
+              "ProtocolNative.Core.parse_valid",
+              "ProtocolNative.Properties.facade_unicode",
+              "ProtocolNative.Properties.facade_short"
+            ] ++ utf8_properties("ProtocolNative")
         ]
 
     library = Path.join(tmp, "native")
@@ -214,6 +260,9 @@ defmodule Lynx.Rust.ProtocolTest do
         do: assert(apply(native, :parse_frame, [input]) == expected)
 
     for {input, expected} <- [
+          {String.duplicate("😀", 262_144), {:ok, 1_048_576}},
+          {:binary.copy(<<65>>, 1_048_576) <> <<255>>, {:error, {1_048_576, 1}}},
+          {:binary.copy(<<65>>, 1_048_576) <> <<194>>, {:error, {1_048_576, 0}}},
           {"😀", {:ok, 4}},
           {<<255>>, {:error, {0, 1}}},
           {<<65, 194>>, {:error, {1, 0}}},
@@ -240,10 +289,12 @@ defmodule Lynx.Rust.ProtocolTest do
     rust = Path.join(workspace, "core/src/protocol.rs")
     original = File.read!(rust)
 
-    for {before, after_change} <- [
-          {"input[0] != 1", "input[0] != 2"},
-          {"input.len() != length + 2", "input.len() < length + 2"},
-          {"return Err(2)", "return Err(3)"}
+    for {before, after_change, diagnostic} <- [
+          {"input[0] != 1", "input[0] != 2", "unsolved goals"},
+          {"input.len() != length + 2", "input.len() < length + 2", "unsolved goals"},
+          {"return Err(2)", "return Err(3)", "unsolved goals"},
+          {"Ok(_) => Ok(input.len() as u64)", "Ok(_) => Ok(0)", "Tactic `rewrite` failed"},
+          {"Some(length) => length as u8", "Some(_length) => 0", "unsolved goals"}
         ] do
       changed = String.replace(original, before, after_change)
       assert changed != original
@@ -254,11 +305,18 @@ defmodule Lynx.Rust.ProtocolTest do
           Lynx.Rustler.prepare!(options)
         end
 
-      assert Exception.message(error) =~ "unsolved goals"
+      assert Exception.message(error) =~ diagnostic
     end
 
     File.write!(rust, original)
     assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
+  end
+
+  defp utf8_properties(prefix) do
+    Enum.map(
+      ~w(valid_string invalid_suffix truncated_suffix megabyte_unicode megabyte_invalid megabyte_truncated),
+      &(prefix <> ".Utf8Scale." <> &1)
+    )
   end
 
   defp native_properties(parse, status) do
@@ -283,7 +341,7 @@ defmodule Lynx.Rust.ProtocolTest do
     theorem facade_utf8 : #{status} ⟨#[1,2,195,169]⟩ = RustM.ok (.Ok 4#u64) := by
       have valid : (ProtocolNative.Extraction.Bytes.bytes ProtocolNative.Core.frame).validateUTF8 = true := by
         decide +kernel
-      obtain ⟨count, computed, size⟩ := ProtocolNative.Core.utf8_valid ProtocolNative.Core.frame (by simp [ProtocolNative.Core.frame]) valid
+      obtain ⟨count, computed, size⟩ := ProtocolNative.Core.utf8_valid ProtocolNative.Core.frame valid
       have equal : count = 4#u64 := by
         apply UScalar.eq_of_val_eq
         simpa [ProtocolNative.Core.frame] using size

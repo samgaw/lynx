@@ -57,7 +57,7 @@ defmodule Lynx.Rust.BytesModels do
           bytes_error_type: type["def_id"],
           model_hash: Lynx.Rust.Fingerprint.digest(@contents),
           label:
-            "Bounded Rust UTF-8 model (4096 bytes); preserves bytes and Utf8Error offsets/lengths; Rust core implementation not verified"
+            "Rust UTF-8 model without a protocol-size cutoff; preserves bytes and Utf8Error offsets/lengths; Rust core implementation not verified"
         }
       end
     else
