@@ -1,0 +1,11 @@
+--- a/src/interp/InterpJoin.ml
++++ b/src/interp/InterpJoin.ml
+@@ -1568,7 +1568,7 @@
+         joined_ctx
+     with
+     | Some ctx -> ctx
+-    | None -> [%craise] span "Could not match the contexts"
++    | None -> [%craise_recover] recoverable span "Could not match the contexts"
+   in
+   [%ltrace
+     "The match was successful:" ^ "\n\n- src_ctx: "
