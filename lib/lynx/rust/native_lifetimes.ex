@@ -577,12 +577,21 @@ defmodule Lynx.Rust.NativeLifetimes do
   # payload of its alternative. Derive this from the actual instantiated fields
   # and compiler discriminants, never from a constructor name or annotation alone.
   defp refine_enum(
-         %{"scrutinee" => %{"Discriminant" => %{"kind" => %{"Local" => root}} = place}} = data,
+         %{"scrutinee" => %{"Discriminant" => place}} = data,
          index,
          state,
          ctx
        ) do
+    {root, path} = resolve_place(place, state.known)
+
     if MapSet.member?(ctx.owners, root) and not MapSet.member?(ctx.borrowed, root) do
+      # An empty nested alternative can discharge the enclosing obligation only
+      # when that container has at most one possible native owner. In particular,
+      # selecting an empty field must never retire an independent sibling owner.
+      if path != [] and native_count(ctx.locals[root], ctx.native, ctx.types, ctx.refs, []) != 1,
+        do: reject!(ctx)
+
+      domain = if path == [], do: {:enum_domain, root}, else: {:enum_projection, root, path}
       type = Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
 
       with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- type,
@@ -614,7 +623,7 @@ defmodule Lynx.Rust.NativeLifetimes do
             else: selected
 
         selected =
-          case state.known[{:enum_domain, root}] do
+          case state.known[domain] do
             previous when is_list(previous) -> Enum.filter(selected, &(&1 in previous))
             nil -> selected
           end
@@ -627,7 +636,7 @@ defmodule Lynx.Rust.NativeLifetimes do
           # an empty alternative must not resurrect an error payload's owner.
           state = %{
             state
-            | known: Map.put(state.known, {:enum_domain, root}, Enum.sort(selected))
+            | known: Map.put(state.known, domain, Enum.sort(selected))
           }
 
           owned =
@@ -645,7 +654,10 @@ defmodule Lynx.Rust.NativeLifetimes do
             end)
 
           if owned do
-            unless live_root?(state.live, root), do: reject!(ctx)
+            # Rust may inspect a discriminant after moving its payload while
+            # deciding which cleanup flags apply. This refines tags only: it
+            # must not recreate the consumed obligation. Any later move still
+            # requires a live owner in moves!/3.
             state
           else
             %{
@@ -836,6 +848,7 @@ defmodule Lynx.Rust.NativeLifetimes do
       |> Map.delete({:alias, local})
       |> Map.delete({:empty, local})
       |> Map.delete({:enum_domain, local})
+      |> clear_projection_domains(local)
       |> Map.delete({:frame_borrow, local})
 
     known =
@@ -904,6 +917,7 @@ defmodule Lynx.Rust.NativeLifetimes do
       |> Map.delete({:alias, local})
       |> Map.delete({:empty, local})
       |> Map.delete({:enum_domain, local})
+      |> clear_projection_domains(local)
       |> Map.delete({:frame_borrow, local})
 
   defp known_after(%{"StorageLive" => local}, known, ctx),
@@ -944,6 +958,9 @@ defmodule Lynx.Rust.NativeLifetimes do
     do: Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
 
   defp known_after(_, known, _), do: known
+
+  defp clear_projection_domains(known, local),
+    do: Map.reject(known, fn {key, _} -> match?({:enum_projection, ^local, _}, key) end)
 
   defp empty_value?(%{"Aggregate" => [_kind, operands]}, known, ctx),
     do: Enum.all?(operands, &empty_operand?(&1, known, ctx))
