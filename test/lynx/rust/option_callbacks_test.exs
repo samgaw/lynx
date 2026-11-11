@@ -26,11 +26,24 @@ defmodule Lynx.Rust.OptionCallbacksTest do
     edition = "2021"
     """)
 
-    File.write!(Path.join(workspace, "base/src/lib.rs"), """
+    base_source = Path.join(workspace, "base/src/lib.rs")
+
+    base_original = """
     pub fn choose(value: bool) -> Option<bool> {
         if value { Some(value) } else { None }
     }
-    """)
+    pub fn bounded(input: Option<usize>, bytes: &[u8]) -> Option<usize> {
+        input.and_then(|length| {
+            if length <= bytes.len() {
+                Some(length)
+            } else {
+                None
+            }
+        })
+    }
+    """
+
+    File.write!(base_source, base_original)
 
     File.write!(Path.join(workspace, "analysis/Cargo.toml"), """
     [package]
@@ -44,6 +57,9 @@ defmodule Lynx.Rust.OptionCallbacksTest do
     source = Path.join(workspace, "analysis/src/lib.rs")
 
     original = """
+    pub fn bounded_length(input: Option<usize>, bytes: &[u8]) -> Option<usize> {
+        option_base::bounded(input, bytes)
+    }
     pub fn captured(input: Option<u64>, mask: u64) -> Option<u64> {
         input.and_then(move |value| Some(value ^ mask))
     }
@@ -109,11 +125,30 @@ defmodule Lynx.Rust.OptionCallbacksTest do
       cases input <;> simp [option_analysis.captured, OptionProofs.Extraction.Option.andThen,
         option_analysis.captured.closure.Insts.CoreOpsFunctionFnOnceTupleU64OptionU64.call_once,
         Aeneas.Std.lift]
+    theorem bounded_core (input : Option Usize) (bytes : Slice U8) :
+        option_analysis.option_base.bounded input bytes = RustM.ok
+          (match input with
+          | none => none
+          | some length => if length.val ≤ bytes.val.length then some length else none) := by
+      cases input with
+      | none => simp [option_analysis.option_base.bounded, OptionProofs.Extraction.Option.andThen]
+      | some length =>
+        by_cases h : length.val ≤ bytes.val.length <;>
+          simp [option_analysis.option_base.bounded, OptionProofs.Extraction.Option.andThen,
+            option_analysis.option_base.bounded.closure.Insts.CoreOpsFunctionFnOnceTupleUsizeOptionUsize.call_once,
+            h, UScalar.le_equiv, Slice.len_val]
+    theorem bounded_composed (input : Option Usize) (bytes : Slice U8) :
+        option_analysis.bounded_length input bytes = RustM.ok
+          (match input with
+          | none => none
+          | some length => if length.val ≤ bytes.val.length then some length else none) := by
+      simp [option_analysis.bounded_length, bounded_core]
     end OptionProofs.Properties
     """)
 
     options = [
       roots: [
+        "option_analysis::bounded_length",
         "option_analysis::captured",
         "option_analysis::invert",
         "option_analysis::panic_some",
@@ -125,7 +160,7 @@ defmodule Lynx.Rust.OptionCallbacksTest do
       proof_modules: ["OptionProofs.Properties"],
       required_properties:
         Enum.map(
-          ~w(compose borrowed skipped panics captured),
+          ~w(compose borrowed skipped panics captured bounded_core bounded_composed),
           &("OptionProofs.Properties." <> &1)
         )
     ]
@@ -135,6 +170,11 @@ defmodule Lynx.Rust.OptionCallbacksTest do
     assert [
              %{
                rust_name: "core::option::{core::option::Option<@T>}::and_then",
+               implementation_verified: false,
+               status: :modelled
+             },
+             %{
+               rust_name: "core::slice::{[@T]}::len",
                implementation_verified: false,
                status: :modelled
              }
@@ -204,6 +244,17 @@ defmodule Lynx.Rust.OptionCallbacksTest do
       end
     end
 
+    File.write!(
+      base_source,
+      String.replace(base_original, "length <= bytes.len()", "length < bytes.len()")
+    )
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "option-analysis", options)
+    end
+
+    File.write!(base_source, base_original)
+
     File.write!(source, String.replace(original, "Some(!value)", "Some(value)"))
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
@@ -219,7 +270,7 @@ defmodule Lynx.Rust.OptionCallbacksTest do
       )
     )
 
-    assert_raise CompileError, ~r/extracted compiler FnOnce/, fn ->
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rust.verify!(workspace, "option-analysis", options)
     end
   end

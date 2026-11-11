@@ -36,6 +36,9 @@ defmodule Lynx.Rust.ResultModelsTest do
     pub fn stamp(input: Result<u64, u64>, mask: u64) -> Result<u64, u64> {
         input.map_err(move |error| error ^ mask)
     }
+    pub fn read_mask(input: Result<u64, u64>, mask: &u64) -> Result<u64, u64> {
+        input.map_err(|error| error ^ *mask)
+    }
     """)
 
     File.write!(Path.join(workspace, "analysis/Cargo.toml"), """
@@ -52,6 +55,9 @@ defmodule Lynx.Rust.ResultModelsTest do
     original = """
     pub fn stamp_result(input: Result<u64, u64>, mask: u64) -> Result<u64, u64> {
         map_base::stamp(input, mask)
+    }
+    pub fn read_mask_result(input: Result<u64, u64>, mask: &u64) -> Result<u64, u64> {
+        map_base::read_mask(input, mask)
     }
     pub fn captured_panic(input: Result<bool, bool>, fail: bool) -> Result<bool, bool> {
         input.map_err(move |error| { assert!(!fail); error })
@@ -143,6 +149,15 @@ defmodule Lynx.Rust.ResultModelsTest do
         map_analysis.captured_panic (.Err value) true = RustM.fail .panic := by
       simp [map_analysis.captured_panic, core.result.Result.map_err,
         map_analysis.captured_panic.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool.call_once]
+    theorem read_mask_core (input : core.result.Result U64 U64) (mask : U64) :
+        map_analysis.map_base.read_mask input mask = RustM.ok
+          (match input with | .Ok value => .Ok value | .Err error => .Err (error ^^^ mask)) := by
+      cases input <;> simp [map_analysis.map_base.read_mask, core.result.Result.map_err,
+        map_analysis.map_base.read_mask.closure.Insts.CoreOpsFunctionFnOnceTupleU64U64.call_once]
+    theorem read_mask_composed (input : core.result.Result U64 U64) (mask : U64) :
+        map_analysis.read_mask_result input mask = RustM.ok
+          (match input with | .Ok value => .Ok value | .Err error => .Err (error ^^^ mask)) := by
+      simp [map_analysis.read_mask_result, read_mask_core]
     end ResultModels.Properties
     """)
 
@@ -153,7 +168,8 @@ defmodule Lynx.Rust.ResultModelsTest do
         "map_analysis::map_error_borrowed",
         "map_analysis::promoted_threshold",
         "map_analysis::stamp_result",
-        "map_analysis::captured_panic"
+        "map_analysis::captured_panic",
+        "map_analysis::read_mask_result"
       ],
       lean_project: project,
       module_prefix: "ResultModels.Extraction",
@@ -168,7 +184,9 @@ defmodule Lynx.Rust.ResultModelsTest do
         "ResultModels.Properties.stamp_core",
         "ResultModels.Properties.stamp_composed",
         "ResultModels.Properties.skipped_capture",
-        "ResultModels.Properties.captured_panics"
+        "ResultModels.Properties.captured_panics",
+        "ResultModels.Properties.read_mask_core",
+        "ResultModels.Properties.read_mask_composed"
       ]
     ]
 
@@ -227,6 +245,29 @@ defmodule Lynx.Rust.ResultModelsTest do
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rust.verify!(workspace, "map-analysis", options)
     end
+
+    # A mutable reference also has no destructor, but dropping it cannot stand
+    # in for correctly threading its mutations through the callback model.
+    File.write!(
+      source,
+      original <>
+        """
+
+        pub fn mutable_capture(input: Result<bool, bool>, state: &mut bool) -> Result<bool, bool> {
+            input.map_err(|error| { *state = error; error })
+        }
+        """
+    )
+
+    unsupported =
+      options
+      |> Keyword.put(:roots, ["map_analysis::mutable_capture"])
+      |> Keyword.put(:proof_modules, [])
+      |> Keyword.put(:required_properties, [])
+
+    assert_raise CompileError, ~r/shared references to scalar\/slice values/, fn ->
+      Lynx.Rust.verify!(workspace, "map-analysis", unsupported)
+    end
   end
 
   defp assert_callback_rejections(document, audit, root, callback) do
@@ -279,7 +320,7 @@ defmodule Lynx.Rust.ResultModelsTest do
         document,
         "type_decls",
         closure["def_id"],
-        &put_in(&1, ["kind", "Struct"], [%{"ty" => %{"Ref" => ["Static", boolean, "Shared"]}}])
+        &put_in(&1, ["kind", "Struct"], [%{"ty" => %{"Ref" => ["Static", boolean, "Mut"]}}])
       ),
       change(document, "type_decls", closure["def_id"], &put_in(&1, ["src"], "Normal")),
       change(
