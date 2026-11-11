@@ -30,7 +30,13 @@ defmodule Lynx.Rust.LockModels do
          true <- [a, b, c] == path(~w(std sync poison)),
          family <- if(d == %{"Ident" => ["mutex", 0]}, do: :mutex, else: :rwlock),
          true <- d == %{"Ident" => [if(family == :mutex, do: "mutex", else: "rwlock"), 0]},
-         true <- {family, method} in [{:mutex, "lock"}, {:rwlock, "read"}, {:rwlock, "write"}],
+         true <-
+           {family, method} in [
+             {:mutex, "lock"},
+             {:mutex, "try_lock"},
+             {:rwlock, "read"},
+             {:rwlock, "write"}
+           ],
          true <- params?(parent_params, 0, []),
          true <- params?(CallModels.expand(params, refs), 1, [outlives()]),
          %{"Adt" => %{"id" => mutex, "builtin" => nil, "generics" => args}} <-
@@ -57,11 +63,16 @@ defmodule Lynx.Rust.LockModels do
          guard when not is_nil(guard) <-
            Enum.find(translated["type_decls"], &(guard_kind(&1, refs) == kind)),
          poison when not is_nil(poison) <- Enum.find(translated["type_decls"], &poison?/1),
+         error when not is_nil(error) <-
+           if(method == "try_lock",
+             do: Enum.find(translated["type_decls"], &try_error?(&1, poison["def_id"], refs)),
+             else: poison
+           ),
          %{"Adt" => %{"id" => result, "generics" => result_args, "builtin" => nil}} <-
            CallModels.expand(sig["output"], refs),
          true <- LLBC.result_type?(result, %{translated: translated, references: refs}),
          guard_type = adt(guard["def_id"], [variable()], [region()]),
-         true <- result_args == arguments([guard_type, adt(poison["def_id"], [guard_type])]) do
+         true <- result_args == arguments([guard_type, adt(error["def_id"], [guard_type])]) do
       %{
         rust_name:
           "std::sync::poison::#{family}::{std::sync::poison::#{family}::#{if family == :mutex, do: "Mutex", else: "RwLock"}<@T>}::#{method}",
@@ -74,20 +85,31 @@ defmodule Lynx.Rust.LockModels do
         native_guard_kind: kind,
         native_guard_type: guard["def_id"],
         native_poison_type: poison["def_id"],
+        native_try_lock_type: if(method == "try_lock", do: error["def_id"]),
         native_codec_input: true,
         label:
           "Blocking Mutex::lock model: atomic shared-cell acquisition; poisoned acquisition returns an owned guard in PoisonError; recursive acquisition and malformed identities exhaust verification; logical execution contexts are local Lynx processes; native async/thread migration, Rust std and FFI implementation correctness unverified"
       }
       |> Map.put(if(family == :mutex, do: :native_mutex_type, else: :native_rwlock_type), mutex)
       |> then(fn model ->
-        if family == :mutex,
-          do: model,
-          else:
+        cond do
+          method == "try_lock" ->
+            Map.put(
+              model,
+              :label,
+              "Atomic Mutex::try_lock model: a held lock returns WouldBlock without mutation or allocation, including recursive attempts; an available poisoned lock returns Poisoned with the acquired owned guard; malformed identities exhaust verification; Rust std, OS/native threading and FFI correctness remain unverified"
+            )
+
+          family == :mutex ->
+            model
+
+          true ->
             Map.put(
               model,
               :label,
               "Logical blocking std RwLock::#{method} model: shared reader leases or an exclusive writer; a conflicting foreign owner blocks, queued writers retain typed context-bound request tickets, and successful acquisition removes its own ticket atomically; poisoned acquisition returns the acquired guard in PoisonError; new reads with a queued writer, self-conflicting acquisition, invalid tickets and reader-limit exhaustion are verification cutoffs; OS priority, fairness, native thread correspondence, std and FFI correctness remain unverified"
             )
+        end
       end)
     else
       _ -> nil
@@ -147,6 +169,43 @@ defmodule Lynx.Rust.LockModels do
 
   def poison?(_), do: false
 
+  defp try_error?(
+         %{
+           "src" => "Normal",
+           "item_meta" => %{"name" => name},
+           "generics" => params,
+           "kind" => kind
+         },
+         poison,
+         refs
+       ) do
+    name == path(~w(std sync poison TryLockError)) and params?(params, 0, []) and
+      case CallModels.expand(kind, refs) do
+        %{
+          "Enum" => [
+            %{
+              "id" => 0,
+              "name" => "Poisoned",
+              "fields" => [%{"ty" => field}],
+              "discriminant" => %{"Signed" => ["Isize", "0"]}
+            },
+            %{
+              "id" => 1,
+              "name" => "WouldBlock",
+              "fields" => [],
+              "discriminant" => %{"Signed" => ["Isize", "1"]}
+            }
+          ]
+        } ->
+          field == adt(poison, [variable()])
+
+        _ ->
+          false
+      end
+  end
+
+  defp try_error?(_, _, _), do: false
+
   def type_models(models, prefix) do
     module = (prefix |> String.split(".") |> hd()) <> ".NativeRuntime"
 
@@ -178,7 +237,28 @@ defmodule Lynx.Rust.LockModels do
         ],
         else: []
 
-    guards ++ poison
+    errors =
+      if Enum.any?(models, fn {_, model} -> model[:native_try_lock_type] end) do
+        [
+          %{
+            rust: "std::sync::poison::TryLockError",
+            lean: "Lynx.NativeTryLockError",
+            import: module,
+            body: %{
+              "kind" => "enum",
+              "variants" => [
+                %{"rust" => "Poisoned", "extract" => "Poisoned"},
+                %{"rust" => "WouldBlock", "extract" => "WouldBlock"}
+              ]
+            },
+            label: "Validated standard TryLockError variants; Poisoned retains its owned guard"
+          }
+        ]
+      else
+        []
+      end
+
+    guards ++ poison ++ errors
   end
 
   defp params?(

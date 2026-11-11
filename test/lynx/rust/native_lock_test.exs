@@ -170,7 +170,7 @@ defmodule Lynx.Rust.NativeLockTest do
             match mutex.try_lock() {
                 Ok(guard) => Ok(guard),
                 Err(std::sync::TryLockError::Poisoned(error)) => Err(error),
-                Err(std::sync::TryLockError::WouldBlock) => panic!("unexpected contention"),
+                Err(std::sync::TryLockError::WouldBlock) => mutex.lock(),
             }
         }
         """,
@@ -180,7 +180,10 @@ defmodule Lynx.Rust.NativeLockTest do
     refute changed == source
     File.write!(core, changed)
 
-    assert_raise ArgumentError, ~r/Charon reported extraction errors.*opaque enum/s, fn ->
+    # Charon extracts both lock modes. Aeneas currently rejects the escaping
+    # guard-bearing result in this branching protocol before any Lean proof.
+    # This is an unsupported extraction case, not a refuted contract.
+    assert_raise RuntimeError, ~r/Rust extraction failed.*InterpReduceCollapse/s, fn ->
       Lynx.Rust.verify!(workspace, "effects-native", options)
     end
   end

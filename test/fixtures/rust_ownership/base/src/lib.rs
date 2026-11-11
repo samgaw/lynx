@@ -1,4 +1,18 @@
 //! Owned values with observable destruction.
+
+/// Toggles protected contents if an immediate acquisition succeeds.
+/// A contended attempt leaves the protected contents unchanged.
+pub fn try_toggle(mutex: &std::sync::Mutex<bool>) -> bool {
+    let mut guard = match mutex.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return false,
+    };
+    toggle(&mut guard);
+    drop(guard);
+    true
+}
+
 /// A value whose destructor validates its code.
 #[derive(Debug)]
 pub struct Audit {
