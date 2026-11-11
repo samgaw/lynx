@@ -175,6 +175,27 @@ fn checked_prefix(matches: bool) -> bool {
     experiment_analysis::checked_prefix(matches)
 }
 
+/// Reports the exact length of a successfully consumed marker's payload.
+#[cfg(feature = "prefix-consume")]
+#[rustler::nif(name = "payload_length", schedule = "DirtyCpu")]
+fn consumed_length(value: rustler::Binary<'_>) -> Option<u64> {
+    experiment_analysis::consumed_length(value.as_slice())
+}
+
+/// Preserves prefix consumption's input-first comparator panic.
+#[cfg(feature = "prefix-consume")]
+#[rustler::nif]
+fn checked_consume() -> bool {
+    experiment_analysis::checked_consume()
+}
+
+/// Preserves recognition's distinct pattern-first comparison order.
+#[cfg(feature = "prefix-consume")]
+#[rustler::nif]
+fn checked_recognize() -> bool {
+    experiment_analysis::checked_recognize()
+}
+
 /// Reads a named protocol marker through a renamed zero-argument NIF.
 #[cfg(feature = "named-arrays")]
 #[rustler::nif(name = "wire_marker")]
@@ -627,6 +648,7 @@ mod tests {
                 + usize::from(cfg!(feature = "text-views"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
+                + 3 * usize::from(cfg!(feature = "prefix-consume"))
                 + usize::from(cfg!(feature = "named-arrays"))
                 + usize::from(cfg!(feature = "named-slices"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
@@ -852,6 +874,23 @@ mod tests {
             expected.push((
                 "checked_prefix".to_owned(),
                 1,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "prefix-consume") {
+            expected.push((
+                "payload_length".to_owned(),
+                1,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+            expected.push((
+                "checked_consume".to_owned(),
+                0,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+            expected.push((
+                "checked_recognize".to_owned(),
+                0,
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }
