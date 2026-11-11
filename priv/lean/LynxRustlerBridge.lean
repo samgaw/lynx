@@ -181,6 +181,12 @@ For i8/i16, Rustler 0.38/0.39 decode i32 and then truncates; i32/i64 do not narr
     else .error (.error (.atom "badarg"))
   | _ => .error (.error (.atom "badarg"))
 
+theorem decodeUnsigned_error {ty : UScalarTy} {bits : Nat} {input : Term} {error : Exception}
+    (failed : decodeUnsigned ty bits input = .error error) :
+    error = .error (.atom "badarg") := by
+  cases input <;> simp_all [decodeUnsigned]
+  split at failed <;> simp_all
+
 @[expose] def encodeSigned {ty : IScalarTy} (value : IScalar ty) : Term := .integer value.val
 @[expose] def encodeUnsigned {ty : UScalarTy} (value : UScalar ty) : Term := .integer value.val
 
@@ -682,6 +688,34 @@ Boxed errors may own first-party values with effectful destructors. -/
 @[simp] theorem dropDecoderError_boxed (raises : Bool)
     (encode : Env → RustM NativeTerm) :
     dropDecoderError (.encoded raises encode) = .fail .undef := rfl
+
+/-- Call-site validation restricts T to a primitive scalar with no destructor.
+Opaque boxed errors still exhaust; they may own effectful first-party values. -/
+@[expose] def dropScalarResult {T : Type} : core.result.Result T DecoderError → RustM Unit
+  | .Ok _ => .ok ()
+  | .Err error => dropDecoderError error
+
+-- Monomorphic entry points retain the compiler type when an Err has no Ok value.
+@[expose] abbrev dropScalarResultBool := @dropScalarResult Bool
+@[expose] abbrev dropScalarResultU8 := @dropScalarResult U8
+@[expose] abbrev dropScalarResultU16 := @dropScalarResult U16
+@[expose] abbrev dropScalarResultU32 := @dropScalarResult U32
+@[expose] abbrev dropScalarResultU64 := @dropScalarResult U64
+@[expose] abbrev dropScalarResultU128 := @dropScalarResult U128
+@[expose] abbrev dropScalarResultUsize := @dropScalarResult Usize
+@[expose] abbrev dropScalarResultI8 := @dropScalarResult I8
+@[expose] abbrev dropScalarResultI16 := @dropScalarResult I16
+@[expose] abbrev dropScalarResultI32 := @dropScalarResult I32
+@[expose] abbrev dropScalarResultI64 := @dropScalarResult I64
+@[expose] abbrev dropScalarResultI128 := @dropScalarResult I128
+@[expose] abbrev dropScalarResultIsize := @dropScalarResult Isize
+
+@[simp] theorem dropScalarResult_ok {T : Type} (value : T) :
+    dropScalarResult (.Ok value : core.result.Result T DecoderError) = .ok () := rfl
+
+@[simp] theorem dropScalarResult_boxed {T : Type} (raises : Bool)
+    (encode : Env → RustM NativeTerm) :
+    dropScalarResult (T := T) (.Err (.encoded raises encode)) = .fail .undef := rfl
 
 /-- Partial model of consuming a Result containing a foreign Rustler Error.
 Only static-borrow/scalar error variants have no observable destruction. A

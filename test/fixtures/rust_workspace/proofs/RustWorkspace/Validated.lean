@@ -16,19 +16,35 @@ theorem validation_spec (input : Lynx.Term) (value : U64)
     experiment_nif.validate_nonzero input = RustM.ok
       (if value = 0#u64 then .Err Lynx.Rustler.badArgOutcome else .Ok (value != 0#u64)) := by
   by_cases zero : value = 0#u64 <;>
-    simp [experiment_nif.validate_nonzero, Lynx.Rustler.Decoding.u64, decoded, zero, restore_spec]
+    simp [experiment_nif.validate_nonzero, Lynx.Rustler.Decoding.u64, decoded, zero, restore_spec, Lynx.Rustler.Decoding.dropScalarResult]
 
 theorem validation_error (input : Lynx.Term) (error : Lynx.Exception)
     (rejected : Lynx.Rustler.decodeUnsigned .U64 64 input = .error error) :
     experiment_nif.validate_nonzero input = RustM.ok (.Err (.error error)) := by
-  simp [experiment_nif.validate_nonzero, Lynx.Rustler.Decoding.u64, rejected]
+  have kind := Lynx.Rustler.decodeUnsigned_error rejected
+  subst error
+  simp [experiment_nif.validate_nonzero, Lynx.Rustler.Decoding.u64, rejected,
+    Lynx.Rustler.Decoding.dropScalarResult, Lynx.Rustler.badArgOutcome,
+    Lynx.Rustler.Decoding.dropDecoderError]
 
 theorem decoder_spec (input : Lynx.Term) :
     __DECODER__ input = (do
       let result ← experiment_nif.validate_nonzero input
       match result with
       | .Ok enabled => RustM.ok (.Ok { enabled := enabled })
-      | .Err error => RustM.ok (.Err error)) := by rfl
+      | .Err error => RustM.ok (.Err error)) := by
+  cases decoded : Lynx.Rustler.decodeUnsigned .U64 64 input with
+  | ok value =>
+    have validated := validation_spec input value decoded
+    by_cases zero : value = 0#u64 <;>
+      simp [__DECODER__, validated, zero, Lynx.Rustler.Decoding.dropScalarResult,
+        Lynx.Rustler.Decoding.dropDecoderError, Lynx.Rustler.badArgOutcome]
+  | error error =>
+    have kind := Lynx.Rustler.decodeUnsigned_error decoded
+    have validated := validation_error input error decoded
+    subst error
+    simp [__DECODER__, validated, Lynx.Rustler.Decoding.dropScalarResult,
+      Lynx.Rustler.Decoding.dropDecoderError, Lynx.Rustler.badArgOutcome]
 
 theorem flag_spec (input : ValidatedFlag) : __FLAG__ input = RustM.ok input.enabled := by
   simp [__FLAG__, restore_spec]

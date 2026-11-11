@@ -11,7 +11,8 @@ defmodule Lynx.Rustler.ErrorConstructors do
         false
 
       error ->
-        Enum.any?(functions(document, first_party), &constructs?(&1["body"], error["def_id"]))
+        Enum.any?(functions(document, first_party), &constructs?(&1["body"], error["def_id"])) ||
+          Lynx.Rustler.ErrorDrops.needed?(document, first_party)
     end
   end
 
@@ -219,7 +220,7 @@ defmodule Lynx.Rustler.ErrorConstructors do
     do:
       boundary(constructors) ++
         [
-          "Partial Rustler Result destruction model: boxed errors and Ok payloads exhaust verification; compiler glue and native SDK remain trusted"
+          "Partial Rustler Result destruction model: boxed errors and unsupported Ok payloads exhaust verification; scalar Ok destruction requires compiler-validated primitive types; compiler glue and native SDK remain trusted"
         ]
 
   def boundary(nil), do: []
