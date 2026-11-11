@@ -182,6 +182,29 @@ pub fn binary_tag_bytes() -> &'static [u8] {
     experiment_core::protocol::binary_tag_bytes()
 }
 
+/// Borrows an indexed window across the crate boundary.
+pub fn indexed_window(input: &[u8], start: usize, end: usize) -> &[u8] {
+    experiment_core::protocol::indexed_window(input, start, end)
+}
+
+/// Splits a payload and remainder using the two indexed core operations.
+pub fn indexed_split(input: &[u8], end: usize) -> (&[u8], &[u8]) {
+    (
+        experiment_core::protocol::indexed_prefix(input, end),
+        experiment_core::protocol::indexed_window(input, end, input.len()),
+    )
+}
+
+/// Counts an indexed protocol window, retaining rejected bounds as panics.
+pub fn indexed_length(input: &[u8], start: u8, end: u8) -> u64 {
+    indexed_window(input, start as usize, end as usize).len() as u64
+}
+
+/// Composes fixed-buffer indexing through the low-level crate.
+pub fn array_window_length(start: usize, end: usize) -> u64 {
+    experiment_core::protocol::array_window_length(start, end)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

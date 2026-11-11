@@ -72,4 +72,14 @@ defmodule Lynx.Rust.VectorIndexTest do
     assert {:error, _, _} =
              CollectionModels.audit([%{"body" => ctx.call}], models, translated, %{})
   end
+
+  test "rejects vector dispatch without captured SliceIndex method evidence", ctx do
+    model = IndexModels.resolve(ctx.function, ctx.translated, %{})
+    caller = %{"def_id" => 999, "body" => %{"Call" => %{"call" => %{"func" => ctx.call}}}}
+
+    assert {:error, _, message} =
+             IndexModels.audit([caller], %{ctx.function["def_id"] => model}, ctx.translated, %{})
+
+    assert message =~ "missing or unsupported SliceIndex"
+  end
 end

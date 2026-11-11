@@ -40,6 +40,9 @@ defmodule Lynx.Rust.IndexModels do
         %{slice_index_method: index} ->
           [index_method!(args, index, models, translated, refs, traits)]
 
+        %{standard_index_container: container} ->
+          standard_index!(args, container, models, translated, refs, traits)
+
         _ ->
           []
       end
@@ -54,6 +57,75 @@ defmodule Lynx.Rust.IndexModels do
     do: Enum.flat_map(nodes, &dispatches(&1, models, translated, refs, traits))
 
   defp dispatches(_, _, _, _, _), do: []
+
+  # Vec delegates directly through SliceIndex; arrays first delegate through
+  # Index<[T]>. Audit every dictionary hop, not just the outer wrapper, so an
+  # unapproved standard method cannot be hidden.
+  defp standard_index!(args, "vec", models, translated, refs, traits) do
+    case args["types"] do
+      [element, input, _allocator, output] ->
+        [
+          index_method!(
+            Map.put(args, "types", [element, input, output]),
+            4,
+            models,
+            translated,
+            refs,
+            traits
+          )
+        ]
+
+      _ ->
+        raise ArgumentError, "missing or unsupported delegated vector Index implementation"
+    end
+  end
+
+  defp standard_index!(args, container, models, translated, refs, traits) do
+    types = CallModels.expand(args["types"], refs)
+
+    selected =
+      case {container, types} do
+        {"array", [element, input, output]} -> {element, input, output, 1}
+        _ -> nil
+      end
+
+    with {element, input, output, constants} <- selected,
+         true <- length(args["regions"]) == 1 and length(args["const_generics"]) == constants,
+         [%{"regions" => [], "outlives" => [], "skip_binder" => raw}] <- args["trait_refs"],
+         %{
+           "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => actual}},
+           "trait_decl_ref" => %{"id" => trait, "generics" => declared}
+         } <- trait_value(raw, traits),
+         true <- actual["regions"] == [] and actual["const_generics"] == [],
+         true <- CallModels.expand(actual["types"], refs) == [element, input, output],
+         true <-
+           CallModels.expand(declared, refs) ==
+             args([%{"Slice" => [element, nil]}, input, output]),
+         impl when is_map(impl) <-
+           Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
+         true <- impl["impl_trait"]["id"] == trait,
+         [%{"skip_binder" => %{"id" => method}}] <-
+           Enum.filter(
+             impl["methods"] || [],
+             &(&1 && &1["kind"] == %{"TraitMethod" => [trait, 0]})
+           ),
+         %{slice_index_method: 4, function: function} <- models[method],
+         true <- get_in(function, ["src", "TraitImpl", "impl_ref", "id"]) == impl_id do
+      leaf =
+        index_method!(
+          Map.put(actual, "regions", args["regions"]),
+          4,
+          models,
+          translated,
+          refs,
+          traits
+        )
+
+      [method, leaf]
+    else
+      _ -> raise ArgumentError, "missing or unsupported delegated standard Index implementation"
+    end
+  end
 
   defp index_method!(args, index, models, translated, refs, traits) do
     with %{
@@ -78,20 +150,24 @@ defmodule Lynx.Rust.IndexModels do
              CallModels.expand(element, refs)
            ) == expected,
          [%{"skip_binder" => %{"id" => method}}] <-
-           Enum.filter(impl["methods"], &(&1["kind"] == %{"TraitMethod" => [trait, index]})),
+           Enum.filter(impl["methods"] || [], &(&1["kind"] == %{"TraitMethod" => [trait, index]})),
          %{lean: lean} <- models[method],
+         method_name when method_name in ["get", "index"] <- %{0 => "get", 4 => "index"}[index],
          true <-
-           lean in [
-             "Aeneas.Std.core.slice.index.Usize.get",
-             "Aeneas.Std.core.slice.index.SliceIndexRangeToUsizeSlice.get",
-             "Aeneas.Std.core.slice.index.SliceIndexRangeUsizeSlice.get",
-             "Aeneas.Std.core.slice.index.SliceIndexRangeFromUsizeSlice.get"
-           ] do
+           lean in Enum.map(
+             [
+               "Usize",
+               "SliceIndexRangeToUsizeSlice",
+               "SliceIndexRangeUsizeSlice",
+               "SliceIndexRangeFromUsizeSlice"
+             ],
+             &("Aeneas.Std.core.slice.index." <> &1 <> "." <> method_name)
+           ) do
       method
     else
       _ ->
         raise ArgumentError,
-              "missing or unsupported SliceIndex implementation selected by slice get"
+              "missing or unsupported SliceIndex implementation selected by slice access"
     end
   end
 
@@ -203,16 +279,9 @@ defmodule Lynx.Rust.IndexModels do
            },
            "generics" => params,
            "def_id" => id,
-           "item_meta" => %{
-             "name" => [
-               %{"Ident" => [library, 0]},
-               %{"Ident" => [container, 0]},
-               %{"Impl" => %{"Trait" => impl_id}},
-               %{"Ident" => ["index", 0]}
-             ]
-           }
+           "item_meta" => %{"name" => path}
          } <- function,
-         true <- {library, container} in [{"core", "array"}, {"core", "slice"}, {"alloc", "vec"}],
+         {_library, container, scope} <- index_scope(path, impl_id),
          impl when not is_nil(impl) <-
            Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
          decl when not is_nil(decl) <-
@@ -274,7 +343,7 @@ defmodule Lynx.Rust.IndexModels do
              "generics" => args([parent, i, o])
            } and
            Enum.count(
-             impl["methods"],
+             impl["methods"] || [],
              &match?(
                %{"kind" => %{"TraitMethod" => [^trait, 0]}, "skip_binder" => %{"id" => ^id}},
                &1
@@ -289,12 +358,12 @@ defmodule Lynx.Rust.IndexModels do
 
         model = %{
           rust_name:
-            "#{library}::#{container}::{core::ops::index::Index<#{rust_type}, @I, @O>}::index",
+            "#{Enum.join(scope, "::")}::{core::ops::index::Index<#{rust_type}, @I, @O>}::index",
           lean:
             if(container == "vec",
               do: "Aeneas.Std.alloc.vec.Vec.index",
               else:
-                "Aeneas.Std.core.#{container}.#{if container == "array", do: "Array", else: "Slice"}.index"
+                "Aeneas.Std.core.#{container}.#{if container == "array", do: "Array", else: "index.Slice"}.index"
             ),
           builtin: true,
           can_fail: true,
@@ -303,11 +372,36 @@ defmodule Lynx.Rust.IndexModels do
             "Aeneas standard #{container} Index wrapper with retained delegated trait dispatch and bounds panics; Rust core implementation not verified"
         }
 
-        if container == "vec", do: Map.put(model, :vec_owned_method, "index"), else: model
+        case container do
+          "vec" ->
+            model
+            |> Map.put(:vec_owned_method, "index")
+            |> Map.put(:standard_index_container, "vec")
+
+          "slice" ->
+            Map.put(model, :slice_index_method, 4)
+
+          "array" ->
+            Map.put(model, :standard_index_container, "array")
+        end
       end
     else
       _ -> nil
     end
+  end
+
+  defp index_scope(path, impl_id) do
+    Enum.find_value(
+      [
+        {"core", "array", ~w(core array)},
+        {"core", "slice", ~w(core slice index)},
+        {"alloc", "vec", ~w(alloc vec)}
+      ],
+      fn {library, container, scope} ->
+        if path == name(scope) ++ [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => ["index", 0]}],
+          do: {library, container, scope}
+      end
+    )
   end
 
   defp parameters?(

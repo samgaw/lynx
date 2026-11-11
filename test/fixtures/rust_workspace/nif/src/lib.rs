@@ -154,6 +154,13 @@ fn text_payload_length(value: rustler::Binary<'_>, header: u8) -> Result<Option<
     experiment_analysis::text_payload_length(value.as_slice(), header)
 }
 
+/// Counts a protocol window; invalid Rust bounds remain NIF panics.
+#[cfg(feature = "slice-index")]
+#[rustler::nif(name = "window_length", schedule = "DirtyCpu")]
+fn indexed_length(value: rustler::Binary<'_>, start: u8, end: u8) -> u64 {
+    experiment_analysis::indexed_length(value.as_slice(), start, end)
+}
+
 /// Reads a named protocol marker through a renamed zero-argument NIF.
 #[cfg(feature = "named-arrays")]
 #[rustler::nif(name = "wire_marker")]
@@ -604,6 +611,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "binary"))
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "text-views"))
+                + usize::from(cfg!(feature = "slice-index"))
                 + usize::from(cfg!(feature = "named-arrays"))
                 + usize::from(cfg!(feature = "named-slices"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
@@ -811,6 +819,13 @@ mod tests {
                 "wire_marker".to_owned(),
                 0,
                 rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "slice-index") {
+            expected.push((
+                "window_length".to_owned(),
+                3,
+                rustler::SchedulerFlags::DirtyCpu as u32,
             ));
         }
         if cfg!(feature = "text-views") {
