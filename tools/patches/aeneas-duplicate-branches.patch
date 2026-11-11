@@ -26,22 +26,13 @@
          " Use colors when printing log messages" );
 --- a/src/EmitJson.ml
 +++ b/src/EmitJson.ml
-@@ -107,6 +107,7 @@
- type envelope = {
-   result_monad : string;
-   effectful_calls_preserved : bool;
+@@ -110,2 +110,3 @@
 +  branch_joins : bool;
-   assertion_unwind_input : bool;
    aeneas_version : string;
    charon_version : string;
-@@ -389,6 +390,7 @@
-         crate_name;
-         result_monad = Config.lean_result_name ();
-         effectful_calls_preserved = Config.effectful_result_monad ();
+@@ -384,1 +385,2 @@
 +        branch_joins = !Config.join_branches;
-         assertion_unwind_input = !Config.assertion_unwind_input;
-         functions = List.rev state.function_entries;
-         types = List.rev state.type_entries;
+         aeneas_version = Option.value GitVersion.commit ~default:"unknown";
 --- a/src/interp/InterpStatements.ml
 +++ b/src/interp/InterpStatements.ml
 @@ -922,7 +922,7 @@
