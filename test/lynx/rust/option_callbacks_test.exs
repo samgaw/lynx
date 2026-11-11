@@ -44,6 +44,9 @@ defmodule Lynx.Rust.OptionCallbacksTest do
     source = Path.join(workspace, "analysis/src/lib.rs")
 
     original = """
+    pub fn captured(input: Option<u64>, mask: u64) -> Option<u64> {
+        input.and_then(move |value| Some(value ^ mask))
+    }
     pub fn invert(value: bool) -> Option<bool> {
         option_base::choose(value).and_then(|value| if value { Some(!value) } else { None })
     }
@@ -101,11 +104,17 @@ defmodule Lynx.Rust.OptionCallbacksTest do
         OptionProofs.Extraction.Option.andThen,
         option_analysis.panic_some.closure.Insts.CoreOpsFunctionFnOnceTupleBoolOptionBool,
         option_analysis.panic_some.closure.Insts.CoreOpsFunctionFnOnceTupleBoolOptionBool.call_once]
+    theorem captured (input : Option U64) (mask : U64) :
+        option_analysis.captured input mask = RustM.ok (input.map fun value => value ^^^ mask) := by
+      cases input <;> simp [option_analysis.captured, OptionProofs.Extraction.Option.andThen,
+        option_analysis.captured.closure.Insts.CoreOpsFunctionFnOnceTupleU64OptionU64.call_once,
+        Aeneas.Std.lift]
     end OptionProofs.Properties
     """)
 
     options = [
       roots: [
+        "option_analysis::captured",
         "option_analysis::invert",
         "option_analysis::panic_some",
         "option_analysis::borrowed"
@@ -115,7 +124,10 @@ defmodule Lynx.Rust.OptionCallbacksTest do
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["OptionProofs.Properties"],
       required_properties:
-        Enum.map(~w(compose borrowed skipped panics), &("OptionProofs.Properties." <> &1))
+        Enum.map(
+          ~w(compose borrowed skipped panics captured),
+          &("OptionProofs.Properties." <> &1)
+        )
     ]
 
     result = Lynx.Rust.verify!(workspace, "option-analysis", options)
@@ -187,7 +199,7 @@ defmodule Lynx.Rust.OptionCallbacksTest do
           end)
         end)
 
-      assert_raise CompileError, ~r/capture-free compiler FnOnce/, fn ->
+      assert_raise CompileError, ~r/extracted compiler FnOnce/, fn ->
         Lynx.Rust.LLBC.audit!(invalid, ["option_analysis", "option_base"])
       end
     end
@@ -207,7 +219,7 @@ defmodule Lynx.Rust.OptionCallbacksTest do
       )
     )
 
-    assert_raise CompileError, ~r/capture-free compiler FnOnce/, fn ->
+    assert_raise CompileError, ~r/extracted compiler FnOnce/, fn ->
       Lynx.Rust.verify!(workspace, "option-analysis", options)
     end
   end
