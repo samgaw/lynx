@@ -147,6 +147,13 @@ fn utf8_status(value: rustler::Binary<'_>) -> Result<u64, (u64, u8)> {
     experiment_analysis::utf8_status(value.as_slice())
 }
 
+/// Counts validated text payload bytes through a renamed dirty NIF export.
+#[cfg(feature = "text-views")]
+#[rustler::nif(name = "text_payload", schedule = "DirtyCpu")]
+fn text_payload_length(value: rustler::Binary<'_>, header: u8) -> Result<Option<u64>, u8> {
+    experiment_analysis::text_payload_length(value.as_slice(), header)
+}
+
 /// An unmodelled owned conversion must not silently become verified.
 #[cfg(feature = "unsupported-binary-method")]
 #[rustler::nif]
@@ -582,6 +589,7 @@ mod tests {
                 + if cfg!(feature = "composite") { 5 } else { 0 }
                 + 2 * usize::from(cfg!(feature = "binary"))
                 + 2 * usize::from(cfg!(feature = "protocol"))
+                + usize::from(cfg!(feature = "text-views"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
                 + usize::from(cfg!(feature = "custom-decoder"))
@@ -773,6 +781,13 @@ mod tests {
                 "decoded_flag".to_owned(),
                 2,
                 rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "text-views") {
+            expected.push((
+                "text_payload".to_owned(),
+                2,
+                rustler::SchedulerFlags::DirtyCpu as u32,
             ));
         }
         if cfg!(feature = "borrowed-prefix") {

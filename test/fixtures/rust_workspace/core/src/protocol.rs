@@ -49,6 +49,21 @@ pub fn utf8_status(input: &[u8]) -> Result<u64, (u64, u8)> {
     }
 }
 
+/// Borrows the original UTF-8 bytes without allocation.
+pub fn text_bytes(text: &str) -> &[u8] {
+    text.as_bytes()
+}
+
+/// Counts bytes rather than Unicode scalar values.
+pub fn text_length(text: &str) -> usize {
+    text.len()
+}
+
+/// Tests whether a borrowed string has no bytes.
+pub fn text_empty(text: &str) -> bool {
+    text.is_empty()
+}
+
 /// Exercises the bounds-checked indexing primitive independently of NIFs.
 ///
 /// # Panics
