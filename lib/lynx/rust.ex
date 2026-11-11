@@ -34,12 +34,14 @@ defmodule Lynx.Rust do
   dictionaries and custom first-party comparator implementations. Missing method
   evidence is rejected; comparison failures and short-circuit order are preserved.
 
-  Full-MIR extraction also retains `strip_prefix` and the standard slice/array
+  Full-MIR extraction also retains `strip_prefix`, `strip_suffix` and the standard slice/array
   `SlicePattern::as_slice` bodies. Pattern dictionaries must resolve to matching
   checked method implementations; array lengths retain their separate constant
   identities. Exact returned slices and comparator failures can be proved across
   crates. Custom constant-generic pattern implementations remain unsupported.
   Delegated primitives such as `split_at` remain explicitly reported models.
+  Prefix/suffix consumers can compose across workspace crates, with proofs of
+  exact payload bytes, reconstruction and framing bounds.
 
   Shared `str::as_bytes`, `str::len` and `str::is_empty` reuse the existing
   Aeneas byte-slice representation. Views preserve bytes and lengths count bytes,

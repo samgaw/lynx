@@ -10,6 +10,24 @@ pub fn consume_prefix<'a, T: PartialEq>(input: &'a [T], prefix: &[T]) -> Option<
     input.strip_prefix(prefix)
 }
 
+/// Consumes a borrowed suffix without allocating.
+pub fn consume_suffix<'a, T: PartialEq>(input: &'a [T], suffix: &[T]) -> Option<&'a [T]> {
+    input.strip_suffix(suffix)
+}
+
+/// Retains failure of the actual input-first suffix comparison.
+///
+/// # Panics
+/// Panics when comparing the reserved input token with the suffix.
+pub fn checked_suffix() -> bool {
+    let input = [CheckedByte(255)];
+    let suffix = [CheckedByte(1)];
+    match input.strip_suffix(&suffix) {
+        Some(payload) => payload.is_empty(),
+        None => false,
+    }
+}
+
 /// Consumes the array marker without an implicit conversion at the call site.
 pub fn consume_array_marker(input: &[u8]) -> Option<&[u8]> {
     input.strip_prefix(b"LYNX")
@@ -246,6 +264,12 @@ mod tests {
         assert!(!super::has_prefix(&[0_u8], &[0, 255]));
         assert!(!super::checked_recognize());
         assert!(std::panic::catch_unwind(super::checked_consume).is_err());
+        assert!(std::panic::catch_unwind(super::checked_suffix).is_err());
+        assert_eq!(
+            super::consume_suffix(&[0_u8, 255, 128], &[255, 128]),
+            Some(&[0][..])
+        );
+        assert_eq!(super::consume_suffix(&[0_u8], &[255, 128]), None);
         assert_eq!(
             super::consume_prefix(&[0_u8, 255, 128], &[0, 255]),
             Some(&[128][..])
