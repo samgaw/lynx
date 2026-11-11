@@ -116,3 +116,8 @@ pub fn lookup<T>(input: &[T], position: usize) -> Option<&T> {
 pub fn vector_at<T>(input: &Vec<T>, position: usize) -> &T {
     experiment_core::collections::vector_at(input, position)
 }
+
+/// Composes an actual scalar-capturing callback across the workspace boundary.
+pub fn masked_error(value: u64, mask: u64) -> Result<u64, u64> {
+    experiment_core::mask_error(Err(value), mask)
+}
