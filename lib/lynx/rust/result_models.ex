@@ -125,6 +125,75 @@ defmodule Lynx.Rust.ResultModels do
     end
   end
 
+  # The standard combinator is modeled, while its compiler-generated callback
+  # must have an actual extracted body and no observable skipped destructor.
+  def resolve(
+        %{
+          "body" => "Opaque",
+          "src" => "Normal",
+          "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["option", 0]},
+              %{
+                "Impl" => %{
+                  "Ty" => %{
+                    "kind" => "InherentImplBlock",
+                    "skip_binder" => parent,
+                    "params" => parent_params
+                  }
+                }
+              },
+              %{"Ident" => ["and_then", 0]}
+            ]
+          },
+          "generics" => generics
+        },
+        translated,
+        refs
+      ) do
+    expand = &CallModels.expand(&1, refs)
+
+    with [input, callback] <- expand.(sig["inputs"]),
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- input,
+         true <- args == arguments([variable(0)]),
+         type when not is_nil(type) <- declaration(translated["type_decls"], id),
+         true <- Lynx.Rust.OptionModels.option_type?(type, refs),
+         true <- expand.(parent) |> free_parent() == input,
+         true <- parameters?(parent_params, 1),
+         true <- callback == variable(2),
+         output = put_in(input, ["Adt", "generics"], arguments([variable(1)])),
+         true <- expand.(sig["output"]) == output,
+         %{"trait_clauses" => [fn_once, destruct]} <- generics,
+         true <- parameters?(%{generics | "trait_clauses" => []}, 3),
+         {0, fn_once_id, [functor, tuple, result]} <- clause(fn_once, refs),
+         true <- functor == variable(2) and result == output,
+         true <- tuple?(tuple, [variable(0)]),
+         true <- trait?(translated, fn_once_id, ~w(core ops function FnOnce), 3),
+         {1, destruct_id, [destruct_type]} <- clause(destruct, refs),
+         true <- destruct_type == variable(2),
+         true <- trait?(translated, destruct_id, ~w(core marker Destruct), 1) do
+      %{
+        rust_name: "core::option::{core::option::Option<@T>}::and_then",
+        backend_rust_name: "core::option::_::and_then",
+        lean: "Lynx.Rust.Option.andThen",
+        builtin: false,
+        can_fail: true,
+        lift: false,
+        callback: :capture_free,
+        fn_once_trait: fn_once_id,
+        destruct_trait: destruct_id,
+        option_callback_type: id,
+        model_hash: Lynx.Rust.OptionModels.fingerprint(),
+        label:
+          "Option::and_then model with actual extracted capture-free compiler FnOnce and validated NoopDestruct; Rust core implementation not verified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
   def resolve(_, _, _), do: nil
 
   # Encoder construction must prove Ok. Err formatting, panic hooks and error
@@ -470,6 +539,8 @@ defmodule Lynx.Rust.ResultModels do
   defp callback!(args, model, ctx) do
     expand = &CallModels.expand(&1, ctx.refs)
 
+    args = callback_arguments(args, model)
+
     with %{
            "regions" => [],
            "const_generics" => [],
@@ -536,7 +607,7 @@ defmodule Lynx.Rust.ResultModels do
              }
            }
          } <- ctx.functions[body_id],
-         true <- lifetime_parameters?(get_in(ctx.functions, [body_id, "generics"]), identity),
+         true <- callback_body_parameters?(get_in(ctx.functions, [body_id, "generics"]), identity),
          true <- body_impl_args == identity,
          true <- Enum.map(inputs, instantiate) == [closure_type, dict_tuple],
          true <- instantiate.(result) == expand.(output),
@@ -552,7 +623,9 @@ defmodule Lynx.Rust.ResultModels do
            "impl_trait" => impl_trait,
            "methods" => [method]
          } <- declaration(ctx.translated["trait_impls"], impl_id),
-         true <- lifetime_parameters?(impl_params, identity),
+         true <- callback_body_parameters?(impl_params, identity),
+         true <-
+           impl_params["outlives"] == get_in(ctx.functions, [body_id, "generics", "outlives"]),
          true <- impl_trait["id"] == model.fn_once_trait,
          true <-
            instantiate.(impl_trait["generics"]) ==
@@ -569,9 +642,45 @@ defmodule Lynx.Rust.ResultModels do
     else
       _ ->
         raise ArgumentError,
-              "Result::map_err requires an extracted capture-free compiler FnOnce callback with matching signature, implementation identity and NoopDestruct"
+              "Rust combinator requires an extracted capture-free compiler FnOnce callback with matching signature, implementation identity and NoopDestruct"
     end
   end
+
+  defp callback_arguments(
+         %{"types" => [input, output, closure]} = args,
+         %{option_callback_type: id}
+       ) do
+    result = %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([output])}}
+    %{args | "types" => [input, input, result, closure]}
+  end
+
+  defp callback_arguments(args, _), do: args
+
+  # Compiler-generated borrowed callback arguments can carry region-to-region
+  # outlives bounds. They add no executable behavior; retain all body/signature
+  # identity checks and accept only references to this binder's own lifetimes.
+  defp callback_body_parameters?(%{"outlives" => outlives} = params, args) do
+    lifetime_parameters?(%{params | "outlives" => []}, args) and
+      Enum.all?(outlives, fn
+        %{
+          "regions" => [],
+          "outlives" => [],
+          "skip_binder" => [
+            %{"Var" => %{"Free" => left}},
+            %{"Var" => %{"Free" => right}}
+          ]
+        } ->
+          Enum.all?(
+            [left, right],
+            &(is_integer(&1) and &1 >= 0 and &1 < length(params["regions"]))
+          )
+
+        _ ->
+          false
+      end)
+  end
+
+  defp callback_body_parameters?(_, _), do: false
 
   defp lifetime_parameters?(params, args) when is_map(params) do
     regions = params["regions"]
