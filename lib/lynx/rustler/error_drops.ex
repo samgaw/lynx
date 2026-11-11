@@ -3,11 +3,47 @@ defmodule Lynx.Rustler.ErrorDrops do
   alias Lynx.Rust.{CallModels, Constants, DropModels, LLBC}
   @error Enum.map(~w(rustler error Error), &%{"Ident" => [&1, 0]})
   @name @error ++ [%{"Ident" => ["LynxDropDecoderError", 0]}]
+  @scalars ~w(Bool U8 U16 U32 U64 U128 Usize I8 I16 I32 I64 I128 Isize)
   @args %{"regions" => [], "types" => [], "const_generics" => [], "trait_refs" => []}
 
   # This is a partial destruction model, not a no-drop annotation on Error.
-  # Boxed errors and successful payloads exhaust verification. Only the SDK's
+  # Boxed errors and unknown successful payloads exhaust verification. Only the SDK's
   # scalar/static-borrow error variants have successful no-effect transitions.
+  def needed?(document, crates) do
+    refs = LLBC.type_references!(document)
+    translated = document["translated"]
+
+    case Enum.find(translated["type_decls"], &(&1 && &1["item_meta"]["name"] == @error)) do
+      nil ->
+        false
+
+      error ->
+        Enum.any?(translated["fun_decls"], fn function ->
+          function && first_party?(function, crates) &&
+            result_drop?(function["body"], error["def_id"], translated, refs)
+        end)
+    end
+  end
+
+  defp result_drop?(%{"Drop" => %{"place" => %{"ty" => type}}}, error, translated, refs) do
+    case CallModels.expand(type, refs) do
+      %{"Adt" => %{"id" => result, "builtin" => nil, "generics" => %{"types" => [_, payload]}}} ->
+        payload == %{"Adt" => %{"id" => error, "builtin" => nil, "generics" => @args}} &&
+          LLBC.result_type?(result, %{translated: translated, references: refs})
+
+      _ ->
+        false
+    end
+  end
+
+  defp result_drop?(map, error, translated, refs) when is_map(map),
+    do: Enum.any?(Map.values(map), &result_drop?(&1, error, translated, refs))
+
+  defp result_drop?(list, error, translated, refs) when is_list(list),
+    do: Enum.any?(list, &result_drop?(&1, error, translated, refs))
+
+  defp result_drop?(_, _, _, _), do: false
+
   def lower!(document, layout, crates) do
     document = Lynx.Rust.LLBCJson.restore_constant_references!(document, document)
     refs = LLBC.type_references!(document)
@@ -43,15 +79,14 @@ defmodule Lynx.Rustler.ErrorDrops do
 
     functions = translated["fun_decls"]
 
-    if Enum.any?(
-         functions,
-         &(&1 &&
-             &1["item_meta"]["name"] in [
-               @name,
-               @error ++ [%{"Ident" => ["LynxDropErrResult", 0]}]
-             ])
-       ),
-       do: raise(ArgumentError, "Rustler error drop primitive identity collision")
+    reserved =
+      [@name, @error ++ [%{"Ident" => ["LynxDropErrResult", 0]}]] ++
+        Enum.map(@scalars, fn scalar ->
+          @error ++ [%{"Ident" => ["LynxDropScalarResult" <> scalar, 0]}]
+        end)
+
+    if Enum.any?(functions, &(&1 && &1["item_meta"]["name"] in reserved)),
+      do: raise(ArgumentError, "Rustler error drop primitive identity collision")
 
     state = %{
       refs: refs,
@@ -115,7 +150,13 @@ defmodule Lynx.Rustler.ErrorDrops do
       unless Enum.at(document["translated"]["fun_decls"], id) == declaration,
         do: raise(ArgumentError, "missing or inconsistent validated Rustler error drop primitive")
 
-      suffix = if mode == :error, do: "dropDecoderError", else: "dropErrResult"
+      suffix =
+        case mode do
+          :error -> "dropDecoderError"
+          {:scalar_result, scalar} -> "dropScalarResult" <> scalar
+          :result -> "dropErrResult"
+        end
+
       name = List.last(declaration["item_meta"]["name"])["Ident"] |> hd()
 
       {id,
@@ -130,7 +171,12 @@ defmodule Lynx.Rustler.ErrorDrops do
          status: :modelled,
          implementation_verified: false,
          label:
-           "Validated compiler Result drop with opaque Rustler Error: only BadArg/Atom/RaiseAtom errors complete; Ok payloads and boxed errors exhaust verification; compiler glue, SDK, allocator and native FFI unverified"
+           "Validated compiler Result drop with opaque Rustler Error: BadArg/Atom/RaiseAtom errors complete; " <>
+             if(match?({:scalar_result, _}, mode),
+               do: "compiler-validated scalar Ok payloads complete without effects; ",
+               else: "unknown Ok payloads exhaust verification; "
+             ) <>
+             "boxed errors exhaust verification; compiler glue, SDK, allocator and native FFI unverified"
        }}
     end)
   end
@@ -233,6 +279,14 @@ defmodule Lynx.Rustler.ErrorDrops do
              LLBC.result_type?(result, %{translated: state.translated, references: state.refs}) do
           glue = DropModels.validate_result_glue!(drop, function, state.translated, state.refs)
           [payload, error_type] = drop["fn_ptr"]["generics"]["types"]
+
+          scalar_type = CallModels.expand(payload, state.refs)
+
+          mode =
+            if mode == :result and DropModels.primitive_scalar?(scalar_type),
+              do: {:scalar_result, scalar_name(scalar_type)},
+              else: mode
+
           state = declaration(state, result, mode)
           declaration = state.declarations[mode]
 
@@ -272,7 +326,10 @@ defmodule Lynx.Rustler.ErrorDrops do
                 "Regular" => %{
                   "kind" => %{"Fun" => declaration["def_id"]},
                   "generics" =>
-                    if(mode == :error, do: @args, else: %{@args | "types" => [payload]})
+                    if(mode in [:error] or match?({:scalar_result, _}, mode),
+                      do: @args,
+                      else: %{@args | "types" => [payload]}
+                    )
                 }
               },
               "args" => [%{"Move" => if(mode == :error, do: error_place, else: drop["place"])}],
@@ -406,7 +463,18 @@ defmodule Lynx.Rustler.ErrorDrops do
         if mode == :error do
           {input, params, @name}
         else
-          type = %{"Value" => [r + 2, %{"TypeVar" => %{"Free" => 0}}]}
+          scalar =
+            case mode do
+              {:scalar_result, scalar} -> scalar
+              _ -> nil
+            end
+
+          type = %{
+            "Value" => [
+              r + 2,
+              if(scalar, do: scalar_type(scalar), else: %{"TypeVar" => %{"Free" => 0}})
+            ]
+          }
 
           result_type = %{
             "Value" => [
@@ -422,8 +490,22 @@ defmodule Lynx.Rustler.ErrorDrops do
           }
 
           {result_type,
-           Map.put(params, "types", [%{"index" => 0, "name" => "T", "variance" => "Invariant"}]),
-           @error ++ [%{"Ident" => ["LynxDropErrResult", 0]}]}
+           if(scalar,
+             do: params,
+             else:
+               Map.put(params, "types", [
+                 %{"index" => 0, "name" => "T", "variance" => "Invariant"}
+               ])
+           ),
+           @error ++
+             [
+               %{
+                 "Ident" => [
+                   if(scalar, do: "LynxDropScalarResult" <> scalar, else: "LynxDropErrResult"),
+                   0
+                 ]
+               }
+             ]}
         end
 
       decl = %{
@@ -445,6 +527,12 @@ defmodule Lynx.Rustler.ErrorDrops do
       %{state | declarations: Map.put(state.declarations, mode, decl), reference: r + 4}
     end
   end
+
+  defp scalar_name(%{"Scalar" => "Bool"}), do: "Bool"
+  defp scalar_name(%{"Scalar" => %{"Integer" => integer}}), do: integer |> Map.values() |> hd()
+  defp scalar_type("Bool"), do: %{"Scalar" => "Bool"}
+  defp scalar_type("U" <> _ = scalar), do: %{"Scalar" => %{"Integer" => %{"Unsigned" => scalar}}}
+  defp scalar_type("I" <> _ = scalar), do: %{"Scalar" => %{"Integer" => %{"Signed" => scalar}}}
 
   defp first_party?(%{"item_meta" => %{"name" => [%{"Ident" => [crate, _]} | _]}}, crates),
     do: crate in crates

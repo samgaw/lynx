@@ -192,7 +192,8 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
         Lynx.Rustler.prepare!(options)
       end
 
-      # The primitive must not erase destruction of an unknown original error.
+      # Every error from this validator is BadArg. Discarding and rebuilding
+      # that error is supported, with scalar Ok cleanup retained explicitly.
       discarded =
         String.replace(
           source,
@@ -202,9 +203,102 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
 
       File.write!(native, discarded)
 
-      assert_raise CompileError, ~r/structural drop erasure rejected/, fn ->
-        Lynx.Rustler.prepare!(options)
-      end
+      assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
+
+      assert Enum.all?(
+               Lynx.Laws.verify([beam], native: {Lynx.Rustler, options}),
+               &(&1.status == :ok)
+             )
+
+      # A separate internal root has no Error constructors or NIF exposure.
+      # Its scalar Result cleanup completes for BadArg, but must not assume
+      # that an arbitrary boxed error has an unobservable destructor.
+      File.write!(
+        native,
+        source <>
+          """
+
+          pub fn discard_error(error: rustler::Error) -> bool {
+              let _result: Result<bool, _> = Err(error);
+              true
+          }
+
+          pub fn discard_result(result: Result<bool, rustler::Error>) -> bool {
+              let _result = result;
+              true
+          }
+          """
+      )
+
+      File.mkdir_p!(Path.join(project, "Validated"))
+      scalar_property = Path.join(project, "Validated/ScalarProperties.lean")
+
+      scalar_proof = """
+      module
+      public import Validated.Scalar.Funs
+      public section
+      open Aeneas Aeneas.Std
+      namespace Validated.ScalarProperties
+      theorem static_error : experiment_nif.discard_error Lynx.Rustler.badArgOutcome = RustM.ok true := by
+        simp [experiment_nif.discard_error, Lynx.Rustler.Decoding.dropScalarResult,
+          Lynx.Rustler.Decoding.dropDecoderError, Lynx.Rustler.badArgOutcome]
+      theorem scalar_success (value : Bool) :
+          experiment_nif.discard_result (.Ok value) = RustM.ok true := by
+        simp [experiment_nif.discard_result, Lynx.Rustler.Decoding.dropScalarResult]
+      end Validated.ScalarProperties
+      """
+
+      File.write!(scalar_property, scalar_proof)
+
+      scalar_options = [
+        tools: @tools,
+        roots: ["experiment_nif::discard_error", "experiment_nif::discard_result"],
+        cargo: [features: ["validated-decoder"]],
+        lean_project: project,
+        build_dir: Path.join(tmp, "scalar-build"),
+        module_prefix: "Validated.Scalar",
+        external_types: [
+          %{
+            rust: "rustler::error::Error",
+            lean: "Lynx.Rustler.DecoderError",
+            import: "Validated.RustlerBridge",
+            label: "Rustler error outcome model; native SDK/FFI unverified"
+          }
+        ],
+        mir: :elaborated,
+        external_calls: [:rustler_decoders],
+        proof_modules: ["Validated.ScalarProperties"],
+        required_properties: [
+          "Validated.ScalarProperties.static_error",
+          "Validated.ScalarProperties.scalar_success"
+        ]
+      ]
+
+      scalar = Lynx.Rust.verify!(workspace, "experiment-nif", scalar_options)
+
+      assert Enum.any?(
+               scalar.verification.guarantees,
+               &(&1.theorem == "Validated.ScalarProperties.static_error")
+             )
+
+      File.write!(
+        scalar_property,
+        scalar_proof <>
+          """
+          theorem unproved_boxed_drop :
+              experiment_nif.discard_error (.encoded false (fun _ => RustM.ok .nil)) = RustM.ok true := by
+            simp [experiment_nif.discard_error, Lynx.Rustler.Decoding.dropScalarResult,
+              Lynx.Rustler.Decoding.dropDecoderError]
+          """
+      )
+
+      failure =
+        assert_raise RuntimeError, fn ->
+          Lynx.Rust.verify!(workspace, "experiment-nif", scalar_options)
+        end
+
+      assert Exception.message(failure) =~ "Validated/ScalarProperties.lean"
+      File.write!(scalar_property, scalar_proof)
 
       File.write!(native, source)
       assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
