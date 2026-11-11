@@ -393,6 +393,7 @@ defmodule Lynx.Rust.Extraction do
       do: raise(ArgumentError, "conflicting native Rust type models")
 
     audit = Map.put(audit, :external_types, models)
+    audit = Lynx.Rust.OptionModels.scope(audit, module)
     audit = Lynx.Rust.BytesModels.scope(audit, module)
     audit = Lynx.Rust.FileModels.scope(audit, module)
     audit = Lynx.Rust.CollectionModels.scope(audit, module)
@@ -556,7 +557,8 @@ defmodule Lynx.Rust.Extraction do
     Lynx.Rust.BytesModels.install!(audit, translation, output, module)
 
     operation_modules =
-      Lynx.Rust.FileModels.install!(audit, translation, output, module) ++
+      Lynx.Rust.OptionModels.install!(audit, output, module) ++
+        Lynx.Rust.FileModels.install!(audit, translation, output, module) ++
         Lynx.Rust.CollectionModels.install!(audit, translation, output, module)
 
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
