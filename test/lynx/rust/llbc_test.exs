@@ -90,7 +90,11 @@ defmodule Lynx.Rust.LLBCTest do
                | "aeneas_version" => "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1"
              })
 
-    for version <- ["build-2b9e3ea", "build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1"] do
+    for version <- [
+          "build-2b9e3ea",
+          "build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1",
+          "build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1+duplicate-branches-v1"
+        ] do
       assert %{0 => %{"lean_name" => "first_party.compute"}} =
                LLBC.link!(audit, %{translation() | "aeneas_version" => version})
 
