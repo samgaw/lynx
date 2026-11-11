@@ -337,8 +337,66 @@ defmodule Lynx.Rust.DropModels do
     do: integer |> Map.values() |> hd() |> String.downcase()
 
   defp result_site!(drop, ctx, seen) do
-    id = drop["fn_ptr"]["kind"]["Fun"]
+    %{
+      id: id,
+      actual: actual,
+      actual_types: actual_types,
+      body: body,
+      body_ctx: body_ctx,
+      name: name
+    } = result_glue!(drop, ctx)
+
     if id in seen, do: reject!("recursive Result destructor dependency")
+    base = Map.delete(ctx, :substitutions)
+
+    unless Enum.all?(actual_types, &nonobservable_payload?(&1, base)),
+      do:
+        reject!(
+          "unsupported or inconsistent Result drop: concrete destruction-free payloads and actual compiler glue required"
+        )
+
+    entries = block!(body, body_ctx, [id | seen])
+
+    {id,
+     Map.put(entries, id, %{
+       definition_id: id,
+       rust_name: render_name(name),
+       type: "core::result::Result",
+       self: actual,
+       first_party: false,
+       status: :audited_erasure,
+       implementation_verified: false,
+       dependencies: Map.keys(entries),
+       label:
+         "Compiler-generated Result drop checked at concrete payload types; scalar/Copy payloads or logical String deallocation only; native allocator and deallocation correctness unverified"
+     })}
+  end
+
+  # Validate compiler glue identity separately from deciding which payload
+  # destruction semantics are admitted. This never certifies erasure itself.
+  @doc false
+  def validate_result_glue!(drop, function, translated, refs) do
+    ctx = %{
+      translated: translated,
+      refs: refs,
+      first_party: [],
+      functions: declarations(translated["fun_decls"]),
+      types: declarations(translated["type_decls"]),
+      traits: declarations(translated["trait_decls"]),
+      impls: declarations(translated["trait_impls"]),
+      constants: constant_references(translated, %{}),
+      trait_references: Lynx.Rust.ResourceModels.trait_references(translated)
+    }
+
+    locals = function["body"]["Structured"]["locals"]["locals"]
+    ctx = Map.put(ctx, :locals, Map.new(locals, &{&1["index"], expand(&1["ty"], ctx)}))
+    unless drop["kind"] == "Precise", do: reject!("imprecise Result destructor")
+    place!(drop["place"], ctx)
+    result_glue!(drop, ctx)
+  end
+
+  defp result_glue!(drop, ctx) do
+    id = drop["fn_ptr"]["kind"]["Fun"]
     base = Map.delete(ctx, :substitutions)
     actual = expand(drop["place"]["ty"], ctx)
     actual_types = expand(drop["fn_ptr"]["generics"]["types"], ctx)
@@ -354,7 +412,6 @@ defmodule Lynx.Rust.DropModels do
          true <-
            Lynx.Rust.NativeDropLowering.same_runtime_type?(actual_args, arguments(actual_types)),
          true <- arguments?(Map.put(drop["fn_ptr"]["generics"], "types", []), 1),
-         true <- Enum.all?(actual_types, &nonobservable_payload?(&1, base)),
          %{
            "generics" => params,
            "signature" => %{
@@ -431,21 +488,14 @@ defmodule Lynx.Rust.DropModels do
                ),
              do: reject!("inconsistent Result drop locals")
 
-      entries = block!(body, Map.put(body_ctx, :locals, local_types), [id | seen])
-
-      {id,
-       Map.put(entries, id, %{
-         definition_id: id,
-         rust_name: render_name(name),
-         type: "core::result::Result",
-         self: actual,
-         first_party: false,
-         status: :audited_erasure,
-         implementation_verified: false,
-         dependencies: Map.keys(entries),
-         label:
-           "Compiler-generated Result drop checked at concrete payload types; scalar/Copy payloads or logical String deallocation only; native allocator and deallocation correctness unverified"
-       })}
+      %{
+        id: id,
+        actual: actual,
+        actual_types: actual_types,
+        body: body,
+        body_ctx: Map.put(body_ctx, :locals, local_types),
+        name: name
+      }
     else
       _ ->
         reject!(
