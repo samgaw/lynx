@@ -154,6 +154,13 @@ fn text_payload_length(value: rustler::Binary<'_>, header: u8) -> Result<Option<
     experiment_analysis::text_payload_length(value.as_slice(), header)
 }
 
+/// Reads a named protocol marker through a renamed zero-argument NIF.
+#[cfg(feature = "named-arrays")]
+#[rustler::nif(name = "wire_marker")]
+fn named_magic_word() -> u32 {
+    experiment_analysis::named_magic_word()
+}
+
 /// An unmodelled owned conversion must not silently become verified.
 #[cfg(feature = "unsupported-binary-method")]
 #[rustler::nif]
@@ -590,6 +597,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "binary"))
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "text-views"))
+                + usize::from(cfg!(feature = "named-arrays"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
                 + usize::from(cfg!(feature = "custom-decoder"))
@@ -780,6 +788,13 @@ mod tests {
             expected.push((
                 "decoded_flag".to_owned(),
                 2,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "named-arrays") {
+            expected.push((
+                "wire_marker".to_owned(),
+                0,
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }

@@ -167,6 +167,11 @@ pub fn magic_bytes() -> &'static [u8] {
     experiment_core::protocol::magic_bytes()
 }
 
+/// Composes the low-level named constant read across the Cargo boundary.
+pub fn named_magic_word() -> u32 {
+    experiment_core::protocol::named_magic_word()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

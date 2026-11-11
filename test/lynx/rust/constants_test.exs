@@ -224,6 +224,82 @@ defmodule Lynx.Rust.ConstantsTest do
     end
   end
 
+  defp named_array(type) do
+    input()
+    |> put_in(["translated", "global_decls", Access.at(0), "ty"], type)
+    |> put_in(
+      ["translated", "global_decls", Access.at(0), "value", "Value", Access.at(1), Access.at(1)],
+      type
+    )
+    |> put_in(["translated", "fun_decls", Access.at(1), "signature", "output"], type)
+  end
+
+  test "named scalar arrays retain actual initializer and Lean definition identities" do
+    for element <- [scalar(), %{"Scalar" => "Bool"}], size <- ["0", "4"] do
+      type = scalar_array(element, size)
+      audit = LLBC.audit!(named_array(type), ["first_party"])
+      assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
+      assert %{10 => %{"global_kind" => "NamedConst", "ty" => ^type}} = audit.constants
+
+      assert %{10 => %{"lean_name" => "first_party.LIMIT", "declaration" => _}} =
+               Lynx.Rust.Constants.link!(audit.constants, %{
+                 "globals" => [
+                   %{
+                     "def_id" => 10,
+                     "lean_name" => "first_party.LIMIT",
+                     "lean_file" => "Native/Funs.lean",
+                     "can_fail" => false
+                   }
+                 ]
+               })
+
+      assert_raise ArgumentError, ~r/constant definition/, fn ->
+        Lynx.Rust.Constants.link!(audit.constants, %{"globals" => []})
+      end
+    end
+  end
+
+  test "named arrays reject unsupported payloads, references and generic lengths" do
+    for type <- [
+          scalar_array(%{"Adt" => %{"id" => 0}}, "1"),
+          scalar_array(scalar_array(scalar(), "2"), "1"),
+          %{"Ref" => ["Erased", scalar_array(scalar(), "4"), "Shared"]},
+          %{"Array" => [scalar(), %{"Var" => %{"Free" => 0}}, nil]}
+        ] do
+      assert_raise ArgumentError, ~r/constant initializer/, fn ->
+        LLBC.audit!(named_array(type), ["first_party"])
+      end
+    end
+  end
+
+  test "named arrays reject mismatched and incomplete initializer implementations" do
+    document = named_array(scalar_array(scalar(), "4"))
+
+    for bad <- [
+          put_in(
+            document,
+            ["translated", "fun_decls", Access.at(1), "signature", "output"],
+            scalar_array(scalar(), "5")
+          ),
+          put_in(
+            document,
+            ["translated", "fun_decls", Access.at(1), "item_meta", "name"],
+            name("OTHER")
+          ),
+          put_in(document, ["translated", "fun_decls", Access.at(1), "body"], "Opaque")
+        ] do
+      error =
+        try do
+          LLBC.audit!(bad, ["first_party"])
+          nil
+        rescue
+          exception in [ArgumentError, CompileError] -> exception
+        end
+
+      assert error != nil
+    end
+  end
+
   test "promoted shared scalar borrows retain initializer dependencies through Aeneas inlining" do
     audit = LLBC.audit!(promoted(%{"Ref" => ["Erased", scalar(), "Shared"]}), ["first_party"])
     assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
