@@ -153,3 +153,38 @@ mod tests {
         }
     }
 }
+
+/// Exercises both rejected lock modes and observes a cross-crate committed update.
+pub fn try_rw_cycle(value: bool) -> (bool, bool, bool, bool) {
+    let lock = std::sync::RwLock::new(value);
+    let reader = match lock.read() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let rejected_write = ownership_base::try_rw_toggle(&lock);
+    drop(reader);
+    let writer = match lock.write() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let rejected_read = ownership_base::try_rw_read(&lock).0;
+    drop(writer);
+    let accepted = ownership_base::try_rw_toggle(&lock);
+    let final_value = ownership_base::try_rw_read(&lock).1;
+    #[expect(
+        clippy::drop_non_drop,
+        reason = "Ends the owned lock lifetime before returning the observations."
+    )]
+    drop(lock);
+    (rejected_write, rejected_read, accepted, final_value)
+}
+
+#[cfg(test)]
+mod try_rw_tests {
+    #[test]
+    fn rejected_attempts_preserve_then_commit() {
+        for value in [false, true] {
+            assert_eq!(super::try_rw_cycle(value), (false, false, true, !value));
+        }
+    }
+}

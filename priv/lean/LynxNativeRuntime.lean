@@ -964,6 +964,43 @@ blocking; an unavailable primitive transition cannot manufacture a guard. -/
       | _ => false
     | _ => false
 
+/-- Nonblocking acquisition preserves the environment on contention. Queued
+writers remain outside this supported subset: no OS admission policy is assumed.
+Poisoning is observed only after the requested lease has been acquired. -/
+@[expose] def tryAcquireRead {α : Type} [NativeCodec α] (lock : NativeRwLock α)
+    (env : Environment) : Except Exception
+      (core.result.Result (NativeRwReadGuard α) (NativeTryLockError (NativeRwReadGuard α))) × Environment :=
+  match state lock env with
+  | none => (.error .exhausted, env)
+  | some value =>
+    if value.writer.isSome then (.ok (.Err .WouldBlock), env)
+    else if writerWaiting lock env then (.error .exhausted, env)
+    else match acquireRead lock env with
+      | (.ok (.Ok guard), updated) => (.ok (.Ok guard), updated)
+      | (.ok (.Err poison), updated) => (.ok (.Err (.Poisoned poison)), updated)
+      | (.error error, updated) => (.error error, updated)
+
+@[expose] def tryAcquireWrite {α : Type} [NativeCodec α] (lock : NativeRwLock α)
+    (env : Environment) : Except Exception
+      (core.result.Result (NativeRwWriteGuard α) (NativeTryLockError (NativeRwWriteGuard α))) × Environment :=
+  match state lock env with
+  | none => (.error .exhausted, env)
+  | some value =>
+    if value.writer.isSome || !value.readers.isEmpty then (.ok (.Err .WouldBlock), env)
+    else if writerWaiting lock env then (.error .exhausted, env)
+    else match acquireWrite lock env with
+      | (.ok (.Ok guard), updated) => (.ok (.Ok guard), updated)
+      | (.ok (.Err poison), updated) => (.ok (.Err (.Poisoned poison)), updated)
+      | (.error error, updated) => (.error error, updated)
+
+@[expose] def try_read {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
+    NativeM (core.result.Result (NativeRwReadGuard α) (NativeTryLockError (NativeRwReadGuard α))) :=
+  .nativeModify (tryAcquireRead lock) Result.ofExcept
+
+@[expose] def try_write {α : Type} [NativeCodec α] (lock : NativeRwLock α) :
+    NativeM (core.result.Result (NativeRwWriteGuard α) (NativeTryLockError (NativeRwWriteGuard α))) :=
+  .nativeModify (tryAcquireWrite lock) Result.ofExcept
+
 /-- The current supported subset does not choose an OS reader/writer priority.
 New reads with a queued writer exhaust verification rather than assume barging.
 A reader waits while another context owns the write lease. -/
