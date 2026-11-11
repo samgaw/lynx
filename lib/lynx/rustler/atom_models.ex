@@ -36,7 +36,7 @@ defmodule Lynx.Rustler.AtomModels do
                [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => ["eq", 0]}],
          %{"def_id" => atom, "kind" => "Opaque"} <- named_type(ctx, ~w(rustler types atom Atom)),
          self = adt(atom),
-         true <- partial_eq?(trait, ctx),
+         true <- partial_eq?(trait, ctx, false),
          true <- expand(trait_args, ctx) == args([self, self]),
          true <- params?(function["generics"], 2, 0),
          true <- expand(function["signature"], ctx) == signature(self, self, &region/1),
@@ -189,7 +189,7 @@ defmodule Lynx.Rustler.AtomModels do
 
   defp standard_default?(_, _, _, _), do: false
 
-  defp partial_eq?(id, ctx) do
+  defp partial_eq?(id, ctx, require_ne \\ true) do
     with %{
            "item_meta" => %{"name" => name, "has_errors" => false},
            "is_unsafe" => false,
@@ -200,11 +200,12 @@ defmodule Lynx.Rustler.AtomModels do
            "methods" => [eq, ne]
          } <- find(ctx, "trait_decls", id),
          true <- name == path(~w(core cmp PartialEq)) and params?(params, 0, 2) do
-      Enum.all?([{eq, 0, "eq"}, {ne, 1, "ne"}], fn {method, index, name} ->
+      Enum.all?([{eq, 0, "eq"}] ++ if(ne, do: [{ne, 1, "ne"}], else: []), fn {method, index, name} ->
         method["kind"] == %{"TraitMethod" => [id, index]} and params?(method["params"], 2, 0) and
           method["skip_binder"]["name"] == name and
           expand(method["skip_binder"]["signature"], ctx) == signature(var(0), var(1), &bound/1)
-      end) and eq["skip_binder"]["default"] == nil and is_map(ne["skip_binder"]["default"])
+      end) and eq["skip_binder"]["default"] == nil and
+        (is_map(ne["skip_binder"]["default"]) or (not require_ne and ne == nil))
     else
       _ -> false
     end
