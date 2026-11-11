@@ -1,6 +1,7 @@
 module
 
 public import Lynx.Term
+import all Lynx.Term.Compare
 
 public section
 
