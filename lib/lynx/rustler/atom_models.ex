@@ -132,6 +132,30 @@ defmodule Lynx.Rustler.AtomModels do
   # A default method must not make an arbitrary foreign equality implementation
   # callable. Close its concrete dictionary over the separately validated SDK
   # method, and retain that method as an implementation-linking dependency.
+  def comparison_dependencies!(id, actual, ctx) do
+    case named_type(ctx, ~w(rustler types atom Atom)) do
+      %{"def_id" => atom} ->
+        if expand(actual["types"], ctx) == [adt(atom), adt(atom)] do
+          case resolve(ctx.models[id].function, ctx.translated, ctx.refs) do
+            %{atom_ne: true} = model ->
+              # Keep the SDK-specific audit when the generic standard default
+              # also serves other comparison dictionaries in this extraction.
+              models = Map.update!(ctx.models, id, &Map.merge(&1, model))
+              dependencies!(id, actual, %{ctx | models: models})
+
+            _ ->
+              raise ArgumentError,
+                    "default PartialEq::ne requires the validated concrete Rustler Atom equality implementation"
+          end
+        else
+          []
+        end
+
+      _ ->
+        []
+    end
+  end
+
   def dependencies!(id, actual, ctx) do
     with %{
            "regions" => [_, _],

@@ -78,10 +78,15 @@ defmodule Lynx.Rustler.DecoderDispatch do
   end
 
   defp call(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => args}}, caller, ctx) do
-    if ctx.models[id][:atom_ne] == true do
-      {Lynx.Rustler.AtomModels.dependencies!(id, args, ctx), []}
-    else
-      decoder_call(id, args, caller, ctx)
+    case ctx.models[id] do
+      %{atom_ne: true} ->
+        {Lynx.Rustler.AtomModels.dependencies!(id, args, ctx), []}
+
+      %{comparison_family: :default} ->
+        {Lynx.Rustler.AtomModels.comparison_dependencies!(id, args, ctx), []}
+
+      _ ->
+        decoder_call(id, args, caller, ctx)
     end
   end
 

@@ -744,6 +744,7 @@ defmodule Lynx.Rust.Extraction do
 
     args =
       ["rustc", "--sysroot", if(context[:sysroot], do: context.sysroot.path, else: "default")] ++
+        if(context[:sysroot], do: ["--translate-all-methods"], else: []) ++
         Lynx.Rust.Futures.arguments!(Keyword.get(opts, :futures, :reject), tools) ++
         Lynx.Rust.NativeOwnedDrops.arguments!(Keyword.get(opts, :owned_drops, false), tools) ++
         Lynx.Rust.Mir.arguments!(opts) ++
@@ -782,7 +783,7 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.DropModels.metadata_arguments(models) ++
         includes ++
         Enum.flat_map(Lynx.Rustler.EncoderModels.metadata_includes(models), &["--include", &1]) ++
-        Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(), &["--include", &1]) ++
+        Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(context), &["--include", &1]) ++
         Enum.flat_map(models, &["--opaque", &1.rust]) ++
         Enum.flat_map(opaque, &["--opaque", &1]) ++
         Enum.flat_map(Keyword.get(opts, :excluded_functions, []), &["--exclude", &1]) ++

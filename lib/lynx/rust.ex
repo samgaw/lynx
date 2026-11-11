@@ -28,6 +28,12 @@ defmodule Lynx.Rust do
   configuration and equivalence to the native standard library remain explicit
   trusted boundaries. The sysroot artifacts are included in proof fingerprints.
 
+  Full-MIR extraction retains the actual standard slice `starts_with` body and
+  captures both `PartialEq` methods, including explicit default selection.
+  Scalar, shared-reference and slice comparison models retain checked method
+  dictionaries and custom first-party comparator implementations. Missing method
+  evidence is rejected; comparison failures and short-circuit order are preserved.
+
   Shared `str::as_bytes`, `str::len` and `str::is_empty` reuse the existing
   Aeneas byte-slice representation. Views preserve bytes and lengths count bytes,
   including multi-byte Unicode text. The standard-library conversion and native

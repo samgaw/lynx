@@ -200,6 +200,16 @@ pub fn indexed_length(input: &[u8], start: u8, end: u8) -> u64 {
     indexed_window(input, start as usize, end as usize).len() as u64
 }
 
+/// Recognizes the borrowed marker without allocating or decoding text.
+pub fn recognize(input: &[u8]) -> bool {
+    experiment_core::protocol::has_prefix(input, experiment_core::protocol::BORROWED_MAGIC)
+}
+
+/// Preserves custom comparator short-circuiting and failure across crates.
+pub fn checked_prefix(matches: bool) -> bool {
+    experiment_core::protocol::checked_prefix(matches)
+}
+
 /// Composes fixed-buffer indexing through the low-level crate.
 pub fn array_window_length(start: usize, end: usize) -> u64 {
     experiment_core::protocol::array_window_length(start, end)

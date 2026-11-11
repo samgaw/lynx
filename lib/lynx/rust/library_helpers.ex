@@ -5,12 +5,30 @@ defmodule Lynx.Rust.LibraryHelpers do
   # Inclusion is not a specification or an approval of its behavior: its actual
   # body goes through the same call audit, extraction and kernel checking as a
   # workspace function. Other dependency functions remain outside this scope.
-  def includes,
-    do: [
+  def includes(context \\ %{}) do
+    [
       "thiserror::display",
       "core::hint::must_use",
       "rustler::term::_::decode"
-    ]
+    ] ++ if(context[:sysroot], do: ["core::slice::_::starts_with"], else: [])
+  end
+
+  def selected?(
+        %{
+          "body" => %{"Structured" => _},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["slice", 0]},
+              %{"Impl" => %{"Ty" => _}},
+              %{"Ident" => ["starts_with", 0]}
+            ]
+          }
+        } = function,
+        translated
+      ) do
+    Lynx.Rust.ComparisonModels.prefix_helper?(function, translated)
+  end
 
   # Retain the actual SDK forwarding body. Decoder dictionaries are closed by
   # the existing dispatch audit; no replacement implementation is supplied.

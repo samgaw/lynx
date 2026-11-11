@@ -275,6 +275,15 @@ defmodule Lynx.Rust.LLBC do
     trait_dependencies =
       Map.merge(trait_dependencies, index_dependencies, fn _, a, b -> Enum.uniq(a ++ b) end)
 
+    comparison_dependencies =
+      case Lynx.Rust.ComparisonModels.audit(functions, available_models, translated, refs) do
+        {:ok, dependencies} -> dependencies
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
+    trait_dependencies =
+      Map.merge(trait_dependencies, comparison_dependencies, fn _, a, b -> Enum.uniq(a ++ b) end)
+
     path_dependencies =
       case Lynx.Rust.FileOpenModels.audit(functions, available_models, translated, refs) do
         {:ok, dependencies} -> dependencies
