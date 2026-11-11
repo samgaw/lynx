@@ -20,6 +20,12 @@ defmodule Lynx.Rust do
   layout remain reported models; owned/mutable strings and character-safe slicing
   are not included in this subset.
 
+  Immutable promoted scalar arrays, including empty slice defaults and fixed
+  byte markers, retain their actual checked initializers across crate boundaries.
+  Only shared promotions with literal usize lengths qualify; mutable, nested and
+  generic arrays remain rejected. Array-to-slice conversion retains its existing
+  reported standard-library model.
+
   Fixed-width signed/unsigned integers from 8 through 128 bits also support
   `to_le_bytes`, `to_be_bytes`, `from_le_bytes` and `from_be_bytes` through
   Aeneas's existing bit-vector models. Admission checks the exact scalar,

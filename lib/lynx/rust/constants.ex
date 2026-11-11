@@ -1,7 +1,7 @@
 defmodule Lynx.Rust.Constants do
   @moduledoc false
 
-  # Immutable, monomorphic scalars, promoted scalar borrows and string literals.
+  # Immutable scalars, promoted shared scalar/array borrows and string literals.
   # Initializer bodies are checked by LLBC alongside ordinary implementations.
   def audit!(globals, initializers, refs, types) do
     declarations = Map.new(globals, &{&1["def_id"], &1})
@@ -47,7 +47,7 @@ defmodule Lynx.Rust.Constants do
 
         _ ->
           raise ArgumentError,
-                "unsupported Rust global: only scalar const initializers, promoted shared scalar borrows and string literals are supported (#{inspect(global["global_kind"])})"
+                "unsupported Rust global: only scalar const initializers, promoted shared scalar/array borrows and string literals are supported (#{inspect(global["global_kind"])})"
       end
     end
 
@@ -130,10 +130,35 @@ defmodule Lynx.Rust.Constants do
     match?(
       %{"Builtin" => ["PromotedConst", index]} when is_integer(index) and index >= 0,
       List.last(name)
-    ) and scalar?(unwrap(element, refs))
+    ) and promoted_element?(unwrap(element, refs), refs)
   end
 
   defp supported_initializer_type?(_, _, _), do: false
+
+  defp promoted_element?(%{"Array" => [element, length, nil]}, refs) do
+    usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+
+    # Lengths use the constant family, even when their IDs overlap type IDs.
+    literal =
+      case length do
+        %{"Value" => [_, value]} -> value
+        value -> value
+      end
+
+    case literal do
+      [%{"Integer" => %{"Unsigned" => ["Usize", value]}}, type] when is_binary(value) ->
+        scalar?(unwrap(element, refs)) and unwrap(type, refs) == usize and
+          case Integer.parse(value) do
+            {count, ""} -> count >= 0 and Integer.to_string(count) == value
+            _ -> false
+          end
+
+      _ ->
+        false
+    end
+  end
+
+  defp promoted_element?(type, _refs), do: scalar?(type)
 
   defp str_type?(%{"Adt" => %{"id" => id, "builtin" => "Str", "generics" => args}}, types, refs) do
     empty_arguments?(args) and
@@ -164,7 +189,7 @@ defmodule Lynx.Rust.Constants do
   defp constant_value(_), do: :unsupported_constant_value
 
   # Rust promotions may inherit lifetime parameters from their enclosing
-  # function. Only shared erased scalar promotions qualify; their real bodies
+  # function. Only shared erased scalar/array promotions qualify; their real bodies
   # remain audited and Aeneas handles the lifetime parameters normally.
   defp constant_parameters?(global) do
     params = global["generics"]
@@ -261,7 +286,7 @@ defmodule Lynx.Rust.Constants do
 
   # Values and types have separate Charon hash-cons tables. Const values are
   # unwrapped only at their explicit Value wrapper; only types use this table.
-  defp unwrap(%{"Value" => [_, value]}, _refs), do: value
+  defp unwrap(%{"Value" => [id, value]}, refs), do: Map.get(refs, id, value)
   defp unwrap(%{"Deduplicated" => id}, refs), do: Map.get(refs, id)
   defp unwrap(value, _refs), do: value
 end

@@ -124,6 +124,7 @@ defmodule Lynx.Rust.LLBC do
 
     globals =
       Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
+      |> Lynx.Rust.LLBCJson.restore_constant_references!(document)
       |> Lynx.Rust.LLBCJson.restore_global_constant_values!(document)
 
     foreign_tables =
@@ -204,8 +205,8 @@ defmodule Lynx.Rust.LLBC do
     constants =
       Lynx.Rust.Constants.audit!(
         Enum.reject(globals, &Map.has_key?(vtables, &1["def_id"])),
-        initializers,
-        refs,
+        Lynx.Rust.LLBCJson.restore_constant_references!(initializers, document),
+        type_references!(document),
         translated["type_decls"]
       )
       |> Map.merge(vtables)
