@@ -11,7 +11,7 @@ defmodule Lynx.Rust.Constants do
 
     for global <- globals do
       unless get_in(global, ["item_meta", "opacity"]) == "Transparent" and
-               empty_parameters?(global["generics"]) do
+               constant_parameters?(global) do
         raise ArgumentError,
               "missing, opaque or generic Rust constant: #{inspect(global["def_id"])}"
       end
@@ -24,11 +24,14 @@ defmodule Lynx.Rust.Constants do
           initializer = Enum.find(initializers, &(&1["def_id"] == id))
 
           unless supported_initializer_type?(global, type, refs) and
-                   unwrap(value_type, refs) == type and empty_arguments?(args) and
+                   unwrap(value_type, refs) == type and identity_arguments?(global, args) and
                    initializer != nil and
                    get_in(initializer, ["src", "GlobalInitializer", "id"]) == global["def_id"] and
-                   empty_arguments?(get_in(initializer, ["src", "GlobalInitializer", "generics"])) and
-                   empty_parameters?(initializer["generics"]) and
+                   identity_arguments?(
+                     global,
+                     get_in(initializer, ["src", "GlobalInitializer", "generics"])
+                   ) and
+                   initializer["generics"] == global["generics"] and
                    get_in(initializer, ["item_meta", "name"]) ==
                      get_in(global, ["item_meta", "name"]) and
                    get_in(initializer, ["signature", "inputs"]) == [] and
@@ -160,6 +163,63 @@ defmodule Lynx.Rust.Constants do
   defp constant_value(%{"Value" => [_, value]}), do: value
   defp constant_value(_), do: :unsupported_constant_value
 
+  # Rust promotions may inherit lifetime parameters from their enclosing
+  # function. Only shared erased scalar promotions qualify; their real bodies
+  # remain audited and Aeneas handles the lifetime parameters normally.
+  defp constant_parameters?(global) do
+    params = global["generics"]
+
+    empty_parameters?(params) or
+      (global["global_kind"] == "AnonConst" and initializer_id(global) != nil and
+         is_map(params) and lifetime_parameters?(params))
+  end
+
+  defp lifetime_parameters?(params) do
+    regions = params["regions"]
+
+    is_list(regions) and regions != [] and
+      Enum.all?(Enum.with_index(regions), fn {region, index} -> region["index"] == index end) and
+      Enum.all?(
+        ~w(types const_generics trait_clauses trait_type_constraints),
+        &(params[&1] == [])
+      ) and
+      Map.get(params, "outlives", []) == []
+  end
+
+  defp identity_arguments?(global, args) do
+    params = global["generics"]
+
+    expected = %{
+      "regions" =>
+        Enum.map(params["regions"], fn region ->
+          %{"Var" => %{"Free" => region["index"]}}
+        end),
+      "types" => [],
+      "const_generics" => [],
+      "trait_refs" => []
+    }
+
+    args == expected
+  end
+
+  def arguments?(
+        %{"generics" => params} = global,
+        %{"regions" => regions, "types" => [], "const_generics" => [], "trait_refs" => []},
+        caller
+      )
+      when is_list(regions) do
+    constant_parameters?(global) and length(regions) == length(params["regions"]) and
+      Enum.all?(regions, fn
+        %{"Var" => %{"Free" => index}} when is_integer(index) and index >= 0 ->
+          Enum.any?(caller["generics"]["regions"], &(&1["index"] == index))
+
+        _ ->
+          false
+      end)
+  end
+
+  def arguments?(_, _, _), do: false
+
   def empty_arguments?(%{
         "regions" => [],
         "types" => [],
@@ -170,14 +230,16 @@ defmodule Lynx.Rust.Constants do
 
   def empty_arguments?(_), do: false
 
-  defp empty_parameters?(%{
-         "regions" => [],
-         "types" => [],
-         "const_generics" => [],
-         "trait_clauses" => [],
-         "trait_type_constraints" => []
-       }),
-       do: true
+  defp empty_parameters?(
+         %{
+           "regions" => [],
+           "types" => [],
+           "const_generics" => [],
+           "trait_clauses" => [],
+           "trait_type_constraints" => []
+         } = params
+       ),
+       do: Map.get(params, "outlives", []) == []
 
   defp empty_parameters?(_), do: false
 
