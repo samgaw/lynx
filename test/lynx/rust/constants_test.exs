@@ -184,6 +184,67 @@ defmodule Lynx.Rust.ConstantsTest do
     assert [%{"generics" => %{"regions" => [%{"index" => 0}]}}] = audit.constant_initializers
   end
 
+  test "promoted scalar uses admit only bound body-local lifetime arguments" do
+    for index <- [0, 2] do
+      document =
+        lifetime_promotion()
+        |> put_in(
+          ["translated", "fun_decls", Access.at(0), "body", "Structured", "bound_body_regions"],
+          3
+        )
+        |> put_in(
+          [
+            "translated",
+            "fun_decls",
+            Access.at(0),
+            "body",
+            "Structured",
+            "Global",
+            "generics",
+            "regions"
+          ],
+          [%{"Body" => index}]
+        )
+
+      audit = LLBC.audit!(document, ["first_party"])
+      assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
+    end
+
+    for {bound, region} <- [
+          {3, %{"Body" => -1}},
+          {3, %{"Body" => 3}},
+          {3, %{"Body" => "0"}},
+          {nil, %{"Body" => 0}},
+          {-1, %{"Body" => 0}},
+          {"3", %{"Body" => 0}},
+          {3, %{"Var" => %{"Bound" => [0, 0]}}}
+        ] do
+      document =
+        lifetime_promotion()
+        |> put_in(
+          ["translated", "fun_decls", Access.at(0), "body", "Structured", "bound_body_regions"],
+          bound
+        )
+        |> put_in(
+          [
+            "translated",
+            "fun_decls",
+            Access.at(0),
+            "body",
+            "Structured",
+            "Global",
+            "generics",
+            "regions"
+          ],
+          [region]
+        )
+
+      assert_raise CompileError, ~r/constant reference/, fn ->
+        LLBC.audit!(document, ["first_party"])
+      end
+    end
+  end
+
   test "lifetime promotions reject mismatched binders and call-site regions" do
     for document <- [
           put_in(

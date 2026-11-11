@@ -213,6 +213,12 @@ defmodule Lynx.Rust.Constants do
         %{"Var" => %{"Free" => index}} when is_integer(index) and index >= 0 ->
           Enum.any?(caller["generics"]["regions"], &(&1["index"] == index))
 
+        %{"Body" => index} when is_integer(index) and index >= 0 ->
+          # The actual function body binds these regions separately from its
+          # signature. Keep the compiler binder and reject out-of-scope IDs.
+          count = get_in(caller, ["body", "Structured", "bound_body_regions"])
+          is_integer(count) and index < count
+
         _ ->
           false
       end)
