@@ -210,6 +210,13 @@ fn checked_suffix() -> bool {
     experiment_analysis::checked_suffix()
 }
 
+/// Counts one complete nested document under explicit protocol budgets.
+#[cfg(feature = "nested-protocol")]
+#[rustler::nif(name = "document_nodes", schedule = "DirtyCpu")]
+fn scan_document(input: rustler::Binary<'_>, depth: u8, nodes: u16) -> Option<u16> {
+    experiment_analysis::document_nodes(input.as_slice(), depth, nodes)
+}
+
 /// Reads a named protocol marker through a renamed zero-argument NIF.
 #[cfg(feature = "named-arrays")]
 #[rustler::nif(name = "wire_marker")]
@@ -664,6 +671,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
                 + 2 * usize::from(cfg!(feature = "suffix-consume"))
+                + usize::from(cfg!(feature = "nested-protocol"))
                 + usize::from(cfg!(feature = "named-arrays"))
                 + usize::from(cfg!(feature = "named-slices"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
@@ -919,6 +927,13 @@ mod tests {
                 "checked_suffix".to_owned(),
                 0,
                 rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "nested-protocol") {
+            expected.push((
+                "document_nodes".to_owned(),
+                3,
+                rustler::SchedulerFlags::DirtyCpu as u32,
             ));
         }
         if cfg!(feature = "text-views") {

@@ -289,3 +289,26 @@ mod tests {
         assert_eq!(super::split_lengths(&input, 5), None);
     }
 }
+
+/// Requires one complete nested document and rejects trailing data.
+pub fn document_nodes(input: &[u8], depth: u8, nodes: u16) -> Option<u16> {
+    let parsed = experiment_core::nested::scan(input, depth, nodes)?;
+    if parsed.consumed == input.len() {
+        Some(parsed.nodes)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod nested_tests {
+    #[test]
+    fn accepts_one_document_and_rejects_trailing_bytes() {
+        assert_eq!(super::document_nodes(&[0, 0, 0], 1, 1), Some(1));
+        assert_eq!(super::document_nodes(&[0, 0, 0, 0], 1, 1), None);
+        assert_eq!(
+            super::document_nodes(&[1, 0, 8, 0, 0, 0, 2, 0, 2, 195, 169], 2, 3),
+            Some(3)
+        );
+    }
+}
