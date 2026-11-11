@@ -761,6 +761,8 @@ defmodule Lynx.Rust.Extraction do
           "--include",
           "core::ops::control_flow::ControlFlow",
           "--include",
+          "core::ops::range::RangeTo",
+          "--include",
           "core::fmt::Error",
           "--include",
           "core::str::error::Utf8Error",

@@ -17,8 +17,17 @@ defmodule Lynx.Rust.SliceModels do
       inputs = CallModels.expand(sig["inputs"], refs)
       output = CallModels.expand(sig["output"], refs)
       name = function["item_meta"]["name"]
+      range_to = range_to_type(translated, refs, usize)
 
       cond do
+        range_to != nil and inputs == [range_to, shared] and
+          option_reference?(output, slice, translated, refs) and
+            index_identity?(function, translated, refs, t, slice, range_to, "get", 0, slice) ->
+          model(
+            "core::slice::index::{core::slice::index::SliceIndex<core::ops::range::RangeTo<usize>, [@T], [@T]>}::get",
+            "Aeneas.Std.core.slice.index.SliceIndexRangeToUsizeSlice.get"
+          )
+
         inherent?(name, slice, refs, "is_empty") and inputs == [shared] and
           output == %{"Scalar" => "Bool"} and function["src"] == "Normal" ->
           model("core::slice::{[@T]}::is_empty", "Aeneas.Std.core.slice.Slice.is_empty")
@@ -140,7 +149,18 @@ defmodule Lynx.Rust.SliceModels do
   defp arguments(types),
     do: %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
 
-  defp index_identity?(function, translated, refs, t, slice, usize, method_name, method_index) do
+  defp index_identity?(
+         function,
+         translated,
+         refs,
+         t,
+         slice,
+         index,
+         method_name,
+         method_index,
+         output \\ nil
+       ) do
+    output = output || t
     id = function["def_id"]
 
     with %{
@@ -165,10 +185,10 @@ defmodule Lynx.Rust.SliceModels do
         impl["types"] == [nil] and impl["consts"] == [] and impl["implied_trait_refs"] == [] and
         impl_parameters?(impl["generics"]) and
         CallModels.expand(impl_args, refs) == arguments([t]) and
-        CallModels.expand(trait_args, refs) == arguments([usize, slice, t]) and
+        CallModels.expand(trait_args, refs) == arguments([index, slice, output]) and
         CallModels.expand(impl["impl_trait"], refs) == %{
           "id" => trait,
-          "generics" => arguments([usize, slice, t])
+          "generics" => arguments([index, slice, output])
         } and
         case Enum.filter(
                impl["methods"],
@@ -185,6 +205,28 @@ defmodule Lynx.Rust.SliceModels do
     else
       _ -> false
     end
+  end
+
+  # Retain and check the compiler's actual nominal range definition. The model
+  # is selected by structure and identity, never by a user type's short name.
+  defp range_to_type(translated, refs, usize) do
+    Enum.find_value(translated["type_decls"], fn
+      %{
+        "def_id" => id,
+        "src" => "Normal",
+        "item_meta" => %{"name" => name},
+        "generics" => params,
+        "kind" => %{"Struct" => [%{"name" => "end", "ty" => field}]}
+      } ->
+        if name == Enum.map(~w(core ops range RangeTo), &%{"Ident" => [&1, 0]}) and
+             impl_parameters?(params) and
+             CallModels.expand(field, refs) == %{"TypeVar" => %{"Free" => 0}} do
+          %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([usize])}}
+        end
+
+      _ ->
+        nil
+    end)
   end
 
   defp impl_parameters?(%{
