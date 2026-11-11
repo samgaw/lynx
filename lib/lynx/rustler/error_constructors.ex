@@ -220,7 +220,7 @@ defmodule Lynx.Rustler.ErrorConstructors do
     do:
       boundary(constructors) ++
         [
-          "Partial Rustler Result destruction model: boxed errors and unsupported Ok payloads exhaust verification; scalar Ok destruction requires compiler-validated primitive types; compiler glue and native SDK remain trusted"
+          "Partial Rustler Result destruction model: boxed errors and unsupported Ok payloads exhaust verification; scalar/Copy Ok destruction requires validated compiler witnesses; compiler glue and native SDK remain trusted"
         ]
 
   def boundary(nil), do: []

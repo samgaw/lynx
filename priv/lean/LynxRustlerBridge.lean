@@ -722,7 +722,8 @@ Boxed errors may own first-party values with effectful destructors. -/
     (encode : Env → RustM NativeTerm) :
     dropDecoderError (.encoded raises encode) = .fail .undef := rfl
 
-/-- Call-site validation restricts T to a primitive scalar with no destructor.
+/-- Call-site validation restricts T to a primitive scalar or an unconditional
+compiler-certified Copy type with no destructor.
 Opaque boxed errors still exhaust; they may own effectful first-party values. -/
 @[expose] def dropScalarResult {T : Type} : core.result.Result T DecoderError → RustM Unit
   | .Ok _ => .ok ()

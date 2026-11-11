@@ -228,6 +228,11 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
               true
           }
 
+          pub fn discard_direct(error: rustler::Error) -> bool {
+              let _error = error;
+              true
+          }
+
           pub fn result_to_option(value: Result<bool, rustler::Error>) -> Option<bool> {
               value.ok()
           }
@@ -250,6 +255,9 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
       theorem static_error : experiment_nif.discard_error Lynx.Rustler.badArgOutcome = RustM.ok true := by
         simp [experiment_nif.discard_error, Lynx.Rustler.Decoding.dropScalarResult,
           Lynx.Rustler.Decoding.dropDecoderError, Lynx.Rustler.badArgOutcome]
+      theorem direct_static_error : experiment_nif.discard_direct Lynx.Rustler.badArgOutcome = RustM.ok true := by
+        simp [experiment_nif.discard_direct, Lynx.Rustler.Decoding.dropDecoderError,
+          Lynx.Rustler.badArgOutcome]
       theorem scalar_success (value : Bool) :
           experiment_nif.discard_result (.Ok value) = RustM.ok true := by
         simp [experiment_nif.discard_result, Lynx.Rustler.Decoding.dropScalarResult]
@@ -283,6 +291,7 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
         roots: [
           "experiment_nif::discard_error",
           "experiment_nif::discard_result",
+          "experiment_nif::discard_direct",
           "experiment_nif::result_to_option",
           "experiment_nif::option_to_result"
         ],
@@ -304,6 +313,7 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
         required_properties: [
           "Validated.ScalarProperties.static_error",
           "Validated.ScalarProperties.scalar_success",
+          "Validated.ScalarProperties.direct_static_error",
           "Validated.ScalarProperties.result_some",
           "Validated.ScalarProperties.result_none",
           "Validated.ScalarProperties.result_boxed",
