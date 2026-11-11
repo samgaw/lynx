@@ -10,8 +10,34 @@ defmodule Lynx.Rust.LibraryHelpers do
       "thiserror::display",
       "core::hint::must_use",
       "rustler::term::_::decode"
-    ] ++ if(context[:sysroot], do: ["core::slice::_::starts_with"], else: [])
+    ] ++
+      if(context[:sysroot],
+        do: [
+          "core::slice::_::starts_with",
+          "core::slice::_::strip_prefix",
+          "core::slice::_::as_slice",
+          "core::slice::SlicePattern"
+        ],
+        else: []
+      )
   end
+
+  def selected?(
+        %{
+          "body" => %{"Structured" => _},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["slice", 0]},
+              _,
+              %{"Ident" => [method, 0]}
+            ]
+          }
+        } = function,
+        translated
+      )
+      when method in ["strip_prefix", "as_slice"],
+      do: Lynx.Rust.SlicePatterns.selected?(function, translated)
 
   def selected?(
         %{

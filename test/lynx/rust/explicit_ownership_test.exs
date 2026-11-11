@@ -113,6 +113,17 @@ defmodule Lynx.Rust.ExplicitOwnershipTest do
 
     missing = put_in(doc, ["translated", "fun_decls", Access.at(19), "body"], "Opaque")
 
+    assert_raise ArgumentError, ~r/missing LLBC constant reference/, fn ->
+      Lynx.Rust.LLBC.audit!(missing, ["lynx_explicit_scalar"], explicit_ownership: true)
+    end
+
+    # Removing a body must not also remove a shared constant definition when
+    # testing the independent missing-implementation diagnostic.
+    missing =
+      doc
+      |> LLBCJson.restore_constant_references!(doc)
+      |> put_in(["translated", "fun_decls", Access.at(19), "body"], "Opaque")
+
     assert_raise CompileError, ~r/missing or unsupported first-party implementation/, fn ->
       Lynx.Rust.LLBC.audit!(missing, ["lynx_explicit_scalar"], explicit_ownership: true)
     end
