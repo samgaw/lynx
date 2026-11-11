@@ -121,3 +121,8 @@ pub fn vector_at<T>(input: &Vec<T>, position: usize) -> &T {
 pub fn masked_error(value: u64, mask: u64) -> Result<u64, u64> {
     experiment_core::mask_error(Err(value), mask)
 }
+
+/// Returns the borrowed payload length, or no value for a truncated payload.
+pub fn prefix_length(input: &[u8], length: u8) -> Option<u64> {
+    experiment_core::protocol::prefix(input, length).map(|payload| payload.len() as u64)
+}
