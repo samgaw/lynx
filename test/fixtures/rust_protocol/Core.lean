@@ -39,10 +39,10 @@ theorem split_spec (input : Slice U8) (position : Usize)
   simp [protocol.prefix_length, core.slice.Slice.split_at, UScalar.le_equiv, inside,
     List.splitAt_eq, List.length_take, Nat.min_eq_left inside]
 
-theorem utf8_valid (input : Slice U8) (bound : input.val.length ≤ 4096)
+theorem utf8_valid (input : Slice U8)
     (valid : (Protocol.Extraction.Bytes.bytes input).validateUTF8 = true) :
     ∃ count, protocol.utf8_status input = .ok (.Ok count) ∧ count.val = input.val.length := by
-  rw [protocol.utf8_status, Protocol.Extraction.Bytes.valid input bound valid]
+  rw [protocol.utf8_status, Protocol.Extraction.Bytes.valid input valid]
   simp only [bind_ok, lift]
   refine ⟨_, rfl, ?_⟩
   rw [UScalar.cast_val_mod_pow_greater_numBits_eq]
@@ -64,10 +64,6 @@ theorem utf8_error (input : Slice U8) (error : experiment_core.core.str.error.Ut
   simp [protocol.utf8_status, rejected, lift, Protocol.Extraction.Bytes.errorLen,
     Protocol.Extraction.Bytes.validUpTo]
   cases error.error_len <;> simp [roundtrip]
-
-theorem utf8_exhausted (input : Slice U8) (large : 4096 < input.val.length) :
-    protocol.utf8_status input = .fail .undef := by
-  simp [protocol.utf8_status, Protocol.Extraction.Bytes.exhausted input large]
 
 theorem short (input : Slice U8) (bound : input.val.length < 2) :
     protocol.parse_frame input = .ok (.Err 1#u8) := by
@@ -145,7 +141,6 @@ theorem parse_valid (input payload : Slice U8) (length : U8)
   have split : core.slice.Slice.split_at input 2#usize =
       .ok (Slice.from [1#u8, length] (by scalar_tac), payload) := by
     simp [core.slice.Slice.split_at, shape]
-  have bounded : payload.val.length ≤ 4096 := by scalar_tac
   have converted : UScalar.cast .U64 count = UScalar.cast .U64 length := by
     apply UScalar.eq_of_val_eq
     rw [UScalar.cast_val_mod_pow_greater_numBits_eq]
@@ -155,7 +150,7 @@ theorem parse_valid (input payload : Slice U8) (length : U8)
   have not_short : ¬ total.val ≤ 1 := by simp [total]
   dsimp [count] at added converted
   simp [protocol.parse_frame, Slice.index_usize, shape, UScalar.lt_equiv,
-    lift, added, total_length, split, Protocol.Extraction.Bytes.valid payload bounded valid, converted, not_short]
+    lift, added, total_length, split, Protocol.Extraction.Bytes.valid payload valid, converted, not_short]
 
 @[expose] def frame : Slice U8 := Slice.from [1#u8, 2#u8, 195#u8, 169#u8] (by scalar_tac)
 theorem unicode_frame : protocol.parse_frame frame = .ok (.Ok 2#u64) := by
