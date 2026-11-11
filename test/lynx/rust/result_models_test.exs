@@ -33,6 +33,9 @@ defmodule Lynx.Rust.ResultModelsTest do
     pub fn choose(value: bool) -> Result<bool, bool> {
         if value { Ok(value) } else { Err(value) }
     }
+    pub fn stamp(input: Result<u64, u64>, mask: u64) -> Result<u64, u64> {
+        input.map_err(move |error| error ^ mask)
+    }
     """)
 
     File.write!(Path.join(workspace, "analysis/Cargo.toml"), """
@@ -47,6 +50,12 @@ defmodule Lynx.Rust.ResultModelsTest do
     source = Path.join(workspace, "analysis/src/lib.rs")
 
     original = """
+    pub fn stamp_result(input: Result<u64, u64>, mask: u64) -> Result<u64, u64> {
+        map_base::stamp(input, mask)
+    }
+    pub fn captured_panic(input: Result<bool, bool>, fail: bool) -> Result<bool, bool> {
+        input.map_err(move |error| { assert!(!fail); error })
+    }
     pub fn map_error(value: bool) -> Result<bool, bool> {
         map_base::choose(value).map_err(|error| !error)
     }
@@ -118,6 +127,22 @@ defmodule Lynx.Rust.ResultModelsTest do
     theorem callback_panic_on_err : map_analysis.panic_error false = RustM.fail .panic := by
       simp [map_analysis.panic_error, choose_spec, core.result.Result.map_err,
         map_analysis.panic_error.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool, panic_callback_spec]
+    theorem stamp_core (input : core.result.Result U64 U64) (mask : U64) :
+        map_analysis.map_base.stamp input mask = RustM.ok
+          (match input with | .Ok value => .Ok value | .Err error => .Err (error ^^^ mask)) := by
+      cases input <;> simp [map_analysis.map_base.stamp, core.result.Result.map_err,
+        map_analysis.map_base.stamp.closure.Insts.CoreOpsFunctionFnOnceTupleU64U64.call_once]
+    theorem stamp_composed (input : core.result.Result U64 U64) (mask : U64) :
+        map_analysis.stamp_result input mask = RustM.ok
+          (match input with | .Ok value => .Ok value | .Err error => .Err (error ^^^ mask)) := by
+      simp [map_analysis.stamp_result, stamp_core]
+    theorem skipped_capture (value fail : Bool) :
+        map_analysis.captured_panic (.Ok value) fail = RustM.ok (.Ok value) := by
+      simp [map_analysis.captured_panic, core.result.Result.map_err]
+    theorem captured_panics (value : Bool) :
+        map_analysis.captured_panic (.Err value) true = RustM.fail .panic := by
+      simp [map_analysis.captured_panic, core.result.Result.map_err,
+        map_analysis.captured_panic.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool.call_once]
     end ResultModels.Properties
     """)
 
@@ -126,7 +151,9 @@ defmodule Lynx.Rust.ResultModelsTest do
         "map_analysis::map_error",
         "map_analysis::panic_error",
         "map_analysis::map_error_borrowed",
-        "map_analysis::promoted_threshold"
+        "map_analysis::promoted_threshold",
+        "map_analysis::stamp_result",
+        "map_analysis::captured_panic"
       ],
       lean_project: project,
       module_prefix: "ResultModels.Extraction",
@@ -137,7 +164,11 @@ defmodule Lynx.Rust.ResultModelsTest do
         "ResultModels.Properties.borrowed_callback",
         "ResultModels.Properties.promoted_scalar",
         "ResultModels.Properties.callback_not_run_on_ok",
-        "ResultModels.Properties.callback_panic_on_err"
+        "ResultModels.Properties.callback_panic_on_err",
+        "ResultModels.Properties.stamp_core",
+        "ResultModels.Properties.stamp_composed",
+        "ResultModels.Properties.skipped_capture",
+        "ResultModels.Properties.captured_panics"
       ]
     ]
 
@@ -183,7 +214,7 @@ defmodule Lynx.Rust.ResultModelsTest do
       Lynx.Rust.verify!(workspace, "map-analysis", options)
     end
 
-    # Even a harmless captured bool is outside the model's explicit subset.
+    # The original theorem must also reject a different scalar-capturing callback.
     File.write!(
       source,
       String.replace(
@@ -193,7 +224,7 @@ defmodule Lynx.Rust.ResultModelsTest do
       )
     )
 
-    assert_raise CompileError, ~r/capture-free compiler FnOnce/, fn ->
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rust.verify!(workspace, "map-analysis", options)
     end
   end
@@ -248,7 +279,7 @@ defmodule Lynx.Rust.ResultModelsTest do
         document,
         "type_decls",
         closure["def_id"],
-        &put_in(&1, ["kind", "Struct"], [%{"ty" => boolean}])
+        &put_in(&1, ["kind", "Struct"], [%{"ty" => %{"Ref" => ["Static", boolean, "Shared"]}}])
       ),
       change(document, "type_decls", closure["def_id"], &put_in(&1, ["src"], "Normal")),
       change(
@@ -298,7 +329,7 @@ defmodule Lynx.Rust.ResultModelsTest do
         &Enum.reject(&1, fn item -> item && item["def_id"] == callback end)
       )
 
-    assert_raise CompileError, ~r/extracted capture-free/, fn ->
+    assert_raise CompileError, ~r/extracted compiler FnOnce/, fn ->
       LLBC.audit!(missing, ["map_analysis", "map_base"])
     end
   end

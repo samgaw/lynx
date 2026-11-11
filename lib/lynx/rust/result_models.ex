@@ -67,9 +67,9 @@ defmodule Lynx.Rust.ResultModels do
   end
 
   # Aeneas's map_err model invokes the actual FnOnce implementation, but does
-  # not drop an unused callback on Ok. Admit only capture-free compiler closures
-  # with NoopDestruct; captured state and user-written FnOnce implementations
-  # require an explicit destructor model instead.
+  # not drop an unused callback on Ok. Admit only empty or scalar environments
+  # with the actual NoopDestruct dictionary. Non-scalar owned captures, borrowed
+  # captures and user-written FnOnce implementations need additional semantics.
   def resolve(
         %{
           "body" => "Opaque",
@@ -114,11 +114,11 @@ defmodule Lynx.Rust.ResultModels do
         builtin: true,
         can_fail: true,
         lift: false,
-        callback: :capture_free,
+        callback: :scalar_captures,
         fn_once_trait: fn_once_id,
         destruct_trait: destruct_id,
         label:
-          "Aeneas Result::map_err with an extracted capture-free FnOnce callback and validated NoopDestruct; Rust core implementation not verified"
+          "Aeneas Result::map_err with an extracted FnOnce callback with empty or scalar captures and validated NoopDestruct; Rust core implementation not verified"
       }
     else
       _ -> nil
@@ -181,13 +181,13 @@ defmodule Lynx.Rust.ResultModels do
         builtin: false,
         can_fail: true,
         lift: false,
-        callback: :capture_free,
+        callback: :scalar_captures,
         fn_once_trait: fn_once_id,
         destruct_trait: destruct_id,
         option_callback_type: id,
         model_hash: Lynx.Rust.OptionModels.fingerprint(),
         label:
-          "Option::and_then model with actual extracted capture-free compiler FnOnce and validated NoopDestruct; Rust core implementation not verified"
+          "Option::and_then model with actual extracted compiler FnOnce with empty or scalar captures and validated NoopDestruct; Rust core implementation not verified"
       }
     else
       _ -> nil
@@ -521,7 +521,7 @@ defmodule Lynx.Rust.ResultModels do
        ) do
     direct =
       case context.models[id] do
-        %{callback: :capture_free} = model -> [callback!(args, model, context)]
+        %{callback: :scalar_captures} = model -> [callback!(args, model, context)]
         _ -> []
       end
 
@@ -550,7 +550,7 @@ defmodule Lynx.Rust.ResultModels do
          %{"Adt" => %{"id" => type_id, "builtin" => nil, "generics" => type_args}} = closure_type <-
            expand.(closure),
          %{
-           "kind" => %{"Struct" => []},
+           "kind" => %{"Struct" => fields},
            "generics" => params,
            "item_meta" => %{"opacity" => "Transparent"},
            "src" => %{"Closure" => %{"info" => info}}
@@ -558,6 +558,7 @@ defmodule Lynx.Rust.ResultModels do
          true <- lifetime_parameters?(params, type_args),
          identity = identity_arguments(params),
          instantiate = &CallModels.instantiate(expand.(&1), type_args),
+         true <- scalar_captures?(fields, expand),
          %{
            "kind" => "FnOnce",
            "closure_body" => %{"id" => body_id, "generics" => body_args},
@@ -642,9 +643,21 @@ defmodule Lynx.Rust.ResultModels do
     else
       _ ->
         raise ArgumentError,
-              "Rust combinator requires an extracted capture-free compiler FnOnce callback with matching signature, implementation identity and NoopDestruct"
+              "Rust combinator requires an extracted compiler FnOnce callback with empty or scalar captures, matching signature, implementation identity and NoopDestruct"
     end
   end
+
+  # Scalar values have no destructor, allocation or reference ownership to lose
+  # when the standard combinator skips its callback. The independent compiler
+  # NoopDestruct dictionary and actual FnOnce body remain mandatory above.
+  defp scalar_captures?(fields, expand) when is_list(fields) do
+    Enum.all?(fields, fn
+      %{"ty" => type} -> Lynx.Rust.DropModels.primitive_scalar?(expand.(type))
+      _ -> false
+    end)
+  end
+
+  defp scalar_captures?(_, _), do: false
 
   defp callback_arguments(
          %{"types" => [input, output, closure]} = args,

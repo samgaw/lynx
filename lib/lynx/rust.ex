@@ -28,12 +28,14 @@ defmodule Lynx.Rust do
   Rust core's native implementation and invalid enum representations are outside
   these models' verified boundary.
 
-  `Option::and_then` supports compiler-generated capture-free callbacks, including
-  borrowed arguments with validated region-only lifetime bounds. Its reported
-  standard-library model invokes the actual extracted callback on `Some` and
-  preserves `None` without invoking it. The skipped callback must have validated
-  no-op destruction. Captured callbacks and arbitrary FnOnce implementations
-  remain rejected; callback panics remain Rust failures.
+  `Option::and_then` and `Result::map_err` support compiler-generated callbacks
+  with empty environments or owned bool/fixed-width integer captures, including
+  borrowed arguments with validated region-only lifetime bounds. Their reported
+  standard-library models invoke the actual extracted callback on `Some`/`Err`
+  and preserve `None`/`Ok` without invoking it. The skipped callback must have
+  validated no-op destruction. Non-scalar owned captures, borrowed captures and
+  arbitrary FnOnce implementations remain rejected; callback panics remain Rust
+  failures.
 
   Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
   Aeneas's value and borrow-update models. Shared `Vec::len` observations support

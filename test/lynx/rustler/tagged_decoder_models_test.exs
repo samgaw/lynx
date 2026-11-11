@@ -56,7 +56,7 @@ defmodule Lynx.Rustler.TaggedDecoderModelsTest do
         do: assert(IndexModels.resolve(changed, ctx.t, ctx.refs) == nil)
   end
 
-  test "lifetime-bearing callbacks keep compiler identity and empty captures", ctx do
+  test "lifetime-bearing callbacks retain identity and reject generic captures", ctx do
     assert {:ok, deps} = ResultModels.audit(ctx.functions, ctx.models, ctx.t, ctx.refs)
     {_, callbacks} = Enum.find(deps, fn {_, ids} -> length(ids) == 3 end)
     assert length(callbacks) == 3
@@ -78,13 +78,13 @@ defmodule Lynx.Rustler.TaggedDecoderModelsTest do
       update_in(ctx.t, ["type_decls"], fn types ->
         Enum.map(types, fn type ->
           if type && type["def_id"] == closure["def_id"],
-            do: put_in(type, ["kind", "Struct"], [%{"ty" => %{"Scalar" => "Bool"}}]),
+            do: put_in(type, ["kind", "Struct"], [%{"ty" => %{"TypeVar" => %{"Free" => 0}}}]),
             else: type
         end)
       end)
 
     assert {:error, _, message} = ResultModels.audit(ctx.functions, ctx.models, changed, ctx.refs)
-    assert message =~ "capture-free compiler FnOnce"
+    assert message =~ "extracted compiler FnOnce"
   end
 
   defp leaf(function), do: List.last(function["item_meta"]["name"])["Ident"] |> List.first()
