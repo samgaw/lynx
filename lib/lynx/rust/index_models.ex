@@ -4,7 +4,89 @@ defmodule Lynx.Rust.IndexModels do
 
   # These standard wrappers retain their delegated trait dictionary in Aeneas;
   # they do not replace arbitrary indexing implementations with direct lookup.
-  def resolve(function, translated, refs) do
+  def resolve(function, translated, refs),
+    do: resolve_get(function, translated, refs) || resolve_index(function, translated, refs)
+
+  defp resolve_get(
+         %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["core", 0]},
+               %{"Ident" => ["slice", 0]},
+               %{"Impl" => %{"Ty" => parent}},
+               %{"Ident" => ["get", 0]}
+             ]
+           },
+           "signature" => sig,
+           "generics" => params
+         },
+         translated,
+         refs
+       ) do
+    [t, i, o] = Enum.map(0..2, &%{"TypeVar" => %{"Free" => &1}})
+    slice = %{"Slice" => [t, nil]}
+    ref = fn type -> %{"Ref" => [%{"Var" => %{"Free" => 0}}, type, "Shared"]} end
+
+    with true <-
+           parameters?(
+             CallModels.expand(params, refs),
+             [],
+             1,
+             [i, slice, o],
+             ~w(core slice index SliceIndex),
+             translated
+           ),
+         true <- parent["kind"] == "InherentImplBlock",
+         true <-
+           CallModels.expand(parent["skip_binder"], refs) == %{
+             "Slice" => [%{"TypeVar" => %{"Bound" => [0, 0]}}, nil]
+           },
+         true <- simple_parent?(parent["params"]),
+         %{
+           "is_unsafe" => false,
+           "abi" => "Rust",
+           "is_variadic" => false,
+           "inputs" => inputs,
+           "output" => output
+         } <- sig,
+         true <- CallModels.expand(inputs, refs) == [ref.(slice), i],
+         %{"Adt" => %{"builtin" => nil, "id" => option, "generics" => args}} <-
+           CallModels.expand(output, refs),
+         true <- args == args([ref.(o)]),
+         type when not is_nil(type) <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == option)),
+         true <- Lynx.Rust.OptionModels.option_type?(type, refs) do
+      %{
+        rust_name: "core::slice::{[@T]}::get",
+        lean: "Aeneas.Std.core.slice.Slice.get",
+        builtin: true,
+        can_fail: true,
+        lift: true,
+        label:
+          "Aeneas safe slice get wrapper retaining its actual SliceIndex dictionary and out-of-bounds None; Rust core implementation not verified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp resolve_get(_, _, _), do: nil
+
+  defp simple_parent?(%{
+         "regions" => [],
+         "types" => [%{"index" => 0}],
+         "const_generics" => [],
+         "trait_clauses" => [],
+         "outlives" => [],
+         "trait_type_constraints" => []
+       }),
+       do: true
+
+  defp simple_parent?(_), do: false
+
+  defp resolve_index(function, translated, refs) do
     with %{
            "body" => "Opaque",
            "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig,

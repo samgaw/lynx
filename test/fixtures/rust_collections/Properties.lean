@@ -83,4 +83,16 @@ theorem result_composition (input : core.result.Result U64 String) :
     result_is_ok input = RustM.ok (match input with | .Ok _ => true | .Err _ => false) := by
   exact result_core input
 
+theorem lookup_core {T : Type} (input : Slice T) (position : Usize) :
+    experiment_core.collections.lookup input position = RustM.ok input.val[position.val]? := by
+  simp [experiment_core.collections.lookup, core.slice.Slice.get, core.slice.index.Usize.get]
+
+theorem lookup_composition {T : Type} (input : Slice T) (position : Usize) :
+    lookup input position = RustM.ok input.val[position.val]? := lookup_core input position
+
+theorem lookup_outside {T : Type} (input : Slice T) (position : Usize)
+    (outside : input.val.length ≤ position.val) :
+    lookup input position = RustM.ok none := by
+  simp [lookup_composition, List.getElem?_eq_none_iff.mpr outside]
+
 end Collections.Properties

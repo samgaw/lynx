@@ -28,6 +28,13 @@ defmodule Lynx.Rust.SliceModels do
           tuple?(output, [shared, shared]) and function["src"] == "Normal" ->
           model("core::slice::{[@T]}::split_at", "Aeneas.Std.core.slice.Slice.split_at")
 
+        inputs == [usize, shared] and option_reference?(output, t, translated, refs) and
+            index_identity?(function, translated, refs, t, slice, usize, "get", 0) ->
+          model(
+            "core::slice::index::{core::slice::index::SliceIndex<usize, [@T], @T>}::get",
+            "Aeneas.Std.core.slice.index.Usize.get"
+          )
+
         inputs == [usize, shared] and
           output == %{"Ref" => [%{"Var" => %{"Free" => 0}}, t, "Shared"]} and
             index_identity?(function, translated, refs, t, slice, usize, "index", 4) ->
@@ -51,6 +58,20 @@ defmodule Lynx.Rust.SliceModels do
       _ -> nil
     end
   end
+
+  defp option_reference?(
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}},
+         t,
+         translated,
+         refs
+       ) do
+    type = Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id))
+
+    type != nil and Lynx.Rust.OptionModels.option_type?(type, refs) and
+      args == arguments([%{"Ref" => [%{"Var" => %{"Free" => 0}}, t, "Shared"]}])
+  end
+
+  defp option_reference?(_, _, _, _), do: false
 
   defp model(rust, lean),
     do: %{
