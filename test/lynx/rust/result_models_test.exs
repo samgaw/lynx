@@ -50,6 +50,9 @@ defmodule Lynx.Rust.ResultModelsTest do
     pub fn map_error(value: bool) -> Result<bool, bool> {
         map_base::choose(value).map_err(|error| !error)
     }
+    pub fn promoted_threshold<'env>(_marker: &'env bool) -> &'env usize {
+        &(1 + 1)
+    }
     pub fn panic_error(value: bool) -> Result<bool, bool> {
         map_base::choose(value).map_err(|_| panic!())
     }
@@ -93,6 +96,14 @@ defmodule Lynx.Rust.ResultModelsTest do
         map_analysis.map_error value = RustM.ok (if value then .Ok value else .Err (!value)) := by
       cases value <;> simp [map_analysis.map_error, choose_spec, core.result.Result.map_err,
         map_analysis.map_error.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool, error_callback_spec]
+    theorem promoted_scalar (marker : Bool) :
+        map_analysis.promoted_threshold marker = RustM.ok 2#usize := by
+      have spec := Usize.add_bv_spec (x := 1#usize) (y := 1#usize) (by scalar_tac)
+      obtain ⟨value, returned, property⟩ := triple_iff_exists_ok.mp (WP.spec_to_mvcgen spec)
+      have valueTwo : value = 2#usize := (UScalar.eq_equiv _ _).mpr (by simpa using property.1)
+      have wrapped : (1#usize).wrapping_add 1#usize = value :=
+        (UScalar.eq_equiv_bv_eq _ _).mpr (by simpa using property.2.symm)
+      simp [map_analysis.promoted_threshold, returned, Usize.wrapping_add, wrapped, valueTwo]
     theorem callback_not_run_on_ok : map_analysis.panic_error true = RustM.ok (.Ok true) := by
       simp [map_analysis.panic_error, choose_spec, core.result.Result.map_err,
         map_analysis.panic_error.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool, panic_callback_spec]
@@ -103,13 +114,18 @@ defmodule Lynx.Rust.ResultModelsTest do
     """)
 
     options = [
-      roots: ["map_analysis::map_error", "map_analysis::panic_error"],
+      roots: [
+        "map_analysis::map_error",
+        "map_analysis::panic_error",
+        "map_analysis::promoted_threshold"
+      ],
       lean_project: project,
       module_prefix: "ResultModels.Extraction",
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["ResultModels.Properties"],
       required_properties: [
         "ResultModels.Properties.map_error_spec",
+        "ResultModels.Properties.promoted_scalar",
         "ResultModels.Properties.callback_not_run_on_ok",
         "ResultModels.Properties.callback_panic_on_err"
       ]

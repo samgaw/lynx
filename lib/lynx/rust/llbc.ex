@@ -685,7 +685,7 @@ defmodule Lynx.Rust.LLBC do
          function,
          translated
        ) do
-    unless Map.has_key?(allowed.constants, id) and Lynx.Rust.Constants.empty_arguments?(generics),
+    unless Lynx.Rust.Constants.arguments?(allowed.constants[id], generics, function),
       do: failure!(function, translated, "missing or unsupported Rust constant reference #{id}")
   end
 

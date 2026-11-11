@@ -144,6 +144,90 @@ defmodule Lynx.Rust.ConstantsTest do
              })
   end
 
+  defp lifetime_promotion do
+    document = promoted(%{"Ref" => ["Erased", scalar(), "Shared"]})
+    params = %{parameters() | "regions" => [%{"index" => 0}]}
+    args = %{arguments() | "regions" => [%{"Var" => %{"Free" => 0}}]}
+
+    document
+    |> put_in(["translated", "global_decls", Access.at(0), "generics"], params)
+    |> put_in(
+      [
+        "translated",
+        "global_decls",
+        Access.at(0),
+        "value",
+        "Value",
+        Access.at(1),
+        Access.at(0),
+        "Call",
+        Access.at(0),
+        "generics"
+      ],
+      args
+    )
+    |> put_in(["translated", "fun_decls", Access.at(0), "generics"], params)
+    |> put_in(
+      ["translated", "fun_decls", Access.at(0), "body", "Structured", "Global", "generics"],
+      args
+    )
+    |> put_in(["translated", "fun_decls", Access.at(1), "generics"], params)
+    |> put_in(
+      ["translated", "fun_decls", Access.at(1), "src", "GlobalInitializer", "generics"],
+      args
+    )
+  end
+
+  test "lifetime-only scalar promotions retain actual initializer dependencies" do
+    audit = LLBC.audit!(lifetime_promotion(), ["first_party"])
+    assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
+    assert [%{"generics" => %{"regions" => [%{"index" => 0}]}}] = audit.constant_initializers
+  end
+
+  test "lifetime promotions reject mismatched binders and call-site regions" do
+    for document <- [
+          put_in(
+            lifetime_promotion(),
+            ["translated", "fun_decls", Access.at(1), "generics"],
+            parameters()
+          ),
+          put_in(
+            lifetime_promotion(),
+            ["translated", "fun_decls", Access.at(0), "body", "Structured", "Global", "generics"],
+            arguments()
+          ),
+          put_in(
+            lifetime_promotion(),
+            [
+              "translated",
+              "fun_decls",
+              Access.at(0),
+              "body",
+              "Structured",
+              "Global",
+              "generics",
+              "regions"
+            ],
+            [%{"Var" => %{"Free" => 1}}]
+          ),
+          put_in(
+            lifetime_promotion(),
+            ["translated", "global_decls", Access.at(0), "generics", "outlives"],
+            [%{"skip_binder" => []}]
+          )
+        ] do
+      error =
+        try do
+          LLBC.audit!(document, ["first_party"])
+          nil
+        rescue
+          exception in [ArgumentError, CompileError] -> exception
+        end
+
+      assert error != nil
+    end
+  end
+
   test "promoted scalar borrows reject mutation, non-scalar payloads and unresolved lifetimes" do
     for type <- [
           %{"Ref" => ["Erased", scalar(), "Mut"]},
