@@ -15,6 +15,37 @@ pub fn remainder(input: &[u8], start: usize) -> Option<&[u8]> {
     input.get(start..)
 }
 
+/// Borrows a window, preserving Rust's panic on invalid endpoints.
+pub fn indexed_window(input: &[u8], start: usize, end: usize) -> &[u8] {
+    &input[start..end]
+}
+
+/// Borrows a prefix, preserving Rust's bounds panic.
+pub fn indexed_prefix(input: &[u8], end: usize) -> &[u8] {
+    &input[..end]
+}
+
+/// Borrows the remainder, preserving Rust's bounds panic.
+pub fn indexed_remainder(input: &[u8], start: usize) -> &[u8] {
+    &input[start..]
+}
+
+/// Counts a window in a fixed protocol buffer using array-to-slice delegation.
+pub fn array_window_length(start: usize, end: usize) -> u64 {
+    let bytes = [0_u8, 255, 128];
+    bytes[start..end].len() as u64
+}
+
+/// Exercises the unqualified RangeFrom failure model through an array wrapper.
+pub fn indexed_array_remainder(input: &[u8; 3], start: usize) -> usize {
+    input[start..].len()
+}
+
+/// Exercises the unqualified RangeFrom model through vector delegation.
+pub fn indexed_vector_remainder(input: Vec<u8>, start: usize) -> usize {
+    input[start..].len()
+}
+
 /// Parses a bounded frame: version byte, payload byte count, then UTF-8 bytes.
 /// Error codes distinguish short headers, versions, lengths and invalid text.
 pub fn parse_frame(input: &[u8]) -> Result<u64, u8> {

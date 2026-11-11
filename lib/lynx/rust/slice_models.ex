@@ -17,7 +17,7 @@ defmodule Lynx.Rust.SliceModels do
       inputs = CallModels.expand(sig["inputs"], refs)
       output = CallModels.expand(sig["output"], refs)
       name = function["item_meta"]["name"]
-      range = range_get(function, translated, refs, t, slice, usize, shared, inputs, output)
+      range = range_operation(function, translated, refs, t, slice, usize, shared, inputs, output)
 
       cond do
         range != nil ->
@@ -204,22 +204,49 @@ defmodule Lynx.Rust.SliceModels do
 
   # Retain and check the compiler's actual nominal range definition. The model
   # is selected by structure and identity, never by a user type's short name.
-  defp range_get(function, translated, refs, t, slice, usize, shared, inputs, output) do
-    if option_reference?(output, slice, translated, refs) do
+  defp range_operation(function, translated, refs, t, slice, usize, shared, inputs, output) do
+    operation =
+      cond do
+        option_reference?(output, slice, translated, refs) -> {"get", 0}
+        output == %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Shared"]} -> {"index", 4}
+        true -> nil
+      end
+
+    if operation do
+      {method, method_index} = operation
+
       Enum.find_value(
         [{"RangeTo", ["end"]}, {"RangeFrom", ["start"]}, {"Range", ["start", "end"]}],
         fn {kind, fields} ->
           index = range_type(translated, refs, usize, kind, fields)
 
-          if index != nil and inputs == [index, shared] and
-               index_identity?(function, translated, refs, t, slice, index, "get", 0, slice) do
+          # The pinned upstream shared RangeFrom.index model returns undef on
+          # invalid bounds instead of Rust's panic. Keep that operation closed.
+          if (method == "get" or kind != "RangeFrom") and index != nil and
+               inputs == [index, shared] and
+               index_identity?(
+                 function,
+                 translated,
+                 refs,
+                 t,
+                 slice,
+                 index,
+                 method,
+                 method_index,
+                 slice
+               ) do
             model(
-              "core::slice::index::{core::slice::index::SliceIndex<core::ops::range::#{kind}<usize>, [@T], [@T]>}::get",
-              "Aeneas.Std.core.slice.index.SliceIndex#{kind}UsizeSlice.get"
+              "core::slice::index::{core::slice::index::SliceIndex<core::ops::range::#{kind}<usize>, [@T], [@T]>}::#{method}",
+              "Aeneas.Std.core.slice.index.SliceIndex#{kind}UsizeSlice.#{method}"
             )
             |> Map.put(
               :label,
-              "Aeneas safe slice model for #{kind}::get; invalid bounds return None; Rust core implementation not verified"
+              "Aeneas safe slice model for #{kind}::#{method}; " <>
+                if(method == "get",
+                  do: "invalid bounds return None",
+                  else: "invalid bounds panic"
+                ) <>
+                "; Rust core implementation not verified"
             )
           end
         end

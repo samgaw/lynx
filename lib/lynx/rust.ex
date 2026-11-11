@@ -8,11 +8,16 @@ defmodule Lynx.Rust do
   actually mentions; extracted bodies without properties are never called verified.
 
   The closed standard-library catalogue includes safe shared-slice indexing and
-  `split_at`, and a UTF-8 model for `core::str::from_utf8` with exact error
+  `split_at`, shared `input[start..end]` / `input[..end]` indexing with bounds
+  panics, and a UTF-8 model for `core::str::from_utf8` with exact error
   offsets and sequence lengths, without an artificial protocol-size cutoff.
   These standard-library operations are explicitly reported models,
   not proofs of Rust core's implementation. Other slice/string operations remain
-  rejected unless separately supported.
+  rejected unless separately supported. Shared `input[start..]` indexing remains
+  rejected: the pinned upstream failure model does not preserve its bounds panic.
+  `RangeFrom::get` remains supported. Array and vector indexing must retain
+  evidence for each delegated standard indexing method; opaque or missing
+  dictionary dependencies are rejected.
 
   `sysroot: :full_mir` performs a separate metadata-only Cargo check against
   Charon's full-MIR Miri standard library, rebuilding target dependencies together.
