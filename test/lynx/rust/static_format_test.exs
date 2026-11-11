@@ -18,6 +18,22 @@ defmodule Lynx.Rust.StaticFormatTest do
            } = FormatModels.resolve(ctx.function, ctx.translated, %{})
   end
 
+  test "the const static-text constructor retains the same representation", ctx do
+    function =
+      update_in(ctx.function, ["item_meta", "name"], fn path ->
+        List.replace_at(path, -1, %{"Ident" => ["from_str", 0]})
+      end)
+
+    assert %{
+             rust_name: "core::fmt::{core::fmt::Arguments<'a>}::from_str",
+             lean: "Aeneas.Std.core.fmt.Arguments.from_str",
+             bounded_formatting: true
+           } =
+             FormatModels.resolve(function, ctx.translated, %{})
+
+    refute FormatModels.resolve(put_in(function, ["signature", "abi"], "C"), ctx.translated, %{})
+  end
+
   test "rejects altered static lifetime, mutability, output and ABI", ctx do
     [%{"Ref" => [_, text, _]}] = ctx.function["signature"]["inputs"]
 

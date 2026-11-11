@@ -449,7 +449,8 @@ defmodule Lynx.Rust.FormatModels do
             nil
         end
 
-      method == "from_str_nonconst" and unsafe == false and function["src"] == "Normal" and
+      method in ["from_str", "from_str_nonconst"] and unsafe == false and
+        function["src"] == "Normal" and
         plain_parameters?(params, 1, 0) and plain_parameters?(generics, 1, 0) and
         named_type?(parent, ~w(core fmt Arguments), [region(0)], ctx) and
           sig["output"] == parent ->
@@ -458,7 +459,7 @@ defmodule Lynx.Rust.FormatModels do
             if str_type?(text),
               do:
                 model(
-                  "core::fmt::{core::fmt::Arguments<'a>}::from_str_nonconst",
+                  "core::fmt::{core::fmt::Arguments<'a>}::#{method}",
                   "Aeneas.Std.core.fmt.Arguments.from_str",
                   true,
                   "Bounded static format-text constructor reusing checked UTF-8 text output; Rust core and allocation unverified"
