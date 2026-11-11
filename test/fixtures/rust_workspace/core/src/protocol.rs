@@ -1,5 +1,39 @@
 //! A small binary protocol and standalone parsing operations.
 
+/// Compares a borrowed prefix using the actual element comparator.
+pub fn has_prefix<T: PartialEq>(input: &[T], prefix: &[T]) -> bool {
+    input.starts_with(prefix)
+}
+
+/// A protocol token whose comparison may reject the reserved byte.
+#[derive(Debug)]
+pub struct CheckedByte(pub u8);
+
+impl PartialEq for CheckedByte {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+
+    #[expect(
+        clippy::partialeq_ne_impl,
+        reason = "exercises retained custom inequality dispatch and panic ordering"
+    )]
+    fn ne(&self, other: &Self) -> bool {
+        assert!(self.0 != 255, "reserved protocol token");
+        self.0 != other.0
+    }
+}
+
+/// Checks short-circuit comparison before a reserved token can panic.
+///
+/// # Panics
+/// Panics at the second token when the first tokens match.
+pub fn checked_prefix(matches: bool) -> bool {
+    let input = [CheckedByte(2), CheckedByte(255)];
+    let prefix = [CheckedByte(if matches { 2 } else { 1 }), CheckedByte(255)];
+    has_prefix(&input, &prefix)
+}
+
 /// Borrows a length-delimited prefix, rejecting truncated input without panicking.
 pub fn prefix(input: &[u8], length: u8) -> Option<&[u8]> {
     input.get(..length as usize)
@@ -173,6 +207,14 @@ mod tests {
     use super::{
         big_endian_roundtrip, little_endian_roundtrip, parse_frame, read_header, utf8_status,
     };
+
+    #[test]
+    fn custom_comparison_preserves_short_circuit_and_panic() {
+        assert!(!super::checked_prefix(false));
+        assert!(std::panic::catch_unwind(|| super::checked_prefix(true)).is_err());
+        assert!(super::has_prefix(&[0_u8, 255, 128], &[0, 255]));
+        assert!(!super::has_prefix(&[0_u8], &[0, 255]));
+    }
 
     #[test]
     fn borrowed_prefix_bounds_and_contents() {

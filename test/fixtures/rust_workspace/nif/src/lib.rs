@@ -161,6 +161,20 @@ fn indexed_length(value: rustler::Binary<'_>, start: u8, end: u8) -> u64 {
     experiment_analysis::indexed_length(value.as_slice(), start, end)
 }
 
+/// Recognizes a marker through the actual cross-crate slice comparison.
+#[cfg(feature = "slice-prefix")]
+#[rustler::nif(name = "wire_prefix", schedule = "DirtyCpu")]
+fn recognize(value: rustler::Binary<'_>) -> bool {
+    experiment_analysis::recognize(value.as_slice())
+}
+
+/// Exposes custom comparison failures through Rustler's panic conversion.
+#[cfg(feature = "slice-prefix")]
+#[rustler::nif]
+fn checked_prefix(matches: bool) -> bool {
+    experiment_analysis::checked_prefix(matches)
+}
+
 /// Reads a named protocol marker through a renamed zero-argument NIF.
 #[cfg(feature = "named-arrays")]
 #[rustler::nif(name = "wire_marker")]
@@ -612,6 +626,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "text-views"))
                 + usize::from(cfg!(feature = "slice-index"))
+                + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + usize::from(cfg!(feature = "named-arrays"))
                 + usize::from(cfg!(feature = "named-slices"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
@@ -826,6 +841,18 @@ mod tests {
                 "window_length".to_owned(),
                 3,
                 rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+        }
+        if cfg!(feature = "slice-prefix") {
+            expected.push((
+                "wire_prefix".to_owned(),
+                1,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+            expected.push((
+                "checked_prefix".to_owned(),
+                1,
+                rustler::SchedulerFlags::Normal as u32,
             ));
         }
         if cfg!(feature = "text-views") {
