@@ -108,3 +108,11 @@ pub fn result_is_ok(input: Result<u64, String>) -> bool {
 pub fn lookup<T>(input: &[T], position: usize) -> Option<&T> {
     experiment_core::collections::lookup(input, position)
 }
+
+/// Borrows an element through the low-level vector operation.
+///
+/// # Panics
+/// Panics when the position is outside the vector.
+pub fn vector_at<T>(input: &Vec<T>, position: usize) -> &T {
+    experiment_core::collections::vector_at(input, position)
+}

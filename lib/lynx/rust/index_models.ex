@@ -102,14 +102,14 @@ defmodule Lynx.Rust.IndexModels do
            "def_id" => id,
            "item_meta" => %{
              "name" => [
-               %{"Ident" => ["core", 0]},
+               %{"Ident" => [library, 0]},
                %{"Ident" => [container, 0]},
                %{"Impl" => %{"Trait" => impl_id}},
                %{"Ident" => ["index", 0]}
              ]
            }
          } <- function,
-         true <- container in ~w(array slice),
+         true <- {library, container} in [{"core", "array"}, {"core", "slice"}, {"alloc", "vec"}],
          impl when not is_nil(impl) <-
            Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
          decl when not is_nil(decl) <-
@@ -117,11 +117,38 @@ defmodule Lynx.Rust.IndexModels do
          true <- decl["item_meta"]["name"] == name(~w(core ops index Index)),
          true <-
            impl["src"] == "Normal" and impl["is_unsafe"] == false and impl["is_negative"] == false do
-      [t, i, o] = Enum.map(0..2, &%{"TypeVar" => %{"Free" => &1}})
+      indices = if container == "vec", do: [0, 1, 2, 3], else: [0, 1, 2]
+      t = %{"TypeVar" => %{"Free" => 0}}
+      i = %{"TypeVar" => %{"Free" => 1}}
+      o = %{"TypeVar" => %{"Free" => List.last(indices)}}
       usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
       n = [%{"Var" => %{"Free" => 0}}, usize]
       slice = %{"Slice" => [t, nil]}
-      parent = if container == "array", do: %{"Array" => [t, n, nil]}, else: slice
+
+      vector =
+        Enum.find(
+          translated["type_decls"],
+          &(&1 && &1["item_meta"]["name"] == name(~w(alloc vec Vec)))
+        )
+
+      parent =
+        case container do
+          "array" ->
+            %{"Array" => [t, n, nil]}
+
+          "slice" ->
+            slice
+
+          "vec" ->
+            %{
+              "Adt" => %{
+                "id" => vector && vector["def_id"],
+                "builtin" => nil,
+                "generics" => args([t])
+              }
+            }
+        end
+
       consts = if container == "array", do: [%{"index" => 0, "ty" => usize}], else: []
       clause_types = if container == "array", do: [slice, i, o], else: [i, slice, o]
 
@@ -134,8 +161,9 @@ defmodule Lynx.Rust.IndexModels do
       impl_params = CallModels.expand(impl["generics"], refs)
       ref = fn type -> %{"Ref" => [%{"Var" => %{"Free" => 0}}, type, "Shared"]} end
 
-      if parameters?(expanded, consts, 1, clause_types, clause_name, translated) and
-           parameters?(impl_params, consts, 0, clause_types, clause_name, translated) and
+      if (container != "vec" or (vector != nil and simple_parent?(vector["generics"]))) and
+           parameters?(expanded, consts, 1, clause_types, clause_name, translated, indices) and
+           parameters?(impl_params, consts, 0, clause_types, clause_name, translated, indices) and
            CallModels.expand(sig["inputs"], refs) == [ref.(parent), i] and
            CallModels.expand(sig["output"], refs) == ref.(o) and
            CallModels.expand(impl["impl_trait"], refs) == %{
@@ -149,23 +177,45 @@ defmodule Lynx.Rust.IndexModels do
                &1
              )
            ) == 1 do
-        rust_type = if container == "array", do: "[@T; @N]", else: "[@T]"
+        rust_type =
+          case container do
+            "array" -> "[@T; @N]"
+            "slice" -> "[@T]"
+            "vec" -> "alloc::vec::Vec<@T>"
+          end
 
-        %{
-          rust_name: "core::#{container}::{core::ops::index::Index<#{rust_type}, @I, @O>}::index",
+        model = %{
+          rust_name:
+            "#{library}::#{container}::{core::ops::index::Index<#{rust_type}, @I, @O>}::index",
           lean:
-            "Aeneas.Std.core.#{container}.#{if container == "array", do: "Array", else: "Slice"}.index",
+            if(container == "vec",
+              do: "Aeneas.Std.alloc.vec.Vec.index",
+              else:
+                "Aeneas.Std.core.#{container}.#{if container == "array", do: "Array", else: "Slice"}.index"
+            ),
           builtin: true,
           can_fail: true,
           lift: true,
           label:
             "Aeneas standard #{container} Index wrapper with retained delegated trait dispatch and bounds panics; Rust core implementation not verified"
         }
+
+        if container == "vec", do: Map.put(model, :vec_owned_method, "index"), else: model
       end
     else
       _ -> nil
     end
   end
+
+  defp parameters?(
+         params,
+         expected_consts,
+         count,
+         clause_types,
+         clause_name,
+         translated,
+         indices \\ [0, 1, 2]
+       )
 
   defp parameters?(
          %{
@@ -189,12 +239,13 @@ defmodule Lynx.Rust.IndexModels do
          count,
          clause_types,
          clause_name,
-         translated
+         translated,
+         indices
        ) do
     region_ok = if count == 0, do: regions == [], else: match?([%{"index" => 0}], regions)
 
     bounds =
-      for index <- [0, 2, 1],
+      for index <- if(length(indices) == 4, do: [0, 2, 3, 1], else: [0, 2, 1]),
           do: %{
             "regions" => [],
             "outlives" => [],
@@ -205,7 +256,7 @@ defmodule Lynx.Rust.IndexModels do
           }
 
     region_ok and Enum.map(consts, &Map.take(&1, ["index", "ty"])) == expected_consts and
-      Enum.map(types, & &1["index"]) == [0, 1, 2] and
+      Enum.map(types, & &1["index"]) == indices and
       outlives == if(count == 0, do: [], else: bounds) and args == args(clause_types) and
       Enum.any?(
         translated["trait_decls"],
@@ -213,7 +264,7 @@ defmodule Lynx.Rust.IndexModels do
       )
   end
 
-  defp parameters?(_, _, _, _, _, _), do: false
+  defp parameters?(_, _, _, _, _, _, _), do: false
 
   defp args(types),
     do: %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}

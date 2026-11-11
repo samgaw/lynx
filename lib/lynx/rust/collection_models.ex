@@ -189,6 +189,23 @@ defmodule Lynx.Rust.CollectionModels do
     end)
   end
 
+  defp global_allocator?(
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}},
+         translated
+       ) do
+    args == arguments([]) and
+      Enum.any?(translated["type_decls"], fn type ->
+        type != nil and type["def_id"] == id and
+          type["item_meta"]["name"] == path(~w(alloc alloc Global)) and
+          Enum.all?(
+            ~w(types regions trait_clauses const_generics outlives trait_type_constraints),
+            &(type["generics"][&1] == [])
+          )
+      end)
+  end
+
+  defp global_allocator?(_, _), do: false
+
   defp audit_node(
          %{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => args}} = node,
          models,
@@ -203,19 +220,12 @@ defmodule Lynx.Rust.CollectionModels do
           {"new", [element]} ->
             Lynx.Rust.DropModels.primitive_scalar?(element)
 
-          {_,
-           [element, %{"Adt" => %{"id" => allocator, "builtin" => nil, "generics" => alloc_args}}]} ->
+          {"index", [_element, _index, allocator, _output]} ->
+            global_allocator?(allocator, translated)
+
+          {_, [element, allocator]} ->
             (method == "len" or Lynx.Rust.DropModels.primitive_scalar?(element)) and
-              alloc_args == arguments([]) and
-              Enum.any?(translated["type_decls"], fn type ->
-                type != nil and type["def_id"] == allocator and
-                  type["item_meta"]["name"] == path(~w(alloc alloc Global)) and
-                  type["generics"]["types"] == [] and type["generics"]["regions"] == [] and
-                  type["generics"]["trait_clauses"] == [] and
-                  type["generics"]["const_generics"] == [] and
-                  type["generics"]["outlives"] == [] and
-                  type["generics"]["trait_type_constraints"] == []
-              end)
+              global_allocator?(allocator, translated)
 
           _ ->
             false
@@ -225,8 +235,8 @@ defmodule Lynx.Rust.CollectionModels do
         do:
           raise(
             ArgumentError,
-            if(method == "len",
-              do: "unsupported Vec::len: only the standard Global allocator is admitted",
+            if(method in ~w(len index),
+              do: "unsupported Vec::#{method}: only the standard Global allocator is admitted",
               else:
                 "unsupported Vec::#{method}: only primitive scalar elements and the standard Global allocator are admitted"
             )

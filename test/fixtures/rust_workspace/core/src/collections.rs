@@ -68,6 +68,15 @@ pub fn lookup<T>(input: &[T], position: usize) -> Option<&T> {
     input.get(position)
 }
 
+/// Borrows a vector element through its standard indexing implementation.
+///
+/// # Panics
+/// Panics when the position is outside the vector.
+#[expect(clippy::ptr_arg, reason = "Exercise standard Vec indexing metadata")]
+pub fn vector_at<T>(input: &Vec<T>, position: usize) -> &T {
+    &input[position]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{replace_at, replace_first, slice_length};

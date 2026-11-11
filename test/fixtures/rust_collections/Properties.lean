@@ -95,4 +95,17 @@ theorem lookup_outside {T : Type} (input : Slice T) (position : Usize)
     lookup input position = RustM.ok none := by
   simp [lookup_composition, List.getElem?_eq_none_iff.mpr outside]
 
+theorem vector_index_core {T : Type} (input : alloc.vec.Vec T) (position : Usize) :
+    experiment_core.collections.vector_at input position = input.index_usize position := by
+  simp [experiment_core.collections.vector_at, alloc.vec.Vec.index_slice_index]
+
+theorem vector_index_composition {T : Type} (input : alloc.vec.Vec T) (position : Usize) :
+    vector_at input position = input.index_usize position := vector_index_core input position
+
+theorem vector_index_outside {T : Type} (input : alloc.vec.Vec T) (position : Usize)
+    (outside : input.val.length ≤ position.val) :
+    vector_at input position = RustM.fail .panic := by
+  simp [vector_index_composition, alloc.vec.Vec.index_usize, alloc.vec.Vec.length,
+    Nat.not_lt.mpr outside]
+
 end Collections.Properties
