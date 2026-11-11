@@ -7,6 +7,106 @@ defmodule Lynx.Rust.IndexModels do
   def resolve(function, translated, refs),
     do: resolve_get(function, translated, refs) || resolve_index(function, translated, refs)
 
+  # Resolve the method actually selected by Slice.get's dictionary. Reporting
+  # only the generic wrapper would hide the external indexing implementation.
+  def audit(functions, models, translated, refs) do
+    traits = Lynx.Rust.ResourceModels.trait_references(translated)
+
+    Enum.reduce_while(functions, {:ok, %{}}, fn function, {:ok, dependencies} ->
+      try do
+        ids = dispatches(function["body"], models, translated, refs, traits) |> Enum.uniq()
+        {:cont, {:ok, Map.put(dependencies, function["def_id"], ids)}}
+      rescue
+        error in ArgumentError -> {:halt, {:error, function, Exception.message(error)}}
+      end
+    end)
+  end
+
+  defp dispatches(
+         %{
+           "Call" => %{
+             "call" => %{
+               "func" => %{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => args}}
+             }
+           }
+         } = node,
+         models,
+         translated,
+         refs,
+         traits
+       ) do
+    selected =
+      case models[id] do
+        %{slice_index_method: index} ->
+          [index_method!(args, index, models, translated, refs, traits)]
+
+        _ ->
+          []
+      end
+
+    selected ++ Enum.flat_map(Map.values(node), &dispatches(&1, models, translated, refs, traits))
+  end
+
+  defp dispatches(node, models, translated, refs, traits) when is_map(node),
+    do: Enum.flat_map(Map.values(node), &dispatches(&1, models, translated, refs, traits))
+
+  defp dispatches(nodes, models, translated, refs, traits) when is_list(nodes),
+    do: Enum.flat_map(nodes, &dispatches(&1, models, translated, refs, traits))
+
+  defp dispatches(_, _, _, _, _), do: []
+
+  defp index_method!(args, index, models, translated, refs, traits) do
+    with %{
+           "regions" => [_],
+           "types" => [element, input, output],
+           "const_generics" => [],
+           "trait_refs" => [ref]
+         } <- args,
+         %{"regions" => [], "outlives" => [], "skip_binder" => value} <- ref,
+         %{
+           "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => actual}},
+           "trait_decl_ref" => %{"id" => trait, "generics" => declared}
+         } <- trait_value(value, traits),
+         %{} = impl <- Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
+         true <- CallModels.expand(actual, refs) == args([CallModels.expand(element, refs)]),
+         expected = args([input, %{"Slice" => [element, nil]}, output]) |> CallModels.expand(refs),
+         true <- CallModels.expand(declared, refs) == expected,
+         true <- impl["impl_trait"]["id"] == trait,
+         true <-
+           instantiate(
+             CallModels.expand(impl["impl_trait"]["generics"], refs),
+             CallModels.expand(element, refs)
+           ) == expected,
+         [%{"skip_binder" => %{"id" => method}}] <-
+           Enum.filter(impl["methods"], &(&1["kind"] == %{"TraitMethod" => [trait, index]})),
+         %{lean: lean} <- models[method],
+         true <-
+           lean in [
+             "Aeneas.Std.core.slice.index.Usize.get",
+             "Aeneas.Std.core.slice.index.SliceIndexRangeToUsizeSlice.get"
+           ] do
+      method
+    else
+      _ ->
+        raise ArgumentError,
+              "missing or unsupported SliceIndex implementation selected by slice get"
+    end
+  end
+
+  defp trait_value(%{"Value" => [_, value]}, _), do: value
+  defp trait_value(%{"Deduplicated" => id}, refs), do: refs[id]
+  defp trait_value(_, _), do: nil
+
+  defp instantiate(%{"TypeVar" => %{"Free" => 0}}, element), do: element
+
+  defp instantiate(map, element) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, instantiate(value, element)} end)
+
+  defp instantiate(list, element) when is_list(list),
+    do: Enum.map(list, &instantiate(&1, element))
+
+  defp instantiate(value, _), do: value
+
   defp resolve_get(
          %{
            "body" => "Opaque",
@@ -62,6 +162,7 @@ defmodule Lynx.Rust.IndexModels do
         rust_name: "core::slice::{[@T]}::get",
         lean: "Aeneas.Std.core.slice.Slice.get",
         builtin: true,
+        slice_index_method: 0,
         can_fail: true,
         lift: true,
         label:
