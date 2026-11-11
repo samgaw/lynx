@@ -32,6 +32,14 @@ fn try_request(value: bool) -> (bool, bool, bool, bool) {
     ownership_app::try_cycle(value)
 }
 
+/// Observes a critical section whose acquired guard crosses a crate boundary.
+#[cfg(feature = "returned-guard")]
+#[rustler::nif(name = "returned_checked", schedule = "DirtyCpu")]
+#[lynx::returned_guard]
+fn returned_request(value: bool) -> bool {
+    ownership_app::returned_guard_flip(value)
+}
+
 /// Observes a borrowed guard's scope-exit mutation through two workspace crates.
 #[cfg(feature = "borrowed-guard")]
 #[rustler::nif]

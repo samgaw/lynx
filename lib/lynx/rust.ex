@@ -403,9 +403,11 @@ defmodule Lynx.Rust do
   The actual standard error enum and method signatures are validated; supported
   consumers must account for the acquired guard. Rust std, native threading,
   allocation and FFI remain reported boundaries.
-  The qualified path consumes guards inside the critical-section helper;
-  branching protocols that return guard-bearing results can still encounter an
-  Aeneas extraction error and remain unverified.
+  `branching: :duplicate` retains separate symbolic branch contexts for supported
+  guard-bearing results returned across first-party crates. It requires the
+  branch-duplication backend and can increase generated code size. The default
+  `:join` keeps the existing extraction heuristic. Loop fixed-point joins and
+  invariant checks are unchanged; unsupported cases still fail extraction.
 
   Runtime RwLock operations support shared readers and exclusive writers.
   A foreign writer blocks a read; a conflicting writer registers a typed request
@@ -487,6 +489,7 @@ defmodule Lynx.Rust do
       :execution,
       :unwind,
       :futures,
+      :branching,
       :files,
       :owned_drops
     ]
@@ -497,6 +500,7 @@ defmodule Lynx.Rust do
 
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     Lynx.Rust.Mir.validate!(opts)
+    Lynx.Rust.Branching.validate!(opts)
   end
 
   defp do_verify!(workspace, package, opts) do
@@ -521,6 +525,7 @@ defmodule Lynx.Rust do
         execution: Keyword.get(opts, :execution, :pure),
         unwind: Keyword.get(opts, :unwind, :reject),
         futures: Keyword.get(opts, :futures, :reject),
+        branching: Keyword.get(opts, :branching, :join),
         files: Keyword.get(opts, :files, :reject),
         owned_drops: Keyword.get(opts, :owned_drops, false)
       )
