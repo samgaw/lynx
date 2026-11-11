@@ -201,7 +201,8 @@ defmodule Lynx.Rustler.AtomErrorsTest do
         Lynx.Rustler.prepare!(options)
       end
 
-      # The primitive must not erase destruction of an unknown original error.
+      # Static SDK errors have explicit modeled destruction. Discarding the
+      # original zero Atom in favor of BadArg must still fail error preservation.
       discarded =
         String.replace(
           source,
@@ -209,11 +210,15 @@ defmodule Lynx.Rustler.AtomErrorsTest do
           "Err(_) => Err(rustler::Error::BadArg)"
         )
 
+      refute discarded == source
       File.write!(native, discarded)
 
-      assert_raise CompileError, ~r/structural drop erasure rejected/, fn ->
-        Lynx.Rustler.prepare!(options)
-      end
+      failure =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
+
+      assert Exception.message(failure) =~ "unsolved goals"
 
       File.write!(native, source)
       assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
