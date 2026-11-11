@@ -602,6 +602,7 @@ mod tests {
                 + usize::from(cfg!(feature = "derived-tagged"))
                 + usize::from(cfg!(feature = "derived-tagged-decoder"))
                 + usize::from(cfg!(feature = "checked-option"))
+                + usize::from(cfg!(feature = "scalar-callbacks"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -773,6 +774,13 @@ mod tests {
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }
+        if cfg!(feature = "scalar-callbacks") {
+            expected.push((
+                "masked_error".to_owned(),
+                2,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+        }
         if cfg!(feature = "derived-tagged-decoder") {
             expected.push((
                 "normalised_reply".to_owned(),
@@ -868,4 +876,11 @@ fn order_reply(input: OrderedReply) -> OrderedReply {
         }
         other => other,
     }
+}
+
+/// Exposes the composed callback while retaining its ordinary Result encoding.
+#[cfg(feature = "scalar-callbacks")]
+#[rustler::nif(schedule = "DirtyCpu")]
+fn masked_error(value: u64, mask: u64) -> Result<u64, u64> {
+    experiment_analysis::masked_error(value, mask)
 }
