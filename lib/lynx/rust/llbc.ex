@@ -120,7 +120,7 @@ defmodule Lynx.Rust.LLBC do
     if length(ids) != MapSet.size(MapSet.new(ids)),
       do: raise(ArgumentError, "duplicate LLBC function identity")
 
-    refs = references(document, %{})
+    refs = type_references!(document)
 
     globals =
       Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
@@ -172,7 +172,7 @@ defmodule Lynx.Rust.LLBC do
       end
 
     translated = document["translated"]
-    refs = references(document, %{})
+    refs = type_references!(document)
 
     functions =
       if Keyword.get(opts, :unwind, :reject) == :captured,
@@ -284,6 +284,17 @@ defmodule Lynx.Rust.LLBC do
     trait_dependencies =
       Map.merge(trait_dependencies, comparison_dependencies, fn _, a, b -> Enum.uniq(a ++ b) end)
 
+    pattern_dispatch =
+      case Lynx.Rust.SlicePatterns.audit(functions, translated, refs) do
+        {:ok, dispatch} -> dispatch
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
+    trait_dependencies =
+      Map.merge(trait_dependencies, pattern_dispatch.dependencies, fn _, a, b ->
+        Enum.uniq(a ++ b)
+      end)
+
     path_dependencies =
       case Lynx.Rust.FileOpenModels.audit(functions, available_models, translated, refs) do
         {:ok, dependencies} -> dependencies
@@ -348,6 +359,7 @@ defmodule Lynx.Rust.LLBC do
         Map.merge(decoder_dispatch.calls, ownership_dispatch.calls, fn _, left, right ->
           Enum.uniq(left ++ right)
         end)
+        |> Map.merge(pattern_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
     }
 
     for function <- functions do
