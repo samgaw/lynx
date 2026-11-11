@@ -1061,7 +1061,7 @@ private theorem mem_mapViewInsert {xs : List (α × α)} {e p : α × α} (h : p
         · exact Or.inr (List.mem_cons_of_mem _ h)
 
 /-- The visible bindings of a map are among its bindings. -/
-theorem mem_mapView {xs : List (α × α)} {p : α × α} (h : p ∈ mapView cmp xs) : p ∈ xs := by
+private theorem mem_mapView {xs : List (α × α)} {p : α × α} (h : p ∈ mapView cmp xs) : p ∈ xs := by
   induction xs with
   | nil => simp [mapView] at h
   | cons e xs ih =>
@@ -1207,6 +1207,14 @@ theorem compareExact_tuple (a b : Array Term) :
       (Ord.compare a.size b.size).then (List.compareLex exactOrder a.toList b.toList) := by
   rw [compareExact_step]
   rfl
+
+/-- Closures with the same identity compare their captures lexicographically. -/
+theorem exactCompare_function_captures (module name : String) (arity : Nat)
+    (a b : Array Term) :
+    exactCompare (.function module name arity a) (.function module name arity b) =
+      List.compareLex exactCompare a.toList b.toList := by
+  rw [exactCompare_eq_step]
+  simp [Compare.compareStep]
 
 /-- Every number precedes every map under ordinary comparison. -/
 theorem compare_integer_map (n : Int) (entries : List (Term × Term)) :

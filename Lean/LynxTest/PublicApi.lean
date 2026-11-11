@@ -29,6 +29,11 @@ example : Lynx.Term.exactCompare (.atom "file") (.atom "file") = .eq := by cbv
 example : Lynx.Term.exactCompare (.integer 7) (.integer 3) = .gt := by cbv
 example : Lynx.Term.exactCompare (.reference [0, 1]) (.reference [0, 2]) = .lt := by cbv
 example : Lynx.Term.exactCompare (.tuple #[]) (.tuple #[]) = .eq := by cbv
+
+example (module name : String) (arity : Nat) (a b : Array Lynx.Term) :
+    Lynx.Term.exactCompare (.function module name arity a) (.function module name arity b) =
+      List.compareLex Lynx.Term.exactCompare a.toList b.toList :=
+  Lynx.Term.exactCompare_function_captures module name arity a b
 example : Lynx.Term.compare (.tuple #[.integer 1]) (.tuple #[.integer 2]) = .lt := by cbv
 example : Lynx.Term.exactCompare (.tuple #[.atom "a"]) (.tuple #[.atom "b"]) = .lt := by cbv
 example : Lynx.Term.compare (.cons (.integer 1) .nil) (.cons (.integer 2) .nil) = .lt := by cbv
