@@ -593,6 +593,7 @@ mod tests {
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
+                + usize::from(cfg!(feature = "derived-tuple-decoder"))
                 + usize::from(cfg!(feature = "derived-map"))
                 + usize::from(cfg!(feature = "derived-map-decoder"))
                 + usize::from(cfg!(feature = "derived-struct"))
@@ -800,6 +801,13 @@ mod tests {
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }
+        if cfg!(feature = "derived-tuple-decoder") {
+            expected.push((
+                "ordered_tuple".to_owned(),
+                1,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
         if cfg!(feature = "derived-tuple") {
             expected.push((
                 "derived_pair".to_owned(),
@@ -831,4 +839,12 @@ fn ordered_map(input: OrderedMap) -> OrderedMap {
 fn ordered_struct(input: OrderedStruct) -> OrderedStruct {
     let (low, high) = experiment_analysis::order_pair(input.low, input.high);
     OrderedStruct { low, high }
+}
+
+/// Decodes an ordered pair through the actual Rustler tuple derive.
+#[cfg(feature = "derived-tuple-decoder")]
+#[rustler::nif]
+fn ordered_tuple(input: OrderedFields) -> OrderedFields {
+    let (low, high) = experiment_analysis::order_pair(input.low, input.high);
+    OrderedFields { low, high }
 }
