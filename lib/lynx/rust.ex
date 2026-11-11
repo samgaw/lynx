@@ -60,6 +60,13 @@ defmodule Lynx.Rust do
   Optional `:mir` selects `:promoted`, `:elaborated` or `:optimized` compiler MIR
   for pure extraction. It cannot override runtime or compiler-owned runtime extraction.
 
+  `:external_types` and `:external_calls` select the existing extraction models
+  for non-workspace dependencies. Type entries specify Rust/Lean names, an import
+  and a boundary label; call selection is restricted to the closed catalogue.
+  These are explicitly reported external semantic models, not verified native
+  implementations. First-party bodies/types cannot be replaced with opaque
+  models. Imported proof modules retain full axiom auditing and kernel checks.
+
   `owned_drops: :explicit` retains upstream precise destructor dictionaries in
   pure extraction. Generic consumers can compose with actual first-party Drop
   bodies, including panics. Supplied dictionaries must resolve to actual audited
@@ -479,6 +486,8 @@ defmodule Lynx.Rust do
       :roots,
       :root_attribute,
       :mir,
+      :external_types,
+      :external_calls,
       :proof_modules,
       :required_properties,
       :lean_project,
@@ -520,6 +529,8 @@ defmodule Lynx.Rust do
 
     extraction =
       Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
+        external_types: Keyword.get(opts, :external_types, []),
+        external_calls: Keyword.get(opts, :external_calls, []),
         root_attribute: opts[:root_attribute],
         mir: opts[:mir],
         execution: Keyword.get(opts, :execution, :pure),
