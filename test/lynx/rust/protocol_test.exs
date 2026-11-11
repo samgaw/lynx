@@ -314,7 +314,7 @@ defmodule Lynx.Rust.ProtocolTest do
 
   defp utf8_properties(prefix) do
     Enum.map(
-      ~w(valid_string invalid_suffix truncated_suffix megabyte_unicode megabyte_invalid megabyte_truncated),
+      ~w(utf8_total valid_string invalid_suffix truncated_suffix megabyte_unicode megabyte_invalid megabyte_truncated),
       &(prefix <> ".Utf8Scale." <> &1)
     )
   end

@@ -76,4 +76,507 @@ theorem invalid (input : Slice U8)
       length.map (fun n => (⟨BitVec.ofNat 8 n⟩ : U8))⟩) := by
   simp [fromUtf8, utf8, found, in_range]
 
+-- The boolean validator and Rust-compatible error scan must agree: input-sized
+-- fuel cannot exhaust before finding an error in invalid UTF-8. These proofs
+-- use kernel reduction and arithmetic, including finite single-byte masks.
+set_option autoImplicit false
+
+private theorem shifted (x bits shift : Nat) (bound : 2^bits * 2^shift ≤ 2^32) :
+    ((x % 2^bits) <<< shift) % 2^32 = x % 2^bits * 2^shift := by
+  rw [Nat.shiftLeft_eq]
+  apply Nat.mod_eq_of_lt
+  calc
+    _ < 2^bits * 2^shift := Nat.mul_lt_mul_of_pos_right (Nat.mod_lt _ (by positivity)) (by positivity)
+    _ ≤ _ := bound
+
+private theorem fields (a b shift : Nat) (bound : b < 2^shift) :
+    (a * 2^shift) ||| b = a * 2^shift + b := by
+  simpa only [Nat.shiftLeft_eq] using (Nat.shiftLeft_add_eq_or_of_lt bound a).symm
+
+private theorem fields_num (a b shift base : Nat) (value : 2^shift = base) (bound : b < base) :
+    (a * base) ||| b = a * base + b := by
+  simpa only [value] using fields a b shift (by simpa only [value] using bound)
+
+private theorem shifted_num (x bits shift mask value : Nat)
+    (maskValue : 2^bits = mask) (shiftValue : 2^shift = value)
+    (bound : 2^bits * 2^shift ≤ 2^32) :
+    ((x % mask) <<< shift) % 2^32 = x % mask * value := by
+  simpa only [maskValue, shiftValue] using shifted x bits shift bound
+
+private theorem mask31 (a : UInt8) : (a &&& 31).toNat = a.toNat % 32 := by
+  rw [UInt8.toNat_and]
+  exact Nat.and_two_pow_sub_one_eq_mod a.toNat 5
+
+private theorem mask63 (a : UInt8) : (a &&& 63).toNat = a.toNat % 64 := by
+  rw [UInt8.toNat_and]
+  exact Nat.and_two_pow_sub_one_eq_mod a.toNat 6
+
+private theorem mask15 (a : UInt8) : (a &&& 15).toNat = a.toNat % 16 := by
+  rw [UInt8.toNat_and]
+  exact Nat.and_two_pow_sub_one_eq_mod a.toNat 4
+
+private theorem mask7 (a : UInt8) : (a &&& 7).toNat = a.toNat % 8 := by
+  rw [UInt8.toNat_and]
+  exact Nat.and_two_pow_sub_one_eq_mod a.toNat 3
+
+private theorem assemble_two (a b : UInt8) :
+    (ByteArray.utf8DecodeChar?.assemble₂Unchecked a b).toNat = a.toNat % 32 * 64 + b.toNat % 64 := by
+  simp only [ByteArray.utf8DecodeChar?.assemble₂Unchecked, UInt32.toNat_or,
+    UInt32.toNat_shiftLeft, UInt8.toNat_toUInt32, mask31, mask63]
+  have six : (6 : UInt32).toNat % 32 = 6 := by decide +kernel
+  rw [six]
+  change (((a.toNat % 32) <<< 6) % 2^32) ||| b.toNat % 64 = _
+  have ha := shifted a.toNat 5 6 (by decide)
+  simp only [show (2 : Nat)^5 = 32 by decide +kernel,
+    show (2 : Nat)^6 = 64 by decide +kernel] at ha
+  rw [ha]
+  simpa only [show (2 : Nat)^6 = 64 by decide +kernel] using
+    fields (a.toNat % 32) (b.toNat % 64) 6 (by norm_num; omega)
+
+private theorem assemble_three (a b c : UInt8) :
+    (ByteArray.utf8DecodeChar?.assemble₃Unchecked a b c).toNat =
+      a.toNat % 16 * 4096 + b.toNat % 64 * 64 + c.toNat % 64 := by
+  have bBound : b.toNat % 64 < 64 := Nat.mod_lt _ (by decide)
+  have cBound : c.toNat % 64 < 64 := Nat.mod_lt _ (by decide)
+  simp only [ByteArray.utf8DecodeChar?.assemble₃Unchecked, UInt32.toNat_or,
+    UInt32.toNat_shiftLeft, UInt8.toNat_toUInt32, mask15, mask63]
+  rw [show (12 : UInt32).toNat % 32 = 12 by decide +kernel,
+      show (6 : UInt32).toNat % 32 = 6 by decide +kernel]
+  rw [shifted_num a.toNat 4 12 16 4096 (by decide) (by decide) (by decide),
+      shifted_num b.toNat 6 6 64 64 (by decide) (by decide) (by decide)]
+  rw [Nat.or_assoc, fields_num (b.toNat % 64) (c.toNat % 64) 6 64 (by decide) cBound,
+      fields_num (a.toNat % 16) (b.toNat % 64 * 64 + c.toNat % 64) 12 4096 (by decide) (by omega)]
+  omega
+
+private theorem assemble_four (a b c d : UInt8) :
+    (ByteArray.utf8DecodeChar?.assemble₄Unchecked a b c d).toNat =
+      a.toNat % 8 * 262144 + b.toNat % 64 * 4096 + c.toNat % 64 * 64 + d.toNat % 64 := by
+  have bBound : b.toNat % 64 < 64 := Nat.mod_lt _ (by decide)
+  have cBound : c.toNat % 64 < 64 := Nat.mod_lt _ (by decide)
+  have dBound : d.toNat % 64 < 64 := Nat.mod_lt _ (by decide)
+  simp only [ByteArray.utf8DecodeChar?.assemble₄Unchecked, UInt32.toNat_or,
+    UInt32.toNat_shiftLeft, UInt8.toNat_toUInt32, mask7, mask63]
+  rw [show (18 : UInt32).toNat % 32 = 18 by decide +kernel,
+      show (12 : UInt32).toNat % 32 = 12 by decide +kernel,
+      show (6 : UInt32).toNat % 32 = 6 by decide +kernel]
+  rw [shifted_num a.toNat 3 18 8 262144 (by decide) (by decide) (by decide),
+      shifted_num b.toNat 6 12 64 4096 (by decide) (by decide) (by decide),
+      shifted_num c.toNat 6 6 64 64 (by decide) (by decide) (by decide)]
+  simp only [Nat.or_assoc]
+  rw [fields_num (c.toNat % 64) (d.toNat % 64) 6 64 (by decide) dBound,
+      fields_num (b.toNat % 64) (c.toNat % 64 * 64 + d.toNat % 64) 12 4096 (by decide) (by omega),
+      fields_num (a.toNat % 8) (b.toNat % 64 * 4096 + (c.toNat % 64 * 64 + d.toNat % 64)) 18 262144 (by decide) (by omega)]
+  omega
+
+private theorem two_masks_fin : ∀ value : Fin 256,
+    194 ≤ UInt8.ofNat value.val → UInt8.ofNat value.val ≤ 223 →
+    UInt8.ofNat value.val &&& 128 ≠ 0 ∧ UInt8.ofNat value.val &&& 224 = 192 := by
+  decide +kernel
+
+private theorem two_masks (a : UInt8) : 194 ≤ a → a ≤ 223 →
+    a &&& 128 ≠ 0 ∧ a &&& 224 = 192 := by
+  simpa using two_masks_fin ⟨a.toNat, a.toNat_lt⟩
+
+private theorem continuation_fin : ∀ value : Fin 256,
+    128 ≤ UInt8.ofNat value.val → UInt8.ofNat value.val ≤ 191 →
+    ByteArray.utf8DecodeChar?.isInvalidContinuationByte (UInt8.ofNat value.val) = false := by
+  decide +kernel
+
+private theorem native_continuation (a : UInt8) (low : 128 ≤ a) (high : a ≤ 191) :
+    ByteArray.utf8DecodeChar?.isInvalidContinuationByte a = false := by
+  have h : 128 ≤ a → a ≤ 191 → ByteArray.utf8DecodeChar?.isInvalidContinuationByte a = false := by
+    simpa using continuation_fin ⟨a.toNat, a.toNat_lt⟩
+  exact h low high
+
+private theorem three_masks_fin : ∀ value : Fin 256,
+    224 ≤ UInt8.ofNat value.val → UInt8.ofNat value.val ≤ 239 →
+    UInt8.ofNat value.val &&& 128 ≠ 0 ∧ UInt8.ofNat value.val &&& 224 ≠ 192 ∧
+      UInt8.ofNat value.val &&& 240 = 224 := by
+  decide +kernel
+
+private theorem three_masks (a : UInt8) : 224 ≤ a → a ≤ 239 →
+    a &&& 128 ≠ 0 ∧ a &&& 224 ≠ 192 ∧ a &&& 240 = 224 := by
+  simpa using three_masks_fin ⟨a.toNat, a.toNat_lt⟩
+
+private theorem four_masks_fin : ∀ value : Fin 256,
+    240 ≤ UInt8.ofNat value.val → UInt8.ofNat value.val ≤ 244 →
+    UInt8.ofNat value.val &&& 128 ≠ 0 ∧ UInt8.ofNat value.val &&& 224 ≠ 192 ∧
+      UInt8.ofNat value.val &&& 240 ≠ 224 ∧ UInt8.ofNat value.val &&& 248 = 240 := by
+  decide +kernel
+
+private theorem four_masks (a : UInt8) : 240 ≤ a → a ≤ 244 →
+    a &&& 128 ≠ 0 ∧ a &&& 224 ≠ 192 ∧ a &&& 240 ≠ 224 ∧ a &&& 248 = 240 := by
+  simpa using four_masks_fin ⟨a.toNat, a.toNat_lt⟩
+
+private theorem verify_two (a b : UInt8) (low : 194 ≤ a) (high : a ≤ 223)
+    (tailLow : 128 ≤ b) (tailHigh : b ≤ 191) :
+    ByteArray.utf8DecodeChar?.verify₂ a b = true := by
+  simp only [ByteArray.utf8DecodeChar?.verify₂, native_continuation b tailLow tailHigh,
+    Bool.false_eq_true, ↓reduceIte, UInt32.le_iff_toNat_le, assemble_two, decide_eq_true_eq]
+  simp only [UInt8.le_iff_toNat_le] at low high tailLow tailHigh
+  simp only [UInt8.toNat_ofNat, UInt32.toNat_ofNat] at low high tailLow tailHigh ⊢
+  norm_num only at low high tailLow tailHigh ⊢
+  omega
+
+private theorem verify_three (a b c : UInt8) (low : 224 ≤ a) (high : a ≤ 239)
+    (bLow : 128 ≤ b) (bHigh : b ≤ 191) (cLow : 128 ≤ c) (cHigh : c ≤ 191)
+    (overlong : a = 224 → 160 ≤ b) (surrogate : a = 237 → b ≤ 159) :
+    ByteArray.utf8DecodeChar?.verify₃ a b c = true := by
+  simp only [ByteArray.utf8DecodeChar?.verify₃, native_continuation b bLow bHigh,
+    native_continuation c cLow cHigh, Bool.false_or, Bool.false_eq_true, ↓reduceIte,
+    UInt32.le_iff_toNat_le, UInt32.lt_iff_toNat_lt, assemble_three, decide_eq_true_eq]
+  simp only [← UInt8.toNat_inj, UInt8.le_iff_toNat_le, UInt8.toNat_ofNat, UInt32.toNat_ofNat] at *
+  norm_num only at *
+  omega
+
+private theorem verify_four (a b c d : UInt8) (low : 240 ≤ a) (high : a ≤ 244)
+    (bLow : 128 ≤ b) (bHigh : b ≤ 191) (cLow : 128 ≤ c) (cHigh : c ≤ 191)
+    (dLow : 128 ≤ d) (dHigh : d ≤ 191)
+    (overlong : a = 240 → 144 ≤ b) (tooLarge : a = 244 → b ≤ 143) :
+    ByteArray.utf8DecodeChar?.verify₄ a b c d = true := by
+  simp only [ByteArray.utf8DecodeChar?.verify₄, native_continuation b bLow bHigh,
+    native_continuation c cLow cHigh, native_continuation d dLow dHigh, Bool.false_or,
+    Bool.false_eq_true, ↓reduceIte, UInt32.le_iff_toNat_le, assemble_four, decide_eq_true_eq]
+  simp only [← UInt8.toNat_inj, UInt8.le_iff_toNat_le, UInt8.toNat_ofNat, UInt32.toNat_ofNat] at *
+  norm_num only at *
+  omega
+
+private theorem two_valid (a b : UInt8) (low : 194 ≤ a) (high : a ≤ 223)
+    (tailLow : 128 ≤ b) (tailHigh : b ≤ 191) :
+    ([a,b] : List UInt8).toByteArray.validateUTF8 = true := by
+  have masks := two_masks a low high
+  have first : ByteArray.utf8DecodeChar?.parseFirstByte a = .oneMore := by
+    simp [ByteArray.utf8DecodeChar?.parseFirstByte, masks.1, masks.2]
+  have width (h : a.IsUTF8FirstByte) : a.utf8ByteSize h = 2 := by
+    simp [UInt8.utf8ByteSize, masks.1, masks.2]
+  have verified := verify_two a b low high tailLow tailHigh
+  have firstArray : ByteArray.utf8DecodeChar?.parseFirstByte ([a,b] : List UInt8).toByteArray[0] = .oneMore := first
+  have verifiedArray : ByteArray.utf8DecodeChar?.verify₂ ([a,b] : List UInt8).toByteArray[0] ([a,b] : List UInt8).toByteArray[1] = true := verified
+  simp [ByteArray.validateUTF8, ByteArray.validateUTF8.go.eq_def,
+    ByteArray.validateUTF8At, width]
+  split
+  next bad => split at bad <;> simp_all [ByteArray.utf8DecodeChar?.verify₁]
+  next => rfl
+
+
+private theorem three_valid (a b c : UInt8) (low : 224 ≤ a) (high : a ≤ 239)
+    (bLow : 128 ≤ b) (bHigh : b ≤ 191) (cLow : 128 ≤ c) (cHigh : c ≤ 191)
+    (overlong : a = 224 → 160 ≤ b) (surrogate : a = 237 → b ≤ 159) :
+    ([a,b,c] : List UInt8).toByteArray.validateUTF8 = true := by
+  have masks := three_masks a low high
+  have first : ByteArray.utf8DecodeChar?.parseFirstByte a = .twoMore := by
+    simp [ByteArray.utf8DecodeChar?.parseFirstByte, masks.1, masks.2.1, masks.2.2]
+  have width (h : a.IsUTF8FirstByte) : a.utf8ByteSize h = 3 := by
+    simp [UInt8.utf8ByteSize, masks.1, masks.2.1, masks.2.2]
+  have verified := verify_three a b c low high bLow bHigh cLow cHigh overlong surrogate
+  have firstArray : ByteArray.utf8DecodeChar?.parseFirstByte ([a,b,c] : List UInt8).toByteArray[0] = .twoMore := first
+  have verifiedArray : ByteArray.utf8DecodeChar?.verify₃ ([a,b,c] : List UInt8).toByteArray[0] ([a,b,c] : List UInt8).toByteArray[1] ([a,b,c] : List UInt8).toByteArray[2] = true := verified
+  simp [ByteArray.validateUTF8, ByteArray.validateUTF8.go.eq_def,
+    ByteArray.validateUTF8At, width]
+  split
+  next bad => split at bad <;> simp_all [ByteArray.utf8DecodeChar?.verify₁]
+  next => rfl
+
+
+private theorem four_valid (a b c d : UInt8) (low : 240 ≤ a) (high : a ≤ 244)
+    (bLow : 128 ≤ b) (bHigh : b ≤ 191) (cLow : 128 ≤ c) (cHigh : c ≤ 191)
+    (dLow : 128 ≤ d) (dHigh : d ≤ 191)
+    (overlong : a = 240 → 144 ≤ b) (tooLarge : a = 244 → b ≤ 143) :
+    ([a,b,c,d] : List UInt8).toByteArray.validateUTF8 = true := by
+  have masks := four_masks a low high
+  have first : ByteArray.utf8DecodeChar?.parseFirstByte a = .threeMore := by
+    simp [ByteArray.utf8DecodeChar?.parseFirstByte, masks.1, masks.2.1, masks.2.2.1, masks.2.2.2]
+  have width (h : a.IsUTF8FirstByte) : a.utf8ByteSize h = 4 := by
+    simp [UInt8.utf8ByteSize, masks.1, masks.2.1, masks.2.2.1]
+  have verified := verify_four a b c d low high bLow bHigh cLow cHigh dLow dHigh overlong tooLarge
+  have firstArray : ByteArray.utf8DecodeChar?.parseFirstByte ([a,b,c,d] : List UInt8).toByteArray[0] = .threeMore := first
+  have verifiedArray : ByteArray.utf8DecodeChar?.verify₄ ([a,b,c,d] : List UInt8).toByteArray[0] ([a,b,c,d] : List UInt8).toByteArray[1] ([a,b,c,d] : List UInt8).toByteArray[2] ([a,b,c,d] : List UInt8).toByteArray[3] = true := verified
+  simp [ByteArray.validateUTF8, ByteArray.validateUTF8.go.eq_def,
+    ByteArray.validateUTF8At, width]
+  split
+  next bad => split at bad <;> simp_all [ByteArray.utf8DecodeChar?.verify₁]
+  next => rfl
+
+
+private theorem ascii_mask_fin : ∀ value : Fin 256, UInt8.ofNat value.val < 128 → UInt8.ofNat value.val &&& 128 = 0 := by
+  decide +kernel
+
+private theorem ascii_valid (a : UInt8) (ascii : a < 128) :
+    ([a] : List UInt8).toByteArray.validateUTF8 = true := by
+  have maskRule : a < 128 → a &&& 128 = 0 := by
+    simpa using ascii_mask_fin ⟨a.toNat, a.toNat_lt⟩
+  have mask := maskRule ascii
+  have first : ByteArray.utf8DecodeChar?.parseFirstByte a = .done := by
+    simp [ByteArray.utf8DecodeChar?.parseFirstByte, mask]
+  have width (h : a.IsUTF8FirstByte) : a.utf8ByteSize h = 1 := by
+    simp [UInt8.utf8ByteSize, mask]
+  have firstArray : ByteArray.utf8DecodeChar?.parseFirstByte ([a] : List UInt8).toByteArray[0] = .done := first
+  simp [ByteArray.validateUTF8, ByteArray.validateUTF8.go.eq_def,
+    ByteArray.validateUTF8At, width, ByteArray.utf8DecodeChar?.verify₁]
+  split
+  next bad => split at bad <;> simp_all
+  next => rfl
+
+
+private def secondByte (a b : UInt8) : Bool :=
+  if a == 224 then 160 ≤ b && b ≤ 191 else
+  if a == 237 then 128 ≤ b && b ≤ 159 else
+  if a == 240 then 144 ≤ b && b ≤ 191 else
+  if a == 244 then 128 ≤ b && b ≤ 143 else continuation b
+
+private theorem second_three (a b : UInt8) (_low : 224 ≤ a) (high : a ≤ 239)
+    (good : secondByte a b = true) :
+    128 ≤ b ∧ b ≤ 191 ∧ (a = 224 → 160 ≤ b) ∧ (a = 237 → b ≤ 159) := by
+  dsimp [secondByte] at good
+  split_ifs at good <;> simp_all [continuation]
+  all_goals
+    simp only [UInt8.le_iff_toNat_le, ← UInt8.toNat_inj, UInt8.toNat_ofNat] at *
+    norm_num only at *
+    omega
+
+private theorem second_four (a b : UInt8) (low : 240 ≤ a) (_high : a ≤ 244)
+    (good : secondByte a b = true) :
+    128 ≤ b ∧ b ≤ 191 ∧ (a = 240 → 144 ≤ b) ∧ (a = 244 → b ≤ 143) := by
+  dsimp [secondByte] at good
+  split_ifs at good <;> simp_all [continuation]
+  all_goals
+    simp only [UInt8.le_iff_toNat_le, ← UInt8.toNat_inj, UInt8.toNat_ofNat] at *
+    norm_num only at *
+    omega
+
+private theorem tails_success (n consumed : Nat) (input rest : List UInt8)
+    (returned : tails n consumed input = .ok rest) :
+    ∃ segment, input = segment ++ rest ∧ segment.length = n ∧
+      ∀ byte ∈ segment, continuation byte = true := by
+  induction n generalizing consumed input with
+  | zero =>
+    simp only [tails, Except.ok.injEq] at returned
+    exact ⟨[], returned, rfl, by simp⟩
+  | succ n ih =>
+    cases input with
+    | nil => simp [tails] at returned
+    | cons byte tail =>
+      simp only [tails] at returned
+      split at returned
+      next good =>
+        obtain ⟨segment, equal, length, valid⟩ := ih (consumed + 1) tail returned
+        refine ⟨byte :: segment, by simp [equal], by simp [length], ?_⟩
+        intro value member
+        simp only [List.mem_cons] at member
+        rcases member with rfl | member
+        · exact good
+        · exact valid value member
+      next bad => simp at returned
+
+private theorem next_valid (input rest : List UInt8) (count : Nat)
+    (returned : next input = .ok (rest, count)) :
+    ∃ segment, input = segment ++ rest ∧ segment.length = count ∧ 0 < count ∧
+      segment.toByteArray.IsValidUTF8 := by
+  cases input with
+  | nil => simp [next] at returned
+  | cons a tail =>
+    by_cases ascii : a < 128
+    · simp only [next, ite_eq_left ascii, Except.ok.injEq,
+        Prod.mk.injEq] at returned
+      rcases returned with ⟨rfl, rfl⟩
+      exact ⟨[a], rfl, rfl, by decide, ByteArray.validateUTF8_eq_true_iff.mp (ascii_valid a ascii)⟩
+    · let width : Nat := if 194 ≤ a && a ≤ 223 then 2 else
+        if 224 ≤ a && a ≤ 239 then 3 else if 240 ≤ a && a ≤ 244 then 4 else 0
+      change (if a < 128 then Except.ok (tail, 1) else
+        if width = 0 then Except.error (some 1) else
+          match tail with
+          | [] => Except.error none
+          | b :: more => if secondByte a b then do
+              let leftover ← tails (width - 2) 2 more
+              .ok (leftover, width)
+            else .error (some 1)) = .ok (rest, count) at returned
+      rw [ite_eq_right ascii] at returned
+      by_cases zero : width = 0
+      · simp [zero] at returned
+      rw [ite_eq_right zero] at returned
+      cases tail with
+      | nil => simp at returned
+      | cons b more =>
+        dsimp only at returned
+        by_cases good : secondByte a b = true
+        · rw [ite_eq_left good] at returned
+          cases outcome : tails (width - 2) 2 more with
+          | error e =>
+            rw [outcome] at returned
+            change Except.error e = Except.ok (rest, count) at returned
+            contradiction
+          | ok leftover =>
+            rw [outcome] at returned
+            change Except.ok (leftover, width) = Except.ok (rest, count) at returned
+            have pairs := Except.ok.inj returned
+            have tailsEqual := congrArg Prod.fst pairs
+            have countEqual := congrArg Prod.snd pairs
+            dsimp only at tailsEqual countEqual
+            subst count
+            subst leftover
+            obtain ⟨middle, equal, length, valid⟩ := tails_success (width - 2) 2 more rest outcome
+            have choices : width = 2 ∨ width = 3 ∨ width = 4 := by
+              dsimp [width] at zero ⊢
+              split_ifs at * <;> simp_all
+            refine ⟨a :: b :: middle, by simp [equal], ?_, by omega, ?_⟩
+            · simp only [List.length_cons]
+              rcases choices with h | h | h <;> omega
+            · apply ByteArray.validateUTF8_eq_true_iff.mp
+              by_cases two : 194 ≤ a ∧ a ≤ 223
+              · have w : width = 2 := by simp [width, two.1, two.2]
+                have empty : middle = [] := by cases middle <;> simp_all
+                subst middle
+                have cont : continuation b = true := by
+                  have ne224 : a ≠ 224 := by
+                    intro eq
+                    have impossible : (224 : UInt8) ≤ 223 := eq ▸ two.2
+                    exact (by decide +kernel : ¬(224 : UInt8) ≤ 223) impossible
+                  have ne237 : a ≠ 237 := by
+                    intro eq
+                    have impossible : (237 : UInt8) ≤ 223 := eq ▸ two.2
+                    exact (by decide +kernel : ¬(237 : UInt8) ≤ 223) impossible
+                  have ne240 : a ≠ 240 := by
+                    intro eq
+                    have impossible : (240 : UInt8) ≤ 223 := eq ▸ two.2
+                    exact (by decide +kernel : ¬(240 : UInt8) ≤ 223) impossible
+                  have ne244 : a ≠ 244 := by
+                    intro eq
+                    have impossible : (244 : UInt8) ≤ 223 := eq ▸ two.2
+                    exact (by decide +kernel : ¬(244 : UInt8) ≤ 223) impossible
+                  simpa [secondByte, ne224, ne237, ne240, ne244] using good
+                have bc : 128 ≤ b ∧ b ≤ 191 := by simpa [continuation] using cont
+                exact two_valid a b two.1 two.2 bc.1 bc.2
+              · by_cases three : 224 ≤ a ∧ a ≤ 239
+                · have w : width = 3 := by simp [width, show ¬(194 ≤ a ∧ a ≤ 223) from two, three.1, three.2]
+                  have one : middle.length = 1 := by omega
+                  cases middle with
+                  | nil => simp at one
+                  | cons c tail =>
+                    have empty : tail = [] := by cases tail <;> simp_all
+                    subst tail
+                    have bc := second_three a b three.1 three.2 good
+                    have cc : 128 ≤ c ∧ c ≤ 191 := by
+                      simpa [continuation] using valid c (by simp)
+                    exact three_valid a b c three.1 three.2 bc.1 bc.2.1 cc.1 cc.2 bc.2.2.1 bc.2.2.2
+                · have four : 240 ≤ a ∧ a ≤ 244 := by
+                    by_contra nope
+                    have w : width = 0 := by simp [width, two, three, nope]
+                    exact zero w
+                  have w : width = 4 := by simp [width, two, three, four.1, four.2]
+                  have twoLeft : middle.length = 2 := by omega
+                  cases middle with
+                  | nil => simp at twoLeft
+                  | cons c tail =>
+                    cases tail with
+                    | nil => simp at twoLeft
+                    | cons d tail =>
+                      have empty : tail = [] := by cases tail <;> simp_all
+                      subst tail
+                      have bc := second_four a b four.1 four.2 good
+                      have cc : 128 ≤ c ∧ c ≤ 191 := by
+                        simpa [continuation] using valid c (by simp)
+                      have dc : 128 ≤ d ∧ d ≤ 191 := by
+                        simpa [continuation] using valid d (by simp)
+                      exact four_valid a b c d four.1 four.2 bc.1 bc.2.1 cc.1 cc.2 dc.1 dc.2 bc.2.2.1 bc.2.2.2
+        · simp [good] at returned
+
+theorem errorOffset_none_valid (fuel : Nat) (input : List UInt8) (offset : Nat)
+    (enough : input.length < fuel)
+    (returned : errorOffset fuel input offset = none) :
+    input.toByteArray.IsValidUTF8 := by
+  induction fuel generalizing input offset with
+  | zero => omega
+  | succ fuel ih =>
+    cases input with
+    | nil => exact ByteArray.validateUTF8_eq_true_iff.mp (by decide +kernel)
+    | cons a tail =>
+      simp only [errorOffset] at returned
+      cases step : next (a :: tail) with
+      | error e => simp [step] at returned
+      | ok pair =>
+        rcases pair with ⟨rest, count⟩
+        rw [step] at returned
+        obtain ⟨segment, equal, length, positive, valid⟩ := next_valid (a :: tail) rest count step
+        have size : rest.length < fuel := by
+          have size := congrArg List.length equal
+          simp only [List.length_append, List.length_cons] at size enough
+          omega
+        have tailValid := ih rest (offset + count) size returned
+        rw [equal, List.toByteArray_append]
+        exact valid.append tailValid
+
+theorem errorOffset_bound (fuel : Nat) (input : List UInt8) (offset found : Nat)
+    (length : Option Nat)
+    (returned : errorOffset fuel input offset = some (found, length)) :
+    found ≤ offset + input.length := by
+  induction fuel generalizing input offset with
+  | zero => simp [errorOffset] at returned
+  | succ fuel ih =>
+    cases input with
+    | nil => simp [errorOffset] at returned
+    | cons a tail =>
+      simp only [errorOffset] at returned
+      cases step : next (a :: tail) with
+      | error e =>
+        simp only [step, Option.some.injEq, Prod.mk.injEq] at returned
+        omega
+      | ok pair =>
+        rcases pair with ⟨rest, count⟩
+        rw [step] at returned
+        have bound := ih rest (offset + count) returned
+        obtain ⟨segment, equal, size, positive, valid⟩ := next_valid (a :: tail) rest count step
+        have total := congrArg List.length equal
+        simp only [List.length_append, List.length_cons] at total ⊢
+        omega
+
+private theorem toList_data (bs : ByteArray) : bs.toList = bs.data.toList := by
+  have loop (i : Nat) (r : List UInt8) (inside : i ≤ bs.size) :
+      ByteArray.toList.loop bs i r = r.reverse ++ bs.data.toList.drop i := by
+    fun_induction ByteArray.toList.loop bs i r with
+    | case1 i r h ih =>
+      rw [ih (by omega)]
+      simp only [List.reverse_cons, List.append_assoc]
+      congr 1
+      conv_rhs => rw [List.drop_eq_getElem_cons (by simpa only [Array.length_toList, ByteArray.size_data] using h)]
+      simp [ByteArray.get!]
+      exact getElem!_pos bs.data i (show i < bs.data.size from h)
+    | case2 i r h =>
+      have last : i = bs.size := by omega
+      simp [last]
+  simpa [ByteArray.toList] using loop 0 [] (Nat.zero_le _)
+
+private theorem bytes_length (input : Slice U8) :
+    (bytes input).toList.length = input.val.length := by
+  rw [toList_data]
+  simp [bytes]
+
+private theorem bytes_roundtrip (bs : ByteArray) : bs.toList.toByteArray = bs := by
+  rw [toList_data]
+  apply ByteArray.ext
+  simp
+
+theorem fromUtf8_total (input : Slice U8) :
+    ∃ result, fromUtf8 input = RustM.ok result := by
+  by_cases utf8 : (bytes input).validateUTF8 = true
+  · exact ⟨.Ok input, valid input utf8⟩
+  · have malformed : (bytes input).validateUTF8 = false := by
+      exact Bool.eq_false_iff.mpr utf8
+    cases found : errorOffset (input.val.length + 1)
+        (bytes input).toList 0 with
+    | none =>
+      have valid := errorOffset_none_valid (input.val.length + 1)
+        (bytes input).toList 0 (by rw [bytes_length]; omega) found
+      rw [bytes_roundtrip] at valid
+      exact False.elim (utf8 (ByteArray.validateUTF8_eq_true_iff.mpr valid))
+    | some pair =>
+      rcases pair with ⟨offset, length⟩
+      have bound := errorOffset_bound (input.val.length + 1)
+        (bytes input).toList 0 offset length found
+      rw [bytes_length] at bound
+      have inside : offset ≤ Usize.max := by
+        have lengthBound := input.property
+        omega
+      exact ⟨_, invalid input malformed offset length found inside⟩
+
+
 end __BYTES_NAMESPACE__
