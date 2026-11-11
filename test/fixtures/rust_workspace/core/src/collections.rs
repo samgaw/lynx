@@ -63,6 +63,11 @@ pub fn replace_first_i64(mut input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
     (changed, input)
 }
 
+/// Borrows an indexed element, returning None beyond the slice boundary.
+pub fn lookup<T>(input: &[T], position: usize) -> Option<&T> {
+    input.get(position)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{replace_at, replace_first, slice_length};

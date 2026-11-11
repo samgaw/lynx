@@ -41,7 +41,7 @@ defmodule Lynx.Rust.OptionModels do
          true <- CallModels.expand(sig["output"], refs) == variable(),
          type when not is_nil(type) <-
            Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
-         true <- option?(type, refs) do
+         true <- option_type?(type, refs) do
       %{
         rust_name: "core::option::{core::option::Option<@T>}::expect",
         lean: "Lynx.NativeM.expectSome",
@@ -60,7 +60,7 @@ defmodule Lynx.Rust.OptionModels do
     end
   end
 
-  defp option?(type, refs) do
+  def option_type?(type, refs) do
     type["item_meta"]["name"] == Enum.map(~w(core option Option), &%{"Ident" => [&1, 0]}) and
       parameters?(type["generics"], 0) and
       match?(

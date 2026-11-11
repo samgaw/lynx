@@ -103,3 +103,8 @@ pub fn batch_length<T>(input: &experiment_core::collections::Batch<T>) -> usize 
 pub fn result_is_ok(input: Result<u64, String>) -> bool {
     experiment_core::collections::result_is_ok(input)
 }
+
+/// Preserves the core slice lookup result across the workspace boundary.
+pub fn lookup<T>(input: &[T], position: usize) -> Option<&T> {
+    experiment_core::collections::lookup(input, position)
+}
