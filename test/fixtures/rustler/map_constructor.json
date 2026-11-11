@@ -1,0 +1,2386 @@
+{
+  "constructor": {
+    "body": "Opaque",
+    "def_id": 26,
+    "generics": {
+      "const_generics": [],
+      "outlives": [
+        {
+          "outlives": [],
+          "regions": [],
+          "skip_binder": [
+            {
+              "Var": {
+                "Free": 0
+              }
+            },
+            {
+              "Var": {
+                "Free": 1
+              }
+            }
+          ]
+        },
+        {
+          "outlives": [],
+          "regions": [],
+          "skip_binder": [
+            {
+              "Var": {
+                "Free": 0
+              }
+            },
+            {
+              "Var": {
+                "Free": 2
+              }
+            }
+          ]
+        }
+      ],
+      "regions": [
+        {
+          "index": 0,
+          "late_bound": false,
+          "mutability": "Unknown",
+          "name": "'a",
+          "variance": "Unknown"
+        },
+        {
+          "index": 1,
+          "late_bound": true,
+          "mutability": "Unknown",
+          "name": null,
+          "variance": "Covariant"
+        },
+        {
+          "index": 2,
+          "late_bound": true,
+          "mutability": "Unknown",
+          "name": null,
+          "variance": "Covariant"
+        }
+      ],
+      "trait_clauses": [],
+      "trait_type_constraints": [],
+      "types": []
+    },
+    "item_meta": {
+      "name": [
+        {
+          "Ident": [
+            "rustler",
+            0
+          ]
+        },
+        {
+          "Ident": [
+            "types",
+            0
+          ]
+        },
+        {
+          "Ident": [
+            "map",
+            0
+          ]
+        },
+        {
+          "Impl": {
+            "Ty": {
+              "kind": "InherentImplBlock",
+              "params": {
+                "const_generics": [],
+                "outlives": [],
+                "regions": [
+                  {
+                    "index": 0,
+                    "late_bound": false,
+                    "mutability": "Unknown",
+                    "name": "'a",
+                    "variance": "Unknown"
+                  }
+                ],
+                "trait_clauses": [],
+                "trait_type_constraints": [],
+                "types": []
+              },
+              "skip_binder": {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [
+                      {
+                        "Var": {
+                          "Bound": [
+                            0,
+                            0
+                          ]
+                        }
+                      }
+                    ],
+                    "trait_refs": [],
+                    "types": []
+                  },
+                  "id": 8
+                }
+              }
+            }
+          }
+        },
+        {
+          "Ident": [
+            "map_from_term_arrays",
+            0
+          ]
+        }
+      ],
+      "opacity": "Foreign"
+    },
+    "signature": {
+      "abi": "Rust",
+      "inputs": [
+        {
+          "Adt": {
+            "builtin": null,
+            "generics": {
+              "const_generics": [],
+              "regions": [
+                {
+                  "Var": {
+                    "Free": 0
+                  }
+                }
+              ],
+              "trait_refs": [],
+              "types": []
+            },
+            "id": 7
+          }
+        },
+        {
+          "Ref": [
+            {
+              "Var": {
+                "Free": 1
+              }
+            },
+            {
+              "Slice": [
+                {
+                  "Adt": {
+                    "builtin": null,
+                    "generics": {
+                      "const_generics": [],
+                      "regions": [
+                        {
+                          "Var": {
+                            "Free": 0
+                          }
+                        }
+                      ],
+                      "trait_refs": [],
+                      "types": []
+                    },
+                    "id": 8
+                  }
+                },
+                null
+              ]
+            },
+            "Shared"
+          ]
+        },
+        {
+          "Ref": [
+            {
+              "Var": {
+                "Free": 2
+              }
+            },
+            {
+              "Slice": [
+                {
+                  "Adt": {
+                    "builtin": null,
+                    "generics": {
+                      "const_generics": [],
+                      "regions": [
+                        {
+                          "Var": {
+                            "Free": 0
+                          }
+                        }
+                      ],
+                      "trait_refs": [],
+                      "types": []
+                    },
+                    "id": 8
+                  }
+                },
+                null
+              ]
+            },
+            "Shared"
+          ]
+        }
+      ],
+      "is_unsafe": false,
+      "is_variadic": false,
+      "output": {
+        "Adt": {
+          "builtin": null,
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": [
+              {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [
+                      {
+                        "Var": {
+                          "Free": 0
+                        }
+                      }
+                    ],
+                    "trait_refs": [],
+                    "types": []
+                  },
+                  "id": 8
+                }
+              },
+              {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": []
+                  },
+                  "id": 10
+                }
+              }
+            ]
+          },
+          "id": 9
+        }
+      }
+    },
+    "src": "Normal"
+  },
+  "debug": {
+    "body": "Opaque",
+    "def_id": 31,
+    "generics": {
+      "const_generics": [],
+      "outlives": [
+        {
+          "outlives": [],
+          "regions": [],
+          "skip_binder": [
+            {
+              "Var": {
+                "Free": 2
+              }
+            },
+            {
+              "Var": {
+                "Free": 1
+              }
+            }
+          ]
+        }
+      ],
+      "regions": [
+        {
+          "index": 0,
+          "late_bound": true,
+          "mutability": "Unknown",
+          "name": null,
+          "variance": "Covariant"
+        },
+        {
+          "index": 1,
+          "late_bound": true,
+          "mutability": "Unknown",
+          "name": null,
+          "variance": "Covariant"
+        },
+        {
+          "index": 2,
+          "late_bound": true,
+          "mutability": "Unknown",
+          "name": null,
+          "variance": "Invariant"
+        }
+      ],
+      "trait_clauses": [],
+      "trait_type_constraints": [],
+      "types": []
+    },
+    "item_meta": {
+      "name": [
+        {
+          "Ident": [
+            "rustler",
+            0
+          ]
+        },
+        {
+          "Ident": [
+            "error",
+            0
+          ]
+        },
+        {
+          "Impl": {
+            "Trait": 10
+          }
+        },
+        {
+          "Ident": [
+            "fmt",
+            0
+          ]
+        }
+      ],
+      "opacity": "Foreign"
+    },
+    "signature": {
+      "abi": "Rust",
+      "inputs": [
+        {
+          "Ref": [
+            {
+              "Var": {
+                "Free": 0
+              }
+            },
+            {
+              "Adt": {
+                "builtin": null,
+                "generics": {
+                  "const_generics": [],
+                  "regions": [],
+                  "trait_refs": [],
+                  "types": []
+                },
+                "id": 10
+              }
+            },
+            "Shared"
+          ]
+        },
+        {
+          "Ref": [
+            {
+              "Var": {
+                "Free": 1
+              }
+            },
+            {
+              "Adt": {
+                "builtin": null,
+                "generics": {
+                  "const_generics": [],
+                  "regions": [
+                    {
+                      "Var": {
+                        "Free": 2
+                      }
+                    }
+                  ],
+                  "trait_refs": [],
+                  "types": []
+                },
+                "id": 15
+              }
+            },
+            "Mut"
+          ]
+        }
+      ],
+      "is_unsafe": false,
+      "is_variadic": false,
+      "output": {
+        "Adt": {
+          "builtin": null,
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": [
+              {
+                "Adt": {
+                  "builtin": "Tuple",
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": []
+                  },
+                  "id": 0
+                }
+              },
+              {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": []
+                  },
+                  "id": 16
+                }
+              }
+            ]
+          },
+          "id": 9
+        }
+      }
+    },
+    "src": {
+      "TraitImpl": {
+        "impl_ref": {
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": []
+          },
+          "id": 10
+        },
+        "item_id": 0,
+        "reuses_default": false,
+        "trait_ref": {
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": [
+              {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": []
+                  },
+                  "id": 10
+                }
+              }
+            ]
+          },
+          "id": 5
+        }
+      }
+    }
+  },
+  "translated": {
+    "trait_decls": [
+      {
+        "consts": [],
+        "def_id": 5,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "Self",
+              "variance": "Unknown"
+            }
+          ]
+        },
+        "implied_clauses": [],
+        "is_unsafe": false,
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "fmt",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Debug",
+                0
+              ]
+            }
+          ],
+          "opacity": "Opaque"
+        },
+        "methods": [
+          {
+            "kind": {
+              "TraitMethod": [
+                5,
+                0
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Covariant"
+                },
+                {
+                  "index": 1,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Covariant"
+                },
+                {
+                  "index": 2,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "default": null,
+              "item_meta": {
+                "name": [
+                  {
+                    "Ident": [
+                      "core",
+                      0
+                    ]
+                  },
+                  {
+                    "Ident": [
+                      "fmt",
+                      0
+                    ]
+                  },
+                  {
+                    "Ident": [
+                      "Debug",
+                      0
+                    ]
+                  },
+                  {
+                    "Ident": [
+                      "fmt",
+                      0
+                    ]
+                  }
+                ],
+                "opacity": "Opaque"
+              },
+              "name": "fmt",
+              "signature": {
+                "abi": "Rust",
+                "inputs": [
+                  {
+                    "Ref": [
+                      {
+                        "Var": {
+                          "Bound": [
+                            0,
+                            0
+                          ]
+                        }
+                      },
+                      {
+                        "TypeVar": {
+                          "Free": 0
+                        }
+                      },
+                      "Shared"
+                    ]
+                  },
+                  {
+                    "Ref": [
+                      {
+                        "Var": {
+                          "Bound": [
+                            0,
+                            1
+                          ]
+                        }
+                      },
+                      {
+                        "Adt": {
+                          "builtin": null,
+                          "generics": {
+                            "const_generics": [],
+                            "regions": [
+                              {
+                                "Var": {
+                                  "Bound": [
+                                    0,
+                                    2
+                                  ]
+                                }
+                              }
+                            ],
+                            "trait_refs": [],
+                            "types": []
+                          },
+                          "id": 15
+                        }
+                      },
+                      "Mut"
+                    ]
+                  }
+                ],
+                "is_unsafe": false,
+                "is_variadic": false,
+                "output": {
+                  "Adt": {
+                    "builtin": null,
+                    "generics": {
+                      "const_generics": [],
+                      "regions": [],
+                      "trait_refs": [],
+                      "types": [
+                        {
+                          "Adt": {
+                            "builtin": "Tuple",
+                            "generics": {
+                              "const_generics": [],
+                              "regions": [],
+                              "trait_refs": [],
+                              "types": []
+                            },
+                            "id": 0
+                          }
+                        },
+                        {
+                          "Adt": {
+                            "builtin": null,
+                            "generics": {
+                              "const_generics": [],
+                              "regions": [],
+                              "trait_refs": [],
+                              "types": []
+                            },
+                            "id": 16
+                          }
+                        }
+                      ]
+                    },
+                    "id": 9
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "src": "Normal",
+        "types": [],
+        "vtable": {
+          "builtin": null,
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": []
+          },
+          "id": 14
+        }
+      }
+    ],
+    "trait_impls": [
+      {
+        "consts": [],
+        "def_id": 10,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": []
+        },
+        "impl_trait": {
+          "generics": {
+            "const_generics": [],
+            "regions": [],
+            "trait_refs": [],
+            "types": [
+              {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": []
+                  },
+                  "id": 10
+                }
+              }
+            ]
+          },
+          "id": 5
+        },
+        "implied_trait_refs": [],
+        "is_negative": false,
+        "is_unsafe": false,
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "rustler",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "error",
+                0
+              ]
+            },
+            {
+              "Impl": {
+                "Trait": 10
+              }
+            }
+          ],
+          "opacity": "Foreign"
+        },
+        "methods": [
+          {
+            "kind": {
+              "TraitMethod": [
+                5,
+                0
+              ]
+            },
+            "params": {
+              "const_generics": [],
+              "outlives": [],
+              "regions": [
+                {
+                  "index": 0,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Covariant"
+                },
+                {
+                  "index": 1,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Covariant"
+                },
+                {
+                  "index": 2,
+                  "late_bound": true,
+                  "mutability": "Unknown",
+                  "name": null,
+                  "variance": "Invariant"
+                }
+              ],
+              "trait_clauses": [],
+              "trait_type_constraints": [],
+              "types": []
+            },
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  },
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        1
+                      ]
+                    }
+                  },
+                  {
+                    "Var": {
+                      "Bound": [
+                        0,
+                        2
+                      ]
+                    }
+                  }
+                ],
+                "trait_refs": [],
+                "types": []
+              },
+              "id": 31
+            }
+          }
+        ],
+        "src": "Normal",
+        "types": [],
+        "vtable": "Lazy"
+      }
+    ],
+    "type_decls": [
+      {
+        "def_id": 7,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [
+            {
+              "index": 0,
+              "late_bound": false,
+              "mutability": "Shared",
+              "name": "'a",
+              "variance": "Invariant"
+            }
+          ],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": []
+        },
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "rustler",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "env",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Env",
+                0
+              ]
+            }
+          ],
+          "opacity": "Opaque"
+        },
+        "kind": "Opaque",
+        "layout": [
+          {
+            "key": "aarch64-apple-darwin",
+            "value": {
+              "align": {
+                "chosen": {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Slice": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        null
+                      ]
+                    },
+                    "Shared"
+                  ]
+                },
+                "guarantee": null
+              },
+              "discriminator": {
+                "Known": 0
+              },
+              "inhabited": {
+                "Scalar": {
+                  "Integer": {
+                    "Unsigned": "Usize"
+                  }
+                }
+              },
+              "repr": {
+                "align_modif": null,
+                "explicit_discr_type": null,
+                "repr_algo": "Rust",
+                "transparent": false
+              },
+              "size": {
+                "chosen": {
+                  "TypeVar": {
+                    "Bound": [
+                      0,
+                      0
+                    ]
+                  }
+                },
+                "guarantee": null
+              },
+              "variant_layouts": [
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": 8,
+                      "guarantee": null
+                    },
+                    {
+                      "chosen": 0,
+                      "guarantee": null
+                    },
+                    {
+                      "chosen": 9,
+                      "guarantee": null
+                    }
+                  ],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": []
+                }
+              ]
+            }
+          }
+        ],
+        "marker_traits": null,
+        "ptr_metadata": "None",
+        "src": "Normal"
+      },
+      {
+        "def_id": 8,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [
+            {
+              "index": 0,
+              "late_bound": false,
+              "mutability": "Shared",
+              "name": "'a",
+              "variance": "Invariant"
+            }
+          ],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": []
+        },
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "rustler",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "term",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Term",
+                0
+              ]
+            }
+          ],
+          "opacity": "Opaque"
+        },
+        "kind": "Opaque",
+        "layout": [
+          {
+            "key": "aarch64-apple-darwin",
+            "value": {
+              "align": {
+                "chosen": {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Slice": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        null
+                      ]
+                    },
+                    "Shared"
+                  ]
+                },
+                "guarantee": null
+              },
+              "discriminator": {
+                "Known": 0
+              },
+              "inhabited": {
+                "Scalar": {
+                  "Integer": {
+                    "Unsigned": "Usize"
+                  }
+                }
+              },
+              "repr": {
+                "align_modif": null,
+                "explicit_discr_type": null,
+                "repr_algo": "Rust",
+                "transparent": false
+              },
+              "size": {
+                "chosen": {
+                  "Constant": [
+                    {
+                      "Integer": {
+                        "Unsigned": [
+                          "Usize",
+                          "24"
+                        ]
+                      }
+                    },
+                    {
+                      "Scalar": {
+                        "Integer": {
+                          "Unsigned": "Usize"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "guarantee": null
+              },
+              "variant_layouts": [
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": 0,
+                      "guarantee": null
+                    },
+                    {
+                      "chosen": 8,
+                      "guarantee": null
+                    }
+                  ],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": []
+                }
+              ]
+            }
+          }
+        ],
+        "marker_traits": null,
+        "ptr_metadata": "None",
+        "src": "Normal"
+      },
+      {
+        "def_id": 9,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": [
+            {
+              "index": 0,
+              "name": "T",
+              "variance": "Covariant"
+            },
+            {
+              "index": 1,
+              "name": "E",
+              "variance": "Covariant"
+            }
+          ]
+        },
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "result",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Result",
+                0
+              ]
+            }
+          ],
+          "opacity": "Transparent"
+        },
+        "kind": {
+          "Enum": [
+            {
+              "discriminant": {
+                "Signed": [
+                  "Isize",
+                  "0"
+                ]
+              },
+              "fields": [
+                {
+                  "is_positional": true,
+                  "name": "_0",
+                  "ty": {
+                    "TypeVar": {
+                      "Free": 0
+                    }
+                  }
+                }
+              ],
+              "id": 0,
+              "name": "Ok"
+            },
+            {
+              "discriminant": {
+                "Signed": [
+                  "Isize",
+                  "1"
+                ]
+              },
+              "fields": [
+                {
+                  "is_positional": true,
+                  "name": "_0",
+                  "ty": {
+                    "TypeVar": {
+                      "Free": 1
+                    }
+                  }
+                }
+              ],
+              "id": 1,
+              "name": "Err"
+            }
+          ]
+        },
+        "layout": [
+          {
+            "key": "aarch64-apple-darwin",
+            "value": {
+              "align": {
+                "chosen": null,
+                "guarantee": {
+                  "AtLeast": {
+                    "Ref": [
+                      {
+                        "Var": {
+                          "Free": 1
+                        }
+                      },
+                      {
+                        "Adt": {
+                          "builtin": null,
+                          "generics": {
+                            "const_generics": [],
+                            "regions": [],
+                            "trait_refs": [],
+                            "types": []
+                          },
+                          "id": 5
+                        }
+                      },
+                      "Shared"
+                    ]
+                  }
+                }
+              },
+              "discriminator": null,
+              "inhabited": {
+                "Or": [
+                  {
+                    "GenericType": {
+                      "TypeVar": {
+                        "Free": 0
+                      }
+                    }
+                  },
+                  {
+                    "GenericType": {
+                      "TypeVar": {
+                        "Free": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              "repr": {
+                "align_modif": null,
+                "explicit_discr_type": null,
+                "repr_algo": "Rust",
+                "transparent": false
+              },
+              "size": {
+                "chosen": null,
+                "guarantee": {
+                  "AtLeast": {
+                    "AlignTo": {
+                      "base": {
+                        "Max": [
+                          {
+                            "Plus": [
+                              {
+                                "Constant": [
+                                  {
+                                    "OffsetOf": [
+                                      {
+                                        "builtin": null,
+                                        "generics": {
+                                          "const_generics": [],
+                                          "regions": [],
+                                          "trait_refs": [],
+                                          "types": [
+                                            {
+                                              "TypeVar": {
+                                                "Free": 0
+                                              }
+                                            },
+                                            {
+                                              "TypeVar": {
+                                                "Free": 1
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        "id": 9
+                                      },
+                                      0,
+                                      0
+                                    ]
+                                  },
+                                  {
+                                    "Scalar": {
+                                      "Integer": {
+                                        "Unsigned": "Usize"
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "Constant": [
+                                  {
+                                    "SizeOf": {
+                                      "TypeVar": {
+                                        "Free": 0
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "Scalar": {
+                                      "Integer": {
+                                        "Unsigned": "Usize"
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "Plus": [
+                              {
+                                "Constant": [
+                                  {
+                                    "OffsetOf": [
+                                      {
+                                        "builtin": null,
+                                        "generics": {
+                                          "const_generics": [],
+                                          "regions": [],
+                                          "trait_refs": [],
+                                          "types": [
+                                            {
+                                              "TypeVar": {
+                                                "Free": 0
+                                              }
+                                            },
+                                            {
+                                              "TypeVar": {
+                                                "Free": 1
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        "id": 9
+                                      },
+                                      1,
+                                      0
+                                    ]
+                                  },
+                                  {
+                                    "Scalar": {
+                                      "Integer": {
+                                        "Unsigned": "Usize"
+                                      }
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "Constant": [
+                                  {
+                                    "SizeOf": {
+                                      "TypeVar": {
+                                        "Free": 1
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "Scalar": {
+                                      "Integer": {
+                                        "Unsigned": "Usize"
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "target_align": {
+                        "Max": [
+                          {
+                            "Constant": [
+                              {
+                                "AlignOf": {
+                                  "TypeVar": {
+                                    "Free": 0
+                                  }
+                                }
+                              },
+                              {
+                                "Scalar": {
+                                  "Integer": {
+                                    "Unsigned": "Usize"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "Constant": [
+                              {
+                                "AlignOf": {
+                                  "TypeVar": {
+                                    "Free": 1
+                                  }
+                                }
+                              },
+                              {
+                                "Scalar": {
+                                  "Integer": {
+                                    "Unsigned": "Usize"
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "variant_layouts": [
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": null,
+                      "guarantee": {
+                        "GuaranteedAlignment": {
+                          "Adt": {
+                            "builtin": null,
+                            "generics": {
+                              "const_generics": [],
+                              "regions": [
+                                {
+                                  "Var": {
+                                    "Free": 0
+                                  }
+                                }
+                              ],
+                              "trait_refs": [],
+                              "types": []
+                            },
+                            "id": 7
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "inhabited": {
+                    "TypeVar": {
+                      "Bound": [
+                        0,
+                        0
+                      ]
+                    }
+                  },
+                  "tagger": []
+                },
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": null,
+                      "guarantee": {
+                        "GuaranteedAlignment": {
+                          "Adt": {
+                            "builtin": null,
+                            "generics": {
+                              "const_generics": [],
+                              "regions": [
+                                {
+                                  "Var": {
+                                    "Free": 0
+                                  }
+                                }
+                              ],
+                              "trait_refs": [],
+                              "types": []
+                            },
+                            "id": 8
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "inhabited": {
+                    "Adt": {
+                      "builtin": null,
+                      "generics": {
+                        "const_generics": [],
+                        "regions": [
+                          {
+                            "Var": {
+                              "Bound": [
+                                0,
+                                0
+                              ]
+                            }
+                          }
+                        ],
+                        "trait_refs": [],
+                        "types": []
+                      },
+                      "id": 8
+                    }
+                  },
+                  "tagger": []
+                }
+              ]
+            }
+          }
+        ],
+        "marker_traits": null,
+        "ptr_metadata": "None",
+        "src": "Normal"
+      },
+      {
+        "def_id": 10,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": []
+        },
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "rustler",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "error",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Error",
+                0
+              ]
+            }
+          ],
+          "opacity": "Opaque"
+        },
+        "kind": "Opaque",
+        "layout": [
+          {
+            "key": "aarch64-apple-darwin",
+            "value": {
+              "align": {
+                "chosen": {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Slice": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        null
+                      ]
+                    },
+                    "Shared"
+                  ]
+                },
+                "guarantee": null
+              },
+              "discriminator": {
+                "Branch": {
+                  "children": [
+                    [
+                      {
+                        "end": {
+                          "Unsigned": [
+                            "U64",
+                            "0"
+                          ]
+                        },
+                        "start": {
+                          "Unsigned": [
+                            "U64",
+                            "0"
+                          ]
+                        }
+                      },
+                      {
+                        "Known": 0
+                      }
+                    ],
+                    [
+                      {
+                        "end": {
+                          "Unsigned": [
+                            "U64",
+                            "1"
+                          ]
+                        },
+                        "start": {
+                          "Unsigned": [
+                            "U64",
+                            "1"
+                          ]
+                        }
+                      },
+                      {
+                        "Known": 1
+                      }
+                    ],
+                    [
+                      {
+                        "end": {
+                          "Unsigned": [
+                            "U64",
+                            "2"
+                          ]
+                        },
+                        "start": {
+                          "Unsigned": [
+                            "U64",
+                            "2"
+                          ]
+                        }
+                      },
+                      {
+                        "Known": 2
+                      }
+                    ],
+                    [
+                      {
+                        "end": {
+                          "Unsigned": [
+                            "U64",
+                            "3"
+                          ]
+                        },
+                        "start": {
+                          "Unsigned": [
+                            "U64",
+                            "3"
+                          ]
+                        }
+                      },
+                      {
+                        "Known": 3
+                      }
+                    ],
+                    [
+                      {
+                        "end": {
+                          "Unsigned": [
+                            "U64",
+                            "4"
+                          ]
+                        },
+                        "start": {
+                          "Unsigned": [
+                            "U64",
+                            "4"
+                          ]
+                        }
+                      },
+                      {
+                        "Known": 4
+                      }
+                    ]
+                  ],
+                  "fallback": "Invalid",
+                  "int_ty": {
+                    "Unsigned": "U64"
+                  },
+                  "offset": {
+                    "chosen": 0,
+                    "guarantee": null
+                  }
+                }
+              },
+              "inhabited": {
+                "Scalar": {
+                  "Integer": {
+                    "Unsigned": "Usize"
+                  }
+                }
+              },
+              "repr": {
+                "align_modif": null,
+                "explicit_discr_type": null,
+                "repr_algo": "Rust",
+                "transparent": false
+              },
+              "size": {
+                "chosen": {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Array": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        [
+                          {
+                            "Var": {
+                              "Free": 0
+                            }
+                          },
+                          {
+                            "Scalar": {
+                              "Integer": {
+                                "Unsigned": "Usize"
+                              }
+                            }
+                          }
+                        ],
+                        null
+                      ]
+                    },
+                    "Mut"
+                  ]
+                },
+                "guarantee": null
+              },
+              "variant_layouts": [
+                {
+                  "field_offsets": [],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": [
+                    [
+                      0,
+                      {
+                        "Unsigned": [
+                          "U64",
+                          "0"
+                        ]
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": 8,
+                      "guarantee": null
+                    }
+                  ],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": [
+                    [
+                      0,
+                      {
+                        "Unsigned": [
+                          "U64",
+                          "1"
+                        ]
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": 8,
+                      "guarantee": null
+                    }
+                  ],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": [
+                    [
+                      0,
+                      {
+                        "Unsigned": [
+                          "U64",
+                          "2"
+                        ]
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": 8,
+                      "guarantee": null
+                    }
+                  ],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": [
+                    [
+                      0,
+                      {
+                        "Unsigned": [
+                          "U64",
+                          "3"
+                        ]
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": 8,
+                      "guarantee": null
+                    }
+                  ],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": [
+                    [
+                      0,
+                      {
+                        "Unsigned": [
+                          "U64",
+                          "4"
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "marker_traits": {
+          "is_freeze": true,
+          "is_send": false,
+          "is_sized": true,
+          "is_sync": false,
+          "is_unpin": true
+        },
+        "ptr_metadata": "None",
+        "src": "Normal"
+      },
+      {
+        "def_id": 15,
+        "generics": {
+          "const_generics": [],
+          "outlives": [
+            {
+              "outlives": [],
+              "regions": [],
+              "skip_binder": [
+                {
+                  "Var": {
+                    "Free": 0
+                  }
+                },
+                {
+                  "Var": {
+                    "Free": 0
+                  }
+                }
+              ]
+            }
+          ],
+          "regions": [
+            {
+              "index": 0,
+              "late_bound": false,
+              "mutability": "Mutable",
+              "name": "'a",
+              "variance": "Invariant"
+            }
+          ],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": []
+        },
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "fmt",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Formatter",
+                0
+              ]
+            }
+          ],
+          "opacity": "Opaque"
+        },
+        "kind": "Opaque",
+        "layout": [
+          {
+            "key": "aarch64-apple-darwin",
+            "value": {
+              "align": {
+                "chosen": {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Slice": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        null
+                      ]
+                    },
+                    "Shared"
+                  ]
+                },
+                "guarantee": null
+              },
+              "discriminator": {
+                "Known": 0
+              },
+              "inhabited": {
+                "Scalar": {
+                  "Integer": {
+                    "Unsigned": "Usize"
+                  }
+                }
+              },
+              "repr": {
+                "align_modif": null,
+                "explicit_discr_type": null,
+                "repr_algo": "Rust",
+                "transparent": false
+              },
+              "size": {
+                "chosen": {
+                  "Ref": [
+                    {
+                      "Var": {
+                        "Free": 0
+                      }
+                    },
+                    {
+                      "Array": [
+                        {
+                          "TypeVar": {
+                            "Free": 0
+                          }
+                        },
+                        [
+                          {
+                            "Var": {
+                              "Free": 0
+                            }
+                          },
+                          {
+                            "Scalar": {
+                              "Integer": {
+                                "Unsigned": "Usize"
+                              }
+                            }
+                          }
+                        ],
+                        null
+                      ]
+                    },
+                    "Mut"
+                  ]
+                },
+                "guarantee": null
+              },
+              "variant_layouts": [
+                {
+                  "field_offsets": [
+                    {
+                      "chosen": 16,
+                      "guarantee": null
+                    },
+                    {
+                      "chosen": 0,
+                      "guarantee": null
+                    }
+                  ],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": []
+                }
+              ]
+            }
+          }
+        ],
+        "marker_traits": null,
+        "ptr_metadata": "None",
+        "src": "Normal"
+      },
+      {
+        "def_id": 16,
+        "generics": {
+          "const_generics": [],
+          "outlives": [],
+          "regions": [],
+          "trait_clauses": [],
+          "trait_type_constraints": [],
+          "types": []
+        },
+        "item_meta": {
+          "name": [
+            {
+              "Ident": [
+                "core",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "fmt",
+                0
+              ]
+            },
+            {
+              "Ident": [
+                "Error",
+                0
+              ]
+            }
+          ],
+          "opacity": "Transparent"
+        },
+        "kind": {
+          "Struct": []
+        },
+        "layout": [
+          {
+            "key": "aarch64-apple-darwin",
+            "value": {
+              "align": {
+                "chosen": {
+                  "Array": [
+                    {
+                      "TypeVar": {
+                        "Bound": [
+                          0,
+                          0
+                        ]
+                      }
+                    },
+                    [
+                      {
+                        "Var": {
+                          "Bound": [
+                            0,
+                            0
+                          ]
+                        }
+                      },
+                      {
+                        "Scalar": {
+                          "Integer": {
+                            "Unsigned": "Usize"
+                          }
+                        }
+                      }
+                    ],
+                    null
+                  ]
+                },
+                "guarantee": {
+                  "AtLeast": {
+                    "Array": [
+                      {
+                        "TypeVar": {
+                          "Bound": [
+                            0,
+                            0
+                          ]
+                        }
+                      },
+                      [
+                        {
+                          "Var": {
+                            "Bound": [
+                              0,
+                              0
+                            ]
+                          }
+                        },
+                        {
+                          "Scalar": {
+                            "Integer": {
+                              "Unsigned": "Usize"
+                            }
+                          }
+                        }
+                      ],
+                      null
+                    ]
+                  }
+                }
+              },
+              "discriminator": {
+                "Known": 0
+              },
+              "inhabited": {
+                "Scalar": {
+                  "Integer": {
+                    "Unsigned": "Usize"
+                  }
+                }
+              },
+              "repr": {
+                "align_modif": null,
+                "explicit_discr_type": null,
+                "repr_algo": "Rust",
+                "transparent": false
+              },
+              "size": {
+                "chosen": {
+                  "Scalar": {
+                    "Integer": {
+                      "Unsigned": "Usize"
+                    }
+                  }
+                },
+                "guarantee": {
+                  "AtLeast": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  }
+                }
+              },
+              "variant_layouts": [
+                {
+                  "field_offsets": [],
+                  "inhabited": {
+                    "Scalar": {
+                      "Integer": {
+                        "Unsigned": "Usize"
+                      }
+                    }
+                  },
+                  "tagger": []
+                }
+              ]
+            }
+          }
+        ],
+        "marker_traits": {
+          "is_freeze": true,
+          "is_send": true,
+          "is_sized": true,
+          "is_sync": true,
+          "is_unpin": true
+        },
+        "ptr_metadata": "None",
+        "src": "Normal"
+      }
+    ]
+  },
+  "unwrap": {
+    "body": "Opaque",
+    "def_id": 27,
+    "generics": {
+      "const_generics": [],
+      "outlives": [],
+      "regions": [],
+      "trait_clauses": [
+        {
+          "clause_id": 0,
+          "origin": "WhereClauseOnFn",
+          "trait_": {
+            "outlives": [],
+            "regions": [],
+            "skip_binder": {
+              "generics": {
+                "const_generics": [],
+                "regions": [],
+                "trait_refs": [],
+                "types": [
+                  {
+                    "TypeVar": {
+                      "Free": 1
+                    }
+                  }
+                ]
+              },
+              "id": 5
+            }
+          }
+        }
+      ],
+      "trait_type_constraints": [],
+      "types": [
+        {
+          "index": 0,
+          "name": "T",
+          "variance": "Unknown"
+        },
+        {
+          "index": 1,
+          "name": "E",
+          "variance": "Unknown"
+        }
+      ]
+    },
+    "item_meta": {
+      "name": [
+        {
+          "Ident": [
+            "core",
+            0
+          ]
+        },
+        {
+          "Ident": [
+            "result",
+            0
+          ]
+        },
+        {
+          "Impl": {
+            "Ty": {
+              "kind": "InherentImplBlock",
+              "params": {
+                "const_generics": [],
+                "outlives": [],
+                "regions": [],
+                "trait_clauses": [],
+                "trait_type_constraints": [],
+                "types": [
+                  {
+                    "index": 0,
+                    "name": "T",
+                    "variance": "Unknown"
+                  },
+                  {
+                    "index": 1,
+                    "name": "E",
+                    "variance": "Unknown"
+                  }
+                ]
+              },
+              "skip_binder": {
+                "Adt": {
+                  "builtin": null,
+                  "generics": {
+                    "const_generics": [],
+                    "regions": [],
+                    "trait_refs": [],
+                    "types": [
+                      {
+                        "TypeVar": {
+                          "Bound": [
+                            0,
+                            0
+                          ]
+                        }
+                      },
+                      {
+                        "TypeVar": {
+                          "Bound": [
+                            0,
+                            1
+                          ]
+                        }
+                      }
+                    ]
+                  },
+                  "id": 9
+                }
+              }
+            }
+          }
+        },
+        {
+          "Ident": [
+            "unwrap",
+            0
+          ]
+        }
+      ],
+      "opacity": "Opaque"
+    },
+    "signature": {
+      "abi": "Rust",
+      "inputs": [
+        {
+          "Adt": {
+            "builtin": null,
+            "generics": {
+              "const_generics": [],
+              "regions": [],
+              "trait_refs": [],
+              "types": [
+                {
+                  "TypeVar": {
+                    "Free": 0
+                  }
+                },
+                {
+                  "TypeVar": {
+                    "Free": 1
+                  }
+                }
+              ]
+            },
+            "id": 9
+          }
+        }
+      ],
+      "is_unsafe": false,
+      "is_variadic": false,
+      "output": {
+        "TypeVar": {
+          "Free": 0
+        }
+      }
+    },
+    "src": "Normal"
+  }
+}
