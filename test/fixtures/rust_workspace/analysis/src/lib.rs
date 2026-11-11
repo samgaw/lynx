@@ -210,6 +210,31 @@ pub fn checked_prefix(matches: bool) -> bool {
     experiment_core::protocol::checked_prefix(matches)
 }
 
+/// Returns the exact payload remaining after the shared marker.
+pub fn consume_marker(input: &[u8]) -> Option<&[u8]> {
+    experiment_core::protocol::consume_prefix(input, experiment_core::protocol::BORROWED_MAGIC)
+}
+
+/// Uses the standard array-pattern implementation through the core crate.
+pub fn consume_array_marker(input: &[u8]) -> Option<&[u8]> {
+    experiment_core::protocol::consume_array_marker(input)
+}
+
+/// Reports payload length after prefix consumption without allocating.
+pub fn consumed_length(input: &[u8]) -> Option<u64> {
+    consume_marker(input).map(|payload| payload.len() as u64)
+}
+
+/// Retains the consuming comparator's panic across the crate boundary.
+pub fn checked_consume() -> bool {
+    experiment_core::protocol::checked_consume()
+}
+
+/// Retains recognition's distinct comparator order across the crate boundary.
+pub fn checked_recognize() -> bool {
+    experiment_core::protocol::checked_recognize()
+}
+
 /// Composes fixed-buffer indexing through the low-level crate.
 pub fn array_window_length(start: usize, end: usize) -> u64 {
     experiment_core::protocol::array_window_length(start, end)

@@ -5,6 +5,36 @@ pub fn has_prefix<T: PartialEq>(input: &[T], prefix: &[T]) -> bool {
     input.starts_with(prefix)
 }
 
+/// Consumes a borrowed prefix using Rust's pattern conversion and comparison order.
+pub fn consume_prefix<'a, T: PartialEq>(input: &'a [T], prefix: &[T]) -> Option<&'a [T]> {
+    input.strip_prefix(prefix)
+}
+
+/// Consumes the array marker without an implicit conversion at the call site.
+pub fn consume_array_marker(input: &[u8]) -> Option<&[u8]> {
+    input.strip_prefix(b"LYNX")
+}
+
+/// Demonstrates that prefix consumption compares the input before the pattern.
+///
+/// # Panics
+/// Panics when the input's reserved token is compared with the pattern.
+pub fn checked_consume() -> bool {
+    let input = [CheckedByte(255)];
+    let prefix = [CheckedByte(1)];
+    match input.strip_prefix(&prefix) {
+        Some(payload) => payload.is_empty(),
+        None => false,
+    }
+}
+
+/// The same operands short-circuit without a panic in starts_with's order.
+pub fn checked_recognize() -> bool {
+    let input = [CheckedByte(255)];
+    let prefix = [CheckedByte(1)];
+    input.starts_with(&prefix)
+}
+
 /// A protocol token whose comparison may reject the reserved byte.
 #[derive(Debug)]
 pub struct CheckedByte(pub u8);
@@ -214,6 +244,16 @@ mod tests {
         assert!(std::panic::catch_unwind(|| super::checked_prefix(true)).is_err());
         assert!(super::has_prefix(&[0_u8, 255, 128], &[0, 255]));
         assert!(!super::has_prefix(&[0_u8], &[0, 255]));
+        assert!(!super::checked_recognize());
+        assert!(std::panic::catch_unwind(super::checked_consume).is_err());
+        assert_eq!(
+            super::consume_prefix(&[0_u8, 255, 128], &[0, 255]),
+            Some(&[128][..])
+        );
+        assert_eq!(
+            super::consume_array_marker(b"LYNX\0\xff"),
+            Some(&[0, 255][..])
+        );
     }
 
     #[test]
