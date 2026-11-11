@@ -157,6 +157,16 @@ pub fn text_payload_length(input: &[u8], header: u8) -> Result<Option<u64>, u8> 
     }
 }
 
+/// Borrows the low-level empty default across the crate boundary.
+pub fn default_bytes() -> &'static [u8] {
+    experiment_core::protocol::default_bytes()
+}
+
+/// Borrows the low-level wire marker across the crate boundary.
+pub fn magic_bytes() -> &'static [u8] {
+    experiment_core::protocol::magic_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

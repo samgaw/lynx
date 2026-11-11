@@ -64,6 +64,16 @@ pub fn text_empty(text: &str) -> bool {
     text.is_empty()
 }
 
+/// Provides an immutable empty default without allocating a buffer.
+pub fn default_bytes() -> &'static [u8] {
+    &[]
+}
+
+/// Provides the fixed wire-format marker from its actual promoted initializer.
+pub fn magic_bytes() -> &'static [u8] {
+    &[76, 89, 78, 88]
+}
+
 /// Exercises the bounds-checked indexing primitive independently of NIFs.
 ///
 /// # Panics

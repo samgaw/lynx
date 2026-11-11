@@ -119,6 +119,111 @@ defmodule Lynx.Rust.ConstantsTest do
     |> put_in(["translated", "fun_decls"], [caller, initializer])
   end
 
+  defp scalar_array(element, length) do
+    usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+    %{"Array" => [element, [%{"Integer" => %{"Unsigned" => ["Usize", length]}}, usize], nil]}
+  end
+
+  test "promoted shared scalar arrays retain checked initializer identities" do
+    for element <- [scalar(), %{"Scalar" => "Bool"}], size <- ["0", "4"] do
+      type = %{"Ref" => ["Erased", scalar_array(element, size), "Shared"]}
+      audit = LLBC.audit!(promoted(type), ["first_party"])
+      assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
+
+      assert %{10 => %{"inlined" => true, "initializer_id" => 11}} =
+               Lynx.Rust.Constants.link!(audit.constants, %{"globals" => []})
+    end
+  end
+
+  test "array lengths use constant identities independently of overlapping type IDs" do
+    usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+
+    type = %{
+      "Ref" => [
+        "Erased",
+        %{"Value" => [81, %{"Array" => [scalar(), %{"Deduplicated" => 77}, nil]}]},
+        "Shared"
+      ]
+    }
+
+    document = promoted(type)
+
+    document =
+      update_in(
+        document,
+        ["translated", "fun_decls", Access.at(0), "body", "Structured"],
+        fn body ->
+          Map.merge(body, %{
+            "type_table_entry" => %{"Value" => [77, scalar()]},
+            "array_size" => %{
+              "Value" => [77, [%{"Integer" => %{"Unsigned" => ["Usize", "4"]}}, usize]]
+            }
+          })
+        end
+      )
+
+    audit = LLBC.audit!(document, ["first_party"])
+    assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
+    assert %{10 => _} = audit.constants
+
+    missing =
+      update_in(
+        document,
+        ["translated", "fun_decls", Access.at(0), "body", "Structured"],
+        &Map.delete(&1, "array_size")
+      )
+
+    assert_raise ArgumentError, ~r/constant/, fn -> LLBC.audit!(missing, ["first_party"]) end
+  end
+
+  test "promoted arrays reject missing, opaque and mismatched initializer bodies" do
+    type = %{"Ref" => ["Erased", scalar_array(scalar(), "4"), "Shared"]}
+    document = promoted(type)
+    wrong_type = %{"Ref" => ["Erased", scalar_array(scalar(), "5"), "Shared"]}
+
+    for bad <- [
+          put_in(document, ["translated", "fun_decls"], [hd(document["translated"]["fun_decls"])]),
+          put_in(
+            document,
+            ["translated", "fun_decls", Access.at(1), "signature", "output"],
+            wrong_type
+          ),
+          put_in(document, ["translated", "fun_decls", Access.at(1), "body"], "Opaque")
+        ] do
+      error =
+        try do
+          LLBC.audit!(bad, ["first_party"])
+          nil
+        rescue
+          exception in [ArgumentError, CompileError] -> exception
+        end
+
+      assert error != nil
+    end
+  end
+
+  test "promoted arrays reject unresolved lengths, non-scalar elements and mutable borrows" do
+    for array <- [
+          scalar_array(%{"Adt" => %{"id" => 0}}, "1"),
+          scalar_array(scalar(), "-1"),
+          scalar_array(scalar(), "04"),
+          scalar_array(scalar(), "1tail"),
+          scalar_array(scalar(), ""),
+          %{"Array" => [scalar(), %{"Var" => %{"Free" => 0}}, nil]},
+          %{"Array" => [scalar(), [%{"Integer" => %{"Signed" => ["Isize", "4"]}}, scalar()], nil]}
+        ] do
+      assert_raise ArgumentError, ~r/constant initializer/, fn ->
+        LLBC.audit!(promoted(%{"Ref" => ["Erased", array, "Shared"]}), ["first_party"])
+      end
+    end
+
+    assert_raise ArgumentError, ~r/constant initializer/, fn ->
+      LLBC.audit!(promoted(%{"Ref" => ["Erased", scalar_array(scalar(), "4"), "Mut"]}), [
+        "first_party"
+      ])
+    end
+  end
+
   test "promoted shared scalar borrows retain initializer dependencies through Aeneas inlining" do
     audit = LLBC.audit!(promoted(%{"Ref" => ["Erased", scalar(), "Shared"]}), ["first_party"])
     assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)

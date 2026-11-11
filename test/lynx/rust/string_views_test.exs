@@ -166,7 +166,7 @@ defmodule Lynx.Rust.StringViewsTest do
 
     rust = Path.join(workspace, "core/src/protocol.rs")
     original = File.read!(rust)
-    changed = String.replace(original, "text.as_bytes()", "text.as_bytes().split_at(0).0")
+    changed = String.replace(original, "text.as_bytes()", "&[]")
     assert changed != original
     File.write!(rust, changed)
 
