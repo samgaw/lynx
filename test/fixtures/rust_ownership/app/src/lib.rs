@@ -71,10 +71,38 @@ pub fn toggle(value: &mut bool) {
     ownership_base::toggle(value);
 }
 
+/// Preserves a held value on contention, then updates after releasing its guard.
+pub fn try_cycle(value: bool) -> (bool, bool, bool, bool) {
+    let mutex = std::sync::Mutex::new(value);
+    let first = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let rejected = ownership_base::try_toggle(&mutex);
+    let unchanged = *first;
+    drop(first);
+    let accepted = ownership_base::try_toggle(&mutex);
+    let last = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let result = (rejected, unchanged, accepted, *last);
+    drop(last);
+    drop(mutex);
+    result
+}
+
 #[cfg(test)]
 mod tests {
-    use super::guard_panic;
+    use super::{guard_panic, try_cycle};
     use std::sync::Mutex;
+
+    #[test]
+    fn nonblocking_cycle_preserves_rejected_updates() {
+        for initial in [false, true] {
+            assert_eq!(try_cycle(initial), (false, initial, true, !initial));
+        }
+    }
 
     #[test]
     fn guarded_mutation_survives_panic_and_sets_poison() {

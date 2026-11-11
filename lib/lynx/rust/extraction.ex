@@ -451,10 +451,17 @@ defmodule Lynx.Rust.Extraction do
                 "types" =>
                   Enum.map(
                     models,
-                    &%{
-                      "rust_pattern" => &1[:backend_rust_name] || &1.rust,
-                      "extract_name" => &1.lean
-                    }
+                    fn model ->
+                      %{
+                        "rust_pattern" => model[:backend_rust_name] || model.rust,
+                        "extract_name" => model.lean
+                      }
+                      |> Map.merge(
+                        Map.new(Map.take(model, [:body]), fn {key, value} ->
+                          {Atom.to_string(key), value}
+                        end)
+                      )
+                    end
                   ),
                 "functions" =>
                   Enum.map(
@@ -751,6 +758,8 @@ defmodule Lynx.Rust.Extraction do
           "core::str::error::Utf8Error",
           "--include",
           "core::io::seek::SeekFrom",
+          "--include",
+          "std::sync::poison::TryLockError",
           "--dest-file",
           llbc
         ] ++

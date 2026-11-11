@@ -396,6 +396,17 @@ defmodule Lynx.Rust do
   Rustler 0.39 `ResourceArc` allocation, clone, immutable dereference, explicit
   release and local scope cleanup are supported for monomorphic first-party
   payloads with native codecs and compiler-certified `needs_drop = false`.
+  Runtime `Mutex::try_lock` performs an atomic nonblocking attempt. A held lock
+  returns `WouldBlock` without changing the logical heap or allocating a guard
+  token, including recursive attempts. An available poisoned lock returns the
+  acquired guard in `Poisoned`.
+  The actual standard error enum and method signatures are validated; supported
+  consumers must account for the acquired guard. Rust std, native threading,
+  allocation and FFI remain reported boundaries.
+  The qualified path consumes guards inside the critical-section helper;
+  branching protocols that return guard-bearing results can still encounter an
+  Aeneas extraction error and remain unverified.
+
   Runtime RwLock operations support shared readers and exclusive writers.
   A foreign writer blocks a read; a conflicting writer registers a typed request
   and waits for existing leases to be released. Acquisition retires only its own

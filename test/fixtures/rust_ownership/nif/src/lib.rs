@@ -24,6 +24,14 @@ fn scalar(code: u64) -> bool {
 
 rustler::init!("Elixir.LynxOwnershipFixture.Native");
 
+/// Reports a rejected contended update and a successful released update.
+#[cfg(feature = "try-lock")]
+#[rustler::nif(name = "try_checked")]
+#[lynx::try_lock]
+fn try_request(value: bool) -> (bool, bool, bool, bool) {
+    ownership_app::try_cycle(value)
+}
+
 /// Observes a borrowed guard's scope-exit mutation through two workspace crates.
 #[cfg(feature = "borrowed-guard")]
 #[rustler::nif]

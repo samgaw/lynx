@@ -457,6 +457,12 @@ before acquisition. This is not an Elixir exception. -/
 structure NativePoisonError (α : Type) where
   value : α
 
+/-- Nonblocking acquisition distinguishes contention from an acquired poisoned
+guard. Neither variant is an Elixir exception. -/
+inductive NativeTryLockError (α : Type) where
+  | Poisoned : NativePoisonError α → NativeTryLockError α
+  | WouldBlock : NativeTryLockError α
+
 /-- Consuming a poisoned result transfers its payload and leaves poison status
 in the shared cell unchanged. It does not release an owned guard. -/
 @[expose] def NativePoisonError.into_inner {α : Type} (error : NativePoisonError α) : α :=
@@ -531,6 +537,35 @@ Successful poisoned acquisitions return an error containing the owned guard. -/
   .wait (pollLock mutex) fun reply => match reply with
     | .ok result => .ok result
     | .error exception => .error exception
+
+/-- One atomic nonblocking attempt. A held lock, including one held by this
+context, returns WouldBlock without allocating a lease or modifying the heap.
+An unlocked cell reuses the exact acquisition and poison semantics of lock. -/
+@[expose] def tryAcquire {α : Type} [NativeCodec α] (mutex : NativeMutex α)
+    (env : Environment) : Except Exception
+      (core.result.Result (NativeGuard α) (NativeTryLockError (NativeGuard α))) × Environment :=
+  let invalid := (.error .exhausted, env)
+  match env.nativeHeap.filter (fun cell => cell.1 == mutex.id) with
+  | [(_, storedType, .tuple fields)] =>
+    if storedType != typeName α then invalid else
+    match fields.toList with
+    | [.tuple owner, .atom poison, payload] =>
+      if !(poison == "unpoisoned" || poison == "poisoned") ||
+          (NativeCodec.decode (α := α) payload).isNone then invalid else
+      match owner.toList with
+      | [.atom "locked", .pid _, .nativeReference _] => (.ok (.Err .WouldBlock), env)
+      | _ => invalid
+    | [.atom "unlocked", _, _] =>
+      match pollLock mutex env with
+      | some (.ok (.Ok guard), updated) => (.ok (.Ok guard), updated)
+      | some (.ok (.Err poison), updated) => (.ok (.Err (.Poisoned poison)), updated)
+      | _ => invalid
+    | _ => invalid
+  | _ => invalid
+
+@[expose] def try_lock {α : Type} [NativeCodec α] (mutex : NativeMutex α) :
+    NativeM (core.result.Result (NativeGuard α) (NativeTryLockError (NativeGuard α))) :=
+  .nativeModify (tryAcquire mutex) Result.ofExcept
 
 end NativeMutex
 end Lynx
