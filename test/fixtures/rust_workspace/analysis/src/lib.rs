@@ -140,6 +140,23 @@ pub fn split_lengths(input: &[u8], length: u8) -> Option<(u64, u64)> {
         .map(|(payload, rest)| (payload.len() as u64, rest.len() as u64))
 }
 
+/// Validates UTF-8 and borrows a byte-counted protocol payload.
+/// The returned byte slice may begin inside a multi-byte character.
+pub fn text_payload_bytes(input: &[u8], header: u8) -> Result<Option<&[u8]>, u8> {
+    match core::str::from_utf8(input) {
+        Ok(text) => Ok(experiment_core::protocol::text_bytes(text).get(header as usize..)),
+        Err(_) => Err(4),
+    }
+}
+
+/// Reports a validated payload's byte length without allocating the payload.
+pub fn text_payload_length(input: &[u8], header: u8) -> Result<Option<u64>, u8> {
+    match text_payload_bytes(input, header) {
+        Ok(payload) => Ok(payload.map(|rest| rest.len() as u64)),
+        Err(error) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
