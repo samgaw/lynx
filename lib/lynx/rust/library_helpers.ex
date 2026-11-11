@@ -5,7 +5,47 @@ defmodule Lynx.Rust.LibraryHelpers do
   # Inclusion is not a specification or an approval of its behavior: its actual
   # body goes through the same call audit, extraction and kernel checking as a
   # workspace function. Other dependency functions remain outside this scope.
-  def includes, do: ["thiserror::display", "core::hint::must_use"]
+  def includes,
+    do: [
+      "thiserror::display",
+      "core::hint::must_use",
+      "rustler::term::_::decode"
+    ]
+
+  # Retain the actual SDK forwarding body. Decoder dictionaries are closed by
+  # the existing dispatch audit; no replacement implementation is supplied.
+  def selected?(
+        %{
+          "src" => "Normal",
+          "body" => %{"Structured" => _},
+          "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["rustler", 0]},
+              %{"Ident" => ["term", 0]},
+              %{"Impl" => %{"Ty" => %{"kind" => "InherentImplBlock", "skip_binder" => parent}}},
+              %{"Ident" => ["decode", 0]}
+            ]
+          }
+        } = function,
+        translated
+      ) do
+    refs = Lynx.Rust.LLBC.type_references!(translated)
+
+    case Lynx.Rust.CallModels.expand(parent, refs) do
+      %{"Adt" => %{"id" => id, "builtin" => nil}} ->
+        Enum.any?(
+          translated["type_decls"],
+          &(&1 && &1["def_id"] == id &&
+              &1["item_meta"]["name"] ==
+                Enum.map(~w(rustler term Term), fn part -> %{"Ident" => [part, 0]} end))
+        ) &&
+          function["generics"]["const_generics"] == []
+
+      _ ->
+        false
+    end
+  end
 
   def selected?(
         %{
