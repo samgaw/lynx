@@ -118,6 +118,11 @@ defmodule Lynx.Rustler do
     * `:tools` — pinned tool directory, defaulting to `LYNX_AENEAS_DIR`.
     * `:build_dir` — verification-owned Cargo output directory; defaults under
       the current Mix build directory. The selected root is rebuilt each time.
+    * `:sysroot` — `:default` or opt-in `:full_mir` for pure extraction. The latter
+      checks separate target metadata against Charon's Miri standard library;
+      compiled export discovery still uses the ordinary native build. Both builds
+      use one explicit named target, respecting Cargo target configuration. The Miri
+      configuration/native standard-library correspondence remains trusted.
     * `:cargo` — Cargo `:features`, `:default_features`, `:target`, `:profile`.
     * `:only` — nonempty list of exported `{name, arity}` pairs to verify, such as
       `[calculate: 1]`. Defaults to every export. Unselected NIF calls are rejected
@@ -224,6 +229,7 @@ defmodule Lynx.Rustler do
       :tools,
       :build_dir,
       :cargo,
+      :sysroot,
       :only,
       :proof_modules,
       :proof_roots,
@@ -242,6 +248,7 @@ defmodule Lynx.Rustler do
         key not in allowed,
         do: raise(ArgumentError, "unknown Rustler verification option: #{key}")
 
+    Lynx.Rust.Sysroot.validate!(opts)
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     Lynx.Rust.Mir.validate!(opts)
     Lynx.Rust.Branching.validate!(opts)
@@ -282,7 +289,15 @@ defmodule Lynx.Rustler do
     tools = opts[:tools] || System.fetch_env!("LYNX_AENEAS_DIR")
     build_dir = opts[:build_dir] || Path.join([Mix.Project.build_path(), "lynx", "rust", package])
     proofs = Keyword.get(opts, :proof_modules, [])
-    context = Lynx.Rust.Cargo.build!(workspace, package, build_dir, Keyword.get(opts, :cargo, []))
+
+    context =
+      Lynx.Rust.Cargo.build!(
+        workspace,
+        package,
+        build_dir,
+        Lynx.Rust.Sysroot.cargo_options!(opts, workspace)
+      )
+
     rustler_version = require_rustler!(context)
     require_unwind!(context)
 
@@ -424,8 +439,11 @@ defmodule Lynx.Rustler do
     if execution == :runtime and custom?,
       do: raise(ArgumentError, "runtime Rustler custom encoders are unsupported")
 
+    extraction_context =
+      Lynx.Rust.Sysroot.context!(context, workspace, package, build_dir, tools, opts)
+
     extraction =
-      Lynx.Rust.Extraction.run!(context, tools, roots, project, prefix,
+      Lynx.Rust.Extraction.run!(extraction_context, tools, roots, project, prefix,
         execution: execution,
         root_attribute: opts[:root_attribute],
         mir: mir,

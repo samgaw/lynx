@@ -6,12 +6,13 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, fs, process::Command};
 
-const CONTROL_ENV: [&str; 5] = [
+const CONTROL_ENV: [&str; 6] = [
     "LYNX_RECORD_CRATE",
     "LYNX_RECORD_FILE",
     "LYNX_RECORD_BASELINE",
     "LYNX_RECORD_COMPILER",
     "LYNX_RECORD_CRATES",
+    "LYNX_RECORD_SYSROOT",
 ];
 
 fn run() -> Result<i32, String> {
@@ -36,6 +37,20 @@ fn run() -> Result<i32, String> {
             "-Zalways-encode-mir".to_owned(),
             "-Zmir-opt-level=0".to_owned(),
         ]);
+    }
+    // Cargo checks target crates against the extraction sysroot. Host build
+    // scripts and procedural macros keep the ordinary compiler sysroot, even
+    // when the target triple equals the host triple. Preserve Cargo's flags.
+    if arguments
+        .iter()
+        .any(|arg| arg == "--target" || arg.starts_with("--target="))
+    {
+        if let Some(sysroot) = env::var_os("LYNX_RECORD_SYSROOT") {
+            arguments.push("--sysroot".to_owned());
+            arguments.push(sysroot.into_string().map_err(|_| "non-UTF8 sysroot path")?);
+            arguments.push("-Zalways-encode-mir".to_owned());
+            arguments.push("-Zmir-opt-level=0".to_owned());
+        }
     }
     if crate_name.as_ref() == Some(&selected) {
         let baseline: BTreeMap<String, String> = serde_json::from_slice(

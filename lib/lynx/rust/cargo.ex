@@ -5,7 +5,13 @@ defmodule Lynx.Rust.Cargo do
   @recorder_manifest Path.expand("../../../native/rust_context/Cargo.toml", __DIR__)
   @libraries ~w(lib rlib cdylib dylib staticlib)
 
-  def build!(manifest, package, directory, opts \\ []) do
+  def build!(manifest, package, directory, opts \\ []),
+    do: compile!(manifest, package, directory, opts, nil)
+
+  def metadata!(manifest, package, directory, opts, sysroot),
+    do: compile!(manifest, package, directory, opts, sysroot)
+
+  defp compile!(manifest, package, directory, opts, sysroot) do
     for key <- Keyword.keys(opts),
         key not in [:features, :default_features, :target, :profile],
         do: raise(ArgumentError, "unknown Rust build option: #{key}")
@@ -14,10 +20,12 @@ defmodule Lynx.Rust.Cargo do
       Path.expand(if File.dir?(manifest), do: Path.join(manifest, "Cargo.toml"), else: manifest)
 
     directory = Path.expand(directory)
-    feature_args = feature_args(package, opts)
 
-    metadata_args =
-      feature_args ++ if(opts[:target], do: ["--filter-platform", opts[:target]], else: [])
+    effective_target = target!(opts, Path.dirname(manifest))
+
+    opts = if sysroot, do: Keyword.put(opts, :target, effective_target), else: opts
+    feature_args = feature_args(package, opts)
+    metadata_args = feature_args ++ ["--filter-platform", effective_target]
 
     workspace =
       case Lynx.Rust.Workspace.discover(manifest, metadata_args, @toolchain) do
@@ -45,7 +53,7 @@ defmodule Lynx.Rust.Cargo do
 
     crates = Lynx.Rust.LLBC.crate_names!(workspace)
     # A recorder change must also invalidate compiler metadata retained for dependencies.
-    hash = recorder |> File.read!() |> digest()
+    hash = digest(File.read!(recorder) <> if(sysroot, do: sysroot.fingerprint, else: "native"))
     target_dir = Path.join(directory, "cargo-" <> String.slice(hash, 0, 16))
     File.mkdir_p!(directory)
     record_file = Path.join(directory, "compiler.json")
@@ -70,7 +78,7 @@ defmodule Lynx.Rust.Cargo do
             package,
             "--target-dir",
             target_dir
-          ],
+          ] ++ if(opts[:target], do: ["--target", opts[:target]], else: []),
         cd: Path.dirname(manifest)
       )
 
@@ -79,7 +87,7 @@ defmodule Lynx.Rust.Cargo do
           "rustup",
           cargo ++
             [
-              "build",
+              if(sysroot, do: "check", else: "build"),
               "--locked",
               "--manifest-path",
               manifest,
@@ -98,7 +106,8 @@ defmodule Lynx.Rust.Cargo do
             {"LYNX_RECORD_CRATES", JSON.encode!(crates)},
             {"LYNX_RECORD_CRATE", target["name"]},
             {"LYNX_RECORD_FILE", record_file},
-            {"LYNX_RECORD_BASELINE", baseline_file}
+            {"LYNX_RECORD_BASELINE", baseline_file},
+            {"LYNX_RECORD_SYSROOT", if(sysroot, do: sysroot.path, else: nil)}
           ]
         )
 
@@ -126,7 +135,8 @@ defmodule Lynx.Rust.Cargo do
         artifact: artifact,
         artifacts: artifacts,
         directory: directory,
-        toolchain: @toolchain
+        toolchain: @toolchain,
+        sysroot: sysroot
       }
 
       expected = command!("rustup", ["run", @toolchain, "rustc", "--version"])
@@ -138,6 +148,59 @@ defmodule Lynx.Rust.Cargo do
       context
     after
       File.rm(baseline_file)
+    end
+  end
+
+  def target!(opts, directory) do
+    target = opts[:target] || configured_target!(directory)
+
+    case target do
+      nil ->
+        version = command!("rustup", ["run", @toolchain, "rustc", "-vV"])
+        [_, host] = Regex.run(~r/^host: (.+)$/m, version)
+        host
+
+      target when is_binary(target) and target != "" ->
+        target
+
+      [target] when is_binary(target) and target != "" ->
+        target
+
+      _ ->
+        raise ArgumentError, "Rust verification requires a single Cargo target"
+    end
+  end
+
+  # Ask the pinned Cargo to resolve config-file and environment precedence.
+  # Reading build.target only avoids capturing unrelated configuration secrets.
+  defp configured_target!(directory) do
+    arguments = [
+      "run",
+      @toolchain,
+      "cargo",
+      "-Zunstable-options",
+      "config",
+      "get",
+      "build.target",
+      "--format",
+      "json-value"
+    ]
+
+    case System.cmd("rustup", arguments,
+           cd: directory,
+           stderr_to_stdout: true,
+           env: [{"CARGO_TERM_COLOR", "never"}]
+         ) do
+      {output, 0} ->
+        JSON.decode!(output)
+
+      {output, 101} ->
+        if String.contains?(output, "config value `build.target` is not set"),
+          do: nil,
+          else: raise("cannot resolve Cargo target:\n#{output}")
+
+      {output, status} ->
+        raise("cannot resolve Cargo target (#{status}):\n#{output}")
     end
   end
 
@@ -172,9 +235,17 @@ defmodule Lynx.Rust.Cargo do
   end
 
   def extraction_arguments(context, output) do
-    strip_output(context.record["arguments"]) ++
-      ["--crate-type=rlib", "--emit=metadata", "--out-dir", Path.expand(output)]
+    arguments = strip_output(context.record["arguments"])
+    # Charon supplies the managed sysroot itself. Keep it in the original
+    # record for direct compiler replay, but never pass rustc the option twice.
+    arguments = if context[:sysroot], do: strip_sysroot(arguments), else: arguments
+    arguments ++ ["--crate-type=rlib", "--emit=metadata", "--out-dir", Path.expand(output)]
   end
+
+  defp strip_sysroot([]), do: []
+  defp strip_sysroot(["--sysroot", _ | rest]), do: strip_sysroot(rest)
+  defp strip_sysroot(["--sysroot=" <> _ | rest]), do: strip_sysroot(rest)
+  defp strip_sysroot([argument | rest]), do: [argument | strip_sysroot(rest)]
 
   defp strip_output([]), do: []
 

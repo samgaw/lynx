@@ -205,6 +205,12 @@ defmodule Lynx.Rust.Report do
       fingerprint: extraction.fingerprint,
       trusted_boundary:
         @trusted ++
+          if(Map.get(extraction, :sysroot),
+            do: [
+              "Full-MIR Miri standard-library configuration; native standard-library equivalence is not verified"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :explicit_ownership),
             do: [
               "Lynx compiler ownership trait naming and validated NoopDestruct dictionary adaptation"

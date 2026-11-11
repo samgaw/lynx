@@ -611,6 +611,7 @@ defmodule Lynx.Rust.Extraction do
       unwind: unwind,
       execution: execution,
       translation: translation,
+      sysroot: context[:sysroot],
       implementations: implementations,
       constants: Lynx.Rust.Constants.link!(audit.constants, translation),
       external_types: models,
@@ -742,7 +743,7 @@ defmodule Lynx.Rust.Extraction do
     llbc = Path.join(output, String.replace(module, ".", "_") <> ".llbc")
 
     args =
-      ["rustc", "--sysroot", "default"] ++
+      ["rustc", "--sysroot", if(context[:sysroot], do: context.sysroot.path, else: "default")] ++
         Lynx.Rust.Futures.arguments!(Keyword.get(opts, :futures, :reject), tools) ++
         Lynx.Rust.NativeOwnedDrops.arguments!(Keyword.get(opts, :owned_drops, false), tools) ++
         Lynx.Rust.Mir.arguments!(opts) ++
