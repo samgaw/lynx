@@ -7,7 +7,7 @@ defmodule Lynx.Rustler.NamedArrayTest do
   if is_nil(@tools), do: @moduletag(skip: "set LYNX_AENEAS_DIR for named array NIF proofs")
 
   @tag :tmp_dir
-  test "links named array initializers through Rustler and an Elixir law", %{tmp_dir: tmp} do
+  test "links named array and slice initializers through Rustler and Elixir laws", %{tmp_dir: tmp} do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -38,8 +38,8 @@ defmodule Lynx.Rustler.NamedArrayTest do
       workspace: workspace,
       package: "experiment-nif",
       tools: @tools,
-      cargo: [features: ["named-arrays"]],
-      only: [wire_marker: 0],
+      cargo: [features: ["named-slices"]],
+      only: [wire_marker: 0, borrowed_wire_marker: 0],
       lean_project: project,
       module_prefix: "NamedArrayNif.Extraction",
       build_dir: Path.join(tmp, "build")
@@ -47,12 +47,23 @@ defmodule Lynx.Rustler.NamedArrayTest do
 
     discovered = Lynx.Rustler.prepare!(options)
 
-    assert [%{"name" => "wire_marker", "arity" => 0, "flags" => 0, "result" => "u32"} = binding] =
-             discovered.bindings.bindings
+    assert %{
+             "wire_marker" =>
+               %{"name" => "wire_marker", "arity" => 0, "flags" => 0, "result" => "u32"} = binding,
+             "borrowed_wire_marker" =>
+               %{
+                 "name" => "borrowed_wire_marker",
+                 "arity" => 0,
+                 "flags" => 0,
+                 "result" => %{"option" => "u32"}
+               } = borrowed
+           } = Map.new(discovered.bindings.bindings, &{&1["name"], &1})
 
     File.write!(
       Path.join(project, "NamedArrayNif/Properties.lean"),
-      String.replace(File.read!(@proof), "__FACADE__", binding["lean_name"])
+      File.read!(@proof)
+      |> String.replace("__FACADE__", binding["lean_name"])
+      |> String.replace("__BORROWED_FACADE__", borrowed["lean_name"])
     )
 
     options =
@@ -60,7 +71,10 @@ defmodule Lynx.Rustler.NamedArrayTest do
         [
           proof_modules: ["NamedArrayNif.Properties"],
           required_properties:
-            Enum.map(~w(core_spec composition facade), &("NamedArrayNif.Properties." <> &1))
+            Enum.map(
+              ~w(core_spec composition facade borrowed_bytes core_borrowed borrowed_composition borrowed_facade),
+              &("NamedArrayNif.Properties." <> &1)
+            )
         ]
 
     prepared = Lynx.Rustler.prepare!(options)
@@ -90,6 +104,7 @@ defmodule Lynx.Rustler.NamedArrayTest do
       """)
 
     assert apply(module, :wire_marker, []) == 1_280_921_176
+    assert apply(module, :borrowed_wire_marker, []) == 1_280_921_176
     [{_, beam}] = Code.compile_file(Path.join(@workspace, "elixir/named_array_laws.ex"))
     export = Path.join(tmp, "named-array.export")
     reports = Lynx.Laws.verify([beam], native: {Lynx.Rustler, options}, export: export)
@@ -111,18 +126,18 @@ defmodule Lynx.Rustler.NamedArrayTest do
     source = Path.join(workspace, "core/src/protocol.rs")
     original = File.read!(source)
 
-    changed =
-      String.replace(
-        original,
-        "WIRE_MAGIC: [u8; 4] = [76, 89, 78, 88]",
-        "WIRE_MAGIC: [u8; 4] = [76, 89, 78, 89]"
-      )
+    for {before, replacement} <- [
+          {"WIRE_MAGIC: [u8; 4] = [76, 89, 78, 88]", "WIRE_MAGIC: [u8; 4] = [76, 89, 78, 89]"},
+          {~s(BORROWED_MAGIC: &[u8] = b"LYNX"), ~s(BORROWED_MAGIC: &[u8] = b"LYNY")},
+          {~s(BORROWED_MAGIC: &[u8] = b"LYNX"), ~s(BORROWED_MAGIC: &[u8] = b"LYN")}
+        ] do
+      changed = String.replace(original, before, replacement)
+      assert changed != original
+      File.write!(source, changed)
 
-    assert changed != original
-    File.write!(source, changed)
-
-    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Rustler.prepare!(options)
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
     end
 
     File.write!(source, original)

@@ -82,6 +82,27 @@ pub fn named_magic_word() -> u32 {
     u32::from_be_bytes(WIRE_MAGIC)
 }
 
+/// Shared borrowed wire marker in the form used by protocol parsers.
+pub const BORROWED_MAGIC: &[u8] = b"LYNX";
+
+/// Binary tag bytes have no UTF-8 requirement.
+pub const BINARY_TAG: &[u8] = b"L\0\xff";
+
+/// Borrows the exact named marker bytes.
+pub fn borrowed_magic_bytes() -> &'static [u8] {
+    BORROWED_MAGIC
+}
+
+/// Parses the named marker through the ordinary checked header reader.
+pub fn borrowed_magic_word() -> Option<u32> {
+    read_header(borrowed_magic_bytes())
+}
+
+/// Borrows the exact named binary tag, including zero and non-UTF-8 bytes.
+pub fn binary_tag_bytes() -> &'static [u8] {
+    BINARY_TAG
+}
+
 /// Exercises the bounds-checked indexing primitive independently of NIFs.
 ///
 /// # Panics

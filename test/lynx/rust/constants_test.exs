@@ -259,6 +259,38 @@ defmodule Lynx.Rust.ConstantsTest do
     end
   end
 
+  test "named static shared scalar slices retain checked initializer identity" do
+    for scalar <- [scalar(), %{"Scalar" => "Bool"}] do
+      type = %{"Ref" => ["Static", %{"Slice" => [scalar, nil]}, "Shared"]}
+      audit = LLBC.audit!(named_array(type), ["first_party"])
+      assert %{10 => %{"global_kind" => "NamedConst", "ty" => ^type}} = audit.constants
+      assert %{0 => [11], 11 => []} = LLBC.dependencies(audit)
+    end
+  end
+
+  test "named slice constants reject mutable, nonstatic and nonscalar borrows" do
+    slice = %{"Slice" => [scalar(), nil]}
+
+    for type <- [
+          %{"Ref" => ["Static", slice, "Mut"]},
+          %{"Ref" => ["Erased", slice, "Shared"]},
+          %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Shared"]},
+          %{
+            "Ref" => [
+              "Static",
+              %{"Slice" => [%{"Ref" => ["Static", scalar(), "Shared"]}, nil]},
+              "Shared"
+            ]
+          },
+          %{"Ref" => ["Static", %{"Slice" => [scalar_array(scalar(), "2"), nil]}, "Shared"]},
+          %{"Ref" => ["Static", scalar_array(scalar(), "4"), "Shared"]}
+        ] do
+      assert_raise ArgumentError, ~r/constant initializer/, fn ->
+        LLBC.audit!(named_array(type), ["first_party"])
+      end
+    end
+  end
+
   test "named arrays reject unsupported payloads, references and generic lengths" do
     for type <- [
           scalar_array(%{"Adt" => %{"id" => 0}}, "1"),

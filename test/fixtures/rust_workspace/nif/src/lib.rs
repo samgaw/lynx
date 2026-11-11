@@ -161,6 +161,13 @@ fn named_magic_word() -> u32 {
     experiment_analysis::named_magic_word()
 }
 
+/// Parses a borrowed protocol marker through the existing optional codec.
+#[cfg(feature = "named-slices")]
+#[rustler::nif(name = "borrowed_wire_marker")]
+fn borrowed_magic_word() -> Option<u32> {
+    experiment_analysis::borrowed_magic_word()
+}
+
 /// An unmodelled owned conversion must not silently become verified.
 #[cfg(feature = "unsupported-binary-method")]
 #[rustler::nif]
@@ -598,6 +605,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "text-views"))
                 + usize::from(cfg!(feature = "named-arrays"))
+                + usize::from(cfg!(feature = "named-slices"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
                 + usize::from(cfg!(feature = "custom-encoder"))
                 + usize::from(cfg!(feature = "custom-decoder"))
@@ -788,6 +796,13 @@ mod tests {
             expected.push((
                 "decoded_flag".to_owned(),
                 2,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "named-slices") {
+            expected.push((
+                "borrowed_wire_marker".to_owned(),
+                0,
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }
