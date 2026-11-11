@@ -350,6 +350,7 @@ defmodule Lynx.Rust.ResultModels do
         can_fail: true,
         lift: false,
         elaboration_only: true,
+        formatting_unavailable: true,
         native_cutoff_only: true,
         label:
           "Unused standard error Debug dictionary elaboration only; formatter calls are unsupported and rejected; no formatting behavior verified"

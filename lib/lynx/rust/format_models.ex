@@ -4,7 +4,7 @@ defmodule Lynx.Rust.FormatModels do
 
   # The bounded runtime is not permission to use arbitrary formatting operations.
   # Check default format constructors, writers and every concrete Display
-  # dictionary. Debug, options and custom writers stay closed.
+  # dictionary. Debug renderers are closed separately; options/custom writers stay closed.
   @source Path.expand("../../../priv/lean/LynxRustFormatting.lean", __DIR__)
   @external_resource @source
   @contents File.read!(@source)
@@ -16,11 +16,16 @@ defmodule Lynx.Rust.FormatModels do
         Map.update!(audit, key, fn calls ->
           Map.new(calls, fn {id, model} ->
             {id,
-             if(model[:bounded_formatting],
+             if(model[:bounded_formatting] || model[:formatting_unavailable],
                do:
                  Map.merge(model, %{
                    import: module(prefix),
-                   lean: String.replace_prefix(model.lean, "Aeneas.Std.", "Lynx.RustFormatting."),
+                   lean:
+                     if(model[:formatting_unavailable],
+                       do: "Lynx.RustFormatting.Formatting.unavailable",
+                       else:
+                         String.replace_prefix(model.lean, "Aeneas.Std.", "Lynx.RustFormatting.")
+                     ),
                    builtin: false,
                    backend_rust_name: "lynx_format::function_#{id}"
                  }),
@@ -56,21 +61,25 @@ defmodule Lynx.Rust.FormatModels do
   def external_names(calls) do
     if enabled?(calls) do
       %{
-        "trait_decls" => [
-          %{
-            "rust_pattern" => "Core::fmt::Display",
-            "extract_name" => "Lynx.RustFormatting.core.fmt.Display",
-            "constructor" => "Lynx.RustFormatting.core.fmt.Display.mk"
-          }
-        ],
-        "trait_items" => [
-          %{
-            "trait" => "Core::fmt::Display",
-            "kind" => "method",
-            "rust" => "fmt",
-            "extract" => "fmt"
-          }
-        ]
+        "trait_decls" =>
+          for(
+            family <- ~w(Display Debug),
+            do: %{
+              "rust_pattern" => "Core::fmt::#{family}",
+              "extract_name" => "Lynx.RustFormatting.core.fmt.#{family}",
+              "constructor" => "Lynx.RustFormatting.core.fmt.#{family}.mk"
+            }
+          ),
+        "trait_items" =>
+          for(
+            family <- ~w(Display Debug),
+            do: %{
+              "trait" => "Core::fmt::#{family}",
+              "kind" => "method",
+              "rust" => "fmt",
+              "extract" => "fmt"
+            }
+          )
       }
     else
       %{}
@@ -108,7 +117,7 @@ defmodule Lynx.Rust.FormatModels do
 
       functions =
         for {id, model} <- calls,
-            model[:bounded_formatting],
+            model[:bounded_formatting] || model[:formatting_unavailable],
             do:
               {"fun_decls", id, model.function["item_meta"]["name"],
                path(~w(lynx_format) ++ ["function_#{id}"])}
@@ -133,12 +142,20 @@ defmodule Lynx.Rust.FormatModels do
 
       traits =
         for trait <- document["translated"]["trait_decls"],
-            trait && trait["item_meta"]["name"] == path(~w(core fmt Display)) do
-          unless same.("trait_decls", trait["def_id"]) and
-                   display_trait?(trait["def_id"], ctx),
-                 do: raise(ArgumentError, "formatting alias requires its audited Display trait")
+            trait &&
+              trait["item_meta"]["name"] in Enum.map(
+                ~w(Display Debug),
+                &path(["core", "fmt", &1])
+              ) do
+          %{"Ident" => [family, 0]} = List.last(trait["item_meta"]["name"])
 
-          {"trait_decls", trait["def_id"], trait["item_meta"]["name"], path(~w(Core fmt Display))}
+          unless same.("trait_decls", trait["def_id"]) and
+                   display_trait?(trait["def_id"], ctx, family),
+                 do:
+                   raise(ArgumentError, "formatting alias requires its audited formatting trait")
+
+          {"trait_decls", trait["def_id"], trait["item_meta"]["name"],
+           path(["Core", "fmt", family])}
         end
 
       aliases = functions ++ types ++ traits
@@ -180,12 +197,18 @@ defmodule Lynx.Rust.FormatModels do
 
   def restore_report_names(translation, aliases) do
     if Enum.any?(aliases, fn {kind, _, original, renamed} ->
-         kind == "trait_decls" and original == path(~w(core fmt Display)) and
-           renamed == path(~w(Core fmt Display))
+         kind == "trait_decls" and
+           Enum.any?(~w(Display Debug), fn family ->
+             original == path(["core", "fmt", family]) and
+               renamed == path(["Core", "fmt", family])
+           end)
        end) do
       Map.update!(translation, "functions", fn functions ->
         Enum.map(functions, fn row ->
-          name = String.replace(row["rust_name"], "{Core::fmt::Display<", "{core::fmt::Display<")
+          name =
+            Enum.reduce(~w(Display Debug), row["rust_name"], fn family, name ->
+              String.replace(name, "{Core::fmt::#{family}<", "{core::fmt::#{family}<")
+            end)
 
           if name == row["rust_name"],
             do: row,
@@ -263,9 +286,10 @@ defmodule Lynx.Rust.FormatModels do
            %{"Ident" => ["fmt", 0]},
            %{"Ident" => ["rt", 0]},
            %{"Impl" => %{"Ty" => %{"skip_binder" => parent, "params" => params}}},
-           %{"Ident" => ["new_display", 0]}
-         ]} ->
-          new_display_model(function, parent, params, ctx)
+           %{"Ident" => [method, 0]}
+         ]}
+        when method in ["new_display", "new_debug"] ->
+          new_display_model(function, parent, params, ctx, method)
 
         {unsafe,
          [
@@ -277,7 +301,7 @@ defmodule Lynx.Rust.FormatModels do
           formatter_model(function, unsafe, method, parent, params, ctx)
 
         {false, name} ->
-          standard_display_model(function, name, ctx)
+          atom_debug_model(function, name, ctx) || standard_display_model(function, name, ctx)
 
         _ ->
           nil
@@ -368,7 +392,8 @@ defmodule Lynx.Rust.FormatModels do
     end
   end
 
-  defp new_display_model(function, parent, params, ctx) do
+  defp new_display_model(function, parent, params, ctx, method) do
+    family = if method == "new_debug", do: "Debug", else: "Display"
     sig = expand(function["signature"], ctx)
     generics = expand(function["generics"], ctx)
 
@@ -382,15 +407,15 @@ defmodule Lynx.Rust.FormatModels do
            ),
          true <- parameters?(generics, 2, 1),
          [clause] <- generics["trait_clauses"],
-         {:ok, display} <- display_clause(clause, ctx),
+         {:ok, display} <- display_clause(clause, ctx, family),
          true <- generics["outlives"] == [outlives(%{"Lub" => variable(0)}, region(1))],
          true <- sig["inputs"] == [reference(region(1), variable(0), "Shared")],
          true <- named_type?(sig["output"], ~w(core fmt rt Argument), [region(1)], ctx) do
       model(
-        "core::fmt::rt::{core::fmt::rt::Argument<'0>}::new_display",
-        "Aeneas.Std.core.fmt.rt.Argument.new_display",
+        "core::fmt::rt::{core::fmt::rt::Argument<'0>}::#{method}",
+        "Aeneas.Std.core.fmt.rt.Argument.#{method}",
         true,
-        "Bounded default Display argument retaining the actual audited renderer; Rust core implementation not verified"
+        "Bounded default #{family} argument retaining the actual audited renderer; Rust core implementation not verified"
       )
       |> Map.merge(%{display_trait: display, display_regions: 2})
     else
@@ -465,6 +490,42 @@ defmodule Lynx.Rust.FormatModels do
         true,
         "Bounded format-argument constructor: supported UTF-8 template and argument indices checked before success; unsupported/invalid inputs cut off; Rust core implementation not verified"
       )
+    else
+      _ -> nil
+    end
+  end
+
+  defp atom_debug_model(function, name, ctx) do
+    with [
+           %{"Ident" => ["rustler", 0]},
+           %{"Ident" => ["types", 0]},
+           %{"Ident" => ["atom", 0]},
+           %{"Impl" => %{"Trait" => impl_id}},
+           %{"Ident" => ["fmt", 0]}
+         ] <- name,
+         %{
+           "src" => "Normal",
+           "is_negative" => false,
+           "is_unsafe" => false,
+           "consts" => [],
+           "types" => [],
+           "implied_trait_refs" => [],
+           "impl_trait" => %{"id" => trait, "generics" => args}
+         } = impl <- declaration(ctx, "trait_impls", impl_id),
+         true <- display_trait?(trait, ctx, "Debug"),
+         %{"regions" => [], "const_generics" => [], "trait_refs" => [], "types" => [self]} <-
+           expand(args, ctx),
+         true <- named_type?(self, ~w(rustler types atom Atom), [], ctx),
+         true <-
+           plain_parameters?(impl["generics"], 0, 0) and display_signature?(function, self, ctx),
+         true <- method_identity?(function, impl, trait, ctx) do
+      model(
+        "rustler::types::atom::{core::fmt::Debug<rustler::types::atom::Atom>}::fmt",
+        "Aeneas.Std.rustler.atom.Debug.fmt",
+        false,
+        "Rustler Atom Debug FFI model for unquoted ASCII atom names up to 255 bytes; other names exhaust verification; native enif_snprintf, allocation and Rustler printing implementation unverified"
+      )
+      |> Map.put(:display_renderer, true)
     else
       _ -> nil
     end
@@ -865,6 +926,8 @@ defmodule Lynx.Rust.FormatModels do
     end
   end
 
+  defp display_clause(clause, ctx, family \\ "Display")
+
   defp display_clause(
          %{
            "clause_id" => 0,
@@ -874,16 +937,17 @@ defmodule Lynx.Rust.FormatModels do
              "skip_binder" => %{"id" => id, "generics" => args}
            }
          },
-         ctx
+         ctx,
+         family
        ) do
-    if expand(args, ctx) == arguments([variable(0)]) and display_trait?(id, ctx),
+    if expand(args, ctx) == arguments([variable(0)]) and display_trait?(id, ctx, family),
       do: {:ok, id},
       else: :error
   end
 
-  defp display_clause(_, _), do: :error
+  defp display_clause(_, _, _), do: :error
 
-  defp display_trait?(id, ctx) do
+  defp display_trait?(id, ctx, family \\ "Display") do
     case declaration(ctx, "trait_decls", id) do
       %{
         "item_meta" => %{"name" => name},
@@ -900,7 +964,7 @@ defmodule Lynx.Rust.FormatModels do
           }
         ]
       } ->
-        name == path(~w(core fmt Display)) and plain_parameters?(params, 0, 1) and
+        name == path(["core", "fmt", family]) and plain_parameters?(params, 0, 1) and
           plain_parameters?(method_params, 3, 0) and
           display_signature?(
             %{"signature" => sig |> expand(ctx) |> free_bound(), "generics" => method_params(3)},

@@ -13,6 +13,9 @@ allocation and correspondence to Rust core/alloc remain external boundaries. -/
 structure core.fmt.Display (Self : Type _) where
   fmt : Self → core.fmt.Formatter → RustM (core.result.Result Unit core.fmt.Error × core.fmt.Formatter)
 
+structure core.fmt.Debug (Self : Type _) where
+  fmt : Self → core.fmt.Formatter → RustM (core.result.Result Unit core.fmt.Error × core.fmt.Formatter)
+
 /-- Formatting arguments retain the actual argument renderer rather than erasing it. -/
 @[expose, reducible]
 def core.fmt.Arguments : Type :=
@@ -178,7 +181,30 @@ def core.fmt.rt.Argument.new_display
   {T : Type _} (inst : core.fmt.Display T) (value : T) : RustM core.fmt.rt.Argument :=
   .ok (inst.fmt value)
 
+@[expose] def core.fmt.rt.Argument.new_debug
+    {T : Type _} (inst : core.fmt.Debug T) (value : T) : RustM core.fmt.rt.Argument :=
+  .ok (inst.fmt value)
 
+/-- An unused foreign formatter dictionary is not callable semantics. -/
+@[expose] def Formatting.unavailable {T : Type} (_ : T) (_ : core.fmt.Formatter) :
+    RustM (core.result.Result Unit core.fmt.Error × core.fmt.Formatter) := .fail .undef
+
+/-- ASCII subset of OTP native `%T` printing. Names containing `@` need
+quotes in this printer. Supported names fit the first 1024-byte buffer;
+quoting, escapes and non-ASCII printing remain cutoffs. -/
+@[expose] def Formatting.bareAtom (value : String) : Bool :=
+  match value.toList with
+  | [] => false
+  | first :: rest => value.toUTF8.size ≤ 255 && first ≥ 'a' && first ≤ 'z' &&
+      rest.all (fun c => (c ≥ 'a' && c ≤ 'z') || (c ≥ 'A' && c ≤ 'Z') ||
+        (c ≥ '0' && c ≤ '9') || c == '_')
+
+theorem Formatting.bareAtom_at_cutoff : Formatting.bareAtom "a@b" = false := by
+  simp [Formatting.bareAtom]
+
+@[expose] def rustler.atom.Debug.fmt (value : String) (fmt : core.fmt.Formatter) :
+    RustM (core.result.Result Unit core.fmt.Error × core.fmt.Formatter) :=
+  if Formatting.bareAtom value then Formatting.append fmt value else .fail .undef
 
 @[expose, simp]
 def core.fmt.num.imp.DisplayU8.fmt : Std.U8 → core.fmt.Formatter →
