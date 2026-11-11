@@ -596,6 +596,7 @@ mod tests {
                 + usize::from(cfg!(feature = "derived-map"))
                 + usize::from(cfg!(feature = "derived-map-decoder"))
                 + usize::from(cfg!(feature = "derived-struct"))
+                + usize::from(cfg!(feature = "derived-struct-decoder"))
                 + usize::from(cfg!(feature = "derived-list"))
                 + usize::from(cfg!(feature = "derived-tagged"))
                 + usize::from(cfg!(feature = "checked-option"))
@@ -792,6 +793,13 @@ mod tests {
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }
+        if cfg!(feature = "derived-struct-decoder") {
+            expected.push((
+                "ordered_struct".to_owned(),
+                1,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
         if cfg!(feature = "derived-tuple") {
             expected.push((
                 "derived_pair".to_owned(),
@@ -816,4 +824,11 @@ mod tests {
 fn ordered_map(input: OrderedMap) -> OrderedMap {
     let (low, high) = experiment_analysis::order_pair(input.low, input.high);
     OrderedMap { low, high }
+}
+
+#[cfg(feature = "derived-struct-decoder")]
+#[rustler::nif]
+fn ordered_struct(input: OrderedStruct) -> OrderedStruct {
+    let (low, high) = experiment_analysis::order_pair(input.low, input.high);
+    OrderedStruct { low, high }
 }

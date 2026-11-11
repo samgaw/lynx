@@ -58,7 +58,9 @@ defmodule Lynx.Rust.CallModels do
               do: Lynx.Rustler.EncoderModels.resolve(function, translated, refs)
             ) ||
             if(:rustler_decoders in enabled,
-              do: Lynx.Rustler.DecoderModels.resolve(function, translated, refs)
+              do:
+                Lynx.Rustler.DecoderModels.resolve(function, translated, refs) ||
+                  Lynx.Rustler.AtomModels.resolve(function, translated, refs)
             ) ||
             match_function(function, translated, refs, enabled),
         model != nil,
