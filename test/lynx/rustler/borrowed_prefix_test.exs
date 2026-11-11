@@ -49,7 +49,7 @@ defmodule Lynx.Rustler.BorrowedPrefixTest do
         package: "experiment-nif",
         tools: @tools,
         cargo: [features: ["borrowed-prefix"]],
-        only: [prefix_length: 2],
+        only: [prefix_length: 2, split_lengths: 2],
         build_dir: Path.join(tmp, "build"),
         lean_project: project,
         module_prefix: "BorrowedPrefix.Extraction"
@@ -57,8 +57,15 @@ defmodule Lynx.Rustler.BorrowedPrefixTest do
 
       discovered = Lynx.Rustler.prepare!(options)
 
-      assert [%{"name" => "prefix_length", "arity" => 2, "flags" => 1} = binding] =
-               discovered.bindings.bindings
+      assert [
+               %{"name" => "prefix_length", "arity" => 2, "flags" => 1} = binding,
+               %{
+                 "name" => "split_lengths",
+                 "arity" => 2,
+                 "flags" => 1,
+                 "result" => %{"option" => %{"tuple" => ["u64", "u64"]}}
+               } = split_binding
+             ] = discovered.bindings.bindings
 
       proof =
         File.read!(Path.join(@fixture, "proofs/RustWorkspace/BorrowedPrefix.lean"))
@@ -67,15 +74,25 @@ defmodule Lynx.Rustler.BorrowedPrefixTest do
       property = Path.join(project, "BorrowedPrefix/Properties.lean")
       File.write!(property, proof)
 
+      split_proof =
+        File.read!(Path.join(@fixture, "proofs/RustWorkspace/SplitConsumption.lean"))
+        |> String.replace("__FACADE__", split_binding["lean_name"])
+
+      File.write!(Path.join(project, "BorrowedPrefix/Consumption.lean"), split_proof)
+
       options =
         options ++
           [
-            proof_modules: ["BorrowedPrefix.Properties"],
+            proof_modules: ["BorrowedPrefix.Properties", "BorrowedPrefix.Consumption"],
             required_properties:
               Enum.map(
                 ~w(core_spec bytes_spec caller_spec facade_spec),
                 &("BorrowedPrefix.Properties." <> &1)
-              )
+              ) ++
+                Enum.map(
+                  ~w(window_spec remainder_spec parser_spec exact_bytes reconstruct caller_spec facade_spec),
+                  &("BorrowedPrefix.Consumption." <> &1)
+                )
           ]
 
       prepared = Lynx.Rustler.prepare!(options)
@@ -128,6 +145,17 @@ defmodule Lynx.Rustler.BorrowedPrefixTest do
           ],
           do: assert(apply(module, :prefix_length, [value, length]) == expected)
 
+      for {value, length, expected} <- [
+            {<<>>, 0, {0, 0}},
+            {<<>>, 1, nil},
+            {<<0, 255, 128>>, 0, {0, 3}},
+            {<<0, 255, 128>>, 2, {2, 1}},
+            {<<0, 255, 128>>, 3, {3, 0}},
+            {<<0, 255, 128>>, 4, nil},
+            {<<65>>, 256, {0, 1}}
+          ],
+          do: assert(apply(module, :split_lengths, [value, length]) == expected)
+
       for bad <- [-1, 4_294_967_296, true, "1"],
           do: assert(catch_error(apply(module, :prefix_length, [<<>>, bad])) == :badarg)
 
@@ -169,6 +197,24 @@ defmodule Lynx.Rustler.BorrowedPrefixTest do
       end
 
       File.write!(core, original)
+      caller = Path.join(workspace, "analysis/src/lib.rs")
+      caller_original = File.read!(caller)
+
+      changed =
+        String.replace(
+          caller_original,
+          "protocol::remainder(input, position)",
+          "protocol::remainder(input, 0)"
+        )
+
+      refute changed == caller_original
+      File.write!(caller, changed)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+      File.write!(caller, caller_original)
       assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
     end
   end
@@ -222,11 +268,83 @@ defmodule Lynx.Rustler.BorrowedPrefixTest do
         """
       end
 
+    split_laws =
+      for {name, comparison, result} <- [
+            {"split_available", "length <= byte_size(value)",
+             "{length, byte_size(value) - length}"},
+            {"split_truncated", "length > byte_size(value)", "nil"}
+          ] do
+        finish =
+          if name == "split_available" do
+            """
+            cases output with
+            | none => simp [chosen] at values
+            | some pair =>
+              rcases pair with ⟨used, rest⟩
+              simp only [Option.map_some, if_pos chosen, Option.some.injEq, Prod.mk.injEq] at values
+              have used_value : (used.val : Int) = n := by rw [values.1]; exact vv
+              have rest_value : (rest.val : Int) = (bytes.size : Int) - n := by
+                rw [values.2, Int.natCast_sub chosen]
+                omega
+              simp [«split_available:ensures/2», Elixir.#{prefix}.Native.«split_lengths/2»,
+                Elixir.#{prefix}.Native.«split_lengths:execution/2», Lynx.Rustler.decodeBinary,
+                decoded, computed, Lynx.Rustler.execute, Lynx.Rustler.encodeOption,
+                Lynx.Rustler.encodeUnsigned, used_value, rest_value,
+                Erlang.erlang.«-/2_integers», Erlang.erlang.«byte_size/1», Erlang.erlang.«==/2»]
+            """
+          else
+            """
+            have absent : output = none := by cases output <;> simp_all [chosen] <;> omega
+            simp [«split_truncated:ensures/2», Elixir.#{prefix}.Native.«split_lengths/2»,
+              Elixir.#{prefix}.Native.«split_lengths:execution/2», Lynx.Rustler.decodeBinary,
+              decoded, computed, absent, Lynx.Rustler.execute, Lynx.Rustler.encodeOption,
+              Erlang.erlang.«==/2»]
+            """
+          end
+
+        finish = finish |> String.trim_trailing() |> String.replace("\n", "\n  ")
+
+        """
+        law #{name}(value, length),
+          requires: is_binary(value) and byte_size(value) <= 2_147_483_647 and
+            is_integer(length) and length >= 0 and length <= 255 and #{comparison},
+          expects: #{prefix}.Native.split_lengths(value, length) == #{result},
+          proof: ~LEAN\"\"\"
+          cases length <;> simp [«#{name}:requires/2», Erlang.erlang.«is_integer/1»] at requires
+          rename_i n
+          cases value <;> simp [«#{name}:requires/2», Erlang.erlang.«is_binary/1»] at requires
+          rename_i bytes bits valid
+          rcases bits with ⟨bits, bound⟩
+          cases bits <;> simp_all [«#{name}:requires/2», Erlang.erlang.«is_binary/1»,
+            Erlang.erlang.«byte_size/1»]
+          have unsigned : bytes.size ≤ Aeneas.Std.Usize.max := by
+            cases System.Platform.numBits_eq <;> scalar_tac
+          have signed : bytes.size ≤ Aeneas.Std.Isize.max.toNat := by
+            cases System.Platform.numBits_eq <;> scalar_tac
+          let v : Aeneas.Std.U8 := Aeneas.Std.U8.ofNatCore n.toNat (by norm_num; omega)
+          have vv : (v.val : Int) = n := by simp [v]; omega
+          have range : 0 ≤ n ∧ n < (2^32 : Int) := by norm_num; omega
+          have decoded : Lynx.Rustler.decodeUnsigned .U8 32 (.integer n) = .ok v := by
+            simp only [Lynx.Rustler.decodeUnsigned]
+            rw [if_pos range]
+            apply congrArg Except.ok
+            apply Aeneas.Std.UScalar.eq_of_val_eq
+            dsimp only [v]
+            rw [Aeneas.Std.U8.ofNatCore_val_eq]
+            change n.toNat % 256 = n.toNat
+            exact Nat.mod_eq_of_lt (by omega)
+          have chosen : #{if name == "split_available", do: "v.val ≤ bytes.size", else: "¬ v.val ≤ bytes.size"} := by omega
+          obtain ⟨output, computed, values⟩ := BorrowedPrefix.Consumption.facade_spec bytes v unsigned signed
+          #{finish}
+          \"\"\"
+        """
+      end
+
     """
     defmodule #{prefix}.Laws do
       @compile :debug_info
       use Lynx.Laws
-      #{Enum.join(laws, "\n")}
+      #{Enum.join(laws ++ split_laws, "\n")}
       law narrows_count,
         expects: #{prefix}.Native.prefix_length(<<>>, 256) == 0,
         proof: ~LEAN\"\"\"
