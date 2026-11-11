@@ -17,16 +17,11 @@ defmodule Lynx.Rust.SliceModels do
       inputs = CallModels.expand(sig["inputs"], refs)
       output = CallModels.expand(sig["output"], refs)
       name = function["item_meta"]["name"]
-      range_to = range_to_type(translated, refs, usize)
+      range = range_get(function, translated, refs, t, slice, usize, shared, inputs, output)
 
       cond do
-        range_to != nil and inputs == [range_to, shared] and
-          option_reference?(output, slice, translated, refs) and
-            index_identity?(function, translated, refs, t, slice, range_to, "get", 0, slice) ->
-          model(
-            "core::slice::index::{core::slice::index::SliceIndex<core::ops::range::RangeTo<usize>, [@T], [@T]>}::get",
-            "Aeneas.Std.core.slice.index.SliceIndexRangeToUsizeSlice.get"
-          )
+        range != nil ->
+          range
 
         inherent?(name, slice, refs, "is_empty") and inputs == [shared] and
           output == %{"Scalar" => "Bool"} and function["src"] == "Normal" ->
@@ -209,18 +204,45 @@ defmodule Lynx.Rust.SliceModels do
 
   # Retain and check the compiler's actual nominal range definition. The model
   # is selected by structure and identity, never by a user type's short name.
-  defp range_to_type(translated, refs, usize) do
+  defp range_get(function, translated, refs, t, slice, usize, shared, inputs, output) do
+    if option_reference?(output, slice, translated, refs) do
+      Enum.find_value(
+        [{"RangeTo", ["end"]}, {"RangeFrom", ["start"]}, {"Range", ["start", "end"]}],
+        fn {kind, fields} ->
+          index = range_type(translated, refs, usize, kind, fields)
+
+          if index != nil and inputs == [index, shared] and
+               index_identity?(function, translated, refs, t, slice, index, "get", 0, slice) do
+            model(
+              "core::slice::index::{core::slice::index::SliceIndex<core::ops::range::#{kind}<usize>, [@T], [@T]>}::get",
+              "Aeneas.Std.core.slice.index.SliceIndex#{kind}UsizeSlice.get"
+            )
+            |> Map.put(
+              :label,
+              "Aeneas safe slice model for #{kind}::get; invalid bounds return None; Rust core implementation not verified"
+            )
+          end
+        end
+      )
+    end
+  end
+
+  defp range_type(translated, refs, usize, kind, expected_fields) do
     Enum.find_value(translated["type_decls"], fn
       %{
         "def_id" => id,
         "src" => "Normal",
         "item_meta" => %{"name" => name},
         "generics" => params,
-        "kind" => %{"Struct" => [%{"name" => "end", "ty" => field}]}
-      } ->
-        if name == Enum.map(~w(core ops range RangeTo), &%{"Ident" => [&1, 0]}) and
-             impl_parameters?(params) and
-             CallModels.expand(field, refs) == %{"TypeVar" => %{"Free" => 0}} do
+        "kind" => %{"Struct" => fields}
+      }
+      when is_list(fields) ->
+        if name == Enum.map(["core", "ops", "range", kind], &%{"Ident" => [&1, 0]}) and
+             impl_parameters?(params) and Enum.map(fields, & &1["name"]) == expected_fields and
+             Enum.all?(
+               fields,
+               &(CallModels.expand(&1["ty"], refs) == %{"TypeVar" => %{"Free" => 0}})
+             ) do
           %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([usize])}}
         end
 

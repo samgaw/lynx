@@ -83,7 +83,9 @@ defmodule Lynx.Rust.IndexModels do
          true <-
            lean in [
              "Aeneas.Std.core.slice.index.Usize.get",
-             "Aeneas.Std.core.slice.index.SliceIndexRangeToUsizeSlice.get"
+             "Aeneas.Std.core.slice.index.SliceIndexRangeToUsizeSlice.get",
+             "Aeneas.Std.core.slice.index.SliceIndexRangeUsizeSlice.get",
+             "Aeneas.Std.core.slice.index.SliceIndexRangeFromUsizeSlice.get"
            ] do
       method
     else
