@@ -44,6 +44,55 @@ defmodule Lynx.Rustler.DecoderModels do
     end
   end
 
+  def resolve(
+        %{
+          "body" => "Opaque",
+          "src" => "Normal",
+          "item_meta" => %{
+            "has_errors" => false,
+            "name" => [
+              %{"Ident" => ["rustler", 0]},
+              %{"Ident" => ["types", 0]},
+              %{"Ident" => ["atom", 0]},
+              %{"Impl" => %{"Ty" => parent}},
+              %{"Ident" => ["from_term", 0]}
+            ]
+          }
+        } = function,
+        translated,
+        refs
+      ) do
+    with %{"kind" => "Opaque", "def_id" => atom} <- named(translated, ~w(rustler types atom Atom)),
+         %{"kind" => "Opaque", "def_id" => term} <- named(translated, ~w(rustler term Term)),
+         %{"kind" => "Opaque", "def_id" => error} <- named(translated, ~w(rustler error Error)),
+         %{"def_id" => result} <- named(translated, ~w(core result Result)),
+         true <- LLBC.result_type?(result, %{translated: translated, references: refs}),
+         true <- parent["kind"] == "InherentImplBlock" and params?(parent["params"], 0, 0),
+         true <- CallModels.expand(parent["skip_binder"], refs) == adt(atom),
+         true <- params?(function["generics"], 1, 0),
+         true <-
+           CallModels.expand(function["signature"], refs) == %{
+             "is_unsafe" => false,
+             "abi" => "Rust",
+             "is_variadic" => false,
+             "inputs" => [adt(term, [], [region()])],
+             "output" => adt(result, [adt(atom), adt(error)])
+           } do
+      %{
+        rust_name: "rustler::types::atom::Atom::from_term",
+        backend_rust_name: "rustler::types::atom::_::from_term",
+        lean: "Lynx.Rustler.Decoding.atom",
+        builtin: false,
+        can_fail: true,
+        lift: false,
+        label:
+          "Rustler Atom::from_term FFI model: exact atom identity and non-atom BadArg; native handles, interning and SDK/OTP implementation unverified"
+      }
+    else
+      _ -> nil
+    end
+  end
+
   def resolve(%{"body" => "Opaque"} = function, translated, refs) do
     ctx = %{translated: translated, refs: refs, traits: %{}}
 
