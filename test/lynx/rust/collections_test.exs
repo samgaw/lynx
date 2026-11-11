@@ -24,7 +24,7 @@ defmodule Lynx.Rust.CollectionsTest do
     options = [
       roots:
         Enum.map(
-          ~w(replace_first slice_length replace_at batch_length result_is_ok lookup),
+          ~w(replace_first slice_length replace_at batch_length result_is_ok lookup vector_at),
           &("experiment_analysis::" <> &1)
         ) ++ ["experiment_core::collections::batch_length"],
       mir: :elaborated,
@@ -34,7 +34,7 @@ defmodule Lynx.Rust.CollectionsTest do
       proof_modules: ["Collections.Properties"],
       required_properties:
         Enum.map(
-          ~w(slice_transition vector_transition composition preserves_length empty_unchanged shared_core shared_composition index_panic generic_core generic_composition result_core result_composition lookup_core lookup_composition lookup_outside),
+          ~w(slice_transition vector_transition composition preserves_length empty_unchanged shared_core shared_composition index_panic generic_core generic_composition result_core result_composition lookup_core lookup_composition lookup_outside vector_index_core vector_index_composition vector_index_outside),
           &("Collections.Properties." <> &1)
         )
     ]
