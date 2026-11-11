@@ -14,6 +14,15 @@ defmodule Lynx.Rust do
   not proofs of Rust core's implementation. Other slice/string operations remain
   rejected unless separately supported.
 
+  `sysroot: :full_mir` performs a separate metadata-only Cargo check against
+  Charon's full-MIR Miri standard library, rebuilding target dependencies together.
+  Host build scripts and procedural macros retain the native sysroot. The normal
+  native build is retained; both builds use the same explicit target, resolved
+  from Cargo configuration or the host. Matching package, features, profile and
+  target are checked. Named targets are supported; custom target files are rejected. This opt-in mode currently requires pure execution. Its Miri library
+  configuration and equivalence to the native standard library remain explicit
+  trusted boundaries. The sysroot artifacts are included in proof fingerprints.
+
   Shared `str::as_bytes`, `str::len` and `str::is_empty` reuse the existing
   Aeneas byte-slice representation. Views preserve bytes and lengths count bytes,
   including multi-byte Unicode text. The standard-library conversion and native
@@ -518,6 +527,7 @@ defmodule Lynx.Rust do
       :tools,
       :build_dir,
       :cargo,
+      :sysroot,
       :execution,
       :unwind,
       :futures,
@@ -530,6 +540,7 @@ defmodule Lynx.Rust do
         key not in allowed,
         do: raise(ArgumentError, "unknown Rust verification option: #{key}")
 
+    Lynx.Rust.Sysroot.validate!(opts)
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     Lynx.Rust.Mir.validate!(opts)
     Lynx.Rust.Branching.validate!(opts)
@@ -541,7 +552,16 @@ defmodule Lynx.Rust do
     prefix = Keyword.get(opts, :module_prefix, "Native.Extraction")
     proofs = Keyword.get(opts, :proof_modules, [])
     directory = opts[:build_dir] || Path.join([Mix.Project.build_path(), "lynx", "rust", package])
-    context = Lynx.Rust.Cargo.build!(workspace, package, directory, Keyword.get(opts, :cargo, []))
+
+    context =
+      Lynx.Rust.Cargo.build!(
+        workspace,
+        package,
+        directory,
+        Lynx.Rust.Sysroot.cargo_options!(opts, workspace)
+      )
+
+    context = Lynx.Rust.Sysroot.context!(context, workspace, package, directory, tools, opts)
 
     project =
       Lynx.Rust.Project.ensure!(

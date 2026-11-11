@@ -49,9 +49,9 @@ defmodule Lynx.Rust.Fingerprint do
 
     digest(
       :erlang.term_to_binary(
-        {"lynx-rust-1", context.toolchain, record["compiler"], record["directory"],
-         record["arguments"], environment, source_hashes, extern_hashes, tool_hashes,
-         File.read!(llbc), translation},
+        {"lynx-rust-2", context[:sysroot], context.toolchain, record["compiler"],
+         record["directory"], record["arguments"], environment, source_hashes, extern_hashes,
+         tool_hashes, File.read!(llbc), translation},
         [:deterministic]
       )
     )
