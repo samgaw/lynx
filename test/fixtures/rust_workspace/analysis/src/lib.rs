@@ -126,3 +126,28 @@ pub fn masked_error(value: u64, mask: u64) -> Result<u64, u64> {
 pub fn prefix_length(input: &[u8], length: u8) -> Option<u64> {
     experiment_core::protocol::prefix(input, length).map(|payload| payload.len() as u64)
 }
+
+/// Separates a bounded payload from the exact unconsumed remainder.
+pub fn split_payload(input: &[u8], position: usize) -> Option<(&[u8], &[u8])> {
+    let payload = experiment_core::protocol::window(input, 0, position)?;
+    let rest = experiment_core::protocol::remainder(input, position)?;
+    Some((payload, rest))
+}
+
+/// Reports consumed and remaining lengths without exporting borrowed pointers.
+pub fn split_lengths(input: &[u8], length: u8) -> Option<(u64, u64)> {
+    split_payload(input, length as usize)
+        .map(|(payload, rest)| (payload.len() as u64, rest.len() as u64))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn split_lengths_account_for_the_entire_input() {
+        let input = [0, 255, 128, 65];
+        assert_eq!(super::split_lengths(&input, 0), Some((0, 4)));
+        assert_eq!(super::split_lengths(&input, 2), Some((2, 2)));
+        assert_eq!(super::split_lengths(&input, 4), Some((4, 0)));
+        assert_eq!(super::split_lengths(&input, 5), None);
+    }
+}

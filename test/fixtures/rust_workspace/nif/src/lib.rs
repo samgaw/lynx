@@ -603,7 +603,7 @@ mod tests {
                 + usize::from(cfg!(feature = "derived-tagged-decoder"))
                 + usize::from(cfg!(feature = "checked-option"))
                 + usize::from(cfg!(feature = "scalar-callbacks"))
-                + usize::from(cfg!(feature = "borrowed-prefix"))
+                + 2 * usize::from(cfg!(feature = "borrowed-prefix"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -777,6 +777,11 @@ mod tests {
         }
         if cfg!(feature = "borrowed-prefix") {
             expected.push((
+                "split_lengths".to_owned(),
+                2,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+            expected.push((
                 "prefix_length".to_owned(),
                 2,
                 rustler::SchedulerFlags::DirtyCpu as u32,
@@ -898,4 +903,11 @@ fn masked_error(value: u64, mask: u64) -> Result<u64, u64> {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn prefix_length(value: rustler::Binary<'_>, length: u8) -> Option<u64> {
     experiment_analysis::prefix_length(value.as_slice(), length)
+}
+
+/// Reports exact payload and remainder lengths through the verified parser.
+#[cfg(feature = "borrowed-prefix")]
+#[rustler::nif(schedule = "DirtyCpu")]
+fn split_lengths(value: rustler::Binary<'_>, length: u8) -> Option<(u64, u64)> {
+    experiment_analysis::split_lengths(value.as_slice(), length)
 }

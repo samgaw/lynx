@@ -5,6 +5,16 @@ pub fn prefix(input: &[u8], length: u8) -> Option<&[u8]> {
     input.get(..length as usize)
 }
 
+/// Borrows a window, rejecting reversed or out-of-bounds endpoints.
+pub fn window(input: &[u8], start: usize, end: usize) -> Option<&[u8]> {
+    input.get(start..end)
+}
+
+/// Borrows the bytes remaining after a validated position.
+pub fn remainder(input: &[u8], start: usize) -> Option<&[u8]> {
+    input.get(start..)
+}
+
 /// Parses a bounded frame: version byte, payload byte count, then UTF-8 bytes.
 /// Error codes distinguish short headers, versions, lengths and invalid text.
 pub fn parse_frame(input: &[u8]) -> Result<u64, u8> {
@@ -88,6 +98,11 @@ mod tests {
         assert_eq!(super::prefix(&input, u8::MAX), None);
         assert_eq!(super::prefix(&[], 0), Some(&[][..]));
         assert_eq!(super::prefix(&[], 1), None);
+        assert_eq!(super::window(&input, 1, 3), Some(&[255, 128][..]));
+        assert_eq!(super::window(&input, 3, 1), None);
+        assert_eq!(super::remainder(&input, 2), Some(&[128, 65][..]));
+        assert_eq!(super::remainder(&input, 4), Some(&[][..]));
+        assert_eq!(super::remainder(&input, 5), None);
     }
 
     #[test]
