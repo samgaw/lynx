@@ -142,7 +142,11 @@ defmodule Lynx.Rustler do
       its error. Pure BadArg and bounded ASCII literal Atom/RaiseAtom construction
       are validated against the actual enum metadata and literal provenance.
       Admitted boxed Term/RaiseTerm payloads retain their actual Encoder dictionary
-      and deferred conversion. Error inspection, unadmitted payload layouts and
+      and deferred conversion. Consuming `Result::ok` and `Option::ok_or` calls
+      are supported when their error type is Rustler Error: transferring the error
+      retains its payload; discarding it requires the partial SDK cleanup model
+      to complete. Discarded boxed errors exhaust verification. Error inspection,
+      unadmitted payload layouts and
       runtime custom Decoders are rejected.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.

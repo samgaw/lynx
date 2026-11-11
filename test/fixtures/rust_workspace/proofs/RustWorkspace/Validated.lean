@@ -50,7 +50,20 @@ theorem flag_spec (input : ValidatedFlag) : __FLAG__ input = RustM.ok input.enab
   simp [__FLAG__, restore_spec]
 
 theorem result_spec (input : Lynx.Term) : __RESULT__ input = experiment_nif.validate_nonzero input := by
-  simp [__RESULT__]
+  cases decoded : Lynx.Rustler.decodeUnsigned .U64 64 input with
+  | ok value =>
+    have validated := validation_spec input value decoded
+    by_cases zero : value = 0#u64 <;>
+      simp [__RESULT__, validated, zero, Lynx.Rustler.Decoding.resultOk,
+        Lynx.Rustler.Decoding.optionOkOr, Lynx.Rustler.Decoding.dropDecoderError,
+        Lynx.Rustler.badArgOutcome]
+  | error error =>
+    have kind := Lynx.Rustler.decodeUnsigned_error decoded
+    have validated := validation_error input error decoded
+    subst error
+    simp [__RESULT__, validated, Lynx.Rustler.Decoding.resultOk,
+      Lynx.Rustler.Decoding.optionOkOr, Lynx.Rustler.Decoding.dropDecoderError,
+      Lynx.Rustler.badArgOutcome]
 
 theorem zero_rejected : experiment_nif.validate_nonzero (.integer 0) =
     RustM.ok (.Err (.error (.error (.atom "badarg")))) := by

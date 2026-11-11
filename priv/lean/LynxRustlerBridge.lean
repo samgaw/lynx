@@ -694,6 +694,24 @@ Boxed errors may own first-party values with effectful destructors. -/
   | .ok _ | .error _ => .ok ()
   | .encoded _ _ => .fail .undef
 
+/-- The eager fallback is discarded on Some, so its cleanup must complete. -/
+@[expose] def optionOkOr {T : Type} (input : Option T) (error : DecoderError) :
+    RustM (core.result.Result T DecoderError) := do
+  match input with
+  | none => .ok (.Err error)
+  | some value =>
+    dropDecoderError error
+    .ok (.Ok value)
+
+/-- Err is consumed; boxed payload cleanup cannot be assumed harmless. -/
+@[expose] def resultOk {T : Type} (input : core.result.Result T DecoderError) :
+    RustM (Option T) := do
+  match input with
+  | .Ok value => .ok (some value)
+  | .Err error =>
+    dropDecoderError error
+    .ok none
+
 @[simp] theorem dropDecoderError_static (value : Term) :
     dropDecoderError (.ok value) = .ok () := rfl
 

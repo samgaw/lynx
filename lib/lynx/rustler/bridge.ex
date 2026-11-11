@@ -4,6 +4,8 @@ defmodule Lynx.Rustler.Bridge do
   @external_resource @source
   @contents File.read!(@source)
 
+  def fingerprint, do: Lynx.Rust.Fingerprint.digest(@contents)
+
   def install!(project, prefix) do
     unless Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*$/, prefix),
       do: raise(ArgumentError, "invalid generated Lean module prefix: #{inspect(prefix)}")
