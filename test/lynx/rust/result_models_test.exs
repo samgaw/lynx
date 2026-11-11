@@ -50,6 +50,9 @@ defmodule Lynx.Rust.ResultModelsTest do
     pub fn map_error(value: bool) -> Result<bool, bool> {
         map_base::choose(value).map_err(|error| !error)
     }
+    pub fn map_error_borrowed<'env>(_marker: &'env bool, value: bool) -> Result<bool, bool> {
+        map_base::choose(value).map_err(|error| !error)
+    }
     pub fn promoted_threshold<'env>(_marker: &'env bool) -> &'env usize {
         &(1 + 1)
     }
@@ -96,6 +99,11 @@ defmodule Lynx.Rust.ResultModelsTest do
         map_analysis.map_error value = RustM.ok (if value then .Ok value else .Err (!value)) := by
       cases value <;> simp [map_analysis.map_error, choose_spec, core.result.Result.map_err,
         map_analysis.map_error.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool, error_callback_spec]
+    theorem borrowed_callback (marker value : Bool) :
+        map_analysis.map_error_borrowed marker value = RustM.ok (if value then .Ok value else .Err (!value)) := by
+      cases value <;> simp [map_analysis.map_error_borrowed, choose_spec, core.result.Result.map_err,
+        map_analysis.map_error_borrowed.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool,
+        map_analysis.map_error_borrowed.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool.call_once]
     theorem promoted_scalar (marker : Bool) :
         map_analysis.promoted_threshold marker = RustM.ok 2#usize := by
       have spec := Usize.add_bv_spec (x := 1#usize) (y := 1#usize) (by scalar_tac)
@@ -117,6 +125,7 @@ defmodule Lynx.Rust.ResultModelsTest do
       roots: [
         "map_analysis::map_error",
         "map_analysis::panic_error",
+        "map_analysis::map_error_borrowed",
         "map_analysis::promoted_threshold"
       ],
       lean_project: project,
@@ -125,6 +134,7 @@ defmodule Lynx.Rust.ResultModelsTest do
       proof_modules: ["ResultModels.Properties"],
       required_properties: [
         "ResultModels.Properties.map_error_spec",
+        "ResultModels.Properties.borrowed_callback",
         "ResultModels.Properties.promoted_scalar",
         "ResultModels.Properties.callback_not_run_on_ok",
         "ResultModels.Properties.callback_panic_on_err"
