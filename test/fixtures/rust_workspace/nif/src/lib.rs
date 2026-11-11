@@ -600,6 +600,7 @@ mod tests {
                 + usize::from(cfg!(feature = "derived-struct-decoder"))
                 + usize::from(cfg!(feature = "derived-list"))
                 + usize::from(cfg!(feature = "derived-tagged"))
+                + usize::from(cfg!(feature = "derived-tagged-decoder"))
                 + usize::from(cfg!(feature = "checked-option"))
         );
         let mut metadata: Vec<_> = exports
@@ -772,6 +773,13 @@ mod tests {
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }
+        if cfg!(feature = "derived-tagged-decoder") {
+            expected.push((
+                "normalised_reply".to_owned(),
+                1,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+        }
         if cfg!(feature = "derived-tagged") {
             expected.push((
                 "tagged_reply".to_owned(),
@@ -847,4 +855,17 @@ fn ordered_struct(input: OrderedStruct) -> OrderedStruct {
 fn ordered_tuple(input: OrderedFields) -> OrderedFields {
     let (low, high) = experiment_analysis::order_pair(input.low, input.high);
     OrderedFields { low, high }
+}
+
+/// Normalizes decoded tagged replies through the ordinary workspace crates.
+#[cfg(feature = "derived-tagged-decoder")]
+#[rustler::nif(name = "normalised_reply", schedule = "DirtyCpu")]
+fn order_reply(input: OrderedReply) -> OrderedReply {
+    match input {
+        OrderedReply::Ordered(left, right) => {
+            let (low, high) = experiment_analysis::order_pair(left, right);
+            OrderedReply::Ordered(low, high)
+        }
+        other => other,
+    }
 }
