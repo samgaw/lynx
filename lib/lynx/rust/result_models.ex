@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.ResultModels do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, Constants, LLBC, FileModels, FormatModels}
+  alias Lynx.Rust.{CallModels, LLBC, FileModels, FormatModels}
 
   # A shared variant observation does not decode, move or destroy its payloads.
   # Reuse upstream Aeneas's observer while checking the actual Rust interface.
@@ -478,14 +478,15 @@ defmodule Lynx.Rust.ResultModels do
          } <- args,
          %{"Adt" => %{"id" => type_id, "builtin" => nil, "generics" => type_args}} = closure_type <-
            expand.(closure),
-         true <- Constants.empty_arguments?(type_args),
          %{
            "kind" => %{"Struct" => []},
            "generics" => params,
            "item_meta" => %{"opacity" => "Transparent"},
            "src" => %{"Closure" => %{"info" => info}}
          } <- declaration(ctx.translated["type_decls"], type_id),
-         true <- parameters?(params, 0),
+         true <- lifetime_parameters?(params, type_args),
+         identity = identity_arguments(params),
+         instantiate = &CallModels.instantiate(expand.(&1), type_args),
          %{
            "kind" => "FnOnce",
            "closure_body" => %{"id" => body_id, "generics" => body_args},
@@ -495,12 +496,12 @@ defmodule Lynx.Rust.ResultModels do
              "skip_binder" => %{"id" => impl_id, "generics" => impl_args}
            }
          } <- info,
-         true <- Constants.empty_arguments?(body_args) and Constants.empty_arguments?(impl_args),
+         true <- body_args == identity and impl_args == identity,
          %{
            "kind" => %{"TraitImpl" => %{"id" => ^impl_id, "generics" => ref_args}},
            "trait_decl_ref" => fn_decl
          } <- reference(fn_ref, ctx.traits),
-         true <- Constants.empty_arguments?(ref_args),
+         true <- ref_args == type_args,
          true <- fn_decl["id"] == model.fn_once_trait,
          [dict_closure, dict_tuple, dict_output] <- expand.(fn_decl["generics"])["types"],
          true <- dict_closure == closure_type and dict_output == expand.(output),
@@ -528,19 +529,20 @@ defmodule Lynx.Rust.ResultModels do
            },
            "src" => %{
              "TraitImpl" => %{
-               "impl_ref" => %{"id" => ^impl_id},
+               "impl_ref" => %{"id" => ^impl_id, "generics" => body_impl_args},
                "trait_ref" => trait_ref,
                "item_id" => 0,
                "reuses_default" => false
              }
            }
          } <- ctx.functions[body_id],
-         true <- parameters?(get_in(ctx.functions, [body_id, "generics"]), 0),
-         true <- Enum.map(inputs, expand) == [closure_type, dict_tuple],
-         true <- expand.(result) == expand.(output),
+         true <- lifetime_parameters?(get_in(ctx.functions, [body_id, "generics"]), identity),
+         true <- body_impl_args == identity,
+         true <- Enum.map(inputs, instantiate) == [closure_type, dict_tuple],
+         true <- instantiate.(result) == expand.(output),
          true <- trait_ref["id"] == model.fn_once_trait,
          true <-
-           expand.(trait_ref["generics"]) ==
+           instantiate.(trait_ref["generics"]) ==
              arguments([closure_type, dict_tuple, expand.(output)]),
          %{
            "src" => %{"Closure" => %{"kind" => "FnOnce"}},
@@ -550,10 +552,10 @@ defmodule Lynx.Rust.ResultModels do
            "impl_trait" => impl_trait,
            "methods" => [method]
          } <- declaration(ctx.translated["trait_impls"], impl_id),
-         true <- parameters?(impl_params, 0),
+         true <- lifetime_parameters?(impl_params, identity),
          true <- impl_trait["id"] == model.fn_once_trait,
          true <-
-           expand.(impl_trait["generics"]) ==
+           instantiate.(impl_trait["generics"]) ==
              arguments([closure_type, dict_tuple, expand.(output)]),
          %{
            "params" => method_params,
@@ -562,7 +564,7 @@ defmodule Lynx.Rust.ResultModels do
          } <- method,
          true <-
            trait_id == model.fn_once_trait and parameters?(method_params, 0) and
-             Constants.empty_arguments?(method_args) do
+             method_args == identity do
       body_id
     else
       _ ->
@@ -570,6 +572,25 @@ defmodule Lynx.Rust.ResultModels do
               "Result::map_err requires an extracted capture-free compiler FnOnce callback with matching signature, implementation identity and NoopDestruct"
     end
   end
+
+  defp lifetime_parameters?(params, args) when is_map(params) do
+    regions = params["regions"]
+
+    is_list(regions) and parameters?(%{params | "regions" => []}, 0) and
+      Enum.all?(Enum.with_index(regions), fn {region, i} -> region["index"] == i end) and
+      match?(%{"types" => [], "const_generics" => [], "trait_refs" => []}, args) and
+      is_list(args["regions"]) and length(args["regions"]) == length(regions)
+  end
+
+  defp lifetime_parameters?(_, _), do: false
+
+  defp identity_arguments(params),
+    do: %{
+      "regions" => Enum.map(params["regions"], fn r -> %{"Var" => %{"Free" => r["index"]}} end),
+      "types" => [],
+      "const_generics" => [],
+      "trait_refs" => []
+    }
 
   defp reference(%{"regions" => [], "outlives" => [], "skip_binder" => value}, refs) do
     case value do
