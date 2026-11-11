@@ -149,5 +149,82 @@ defmodule Lynx.Rust.NativeEnumLifetimesTest do
         function.([switch.(["Return"], consume ++ [switch.(["Return"], consume ++ ["Return"])])])
       )
     end
+
+    wrapper = %{"Adt" => %{"id" => 3, "builtin" => nil, "generics" => args.([])}}
+    wrapper_place = %{"kind" => %{"Local" => 1}, "ty" => wrapper}
+
+    nested = %{
+      "kind" => %{"Projection" => [wrapper_place, %{"Field" => [nil, 0]}]},
+      "ty" => choice
+    }
+
+    replace = fn recurse, value ->
+      cond do
+        value == place.(1) -> nested
+        is_map(value) -> Map.new(value, fn {k, v} -> {k, recurse.(recurse, v)} end)
+        is_list(value) -> Enum.map(value, &recurse.(recurse, &1))
+        true -> value
+      end
+    end
+
+    wrapped = fn kinds ->
+      f = function.(kinds)
+      f = put_in(f, ["signature", "inputs"], [wrapper])
+      f = update_in(f, ["body", "Structured", "body"], &replace.(replace, &1))
+
+      update_in(f, ["body", "Structured", "locals", "locals"], fn locals ->
+        Enum.map(locals, fn
+          %{"index" => 1} = local -> %{local | "ty" => wrapper}
+          local -> local
+        end)
+      end)
+    end
+
+    wrapper_decl = %{
+      "def_id" => 3,
+      "generics" => %{params | "types" => []},
+      "item_meta" => %{"name" => [%{"Ident" => ["Wrapper", 0]}]},
+      "kind" => %{"Struct" => [%{"ty" => choice}]}
+    }
+
+    nested_audit = fn f, declaration ->
+      NativeLifetimes.audit!(
+        [f],
+        models,
+        %{
+          "files" => [],
+          "type_decls" => [mutex_decl, choice_decl, declaration],
+          "fun_decls" => [f]
+        },
+        %{}
+      )
+    end
+
+    # An empty nested alternative discharges the one possible owner. Its tags
+    # must remain distinct from any tags on the enclosing value.
+    nested_audit.(
+      wrapped.([switch.([switch.(["Return"], [panic])], consume ++ ["Return"])]),
+      wrapper_decl
+    )
+
+    # Inspecting the tag after moving the payload does not recreate ownership.
+    nested_audit.(
+      wrapped.([switch.(["Return"], consume ++ [switch.([panic], ["Return"])])]),
+      wrapper_decl
+    )
+
+    # An empty selected field cannot discharge a different field's owner.
+    two_owners = put_in(wrapper_decl, ["kind", "Struct"], [%{"ty" => choice}, %{"ty" => mutex}])
+
+    assert_raise CompileError, ~r/native owner lifetime/, fn ->
+      nested_audit.(wrapped.([switch.(["Return"], consume ++ ["Return"])]), two_owners)
+    end
+
+    assert_raise CompileError, ~r/native owner lifetime/, fn ->
+      nested_audit.(
+        wrapped.([switch.(["Return"], consume ++ [switch.(["Return"], consume ++ ["Return"])])]),
+        wrapper_decl
+      )
+    end
   end
 end
