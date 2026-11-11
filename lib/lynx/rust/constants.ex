@@ -1,7 +1,7 @@
 defmodule Lynx.Rust.Constants do
   @moduledoc false
 
-  # Immutable scalar/array constants, promoted shared borrows and string literals.
+  # Immutable scalar/array/slice constants, promoted shared borrows and string literals.
   # Initializer bodies are checked by LLBC alongside ordinary implementations.
   def audit!(globals, initializers, refs, types) do
     declarations = Map.new(globals, &{&1["def_id"], &1})
@@ -47,7 +47,7 @@ defmodule Lynx.Rust.Constants do
 
         _ ->
           raise ArgumentError,
-                "unsupported Rust global: only scalar/array const initializers, promoted shared scalar/array borrows and string literals are supported (#{inspect(global["global_kind"])})"
+                "unsupported Rust global: only scalar/array/static-slice const initializers, promoted shared scalar/array borrows and string literals are supported (#{inspect(global["global_kind"])})"
       end
     end
 
@@ -116,6 +116,17 @@ defmodule Lynx.Rust.Constants do
     case constant_value(global["value"]) do
       [%{"Call" => [%{"kind" => %{"Fun" => id}}, []]}, _] -> id
       _ -> nil
+    end
+  end
+
+  defp supported_initializer_type?(
+         %{"global_kind" => "NamedConst"},
+         %{"Ref" => ["Static", element, "Shared"]},
+         refs
+       ) do
+    case unwrap(element, refs) do
+      %{"Slice" => [scalar, nil]} -> scalar?(unwrap(scalar, refs))
+      _ -> false
     end
   end
 

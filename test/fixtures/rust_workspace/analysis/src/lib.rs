@@ -172,6 +172,16 @@ pub fn named_magic_word() -> u32 {
     experiment_core::protocol::named_magic_word()
 }
 
+/// Parses a low-level named borrowed marker across crates.
+pub fn borrowed_magic_word() -> Option<u32> {
+    experiment_core::protocol::borrowed_magic_word()
+}
+
+/// Borrows a low-level binary tag across crates.
+pub fn binary_tag_bytes() -> &'static [u8] {
+    experiment_core::protocol::binary_tag_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
