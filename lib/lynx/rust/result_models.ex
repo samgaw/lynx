@@ -146,14 +146,15 @@ defmodule Lynx.Rust.ResultModels do
                   }
                 }
               },
-              %{"Ident" => ["and_then", 0]}
+              %{"Ident" => [method, 0]}
             ]
           },
           "generics" => generics
         },
         translated,
         refs
-      ) do
+      )
+      when method in ["and_then", "map"] do
     expand = &CallModels.expand(&1, refs)
 
     with [input, callback] <- expand.(sig["inputs"]),
@@ -169,13 +170,14 @@ defmodule Lynx.Rust.ResultModels do
          %{"trait_clauses" => [fn_once, destruct]} <- generics,
          true <- parameters?(%{generics | "trait_clauses" => []}, 3),
          {0, fn_once_id, [functor, tuple, result]} <- clause(fn_once, refs),
-         true <- functor == variable(2) and result == output,
+         true <-
+           functor == variable(2) and result == if(method == "map", do: variable(1), else: output),
          true <- tuple?(tuple, [variable(0)]),
          true <- trait?(translated, fn_once_id, ~w(core ops function FnOnce), 3),
          {1, destruct_id, [destruct_type]} <- clause(destruct, refs),
          true <- destruct_type == variable(2),
          true <- trait?(translated, destruct_id, ~w(core marker Destruct), 1) do
-      %{
+      model = %{
         rust_name: "core::option::{core::option::Option<@T>}::and_then",
         backend_rust_name: "core::option::_::and_then",
         lean: "Lynx.Rust.Option.andThen",
@@ -190,6 +192,23 @@ defmodule Lynx.Rust.ResultModels do
         label:
           "Option::and_then model with actual extracted compiler FnOnce with empty or scalar captures or shared references to scalar/slice values and validated NoopDestruct; Rust core implementation not verified"
       }
+
+      if method == "map" do
+        model
+        |> Map.delete(:option_callback_type)
+        |> Map.delete(:backend_rust_name)
+        |> Map.delete(:model_hash)
+        |> Map.merge(%{
+          rust_name: "core::option::{core::option::Option<@T>}::map",
+          lean: "Aeneas.Std.core.option.Option.map",
+          builtin: true,
+          option_map: true,
+          label:
+            "Aeneas Option::map model with actual extracted compiler FnOnce and validated NoopDestruct; Rust core implementation not verified"
+        })
+      else
+        model
+      end
     else
       _ -> nil
     end
@@ -686,6 +705,12 @@ defmodule Lynx.Rust.ResultModels do
     result = %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([output])}}
     %{args | "types" => [input, input, result, closure]}
   end
+
+  defp callback_arguments(
+         %{"types" => [input, output, closure]} = args,
+         %{option_map: true}
+       ),
+       do: %{args | "types" => [input, input, output, closure]}
 
   defp callback_arguments(args, _), do: args
 

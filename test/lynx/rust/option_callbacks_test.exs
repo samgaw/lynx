@@ -57,6 +57,12 @@ defmodule Lynx.Rust.OptionCallbacksTest do
     source = Path.join(workspace, "analysis/src/lib.rs")
 
     original = """
+    pub fn map_panic(value: Option<bool>) -> Option<bool> {
+        value.map(|_| panic!())
+    }
+    pub fn mapped(value: Option<bool>) -> Option<bool> {
+        value.map(|value| !value)
+    }
     pub fn bounded_length(input: Option<usize>, bytes: &[u8]) -> Option<usize> {
         option_base::bounded(input, bytes)
     }
@@ -98,6 +104,19 @@ defmodule Lynx.Rust.OptionCallbacksTest do
     public section
     open Aeneas Aeneas.Std
     namespace OptionProofs.Properties
+    theorem map_skipped : option_analysis.map_panic none = RustM.ok none := by
+      simp [option_analysis.map_panic, core.option.Option.map]
+    theorem map_panics (value : Bool) :
+        option_analysis.map_panic (some value) = RustM.fail .panic := by
+      simp [option_analysis.map_panic, core.option.Option.map,
+        option_analysis.map_panic.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool.call_once]
+    theorem mapped (value : Option Bool) :
+        option_analysis.mapped value = RustM.ok (value.map Bool.not) := by
+      cases value with
+      | none => simp [option_analysis.mapped, core.option.Option.map]
+      | some value =>
+        cases value <;> simp [option_analysis.mapped, core.option.Option.map,
+          option_analysis.mapped.closure.Insts.CoreOpsFunctionFnOnceTupleBoolBool.call_once]
     theorem compose (value : Bool) :
         option_analysis.invert value = RustM.ok (if value then some false else none) := by
       cases value <;> simp [option_analysis.invert, option_analysis.option_base.choose,
@@ -148,6 +167,8 @@ defmodule Lynx.Rust.OptionCallbacksTest do
 
     options = [
       roots: [
+        "option_analysis::mapped",
+        "option_analysis::map_panic",
         "option_analysis::bounded_length",
         "option_analysis::captured",
         "option_analysis::invert",
@@ -160,7 +181,7 @@ defmodule Lynx.Rust.OptionCallbacksTest do
       proof_modules: ["OptionProofs.Properties"],
       required_properties:
         Enum.map(
-          ~w(compose borrowed skipped panics captured bounded_core bounded_composed),
+          ~w(compose mapped map_skipped map_panics borrowed skipped panics captured bounded_core bounded_composed),
           &("OptionProofs.Properties." <> &1)
         )
     ]
@@ -174,11 +195,36 @@ defmodule Lynx.Rust.OptionCallbacksTest do
                status: :modelled
              },
              %{
+               rust_name: "core::option::{core::option::Option<@T>}::map",
+               implementation_verified: false,
+               status: :modelled
+             },
+             %{
                rust_name: "core::slice::{[@T]}::len",
                implementation_verified: false,
                status: :modelled
              }
            ] = result.verification.unverified_external_calls
+
+    map_model =
+      Enum.find_value(result.extraction.audit.external_calls, fn
+        {_, %{option_map: true} = model} -> model
+        _ -> nil
+      end)
+
+    assert map_model
+
+    for changed <- [
+          put_in(map_model.function, ["signature", "abi"], "C"),
+          put_in(map_model.function, ["signature", "output"], %{"Scalar" => "Bool"}),
+          put_in(map_model.function, ["generics", "trait_clauses"], [])
+        ] do
+      refute Lynx.Rust.ResultModels.resolve(
+               changed,
+               result.extraction.audit.translated,
+               result.extraction.audit.references
+             )
+    end
 
     assert Enum.any?(result.extraction.audit.callback_dependencies, fn {_, ids} ->
              length(ids) == 1
@@ -243,6 +289,17 @@ defmodule Lynx.Rust.OptionCallbacksTest do
         Lynx.Rust.LLBC.audit!(invalid, ["option_analysis", "option_base"])
       end
     end
+
+    File.write!(
+      source,
+      String.replace(original, "value.map(|value| !value)", "value.map(|value| value)")
+    )
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "option-analysis", options)
+    end
+
+    File.write!(source, original)
 
     File.write!(
       base_source,
