@@ -1,5 +1,10 @@
 //! A small binary protocol and standalone parsing operations.
 
+/// Borrows a length-delimited prefix, rejecting truncated input without panicking.
+pub fn prefix(input: &[u8], length: u8) -> Option<&[u8]> {
+    input.get(..length as usize)
+}
+
 /// Parses a bounded frame: version byte, payload byte count, then UTF-8 bytes.
 /// Error codes distinguish short headers, versions, lengths and invalid text.
 pub fn parse_frame(input: &[u8]) -> Result<u64, u8> {
@@ -73,6 +78,17 @@ mod tests {
     use super::{
         big_endian_roundtrip, little_endian_roundtrip, parse_frame, read_header, utf8_status,
     };
+
+    #[test]
+    fn borrowed_prefix_bounds_and_contents() {
+        let input = [0, 255, 128, 65];
+        assert_eq!(super::prefix(&input, 2), Some(&[0, 255][..]));
+        assert_eq!(super::prefix(&input, 4), Some(&input[..]));
+        assert_eq!(super::prefix(&input, 5), None);
+        assert_eq!(super::prefix(&input, u8::MAX), None);
+        assert_eq!(super::prefix(&[], 0), Some(&[][..]));
+        assert_eq!(super::prefix(&[], 1), None);
+    }
 
     #[test]
     fn fixed_width_byte_orders_and_header_bounds() {

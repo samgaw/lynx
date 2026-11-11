@@ -603,6 +603,7 @@ mod tests {
                 + usize::from(cfg!(feature = "derived-tagged-decoder"))
                 + usize::from(cfg!(feature = "checked-option"))
                 + usize::from(cfg!(feature = "scalar-callbacks"))
+                + usize::from(cfg!(feature = "borrowed-prefix"))
         );
         let mut metadata: Vec<_> = exports
             .into_iter()
@@ -774,6 +775,13 @@ mod tests {
                 rustler::SchedulerFlags::Normal as u32,
             ));
         }
+        if cfg!(feature = "borrowed-prefix") {
+            expected.push((
+                "prefix_length".to_owned(),
+                2,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
+        }
         if cfg!(feature = "scalar-callbacks") {
             expected.push((
                 "masked_error".to_owned(),
@@ -883,4 +891,11 @@ fn order_reply(input: OrderedReply) -> OrderedReply {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn masked_error(value: u64, mask: u64) -> Result<u64, u64> {
     experiment_analysis::masked_error(value, mask)
+}
+
+/// Checks a bounded borrowed payload through first-party workspace implementations.
+#[cfg(feature = "borrowed-prefix")]
+#[rustler::nif(schedule = "DirtyCpu")]
+fn prefix_length(value: rustler::Binary<'_>, length: u8) -> Option<u64> {
+    experiment_analysis::prefix_length(value.as_slice(), length)
 }
