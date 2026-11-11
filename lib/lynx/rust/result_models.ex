@@ -447,7 +447,7 @@ defmodule Lynx.Rust.ResultModels do
     selected =
       Map.filter(models, fn {_, model} ->
         model[:native_expect_ok] == true or model[:native_expect_some] == true or
-          model[:encoder_unwrap_ok] == true
+          model[:encoder_unwrap_ok] == true or model[:rustler_result_conversion] != nil
       end)
 
     {functions, found} =

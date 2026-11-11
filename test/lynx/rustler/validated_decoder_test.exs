@@ -74,7 +74,7 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
       [argument] = by_name["validated_flag"]["arguments"]
       assert %{"decoder" => decoder} = argument
 
-      assert %{sites: [_], variant: %{"name" => "BadArg", "fields" => []}} =
+      assert %{sites: [_, _], variant: %{"name" => "BadArg", "fields" => []}} =
                prepared.extraction.rustler_constructors
 
       properties =
@@ -227,6 +227,14 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
               let _result = result;
               true
           }
+
+          pub fn result_to_option(value: Result<bool, rustler::Error>) -> Option<bool> {
+              value.ok()
+          }
+
+          pub fn option_to_result(value: Option<bool>, error: rustler::Error) -> Result<bool, rustler::Error> {
+              value.ok_or(error)
+          }
           """
       )
 
@@ -245,6 +253,26 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
       theorem scalar_success (value : Bool) :
           experiment_nif.discard_result (.Ok value) = RustM.ok true := by
         simp [experiment_nif.discard_result, Lynx.Rustler.Decoding.dropScalarResult]
+      theorem result_some (value : Bool) : experiment_nif.result_to_option (.Ok value) = RustM.ok (some value) := by
+        simp [experiment_nif.result_to_option, Lynx.Rustler.Decoding.resultOk]
+      theorem result_none : experiment_nif.result_to_option (.Err Lynx.Rustler.badArgOutcome) = RustM.ok none := by
+        simp [experiment_nif.result_to_option, Lynx.Rustler.Decoding.resultOk,
+          Lynx.Rustler.Decoding.dropDecoderError, Lynx.Rustler.badArgOutcome]
+      theorem result_boxed (raises : Bool) (encode : Lynx.Rustler.Env → RustM Lynx.Rustler.NativeTerm) :
+          experiment_nif.result_to_option (.Err (.encoded raises encode)) = RustM.fail .undef := by
+        simp [experiment_nif.result_to_option, Lynx.Rustler.Decoding.resultOk,
+          Lynx.Rustler.Decoding.dropDecoderError]
+      theorem option_none (error : Lynx.Rustler.DecoderError) :
+          experiment_nif.option_to_result none error = RustM.ok (.Err error) := by
+        simp [experiment_nif.option_to_result, Lynx.Rustler.Decoding.optionOkOr]
+      theorem option_some (value : Bool) :
+          experiment_nif.option_to_result (some value) Lynx.Rustler.badArgOutcome = RustM.ok (.Ok value) := by
+        simp [experiment_nif.option_to_result, Lynx.Rustler.Decoding.optionOkOr,
+          Lynx.Rustler.Decoding.dropDecoderError, Lynx.Rustler.badArgOutcome]
+      theorem option_boxed (value raises : Bool) (encode : Lynx.Rustler.Env → RustM Lynx.Rustler.NativeTerm) :
+          experiment_nif.option_to_result (some value) (.encoded raises encode) = RustM.fail .undef := by
+        simp [experiment_nif.option_to_result, Lynx.Rustler.Decoding.optionOkOr,
+          Lynx.Rustler.Decoding.dropDecoderError]
       end Validated.ScalarProperties
       """
 
@@ -252,7 +280,12 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
 
       scalar_options = [
         tools: @tools,
-        roots: ["experiment_nif::discard_error", "experiment_nif::discard_result"],
+        roots: [
+          "experiment_nif::discard_error",
+          "experiment_nif::discard_result",
+          "experiment_nif::result_to_option",
+          "experiment_nif::option_to_result"
+        ],
         cargo: [features: ["validated-decoder"]],
         lean_project: project,
         build_dir: Path.join(tmp, "scalar-build"),
@@ -270,7 +303,13 @@ defmodule Lynx.Rustler.ValidatedDecoderTest do
         proof_modules: ["Validated.ScalarProperties"],
         required_properties: [
           "Validated.ScalarProperties.static_error",
-          "Validated.ScalarProperties.scalar_success"
+          "Validated.ScalarProperties.scalar_success",
+          "Validated.ScalarProperties.result_some",
+          "Validated.ScalarProperties.result_none",
+          "Validated.ScalarProperties.result_boxed",
+          "Validated.ScalarProperties.option_none",
+          "Validated.ScalarProperties.option_some",
+          "Validated.ScalarProperties.option_boxed"
         ]
       ]
 

@@ -490,7 +490,7 @@ fn validated_result(input: rustler::Term<'_>) -> rustler::NifResult<bool> {
     }
     #[cfg(not(feature = "atom-errors"))]
     {
-        validate_nonzero(input)
+        validate_nonzero(input).ok().ok_or(rustler::Error::BadArg)
     }
 }
 
