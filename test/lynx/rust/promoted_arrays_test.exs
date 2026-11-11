@@ -26,27 +26,40 @@ defmodule Lynx.Rust.PromotedArraysTest do
 
     options = [
       tools: @tools,
-      roots: ["experiment_analysis::default_bytes", "experiment_analysis::magic_bytes"],
+      roots: [
+        "experiment_analysis::default_bytes",
+        "experiment_analysis::magic_bytes",
+        "experiment_analysis::named_magic_word"
+      ],
       lean_project: project,
       module_prefix: "PromotedArrays.Extraction",
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["PromotedArrays.Properties"],
       required_properties:
-        Enum.map(~w(core_empty core_magic empty magic), &("PromotedArrays.Properties." <> &1))
+        Enum.map(
+          ~w(core_empty core_magic empty magic core_named named),
+          &("PromotedArrays.Properties." <> &1)
+        )
     ]
 
     result = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     assert [%{status: :ok}] = result.reports
     assert Enum.count(result.verification.constants, &(&1["status"] == :inlined)) == 2
 
-    assert [
-             %{
-               rust_name: "core::array::{[@T; @N]}::as_slice",
-               implementation_verified: false,
-               status: :modelled
-             }
-           ] =
-             result.verification.unverified_external_calls
+    assert Enum.any?(
+             result.verification.constants,
+             &(&1["status"] == :extracted and String.ends_with?(&1["lean_name"], ".WIRE_MAGIC"))
+           )
+
+    assert length(result.verification.unverified_external_calls) == 2
+
+    assert Enum.all?(
+             result.verification.unverified_external_calls,
+             &(&1.implementation_verified == false and &1.status == :modelled)
+           )
+
+    assert MapSet.new(Enum.map(result.verification.unverified_external_calls, & &1.rust_name)) ==
+             MapSet.new(["core::array::{[@T; @N]}::as_slice", "core::num::{u32}::from_be_bytes"])
 
     assert Enum.any?(result.verification.guarantees, &(&1.kind == :cross_crate_contract))
 
@@ -63,7 +76,11 @@ defmodule Lynx.Rust.PromotedArraysTest do
     source = Path.join(workspace, "core/src/protocol.rs")
     original = File.read!(source)
 
-    for {before, after_change} <- [{"&[]", "&[0]"}, {"&[76, 89, 78, 88]", "&[76, 89, 78, 89]"}] do
+    for {before, after_change} <- [
+          {"&[]", "&[0]"},
+          {"&[76, 89, 78, 88]", "&[76, 89, 78, 89]"},
+          {"WIRE_MAGIC: [u8; 4] = [76, 89, 78, 88]", "WIRE_MAGIC: [u8; 4] = [76, 89, 78, 89]"}
+        ] do
       changed = String.replace(original, before, after_change)
       assert changed != original
       File.write!(source, changed)

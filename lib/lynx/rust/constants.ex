@@ -1,7 +1,7 @@
 defmodule Lynx.Rust.Constants do
   @moduledoc false
 
-  # Immutable scalars, promoted shared scalar/array borrows and string literals.
+  # Immutable scalar/array constants, promoted shared borrows and string literals.
   # Initializer bodies are checked by LLBC alongside ordinary implementations.
   def audit!(globals, initializers, refs, types) do
     declarations = Map.new(globals, &{&1["def_id"], &1})
@@ -47,7 +47,7 @@ defmodule Lynx.Rust.Constants do
 
         _ ->
           raise ArgumentError,
-                "unsupported Rust global: only scalar const initializers, promoted shared scalar/array borrows and string literals are supported (#{inspect(global["global_kind"])})"
+                "unsupported Rust global: only scalar/array const initializers, promoted shared scalar/array borrows and string literals are supported (#{inspect(global["global_kind"])})"
       end
     end
 
@@ -119,8 +119,8 @@ defmodule Lynx.Rust.Constants do
     end
   end
 
-  defp supported_initializer_type?(%{"global_kind" => "NamedConst"}, type, _refs),
-    do: scalar?(type)
+  defp supported_initializer_type?(%{"global_kind" => "NamedConst"}, type, refs),
+    do: scalar_or_array?(type, refs)
 
   defp supported_initializer_type?(
          %{"global_kind" => "AnonConst", "item_meta" => %{"name" => name}},
@@ -130,12 +130,12 @@ defmodule Lynx.Rust.Constants do
     match?(
       %{"Builtin" => ["PromotedConst", index]} when is_integer(index) and index >= 0,
       List.last(name)
-    ) and promoted_element?(unwrap(element, refs), refs)
+    ) and scalar_or_array?(unwrap(element, refs), refs)
   end
 
   defp supported_initializer_type?(_, _, _), do: false
 
-  defp promoted_element?(%{"Array" => [element, length, nil]}, refs) do
+  defp scalar_or_array?(%{"Array" => [element, length, nil]}, refs) do
     usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
 
     # Lengths use the constant family, even when their IDs overlap type IDs.
@@ -158,7 +158,7 @@ defmodule Lynx.Rust.Constants do
     end
   end
 
-  defp promoted_element?(type, _refs), do: scalar?(type)
+  defp scalar_or_array?(type, _refs), do: scalar?(type)
 
   defp str_type?(%{"Adt" => %{"id" => id, "builtin" => "Str", "generics" => args}}, types, refs) do
     empty_arguments?(args) and

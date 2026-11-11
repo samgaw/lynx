@@ -74,6 +74,14 @@ pub fn magic_bytes() -> &'static [u8] {
     &[76, 89, 78, 88]
 }
 
+/// Fixed wire-format marker shared by protocol operations.
+pub const WIRE_MAGIC: [u8; 4] = [76, 89, 78, 88];
+
+/// Interprets the shared marker in network byte order.
+pub fn named_magic_word() -> u32 {
+    u32::from_be_bytes(WIRE_MAGIC)
+}
+
 /// Exercises the bounds-checked indexing primitive independently of NIFs.
 ///
 /// # Panics
