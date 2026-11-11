@@ -46,23 +46,38 @@ defmodule Lynx.Rustler.DecoderModels do
 
   def resolve(%{"body" => "Opaque"} = function, translated, refs) do
     ctx = %{translated: translated, refs: refs, traits: %{}}
-    self = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
+
+    {scope, self, leaf, label} =
+      case named(translated, ~w(rustler types atom Atom)) do
+        %{"def_id" => atom, "kind" => "Opaque"} ->
+          if Enum.at(function["item_meta"]["name"], 2) == %{"Ident" => ["atom", 0]} do
+            {"atom", adt(atom), "atom",
+             "Rustler Atom Decoder FFI model: atom names retain exact identity; non-atoms return BadArg; native handles, atom interning and SDK/OTP implementation unverified"}
+          else
+            {"primitive", %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}, "u64",
+             "Rustler u64 Decoder FFI model with exact integer bounds and forwarded BadArg outcome; native Term handles and Rustler implementation unverified"}
+          end
+
+        _ ->
+          {"primitive", %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}, "u64",
+           "Rustler u64 Decoder FFI model with exact integer bounds and forwarded BadArg outcome; native Term handles and Rustler implementation unverified"}
+      end
 
     with %{"TraitImpl" => %{"impl_ref" => %{"id" => impl_id}}} <- function["src"],
          true <-
            function["item_meta"]["name"] ==
-             path(~w(rustler types primitive)) ++
+             path(["rustler", "types", scope]) ++
                [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => ["decode", 0]}],
          true <- method?(function, self, ctx) do
       %{
-        rust_name: "rustler::types::primitive::{rustler::types::Decoder<'_, u64>}::decode",
-        lean: "Lynx.Rustler.Decoding.u64",
+        rust_name:
+          "rustler::types::#{scope}::{rustler::types::Decoder<'_, #{if leaf == "atom", do: "rustler::types::atom::Atom", else: leaf}>}::decode",
+        lean: "Lynx.Rustler.Decoding.#{leaf}",
         decoder_trait: function["src"]["TraitImpl"]["trait_ref"]["id"],
         builtin: false,
         can_fail: true,
         lift: false,
-        label:
-          "Rustler u64 Decoder FFI model with exact integer bounds and forwarded BadArg outcome; native Term handles and Rustler implementation unverified"
+        label: label
       }
     else
       _ -> nil

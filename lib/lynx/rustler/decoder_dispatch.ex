@@ -78,6 +78,16 @@ defmodule Lynx.Rustler.DecoderDispatch do
   end
 
   defp call(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => args}}, caller, ctx) do
+    if ctx.models[id][:atom_ne] == true do
+      {Lynx.Rustler.AtomModels.dependencies!(id, args, ctx), []}
+    else
+      decoder_call(id, args, caller, ctx)
+    end
+  end
+
+  defp call(_, _, _), do: {[], []}
+
+  defp decoder_call(id, args, caller, ctx) do
     target = ctx.functions[id]
     clauses = if target, do: target["generics"]["trait_clauses"], else: []
 
@@ -103,8 +113,6 @@ defmodule Lynx.Rustler.DecoderDispatch do
       {[], []}
     end
   end
-
-  defp call(_, _, _), do: {[], []}
 
   defp dictionary!(reference, expected, caller, ctx) do
     ref = trait_ref!(reference, ctx)

@@ -671,6 +671,21 @@ theorem mapFromTermArrays_exhausted (env : Env) (keys values : Slice NativeTerm)
 
 end Encoding
 
+@[expose] def atomEq (left right : Atom) : RustM Bool := .ok (left == right)
+
+@[simp] theorem atomEq_same (value : Atom) : atomEq value value = .ok true := by simp [atomEq]
+
+theorem atomDefaultNe_eq (inst : core.cmp.PartialEq Lynx.Rustler.Atom Lynx.Rustler.Atom)
+    (field : inst.eq = Lynx.Rustler.atomEq) (left right : Lynx.Rustler.Atom) :
+    core.cmp.PartialEq.ne.trait_default inst left right = RustM.ok (!(left == right)) := by
+  have eqSpec : inst.eq left right ⦃ b => b ↔ left = right ⦄ := by
+    rw [field]
+    simp [Lynx.Rustler.atomEq, WP.spec_ok]
+  have spec := core.cmp.PartialEq.ne.trait_default.spec inst left right eqSpec
+  obtain ⟨returned, computation, property⟩ :=
+    triple_iff_exists_ok.mp (WP.spec_to_mvcgen spec)
+  by_cases equal : left = right <;> cases returned <;> simp_all
+
 namespace Decoding
 
 /-- Only static-borrow/scalar SDK errors have supported destruction.
@@ -790,6 +805,12 @@ theorem getTuple_exhausted (fields : Array Term)
     getTuple (.tuple fields) = .fail .undef := by
   simp only [Array.length_toList] at outside
   simp [getTuple, outside]
+
+@[expose] def atom : NativeTerm → RustM (core.result.Result Atom DecoderError)
+  | .atom value => .ok (.Ok value)
+  | _ => .ok (.Err badArgOutcome)
+
+@[simp] theorem atom_name (value : String) : atom (.atom value) = .ok (.Ok value) := rfl
 
 @[expose] def u64 (term : NativeTerm) : RustM (core.result.Result U64 DecoderError) :=
   .ok (match decodeUnsigned .U64 64 term with
