@@ -34,7 +34,7 @@ defmodule Lynx.Rust.Proofs do
       let auditEnv ← importModules imports {} (loadExts := true)
       let properties ← withEnv auditEnv do
         let env := auditEnv.setExporting false
-        let implementations : Array Name := #{names(implementations)}
+        let implementations : Array String := #[#{Enum.map_join(implementations, ", ", &JSON.encode!/1)}]
         let required : Array Name := #{names(required)}
         let mut found : Array Name := #[]
         let mut properties : Array Json := #[]
@@ -45,7 +45,7 @@ defmodule Lynx.Rust.Proofs do
           let some info := env.find? declName | continue
           let .thmInfo proof := info | continue
           unless required.contains declName || (← findDeclarationRanges? declName).isSome do continue
-          let targets := implementations.filter proof.type.getUsedConstants.contains
+          let targets := implementations.filter (fun label => proof.type.getUsedConstants.contains label.toName)
           if targets.isEmpty then continue
           let proposition ← liftTermElabM do pure (toString (← Meta.ppExpr proof.type))
           let contracts := proof.value.getUsedConstants.filter fun dependency => Id.run do
