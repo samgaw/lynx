@@ -37,6 +37,17 @@ theorem toList_data (bs : ByteArray) : bs.toList = bs.data.toList := by
       simp [last]
   simpa [ByteArray.toList] using loop 0 [] (Nat.zero_le _)
 
+/-- Every input returns a normal Rust result, including malformed UTF-8. -/
+theorem utf8_total (input : Slice U8) :
+    ∃ result, experiment_core.protocol.utf8_status input = RustM.ok result := by
+  obtain ⟨result, returned⟩ := Protocol.Extraction.Bytes.fromUtf8_total input
+  cases result with
+  | Ok text => simp [experiment_core.protocol.utf8_status, returned, lift]
+  | Err error =>
+    cases lengthEq : error.error_len <;>
+      simp [experiment_core.protocol.utf8_status, returned, lift, lengthEq,
+        Protocol.Extraction.Bytes.errorLen, Protocol.Extraction.Bytes.validUpTo]
+
 theorem ascii_prefix (n fuel offset : Nat) (rest : List UInt8) :
     Protocol.Extraction.Bytes.errorOffset (n + fuel) (List.replicate n 65 ++ rest) offset =
       Protocol.Extraction.Bytes.errorOffset fuel rest (offset + n) := by
