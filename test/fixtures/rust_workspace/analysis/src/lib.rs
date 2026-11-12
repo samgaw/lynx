@@ -330,6 +330,11 @@ pub fn binary_tree(payload: Vec<u8>) -> experiment_core::tree::Node {
     experiment_core::tree::singleton(payload)
 }
 
+/// Constructs, counts and drops an owned recursive protocol value.
+pub fn binary_tree_nodes(payload: Vec<u8>, budget: u16) -> Option<u16> {
+    experiment_core::tree::count_owned(binary_tree(payload), budget)
+}
+
 #[cfg(test)]
 mod producer_tests {
     #[test]

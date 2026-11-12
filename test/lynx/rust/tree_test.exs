@@ -18,15 +18,20 @@ defmodule Lynx.Rust.TreeTest do
 
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "Tree"))
-    proof_path = Path.join(project, "Tree/Properties.lean")
 
-    File.write!(
-      proof_path,
-      File.read!(@proof)
-      |> String.replace("__PREFIX__", "Tree")
-      |> String.replace("__CORE__", "experiment_analysis.experiment_core.tree")
-      |> String.replace("__ANALYSIS__", "experiment_analysis")
-    )
+    for {source, target} <- [
+          {"TreeCore.lean", "CoreProperties"},
+          {"TreeDriver.lean", "DriverProperties"},
+          {"Tree.lean", "Properties"}
+        ] do
+      File.write!(
+        Path.join(project, "Tree/#{target}.lean"),
+        File.read!(Path.join(Path.dirname(@proof), source))
+        |> String.replace("__PREFIX__", "Tree")
+        |> String.replace("__CORE__", "experiment_analysis.experiment_core.tree")
+        |> String.replace("__ANALYSIS__", "experiment_analysis")
+      )
+    end
 
     packages = Path.join(@fixture, "proofs/.lake/packages")
 
@@ -37,20 +42,29 @@ defmodule Lynx.Rust.TreeTest do
 
     options = [
       tools: @tools,
-      roots: ["experiment_analysis::tree_nodes", "experiment_analysis::binary_tree"],
+      roots: ["experiment_analysis::tree_nodes", "experiment_analysis::binary_tree_nodes"],
       lean_project: project,
       module_prefix: "Tree.Extraction",
       build_dir: Path.join(tmp, "build"),
-      proof_modules: ["Tree.Properties"],
+      proof_modules: ["Tree.CoreProperties", "Tree.DriverProperties", "Tree.Properties"],
       required_properties:
         Enum.map(
-          ~w(count_exact count_total inspect_exact inspect_fits inspect_rejects append_exact singleton_payload binary_tree_payload constructed_count),
+          ~w(count_exact count_total inspect_exact inspect_fits inspect_rejects append_exact singleton_payload binary_tree_payload constructed_count count_owned_exact binary_tree_nodes),
           &("Tree.Properties." <> &1)
         )
     ]
 
     result = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     assert [%{status: :ok}] = result.reports
+
+    drops = result.verification.structural_drops
+    assert Enum.any?(drops, &(&1.type == "alloc::vec::Vec<u8>"))
+    assert Enum.any?(drops, &(&1.type == "alloc::vec::Vec<experiment_core::tree::Node>"))
+
+    assert Enum.any?(drops, fn drop ->
+             drop.type == "experiment_core::tree::Node" and
+               drop.status == :audited_erasure and not drop.implementation_verified
+           end)
 
     assert Enum.any?(
              result.extraction.native_unwind,
@@ -72,7 +86,7 @@ defmodule Lynx.Rust.TreeTest do
     assert [%{status: :ok, cached: true}] =
              Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports
 
-    file = Lynx.Rust.Proofs.file!(result.extraction, ["Tree.Properties"])
+    file = Lynx.Rust.Proofs.file!(result.extraction, options[:proof_modules])
     export = Path.join(tmp, "tree.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
@@ -143,9 +157,18 @@ defmodule Lynx.Rust.TreeTest do
     assert reachable_drop != original
     File.write!(source, reachable_drop)
 
-    assert_raise CompileError, ~r/structural drop erasure rejected/, fn ->
-      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
-    end
+    assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports
+
+    File.write!(
+      source,
+      original <> "\nimpl Drop for Node { fn drop(&mut self) { panic!(\"observable drop\"); } }\n"
+    )
+
+    assert_raise CompileError,
+                 ~r/observable or unsupported behavior in compiler-generated drop glue/,
+                 fn ->
+                   Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+                 end
 
     File.write!(source, original)
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports
