@@ -39,6 +39,11 @@ pub fn count(node: &Node, budget: u16) -> Option<u16> {
     }
 }
 
+/// Counts and consumes an owned tree, including every compiler field drop.
+pub fn count_owned(node: Node, budget: u16) -> Option<u16> {
+    count(&node, budget)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{count, singleton, Node};
