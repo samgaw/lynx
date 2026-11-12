@@ -1,6 +1,7 @@
 pub mod collections;
 pub mod nested;
 pub mod protocol;
+pub mod tree;
 
 pub fn evaluate(value: i64) -> Option<i64> {
     value.checked_mul(2)
