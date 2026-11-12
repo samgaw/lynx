@@ -177,4 +177,35 @@ theorem inspect_rejects (node : __CORE__.Node) (budget : U16)
   | none => exact returned
   | some used => simp only [exactCount] at correct; omega
 
+theorem append_exact (children : alloc.vec.Vec __CORE__.Node) (child : __CORE__.Node)
+    (room : children.val.length < 262144) :
+    ∃ result, __CORE__.append children child = RustM.ok (.Sequence result) ∧
+      result.val = children.val ++ [child] := by
+  simp [__CORE__.append, __PREFIX__.Extraction.VectorModel.push_eq, room]
+
+theorem singleton_payload (payload : alloc.vec.Vec U8) :
+    ∃ children, __CORE__.singleton payload = RustM.ok (.Sequence children) ∧
+      children.val = [.Binary payload] := by
+  simp [__CORE__.singleton, __CORE__.append,
+    __PREFIX__.Extraction.VectorModel.push_eq, alloc.vec.Vec.new]
+
+theorem binary_tree_payload (payload : alloc.vec.Vec U8) :
+    ∃ children, __ANALYSIS__.binary_tree payload = RustM.ok (.Sequence children) ∧
+      children.val = [.Binary payload] :=
+  singleton_payload payload
+
+theorem constructed_count (payload : alloc.vec.Vec U8) :
+    ∃ tree, __ANALYSIS__.binary_tree payload = RustM.ok tree ∧
+      __ANALYSIS__.tree_nodes tree 2#u16 = RustM.ok (some 2#u16) ∧
+      __ANALYSIS__.tree_nodes tree 1#u16 = RustM.ok none := by
+  obtain ⟨children, built, payloads⟩ := binary_tree_payload payload
+  have size : nodes (.Sequence children) = 2 := by
+    rw [nodes_sequence, payloads]
+    simp
+  obtain ⟨used, counted, exactSize⟩ := inspect_fits (.Sequence children) 2#u16 (by rw [size]; simp)
+  have same : used = 2#u16 := by apply UScalar.eq_of_val_eq; simpa [size] using exactSize
+  refine ⟨.Sequence children, built, ?_, ?_⟩
+  · simpa [same] using counted
+  · exact inspect_rejects _ _ (by rw [size]; simp)
+
 end __PREFIX__.Properties

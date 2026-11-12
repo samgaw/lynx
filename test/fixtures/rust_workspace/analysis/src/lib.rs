@@ -325,6 +325,11 @@ pub fn tree_nodes(node: &experiment_core::tree::Node, budget: u16) -> Option<u16
     experiment_core::tree::count(node, budget)
 }
 
+/// Builds a recursive protocol tree through the first-party constructor.
+pub fn binary_tree(payload: Vec<u8>) -> experiment_core::tree::Node {
+    experiment_core::tree::singleton(payload)
+}
+
 #[cfg(test)]
 mod producer_tests {
     #[test]

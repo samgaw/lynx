@@ -7,7 +7,9 @@ defmodule Lynx.Rust.TreeTest do
   if is_nil(@tools), do: @moduletag(skip: "set LYNX_AENEAS_DIR for recursive tree proofs")
 
   @tag :tmp_dir
-  test "proves exact recursive tree counts and budget rejection across crates", %{tmp_dir: tmp} do
+  test "proves recursive tree construction, exact counts and budget rejection across crates", %{
+    tmp_dir: tmp
+  } do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -35,20 +37,25 @@ defmodule Lynx.Rust.TreeTest do
 
     options = [
       tools: @tools,
-      roots: ["experiment_analysis::tree_nodes"],
+      roots: ["experiment_analysis::tree_nodes", "experiment_analysis::binary_tree"],
       lean_project: project,
       module_prefix: "Tree.Extraction",
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["Tree.Properties"],
       required_properties:
         Enum.map(
-          ~w(count_exact count_total inspect_exact inspect_fits inspect_rejects),
+          ~w(count_exact count_total inspect_exact inspect_fits inspect_rejects append_exact singleton_payload binary_tree_payload constructed_count),
           &("Tree.Properties." <> &1)
         )
     ]
 
     result = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     assert [%{status: :ok}] = result.reports
+
+    assert Enum.any?(
+             result.extraction.native_unwind,
+             &(&1.kind == :nonpanicking_collection_call and &1.method == "push")
+           )
 
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :cross_crate_contract and
@@ -110,6 +117,37 @@ defmodule Lynx.Rust.TreeTest do
     end
 
     File.write!(caller, original_caller)
+    assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports
+
+    corrupted =
+      String.replace(
+        original,
+        "children.push(child);",
+        "children.push(child);\n    children.push(Node::Sequence(Vec::new()));"
+      )
+
+    assert corrupted != original
+    File.write!(source, corrupted)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    end
+
+    reachable_drop =
+      String.replace(
+        original,
+        "children.push(child);",
+        "let _discarded = Node::Sequence(Vec::new());\n    children.push(child);"
+      )
+
+    assert reachable_drop != original
+    File.write!(source, reachable_drop)
+
+    assert_raise CompileError, ~r/structural drop erasure rejected/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    end
+
+    File.write!(source, original)
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports
   end
 end
