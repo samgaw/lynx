@@ -286,12 +286,19 @@ defmodule Lynx.Rust.Extraction do
            ),
          else: {document, []}
 
+    {document, collection_cleanup} =
+      if Keyword.get(opts, :execution, :pure) == :pure and
+           Keyword.get(opts, :owned_drops, false) != :explicit and unwind == :reject,
+         do: Lynx.Rust.CollectionModels.prune_nonpanicking_calls!(document, first_party),
+         else: {document, []}
+
     native_unwind =
       nonpanicking_borrows ++
         cleanup_flags ++
         native_unwind ++
         nonpanicking ++
-        nonpanicking_after_drops
+        nonpanicking_after_drops ++
+        collection_cleanup
 
     document =
       if native_drops != [] or native_unwind != [],

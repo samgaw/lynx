@@ -90,9 +90,14 @@ defmodule Lynx.Rust do
   Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
   Aeneas's value and borrow-update models. Shared `Vec::len` observations support
   arbitrary element types with the standard Global allocator; this does not admit
-  element destruction or owned operations on those types. Owned primitive scalar vectors using
-  the standard Global allocator support `new`, `len` and bounded `push`, with
-  logical deallocation including compiler-emitted cleanup paths. Growth beyond
+  element destruction on those types. Empty `Vec::new` is independent of element
+  layout. Bounded `push` supports primitive scalars and concrete struct/enum
+  layouts of at most 4095 bytes on every selected 32/64-bit target, using the
+  standard Global allocator. Generic or symbolic composite layouts are rejected.
+  Unwind cleanup behind these validated nonpanicking calls is unreachable;
+  ordinary drops and cleanup behind other calls are still audited separately.
+  Scalar vectors support logical deallocation including compiler-emitted cleanup
+  paths. Growth beyond
   262144 elements exhausts verification. A kernel-checked model theorem rules
   out catchable overflow panics within that bound. Drop erasure for custom
   allocators or element destructors is rejected. Native allocation, capacity and
