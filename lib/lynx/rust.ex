@@ -80,6 +80,13 @@ defmodule Lynx.Rust do
   owned aggregates, generic captures and arbitrary FnOnce implementations remain
   rejected; callback panics remain Rust failures.
 
+  Shared-slice `for item in slice` loops reuse Aeneas's existing `IntoIterator`
+  conversion and `Iterator::next` models. Admission checks method forwarding,
+  shared item lifetimes, the matching iterator dictionary and Option layout.
+  The first-party loop body remains extracted; native iterator implementation
+  and pointer layout remain reported external boundaries. Owning/mutable
+  iterators and iterator combinators are not included in this subset.
+
   Vec shared/mutable slice views and bounds-checked mutable slice indexing reuse
   Aeneas's value and borrow-update models. Shared `Vec::len` observations support
   arbitrary element types with the standard Global allocator; this does not admit

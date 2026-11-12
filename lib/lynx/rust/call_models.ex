@@ -52,6 +52,7 @@ defmodule Lynx.Rust.CallModels do
             Lynx.Rust.IndexModels.resolve(function, translated, refs) ||
             Lynx.Rust.ComparisonModels.resolve(function, translated, refs) ||
             Lynx.Rust.CollectionModels.resolve(function, translated, refs) ||
+            Lynx.Rust.IteratorModels.resolve(function, translated, refs) ||
             Lynx.Rust.EndianModels.resolve(function, translated, refs) ||
             Lynx.Rust.StringModels.resolve(function, translated, refs) ||
             Lynx.Rust.BytesModels.resolve(function, translated, refs) ||
