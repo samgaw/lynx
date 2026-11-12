@@ -185,6 +185,10 @@ defmodule Lynx.Rust.DropTest do
 
     File.write!(source, String.replace(original, "Text(String)", "Text(Vec<u8>)"))
 
+    assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "drop-analysis", options).reports
+
+    File.write!(source, String.replace(original, "Text(String)", "Text(Box<u8>)"))
+
     assert_raise CompileError, ~r/owned drop type/, fn ->
       Lynx.Rust.verify!(workspace, "drop-analysis", options)
     end

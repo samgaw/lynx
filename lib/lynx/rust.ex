@@ -99,8 +99,14 @@ defmodule Lynx.Rust do
   Scalar vectors support logical deallocation including compiler-emitted cleanup
   paths. Growth beyond
   262144 elements exhausts verification. A kernel-checked model theorem rules
-  out catchable overflow panics within that bound. Drop erasure for custom
-  allocators or element destructors is rejected. Native allocation, capacity and
+  out catchable overflow panics within that bound. Structural destruction also
+  supports monomorphic first-party structs/enums containing scalar/Copy data,
+  String, shared references and Vec fields when actual compiler glue is captured
+  and checked. Recursive glue may close only through finite owned Vec elements;
+  each body and dictionary is checked, including every variant. Custom Drop
+  implementations, allocators, opaque/missing element glue and unguarded cycles
+  remain rejected. These are reported erasure audits, not Lean implementation
+  theorems for destructors. Native allocation, stack exhaustion, capacity and
   deallocation correctness remain unverified.
 
   Concrete `Result<T, E>` cleanup checks the actual generated destructor at
