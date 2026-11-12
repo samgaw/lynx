@@ -11,6 +11,17 @@ pub enum Node {
     Sequence(Vec<Node>),
 }
 
+/// Moves a binary payload into a sequence containing exactly one child.
+pub fn singleton(payload: Vec<u8>) -> Node {
+    append(Vec::new(), Node::Binary(payload))
+}
+
+/// Appends an owned child while preserving every previous child in order.
+pub fn append(mut children: Vec<Node>, child: Node) -> Node {
+    children.push(child);
+    Node::Sequence(children)
+}
+
 /// Counts every node, rejecting trees larger than the supplied node budget.
 pub fn count(node: &Node, budget: u16) -> Option<u16> {
     if budget == 0 {
@@ -30,7 +41,21 @@ pub fn count(node: &Node, budget: u16) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{count, Node};
+    use super::{count, singleton, Node};
+
+    #[test]
+    fn construction_preserves_the_owned_payload() {
+        let tree = singleton(vec![0, 255, 195, 40]);
+        assert_eq!(count(&tree, 2), Some(2));
+        assert_eq!(count(&tree, 1), None);
+        let Node::Sequence(children) = tree else {
+            panic!("expected a sequence");
+        };
+        let [Node::Binary(payload)] = children.as_slice() else {
+            panic!("expected one binary child");
+        };
+        assert_eq!(payload, &[0, 255, 195, 40]);
+    }
 
     #[test]
     fn counts_nested_siblings_and_rejects_insufficient_budgets() {
