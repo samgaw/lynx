@@ -211,6 +211,12 @@ fn checked_suffix() -> bool {
 }
 
 /// Counts one complete nested document under explicit protocol budgets.
+#[cfg(feature = "producer-protocol")]
+#[rustler::nif(name = "binary_roundtrip", schedule = "DirtyCpu")]
+fn produce_binary_document(input: rustler::Binary<'_>) -> Option<bool> {
+    experiment_analysis::binary_roundtrip(input.as_slice())
+}
+
 #[cfg(feature = "nested-protocol")]
 #[rustler::nif(name = "document_nodes", schedule = "DirtyCpu")]
 fn scan_document(input: rustler::Binary<'_>, depth: u8, nodes: u16) -> Option<u16> {
@@ -672,6 +678,7 @@ mod tests {
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
                 + 2 * usize::from(cfg!(feature = "suffix-consume"))
                 + usize::from(cfg!(feature = "nested-protocol"))
+                + usize::from(cfg!(feature = "producer-protocol"))
                 + usize::from(cfg!(feature = "named-arrays"))
                 + usize::from(cfg!(feature = "named-slices"))
                 + usize::from(cfg!(feature = "unsupported-binary-method"))
@@ -927,6 +934,13 @@ mod tests {
                 "checked_suffix".to_owned(),
                 0,
                 rustler::SchedulerFlags::Normal as u32,
+            ));
+        }
+        if cfg!(feature = "producer-protocol") {
+            expected.push((
+                "binary_roundtrip".to_owned(),
+                1,
+                rustler::SchedulerFlags::DirtyCpu as u32,
             ));
         }
         if cfg!(feature = "nested-protocol") {
