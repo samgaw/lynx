@@ -317,6 +317,150 @@ defmodule Lynx.Rust.CollectionModelsTest do
              )
   end
 
+  defp composite_example(size) do
+    {push, types} = owned_example("push")
+    args = %{"regions" => [], "types" => [], "const_generics" => [], "trait_refs" => []}
+    scalar = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+    element = %{"Adt" => %{"id" => 7, "builtin" => nil, "generics" => args}}
+    allocator = %{"Adt" => %{"id" => 6, "builtin" => nil, "generics" => args}}
+    parameters = Map.put(params(1, [], []), "types", [])
+
+    global = %{
+      "def_id" => 6,
+      "generics" => parameters,
+      "item_meta" => %{"name" => Enum.map(~w(alloc alloc Global), &%{"Ident" => [&1, 0]})}
+    }
+
+    composite = %{
+      "def_id" => 7,
+      "src" => "Normal",
+      "generics" => parameters,
+      "kind" => %{"Enum" => []},
+      "layout" => [
+        %{
+          "key" => "test-target",
+          "value" => %{
+            "size" => %{
+              "chosen" => %{
+                "Value" => [
+                  50,
+                  %{
+                    "Constant" => %{
+                      "Value" => [
+                        51,
+                        [%{"Integer" => %{"Unsigned" => ["Usize", to_string(size)]}}, scalar]
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+
+    caller = %{
+      "def_id" => 2,
+      "item_meta" => %{"name" => [%{"Ident" => ["example", 0]}, %{"Ident" => ["build", 0]}]},
+      "body" => %{
+        "Regular" => %{
+          "kind" => %{"Fun" => 1},
+          "generics" => %{args | "types" => [element, allocator]}
+        }
+      }
+    }
+
+    types =
+      types
+      |> Map.update!("type_decls", &(&1 ++ [global, composite]))
+      |> Map.put("target_information", [
+        %{"key" => "test-target", "value" => %{"target_pointer_size" => 4}}
+      ])
+
+    {caller, push, types}
+  end
+
+  test "composite pushes require concrete bounded layouts for every target" do
+    for size <- [0, 32, 4095] do
+      {caller, push, types} = composite_example(size)
+      models = CallModels.resolve([push], types, %{}, [])
+      assert :ok = Lynx.Rust.CollectionModels.audit([caller], models, types, %{})
+    end
+
+    {caller, push, types} = composite_example(32)
+    models = CallModels.resolve([push], types, %{}, [])
+    composite = ["type_decls", Access.at(-1)]
+    chosen = composite ++ ["layout", Access.at(0), "value", "size", "chosen"]
+    {_, _, large} = composite_example(4096)
+
+    for unsupported <- [
+          large,
+          put_in(types, composite ++ ["kind"], "Opaque"),
+          put_in(types, composite ++ ["generics", "types"], [%{"index" => 0}]),
+          put_in(types, composite ++ ["layout"], []),
+          put_in(types, chosen, %{"Deduplicated" => 50}),
+          put_in(types, chosen, %{"Value" => [50, %{"SizeOf" => %{}}]}),
+          put_in(types, ["target_information"], []),
+          put_in(types, ["target_information", Access.at(0), "value", "target_pointer_size"], 2),
+          update_in(types, ["target_information"], fn targets ->
+            targets ++ [%{"key" => "other-target", "value" => %{"target_pointer_size" => 8}}]
+          end),
+          update_in(types, composite ++ ["layout"], &(&1 ++ &1))
+        ] do
+      assert {:error, _, message} =
+               Lynx.Rust.CollectionModels.audit([caller], models, unsupported, %{})
+
+      assert message =~ "compiler layouts"
+    end
+  end
+
+  test "empty vector construction does not require an element layout" do
+    {constructor, types} = owned_example("new")
+    models = CallModels.resolve([constructor], types, %{}, [])
+
+    caller = %{
+      "body" => %{
+        "Regular" => %{
+          "kind" => %{"Fun" => 1},
+          "generics" => %{"types" => [%{"TypeVar" => %{"Free" => 0}}]}
+        }
+      }
+    }
+
+    assert :ok = Lynx.Rust.CollectionModels.audit([caller], models, types, %{})
+  end
+
+  test "prunes only validated collection unwind edges and retains reachable drops" do
+    {caller, push, types} = composite_example(32)
+    normal_drop = %{"kind" => %{"Drop" => %{"place" => "observable"}}}
+    cleanup = %{"id" => 10, "statements" => [normal_drop]}
+
+    call = %{
+      "kind" => %{
+        "Call" => %{
+          "call" => %{"func" => caller["body"]},
+          "on_unwind" => cleanup
+        }
+      }
+    }
+
+    unknown = put_in(call, ["kind", "Call", "call", "func", "Regular", "kind", "Fun"], 99)
+    caller = put_in(caller, ["body"], %{"statements" => [call, unknown, normal_drop]})
+    document = %{"translated" => Map.put(types, "fun_decls", [push, caller])}
+
+    assert {%{"translated" => %{"fun_decls" => [_, checked]}}, [record]} =
+             Lynx.Rust.CollectionModels.prune_nonpanicking_calls!(document, ["example"])
+
+    assert [
+             %{"kind" => %{"Call" => %{"on_unwind" => %{"statements" => []}}}},
+             ^unknown,
+             ^normal_drop
+           ] = checked["body"]["statements"]
+
+    assert %{kind: :nonpanicking_collection_call, caller: 2, function: 1, method: "push"} = record
+  end
+
   @tag :tmp_dir
   test "bounded model assembly preserves literals and rejects application name collisions", %{
     tmp_dir: tmp
