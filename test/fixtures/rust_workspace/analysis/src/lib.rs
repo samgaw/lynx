@@ -312,3 +312,20 @@ mod nested_tests {
         );
     }
 }
+
+/// Produces a complete binary document and checks the decoded payload.
+pub fn binary_roundtrip(payload: &[u8]) -> Option<bool> {
+    let encoded = experiment_core::nested::encode_binary(payload)?;
+    let decoded = experiment_core::nested::decode_binary(&encoded)?;
+    Some(decoded == payload)
+}
+
+#[cfg(test)]
+mod producer_tests {
+    #[test]
+    fn roundtrips_binary_data_and_rejects_oversized_payloads() {
+        assert_eq!(super::binary_roundtrip(&[0, 255, 195, 40]), Some(true));
+        assert_eq!(super::binary_roundtrip(&[]), Some(true));
+        assert_eq!(super::binary_roundtrip(&vec![0; 65536]), None);
+    }
+}
