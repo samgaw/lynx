@@ -73,14 +73,14 @@ defmodule Lynx.Rust.DropModels do
             Enum.reduce(drops(function["body"]), {%{}, []}, fn drop, {entries, ids} ->
               place!(drop["place"], local_ctx)
               {id, found} = site!(drop, local_ctx, [])
-              {Map.merge(entries, found), [id | ids]}
+              {merge_entries(entries, found), [id | ids]}
             end)
           end
 
         {:cont,
          {:ok,
           %{
-            erasures: Map.merge(result.erasures, entries),
+            erasures: merge_entries(result.erasures, entries),
             sites: Map.put(result.sites, function["def_id"], Enum.uniq(ids) |> Enum.sort())
           }}}
       rescue
@@ -100,8 +100,37 @@ defmodule Lynx.Rust.DropModels do
   def report(audit) do
     audit.erasures
     |> Map.values()
+    |> Enum.flat_map(&Map.get(&1, :instances, [&1]))
     |> Enum.map(&Map.drop(&1, [:self]))
-    |> Enum.sort_by(& &1.rust_name)
+    |> Enum.sort_by(&{&1.rust_name, &1.type})
+  end
+
+  defp put_entry(entries, id, entry), do: merge_entries(entries, %{id => entry})
+
+  # One generic compiler function can be instantiated at several payload types.
+  # Keep every checked instance, including when a recursive vector revisits its
+  # parent's glue before the parent finishes checking its remaining fields.
+  defp merge_entries(left, right) do
+    Map.merge(left, right, fn _, previous, next ->
+      instances = Map.get(previous, :instances, [previous]) ++ Map.get(next, :instances, [next])
+
+      instances =
+        Enum.reduce(instances, %{}, fn entry, found ->
+          Map.update(found, entry.self, entry, fn old ->
+            %{
+              entry
+              | dependencies: Enum.uniq(old.dependencies ++ entry.dependencies) |> Enum.sort()
+            }
+          end)
+        end)
+        |> Map.values()
+        |> Enum.sort_by(&{&1.type, :erlang.term_to_binary(&1.self, [:deterministic])})
+
+      case instances do
+        [entry] -> entry
+        _ -> Map.put(next, :instances, instances)
+      end
+    end)
   end
 
   defp site!(
@@ -187,9 +216,10 @@ defmodule Lynx.Rust.DropModels do
 
   # Charon preserves both the element and allocator parameters on Vec's
   # generated drop even though it removes the allocator from the Vec type.
-  # Erasure requires scalar elements or an unconditional compiler Copy witness,
-  # and Global: neither has an element/custom allocator destructor. Native
-  # deallocation remains an explicit heap model.
+  # Elements require a scalar/Copy witness or actual checked structural glue.
+  # A recursion edge is admitted only through the finite owned vector's elements;
+  # custom destructors and allocators remain excluded. Native deallocation and
+  # stack exhaustion remain explicit boundaries.
   defp vector_site!(
          %{
            "kind" => "Precise",
@@ -205,7 +235,7 @@ defmodule Lynx.Rust.DropModels do
            }
          },
          ctx,
-         _seen
+         seen
        )
        when is_integer(region) do
     element_type = expand(element, ctx)
@@ -213,8 +243,7 @@ defmodule Lynx.Rust.DropModels do
     a = %{"TypeVar" => %{"Free" => 1}}
     vector_name = path(~w(alloc vec Vec))
 
-    with {element_name, element_basis} <- nondestructive_element(element_type, ctx),
-         %{"Adt" => %{"id" => allocator_id, "builtin" => nil, "generics" => allocator_args}} <-
+    with %{"Adt" => %{"id" => allocator_id, "builtin" => nil, "generics" => allocator_args}} <-
            expand(allocator, ctx),
          true <- Constants.empty_arguments?(allocator_args),
          %{"item_meta" => %{"name" => allocator_name}, "generics" => allocator_params} <-
@@ -291,22 +320,28 @@ defmodule Lynx.Rust.DropModels do
          true <-
            expand(method_args, ctx) ==
              Map.put(arguments([t, a]), "regions", [%{"Var" => %{"Bound" => [0, 0]}}]) do
+      {element_name, element_basis, dependencies} =
+        vector_element!(element_type, ctx, [:vector | seen])
+
       {id,
-       %{
-         id => %{
-           definition_id: id,
-           rust_name: render_name(function["item_meta"]["name"]),
-           type: "alloc::vec::Vec<#{element_name}>",
-           element_drop_basis: element_basis,
-           self: self,
-           first_party: false,
-           status: :modelled,
-           implementation_verified: false,
-           dependencies: [],
-           label:
-             "Logical heap Vec<#{element_name}>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
-         }
-       }}
+       put_entry(dependencies, id, %{
+         definition_id: id,
+         rust_name: render_name(function["item_meta"]["name"]),
+         type: "alloc::vec::Vec<#{element_name}>",
+         element_drop_basis: element_basis,
+         self: self,
+         first_party: false,
+         status: :modelled,
+         implementation_verified: false,
+         dependencies: Map.keys(dependencies) |> Enum.sort(),
+         label:
+           if(match?(%{kind: :compiler_structural}, element_basis),
+             do:
+               "Logical heap Vec<#{element_name}>/Global deallocation model: checked compiler structural element glue; finite owned vector recursion only; native allocator effects, stack exhaustion and deallocation correctness unverified",
+             else:
+               "Logical heap Vec<#{element_name}>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
+           )
+       })}
     else
       _ ->
         reject!(
@@ -316,6 +351,33 @@ defmodule Lynx.Rust.DropModels do
   end
 
   defp vector_site!(_, _, _), do: reject!("unsupported or inconsistent Vec drop signature")
+
+  defp vector_element!(element, ctx, seen) do
+    case nondestructive_element(element, ctx) do
+      {name, basis} ->
+        {name, basis, %{}}
+
+      nil ->
+        candidates =
+          for {id, function} <- ctx.functions,
+              generated?(function),
+              match?(
+                %{"Ref" => [_, ^element, "Mut"]},
+                expand(List.first(function["signature"]["inputs"]), ctx)
+              ),
+              do: id
+
+        case candidates do
+          [id] ->
+            {_, dependencies} = destructor!(id, element, ctx, seen)
+            name = render_name(ctx.types[element["Adt"]["id"]]["item_meta"]["name"])
+            {name, %{kind: :compiler_structural, function_id: id}, dependencies}
+
+          _ ->
+            reject!("Vec drop: missing or ambiguous compiler-generated element destructor")
+        end
+    end
+  end
 
   @doc false
   def primitive_scalar?(%{"Scalar" => "Bool"}), do: true
@@ -354,7 +416,7 @@ defmodule Lynx.Rust.DropModels do
     entries = block!(body, body_ctx, [id | seen])
 
     {id,
-     Map.put(entries, id, %{
+     put_entry(entries, id, %{
        definition_id: id,
        rust_name: render_name(name),
        type: "core::result::Result",
@@ -676,7 +738,11 @@ defmodule Lynx.Rust.DropModels do
         end)
 
   defp destructor!(id, expected, ctx, seen) do
-    if id in seen, do: reject!("recursive destructor dependency")
+    closing = id in seen
+
+    if closing and :vector not in Enum.take_while(seen, &(&1 != id)),
+      do: reject!("unguarded recursive destructor dependency")
+
     function = ctx.functions[id]
 
     with %{
@@ -732,6 +798,9 @@ defmodule Lynx.Rust.DropModels do
 
       dependencies =
         cond do
+          closing ->
+            %{}
+
           first_party ->
             with %{
                    "Structured" => %{
@@ -740,6 +809,8 @@ defmodule Lynx.Rust.DropModels do
                    }
                  } <- function["body"],
                  true <- function["item_meta"]["opacity"] == "Transparent",
+                 true <- function["item_meta"]["has_errors"] == false,
+                 true <- ctx.types[type_id]["item_meta"]["has_errors"] == false,
                  true <- Enum.map(locals, & &1["index"]) == Enum.to_list(0..(length(locals) - 1)) do
               local_types = Map.new(locals, &{&1["index"], expand(&1["ty"], ctx)})
 
@@ -776,7 +847,7 @@ defmodule Lynx.Rust.DropModels do
           )
       }
 
-      {self, Map.put(dependencies, id, entry)}
+      {self, put_entry(dependencies, id, entry)}
     else
       _ ->
         reject!(
@@ -825,14 +896,14 @@ defmodule Lynx.Rust.DropModels do
               do: reject!("inconsistent dropped field type")
 
             {_, found} = site!(drop, ctx, seen)
-            Map.merge(found, block!(drop["on_unwind"], Map.put(ctx, :cleanup, true), seen))
+            merge_entries(found, block!(drop["on_unwind"], Map.put(ctx, :cleanup, true), seen))
 
           %{"Switch" => %{"data" => data, "branches" => branches}} when is_list(branches) ->
             with %{"Discriminant" => place} <- data["scrutinee"],
                  %{"Adt" => adt} <- place!(place, ctx),
                  %{"kind" => %{"Enum" => variants}} <- ctx.types[adt["id"]],
                  true <- switch?(data, adt, variants, length(branches), ctx) do
-              Enum.reduce(branches, %{}, &Map.merge(&2, block!(&1, ctx, seen)))
+              Enum.reduce(branches, %{}, &merge_entries(&2, block!(&1, ctx, seen)))
             else
               _ -> reject!("unsupported structural drop switch")
             end
@@ -843,7 +914,7 @@ defmodule Lynx.Rust.DropModels do
             )
         end
 
-      Map.merge(entries, found)
+      merge_entries(entries, found)
     end)
   end
 
@@ -918,37 +989,53 @@ defmodule Lynx.Rust.DropModels do
   end
 
   defp type!(%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}, ctx, seen) do
-    if id in seen or not Constants.empty_arguments?(args),
-      do: reject!("recursive or generic owned drop type")
+    case ctx.types[id] do
+      %{"item_meta" => %{"name" => name}, "generics" => params, "kind" => kind} ->
+        if name == path(~w(alloc vec Vec)) and kind == "Opaque" and parameters?(params, 0, 1) do
+          case args do
+            %{"types" => [element]} ->
+              unless args == arguments([element]), do: reject!("generic owned vector drop type")
+              type!(element, ctx, [:vector | seen])
 
-    with %{"item_meta" => %{"name" => name}, "generics" => params, "kind" => kind} <-
-           ctx.types[id],
-         true <- parameters?(params, 0, 0) do
-      case {name, kind} do
-        {name, "Opaque"}
-        when name == [
-               %{"Ident" => ["alloc", 0]},
-               %{"Ident" => ["string", 0]},
-               %{"Ident" => ["String", 0]}
-             ] ->
-          :ok
+            _ ->
+              reject!("missing owned vector element")
+          end
+        else
+          unless Constants.empty_arguments?(args) and parameters?(params, 0, 0),
+            do: reject!("generic owned drop type")
 
-        {name, %{"Struct" => fields}} ->
-          unless first_party?(name, ctx), do: reject!("unapproved external owned drop type")
-          Enum.each(fields, &type!(expand(&1["ty"], ctx), ctx, [id | seen]))
+          if id in seen do
+            unless :vector in Enum.take_while(seen, &(&1 != id)),
+              do: reject!("unguarded recursive owned drop type")
+          else
+            case {name, kind} do
+              {name, "Opaque"}
+              when name == [
+                     %{"Ident" => ["alloc", 0]},
+                     %{"Ident" => ["string", 0]},
+                     %{"Ident" => ["String", 0]}
+                   ] ->
+                :ok
 
-        {name, %{"Enum" => variants}} ->
-          unless first_party?(name, ctx), do: reject!("unapproved external owned drop type")
+              {name, %{"Struct" => fields}} ->
+                unless first_party?(name, ctx), do: reject!("unapproved external owned drop type")
+                Enum.each(fields, &type!(expand(&1["ty"], ctx), ctx, [id | seen]))
 
-          Enum.each(variants, fn v ->
-            Enum.each(v["fields"], &type!(expand(&1["ty"], ctx), ctx, [id | seen]))
-          end)
+              {name, %{"Enum" => variants}} ->
+                unless first_party?(name, ctx), do: reject!("unapproved external owned drop type")
 
-        _ ->
-          reject!("unsupported owned drop type")
-      end
-    else
-      _ -> reject!("missing owned drop type")
+                Enum.each(variants, fn v ->
+                  Enum.each(v["fields"], &type!(expand(&1["ty"], ctx), ctx, [id | seen]))
+                end)
+
+              _ ->
+                reject!("unsupported owned drop type")
+            end
+          end
+        end
+
+      _ ->
+        reject!("missing owned drop type")
     end
   end
 
