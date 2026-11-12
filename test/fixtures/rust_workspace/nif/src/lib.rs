@@ -1,5 +1,12 @@
 //! Rustler facade for the workspace verification fixture.
 
+/// Constructs, counts and consumes a recursive protocol tree across crates.
+#[cfg(feature = "owned-tree")]
+#[rustler::nif(name = "owned_tree_nodes", schedule = "DirtyCpu")]
+fn consume_tree(payload: Vec<u8>, budget: u16) -> Option<u16> {
+    experiment_analysis::binary_tree_nodes(payload, budget)
+}
+
 /// Replaces the first byte through two ordinary workspace crates.
 #[cfg(feature = "collections")]
 #[rustler::nif]
@@ -669,6 +676,7 @@ mod tests {
         assert_eq!(
             exports.len(),
             10 + usize::from(cfg!(feature = "unsupported-float"))
+                + usize::from(cfg!(feature = "owned-tree"))
                 + if cfg!(feature = "composite") { 5 } else { 0 }
                 + 2 * usize::from(cfg!(feature = "binary"))
                 + 2 * usize::from(cfg!(feature = "protocol"))
@@ -771,6 +779,13 @@ mod tests {
             if enabled {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
+        }
+        if cfg!(feature = "owned-tree") {
+            expected.push((
+                "owned_tree_nodes".to_owned(),
+                2,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
         }
         if cfg!(feature = "optional") {
             for name in [
