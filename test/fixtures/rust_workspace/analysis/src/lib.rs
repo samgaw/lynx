@@ -320,6 +320,11 @@ pub fn binary_roundtrip(payload: &[u8]) -> Option<bool> {
     Some(decoded == payload)
 }
 
+/// Counts an owned recursive protocol value through a shared cross-crate borrow.
+pub fn tree_nodes(node: &experiment_core::tree::Node, budget: u16) -> Option<u16> {
+    experiment_core::tree::count(node, budget)
+}
+
 #[cfg(test)]
 mod producer_tests {
     #[test]
