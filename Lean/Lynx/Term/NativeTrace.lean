@@ -5,17 +5,26 @@ public import Lynx.Term.Runner
 public section
 namespace Lynx.Result
 
-/-- A finite prefix of state reads, state writes and ready waits in one local execution. The residual
-computation is retained rather than assumed to finish. Readiness and every
+/-- A finite prefix of local/native state reads, writes and ready waits. The
+prefix follows the single-computation `Config.start` semantics and never moves
+operations across a spawn. The residual is retained rather than assumed to finish. Readiness and every
 intermediate state are established by the actual operations; this relation does not
 inject a crash or choose concurrent scheduler interleavings. -/
 inductive ReadyPrefix : Result α → Environment → Result α → Environment → Prop where
   | refl (computation : Result α) (env : Environment) :
       ReadyPrefix computation env computation env
+  | get (next : Environment → Result α) (before : Environment)
+      (residual : Result α) (after : Environment)
+      (rest : ReadyPrefix (next before) before residual after) :
+      ReadyPrefix (.get next) before residual after
   | nativeGet (next : Environment → Result α) (before : Environment)
       (residual : Result α) (after : Environment)
       (rest : ReadyPrefix (next before) before residual after) :
       ReadyPrefix (.nativeGet next) before residual after
+  | set (middle : Environment) (next : Result α) (before : Environment)
+      (residual : Result α) (after : Environment)
+      (rest : ReadyPrefix next middle residual after) :
+      ReadyPrefix (.set middle next) before residual after
   | nativeSet (middle : Environment) (next : Result α) (before : Environment)
       (residual : Result α) (after : Environment)
       (rest : ReadyPrefix next middle residual after) :
@@ -42,7 +51,9 @@ theorem ReadyPrefix.trans {computation middle residual : Result α}
     ReadyPrefix computation before residual after := by
   induction first with
   | refl => exact second
+  | get next before middle midway rest ih => exact .get _ _ _ _ (ih second)
   | nativeGet next before middle midway rest ih => exact .nativeGet _ _ _ _ (ih second)
+  | set updated next before middle midway rest ih => exact .set _ _ _ _ _ (ih second)
   | nativeSet updated next before middle midway rest ih => exact .nativeSet _ _ _ _ _ (ih second)
   | wait poll next reply before updated middle midway ready rest ih =>
     exact .wait _ _ _ _ _ _ _ ready (ih second)
@@ -57,9 +68,13 @@ theorem ReadyPrefix.apply {computation residual : Result α} {before after : Env
     computation before = residual after := by
   induction trace with
   | refl => rfl
+  | get next before residual after rest ih =>
+      exact (get_continuation_apply next before []).trans ih
   | nativeGet next before residual after rest ih =>
       rw [nativeGet_continuation_apply]
       exact ih
+  | set middle next before residual after rest ih =>
+      exact (set_continuation_apply middle next before []).trans ih
   | nativeSet middle next before residual after rest ih =>
       rw [nativeSet_continuation_apply]
       exact ih
@@ -77,8 +92,14 @@ theorem ReadyPrefix.run {computation residual : Result α} {before after : Envir
     computation.run before choices = residual.run after choices := by
   induction trace with
   | refl => rfl
+  | get next before residual after rest ih =>
+      rw [get_continuation_apply]
+      exact ih
   | nativeGet next before residual after rest ih =>
       rw [nativeGet_continuation_run]
+      exact ih
+  | set middle next before residual after rest ih =>
+      rw [set_continuation_apply]
       exact ih
   | nativeSet middle next before residual after rest ih =>
       rw [nativeSet_continuation_run]
@@ -117,7 +138,13 @@ theorem ReadyPrefix.terminalRun {computation residual : Result α} {before after
     ∃ rest, Concurrent.Run (.start after residual elapsed) rest last := by
   induction trace generalizing events with
   | refl => exact ⟨_, run⟩
+  | get next before residual after rest ih =>
+      obtain ⟨_, run⟩ := run_after_single rfl run terminal
+      exact ih run
   | nativeGet next before residual after rest ih =>
+      obtain ⟨_, run⟩ := run_after_single rfl run terminal
+      exact ih run
+  | set middle next before residual after rest ih =>
       obtain ⟨_, run⟩ := run_after_single rfl run terminal
       exact ih run
   | nativeSet middle next before residual after rest ih =>
@@ -163,9 +190,15 @@ theorem ReadyPrefix.bind {computation residual : Result α} {before after : Envi
     ReadyPrefix (computation >>= next) before (residual >>= next) after := by
   induction trace with
   | refl => exact .refl _ _
+  | get continuation before residual after rest ih =>
+      rw [get_bind]
+      exact .get _ _ _ _ ih
   | nativeGet continuation before residual after rest ih =>
       rw [nativeGet_bind]
       exact .nativeGet _ _ _ _ ih
+  | set middle continuation before residual after rest ih =>
+      rw [set_bind]
+      exact .set _ _ _ _ _ ih
   | nativeSet middle continuation before residual after rest ih =>
       rw [nativeSet_bind]
       exact .nativeSet _ _ _ _ _ ih
@@ -185,9 +218,15 @@ theorem ReadyPrefix.handle {computation residual : Result α} {before after : En
     ReadyPrefix (Result.handle computation handler) before (Result.handle residual handler) after := by
   induction trace with
   | refl => exact .refl _ _
+  | get continuation before residual after rest ih =>
+      rw [handle_get]
+      exact .get _ _ _ _ ih
   | nativeGet continuation before residual after rest ih =>
       rw [handle_nativeGet]
       exact .nativeGet _ _ _ _ ih
+  | set middle continuation before residual after rest ih =>
+      rw [handle_set]
+      exact .set _ _ _ _ _ ih
   | nativeSet middle continuation before residual after rest ih =>
       rw [handle_nativeSet]
       exact .nativeSet _ _ _ _ _ ih
