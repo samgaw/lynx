@@ -40,7 +40,7 @@ defmodule Lynx.Rust.NativeCleanupConcurrentTest do
       proof_modules: ["Cleanup.Properties"],
       required_properties: [
         "Cleanup.Properties.every_interleaving",
-        "Cleanup.Properties.every_schedule"
+        "Cleanup.Properties.every_run"
       ]
     ]
 
@@ -50,7 +50,7 @@ defmodule Lynx.Rust.NativeCleanupConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::mutex_new_incremented" &&
-               guarantee.theorem == "Cleanup.Properties.every_interleaving"
+               guarantee.theorem == "Cleanup.Properties.every_run"
            end)
 
     assert result.verification.owned_drops
@@ -58,7 +58,7 @@ defmodule Lynx.Rust.NativeCleanupConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::mutex_scope_flag" &&
-               guarantee.theorem == "Cleanup.Properties.every_interleaving"
+               guarantee.theorem == "Cleanup.Properties.every_run"
            end)
 
     assert [%{status: :ok, cached: true}] =
@@ -72,7 +72,7 @@ defmodule Lynx.Rust.NativeCleanupConcurrentTest do
 
     export = Path.join(tmp, "cleanup.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
-    assert File.read!(export) =~ "every_interleaving"
+    assert File.read!(export) =~ "every_run"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output

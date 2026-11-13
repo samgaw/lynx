@@ -30,19 +30,19 @@ The mailbox joins the workers before inspecting their shared capability heap. -/
       (3,"unrelated",.integer 17)]}
 
 /-- Every transition order consumes both tokens, preserving an unrelated cell and the identity supply. -/
-theorem every_interleaving :
+theorem every_interleaving (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 24
-      (.start admitted (destroyBoth discard_error_ack io_core.discard_io_error_implicit)) = true := by
+      (.start admitted (destroyBoth discard_error_ack io_core.discard_io_error_implicit) elapsed) = true := by
   cbv
 
-theorem every_schedule (choices : List ScheduleChoice) :
+/-- Every actual run consumes both admitted error capabilities while preserving
+its unrelated cell, for arbitrary elapsed-time functions. -/
+theorem every_run :
     concurrentFrom admitted
-      (destroyBoth discard_error_ack io_core.discard_io_error_implicit) choices = .ok Term.true := by
-  obtain ⟨_, _, run, final⟩ := Result.run_reaches
-    (destroyBoth discard_error_ack io_core.discard_io_error_implicit) admitted choices
-  have checked := Concurrent.check_sound every_interleaving run final
-  rw [← concurrentFrom_eq_run] at checked
+      (destroyBoth discard_error_ack io_core.discard_io_error_implicit) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (every_interleaving elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 end Errors.Properties

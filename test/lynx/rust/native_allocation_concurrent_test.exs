@@ -39,7 +39,7 @@ defmodule Lynx.Rust.NativeAllocationConcurrentTest do
       proof_modules: ["Allocation.Properties"],
       required_properties: [
         "Allocation.Properties.every_interleaving",
-        "Allocation.Properties.every_schedule"
+        "Allocation.Properties.every_run"
       ]
     ]
 
@@ -49,7 +49,7 @@ defmodule Lynx.Rust.NativeAllocationConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::mutex_new_incremented" &&
-               guarantee.theorem == "Allocation.Properties.every_interleaving"
+               guarantee.theorem == "Allocation.Properties.every_run"
            end)
 
     assert [%{status: :ok, cached: true}] =
@@ -63,7 +63,7 @@ defmodule Lynx.Rust.NativeAllocationConcurrentTest do
 
     export = Path.join(tmp, "allocation.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
-    assert File.read!(export) =~ "every_interleaving"
+    assert File.read!(export) =~ "every_run"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output

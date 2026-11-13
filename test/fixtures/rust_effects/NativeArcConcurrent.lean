@@ -38,17 +38,17 @@ attribute [local cbv_eval] Term.compare_atoms Term.compare_reference
       .tuple #[.integer 2,NativeCodec.encode ({counter := {value := 42#u64}} : ScalarResource)])]}
 
 /-- Independent owners retain one allocation without losing a token or payload. -/
-theorem every_interleaving :
+theorem every_interleaving (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 32
-      (.start initial (twoClones scalar_resource_clone scalar_resource_read)) = true := by cbv
+      (.start initial (twoClones scalar_resource_clone scalar_resource_read) elapsed) = true := by cbv
 
-theorem every_schedule (choices : List ScheduleChoice) :
-    concurrentFrom initial (twoClones scalar_resource_clone scalar_resource_read) choices = .ok Term.true := by
-  obtain ⟨_,_,run,final⟩ := Result.run_reaches
-    (twoClones scalar_resource_clone scalar_resource_read) initial choices
-  have checked := Concurrent.check_sound every_interleaving run final
-  rw [← concurrentFrom_eq_run] at checked
+/-- Every actual run retains the shared payload and distinct owner tokens,
+for arbitrary elapsed-time functions. -/
+theorem every_run :
+    concurrentFrom initial (twoClones scalar_resource_clone scalar_resource_read) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (every_interleaving elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 end Retain.Properties

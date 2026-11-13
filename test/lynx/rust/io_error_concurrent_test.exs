@@ -41,7 +41,7 @@ defmodule Lynx.Rust.IoErrorConcurrentTest do
       proof_modules: ["Errors.Properties"],
       required_properties: [
         "Errors.Properties.every_interleaving",
-        "Errors.Properties.every_schedule"
+        "Errors.Properties.every_run"
       ]
     ]
 
@@ -51,13 +51,13 @@ defmodule Lynx.Rust.IoErrorConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "io_protocol::discard_error_ack" &&
-               guarantee.theorem == "Errors.Properties.every_interleaving"
+               guarantee.theorem == "Errors.Properties.every_run"
            end)
 
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :cross_crate_contract &&
                guarantee.rust_name == "io_protocol::discard_error_ack" &&
-               guarantee.theorem == "Errors.Properties.every_interleaving"
+               guarantee.theorem == "Errors.Properties.every_run"
            end)
 
     assert result.verification.owned_drops
@@ -65,7 +65,7 @@ defmodule Lynx.Rust.IoErrorConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "io_core::discard_io_error_implicit" &&
-               guarantee.theorem == "Errors.Properties.every_interleaving"
+               guarantee.theorem == "Errors.Properties.every_run"
            end)
 
     assert [%{status: :ok, cached: true}] =
@@ -79,7 +79,7 @@ defmodule Lynx.Rust.IoErrorConcurrentTest do
 
     export = Path.join(tmp, "errors.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
-    assert File.read!(export) =~ "every_interleaving"
+    assert File.read!(export) =~ "every_run"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output

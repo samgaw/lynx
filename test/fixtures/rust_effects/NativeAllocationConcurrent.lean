@@ -51,22 +51,22 @@ private theorem checked_sum (value amount total : U64)
 /-- Every scheduler transition order retains both initialized payloads and
 allocates distinct identities. The depth is a checked exploration bound, not
 a bound on the number or contents of supplied scheduler choices. -/
-theorem every_interleaving :
+theorem every_interleaving (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 24
-      (.start {} (concurrentFactories mutex_new_incremented)) = true := by
+      (.start {} (concurrentFactories mutex_new_incremented) elapsed) = true := by
   have first := checked_sum 7#u64 3#u64 10#u64 (by decide +kernel)
   have second := checked_sum 11#u64 5#u64 16#u64 (by decide +kernel)
   simp only [concurrentFactories, worker, mutex_new_incremented, effects_core.increment,
     first, second, NativeM.ok, monadLift_self]
   cbv
 
-/-- The ordinary runner is covered for every finite choice list. -/
-theorem every_schedule (choices : List ScheduleChoice) :
-    concurrent (concurrentFactories mutex_new_incremented) choices = .ok Term.true := by
-  have checked := concurrent_of_check (concurrentFactories mutex_new_incremented)
-    (fun | .ok (.atom "true") => true | _ => false) 24 every_interleaving choices
+/-- Every actual run preserves both initialized cells and their distinct identities. -/
+theorem every_run :
+    concurrent (concurrentFactories mutex_new_incremented) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (every_interleaving elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 
 end Allocation.Properties

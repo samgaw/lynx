@@ -40,10 +40,10 @@ defmodule Lynx.Rust.NativeArcReleaseConcurrentTest do
       proof_modules: ["Reclaim.Properties"],
       required_properties: [
         "Reclaim.Properties.deferred_interleavings",
-        "Reclaim.Properties.deferred_schedules",
+        "Reclaim.Properties.deferred_runs",
         "Reclaim.Properties.repeated_owner_rejected",
         "Reclaim.Properties.synchronous_interleavings",
-        "Reclaim.Properties.synchronous_schedules",
+        "Reclaim.Properties.synchronous_runs",
         "Reclaim.Properties.release_can_precede_cleanup",
         "Reclaim.Properties.missing_policy_rejected"
       ]
@@ -55,7 +55,7 @@ defmodule Lynx.Rust.NativeArcReleaseConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::resource_release_ack" &&
-               guarantee.theorem == "Reclaim.Properties.deferred_interleavings"
+               guarantee.theorem == "Reclaim.Properties.deferred_runs"
            end)
 
     assert result.verification.owned_drops
@@ -71,7 +71,7 @@ defmodule Lynx.Rust.NativeArcReleaseConcurrentTest do
 
     export = Path.join(tmp, "release.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
-    assert File.read!(export) =~ "deferred_interleavings"
+    assert File.read!(export) =~ "deferred_runs"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output

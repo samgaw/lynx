@@ -62,48 +62,47 @@ thread or identify native callback jobs with BEAM process identities. -/
       (5,"unrelated",.integer 17)]}
 
 /-- Immediate cleanup is conditional on an explicit external timing model. -/
-theorem synchronous_interleavings :
+theorem synchronous_interleavings (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 36
-      (.start (initial .synchronous) (releaseBoth resource_release_ack 4 inspectHeap)) = true := by cbv
+      (.start (initial .synchronous) (releaseBoth resource_release_ack 4 inspectHeap) elapsed) = true := by cbv
 
 /-- Deferred callbacks retire ownership first, then exactly one dispatcher
 executes the actual payload destructor; busy is never accepted as completion. -/
-theorem deferred_interleavings :
+theorem deferred_interleavings (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 64
-      (.start (initial .deferred) (releaseBoth resource_release_ack 4 finalizerRace)) = true := by cbv
+      (.start (initial .deferred) (releaseBoth resource_release_ack 4 finalizerRace) elapsed) = true := by cbv
 
 /-- Release may acknowledge while its destructor is still pending. -/
-theorem release_can_precede_cleanup :
+theorem release_can_precede_cleanup (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 36
-      (.start (initial .deferred) (releaseBoth resource_release_ack 4 inspectPending)) = true := by cbv
+      (.start (initial .deferred) (releaseBoth resource_release_ack 4 inspectPending) elapsed) = true := by cbv
 
 /-- Reusing one logical owner exhausts verification, rather than modelling UB. -/
-theorem repeated_owner_rejected :
+theorem repeated_owner_rejected (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .error .exhausted => true | _ => false) 36
-      (.start (initial .synchronous) (releaseBoth resource_release_ack 3 inspectHeap)) = true := by cbv
+      (.start (initial .synchronous) (releaseBoth resource_release_ack 3 inspectHeap) elapsed) = true := by cbv
 
 /-- Missing callback timing is never silently assumed to be synchronous. -/
-theorem missing_policy_rejected :
+theorem missing_policy_rejected (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .error .exhausted => true | _ => false) 36
-      (.start (initial .unspecified) (releaseBoth resource_release_ack 4 inspectHeap)) = true := by cbv
+      (.start (initial .unspecified) (releaseBoth resource_release_ack 4 inspectHeap) elapsed) = true := by cbv
 
-theorem synchronous_schedules (choices : List ScheduleChoice) :
-    concurrentFrom (initial .synchronous) (releaseBoth resource_release_ack 4 inspectHeap) choices = .ok Term.true := by
-  obtain ⟨_,_,run,final⟩ := Result.run_reaches
-    (releaseBoth resource_release_ack 4 inspectHeap) (initial .synchronous) choices
-  have checked := Concurrent.check_sound synchronous_interleavings run final
-  rw [← concurrentFrom_eq_run] at checked
+/-- Every actual run completes cleanup under the explicitly synchronous policy. -/
+theorem synchronous_runs :
+    concurrentFrom (initial .synchronous) (releaseBoth resource_release_ack 4 inspectHeap) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (synchronous_interleavings elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 
-theorem deferred_schedules (choices : List ScheduleChoice) :
-    concurrentFrom (initial .deferred) (releaseBoth resource_release_ack 4 finalizerRace) choices = .ok Term.true := by
-  obtain ⟨_,_,run,final⟩ := Result.run_reaches
-    (releaseBoth resource_release_ack 4 finalizerRace) (initial .deferred) choices
-  have checked := Concurrent.check_sound deferred_interleavings run final
-  rw [← concurrentFrom_eq_run] at checked
+/-- Every actual run under deferred policy retires both owners and completes
+exactly one explicitly dispatched payload cleanup. -/
+theorem deferred_runs :
+    concurrentFrom (initial .deferred) (releaseBoth resource_release_ack 4 finalizerRace) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (deferred_interleavings elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 end Reclaim.Properties
