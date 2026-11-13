@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.NativeTrace.Blocked
+public import Lynx.Term.NativeTrace.Completion
 import all Lynx.Term.Runner
 
 namespace Lynx.Term.NativeRunner
