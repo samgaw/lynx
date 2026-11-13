@@ -14,6 +14,18 @@ theorem facade_prefix (value : U16) (env : Environment)
   simpa [__COMMIT__,monadLift_self] using
     Publish.Commit.Framed.acknowledged_prefix value env counter heap
 
+/-- The actual native call's successful transition trace includes encoding. -/
+theorem adapter_prefix (value : U16) (env : Environment)
+    (counter : env.nativeRefCounter = Publish.Commit.initial.nativeRefCounter)
+    (heap : env.nativeHeap = Publish.Commit.initial.nativeHeap) :
+    Result.ReadyPrefix (Rustler.executeNative (__COMMIT__ value) Rustler.encodeBool)
+      env (.ok Term.true)
+      {env with
+        nativeRefCounter := (Publish.Commit.done value).nativeRefCounter
+        nativeHeap := (Publish.Commit.done value).nativeHeap} := by
+  simpa [Rustler.encodeBool] using
+    Rustler.executeNative_readyPrefix (facade_prefix value env counter heap) Rustler.encodeBool
+
 /-- Encoding and native exception conversion preserve the actual publication prefix. -/
 theorem adapter_continuation {β : Type} (value : U16) (next : Term → Result β)
     (env : Environment)
@@ -22,8 +34,7 @@ theorem adapter_continuation {β : Type} (value : U16) (next : Term → Result �
     (Rustler.executeNative (__COMMIT__ value)
       Rustler.encodeBool >>= next) env =
     next Term.true {env with nativeRefCounter := (Publish.Commit.done value).nativeRefCounter, nativeHeap := (Publish.Commit.done value).nativeHeap} := by
-  have trace := Rustler.executeNative_readyPrefix (facade_prefix value env counter heap) Rustler.encodeBool
-  simpa [Rustler.encodeBool] using (trace.bind next).apply
+  simpa only [Result.ok_bind] using ((adapter_prefix value env counter heap).bind next).apply
 
 
 
@@ -36,6 +47,15 @@ theorem rejected_facade_prefix (value : U16) (env : Environment)
   simpa [__COMMIT__,monadLift_self] using
     Publish.Commit.Framed.rejected_prefix value env counter heap
 
+/-- Rejected publication retains the actual error-destruction transitions. -/
+theorem rejected_adapter_prefix (value : U16) (env : Environment)
+    (counter : env.nativeRefCounter = Publish.IoErrors.rejected.nativeRefCounter)
+    (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
+    Result.ReadyPrefix (Rustler.executeNative (__COMMIT__ value) Rustler.encodeBool)
+      env (.ok Term.false) {env with nativeHeap := Publish.IoErrors.disposed.nativeHeap} := by
+  simpa [Rustler.encodeBool] using
+    Rustler.executeNative_readyPrefix (rejected_facade_prefix value env counter heap) Rustler.encodeBool
+
 /-- The Elixir continuation receives false after actual native error destruction. -/
 theorem rejected_adapter_continuation {β : Type} (value : U16) (next : Term → Result β)
     (env : Environment)
@@ -43,8 +63,7 @@ theorem rejected_adapter_continuation {β : Type} (value : U16) (next : Term →
     (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
     (Rustler.executeNative (__COMMIT__ value) Rustler.encodeBool >>= next) env =
     next Term.false {env with nativeHeap := Publish.IoErrors.disposed.nativeHeap} := by
-  have trace := Rustler.executeNative_readyPrefix (rejected_facade_prefix value env counter heap) Rustler.encodeBool
-  simpa [Rustler.encodeBool] using (trace.bind next).apply
+  simpa only [Result.ok_bind] using ((rejected_adapter_prefix value env counter heap).bind next).apply
 
 /-- The error cleanup also composes through a real protected Elixir computation. -/
 theorem rejected_handler_prefix {β γ : Type} (value : U16)
@@ -56,8 +75,7 @@ theorem rejected_handler_prefix {β γ : Type} (value : U16)
       next handler env =
     Result.tryWith (tail Term.false) next handler
       {env with nativeHeap := Publish.IoErrors.disposed.nativeHeap} := by
-  have trace := Rustler.executeNative_readyPrefix (rejected_facade_prefix value env counter heap) Rustler.encodeBool
-  simpa [Rustler.encodeBool] using ((trace.bind tail).tryWith next handler).apply
+  simpa only [Result.ok_bind] using (((rejected_adapter_prefix value env counter heap).bind tail).tryWith next handler).apply
 
 /-- A custom error payload does not satisfy the callback-free OS-error admission. -/
 @[expose] def customRejected : Environment :=

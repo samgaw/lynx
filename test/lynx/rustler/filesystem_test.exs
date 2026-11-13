@@ -79,7 +79,9 @@ defmodule Lynx.Rustler.FilesystemTest do
         [
           proof_modules:
             ~w(Publish.Properties Publish.Payload Publish.NamedRecovery Publish.WordRecovery Publish.Commit Publish.IoErrors Publish.Framed Publish.Native),
-          required_properties: ~w(Publish.Native.facade_prefix Publish.Native.adapter_continuation
+          required_properties:
+            ~w(Publish.Native.facade_prefix Publish.Native.adapter_prefix Publish.Native.adapter_continuation
+        Publish.Native.rejected_adapter_prefix
         Publish.Commit.Framed.commit_shared Publish.Commit.commit_recovery
         Publish.IoErrors.implicit_cleanup Publish.Commit.Framed.rejected_prefix
         Publish.Native.rejected_facade_prefix Publish.Native.rejected_adapter_continuation
