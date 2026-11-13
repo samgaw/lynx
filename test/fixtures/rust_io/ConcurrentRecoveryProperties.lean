@@ -13,7 +13,7 @@ open NativeFile Record.Properties Record.CrashProperties Record.RecoveryProperti
   Record.LogProperties Record.SharedRecoveryProperties
 
 @[expose] def terminalEnvironment : Concurrent.Config Term → Environment
-  | .start env _ => env
+  | .start env _ _ => env
   | .running state .. => state.nativeView []
 
 /-- Require both acknowledgements and complete synchronized records. The visible
@@ -73,15 +73,16 @@ theorem accepted_outcome (config : Concurrent.Config Term)
     (accepted : recoverable config = true) : config.outcome = .ok Term.true := by
   unfold recoverable at accepted
   split at accepted
-  · assumption
+  · simpa only [Term.true] using (by assumption : config.outcome = .ok (.atom "true"))
   · contradiction
 
 /-- Compose a checked concurrent computation with implementation-linked recovery
 for every terminal run and every admitted post-acknowledgement crash image. -/
 theorem checked_recovery {env : Environment} {computation : Result Term} {depth : Nat}
+    {elapsed : PID → Nat → Nat}
     {last : Concurrent.Config Term} {events : List Concurrent.Event} {outcome : Outcome Term}
-    (verified : Concurrent.checkPost recoverable depth (.start env computation) = true)
-    (run : Concurrent.Run (.start env computation) events last)
+    (verified : Concurrent.checkPost recoverable depth (.start env computation elapsed) = true)
+    (run : Concurrent.Run (.start env computation elapsed) events last)
     (terminal : Concurrent.Terminal last outcome)
     (mask : ByteArray) (image : Image) (rest : Term)
     (captured : crashImage ⟨2⟩ mask (terminalEnvironment last) = some image) :

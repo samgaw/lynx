@@ -25,7 +25,7 @@ satisfy this postcondition. -/
   match config.outcome with
   | .ok (.atom "true") =>
     let env := match config with
-      | .start env _ => env
+      | .start env _ _ => env
       | .running state .. => state.nativeView []
     match NativeFile.lookup ⟨2⟩ env with
     | some file => file.durable == ordered || file.durable == reversed
@@ -36,7 +36,7 @@ theorem accepted_outcome (config : Concurrent.Config Term)
     (accepted : durableRecords config = true) : config.outcome = .ok Term.true := by
   unfold durableRecords at accepted
   split at accepted
-  · assumption
+  · simpa only [Term.true] using (by assumption : config.outcome = .ok (.atom "true"))
   · contradiction
 
 end Record.ConcurrentStorageProperties
