@@ -2,6 +2,8 @@ module
 
 import Lynx.Concurrent.Confluence
 import Lynx.Term.NativeTrace
+-- Inspect the private executor while auditing its native scheduling boundaries.
+import all Lynx.Term.Runner
 meta import LynxTest.ProofAudit
 
 namespace LynxTest.Term.NativeScheduler
@@ -55,6 +57,25 @@ theorem blocked_keeps_state (env : Environment) (choices : List ScheduleChoice) 
     (Result.wait (β := Unit) (fun _ => none) (fun _ => Result.ok true)).run env choices =
       (.deadlock, env) :=
   Result.wait_blocked_run _ _ env rfl choices
+
+private def yieldedRead : Result Nat :=
+  Result.schedule {} (.nativeSet { nativeRefCounter := 7 } (.ok .nil)) fun _ =>
+    .wait (fun env => some ((), env)) fun _ =>
+      .nativeGet fun env => .ok env.nativeRefCounter
+
+/-- A successful native wait remains a scheduling boundary. The second choice
+runs the child before the root reads the shared state. -/
+theorem ready_wait_yields :
+    (yieldedRead.run {} [.current, .swap [1]]).1 = .ok 7 := by
+  cbv
+
+/-- An atomic native modification retains local execution. It cannot consume
+a later choice merely because native waits yield. -/
+theorem atomic_native_modification_stays_local :
+    ((Result.schedule {} (.nativeSet { nativeRefCounter := 7 } (.ok .nil)) fun _ =>
+      .nativeModify (fun env => ((), env)) fun _ =>
+        .nativeGet fun env => .ok env.nativeRefCounter).run {} [.current, .swap [1]]).1 = .ok 0 := by
+  cbv
 
 /-- Replacing native state preserves the independently scheduled state. -/
 theorem native_frame (state : State) (native : NativeState) :
