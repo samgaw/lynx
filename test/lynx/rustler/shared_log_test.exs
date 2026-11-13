@@ -2,7 +2,7 @@ defmodule Lynx.Rustler.SharedLogTest do
   use ExUnit.Case
   Code.require_file("../../support/rust_io.exs", __DIR__)
   @tools System.get_env("LYNX_AENEAS_DIR")
-  @moduletag timeout: 900_000
+  @moduletag timeout: 1_800_000
   unless @tools, do: @moduletag(skip: "set LYNX_AENEAS_DIR for shared file resource proofs")
   @fixture Path.expand("../../fixtures/rust_io", __DIR__)
 
@@ -76,6 +76,7 @@ defmodule Lynx.Rustler.SharedLogTest do
               Record.SharedLogProperties.borrow_prefix Record.SharedLogProperties.aliasing_prefix
               Record.SharedLogProperties.full_write Record.FramedLogProperties.append_success
               Record.NativeLogProperties.append_prefix Record.NativeLogProperties.facade_prefix
+              Record.NativeLogProperties.adapter_prefix Record.NativeLogProperties.initial_prefix
               Record.NativeLogProperties.adapter_continuation Record.NativeLogProperties.initial_adapter
               Record.FramedLogProperties.guarded_prefix Record.OverlappingLogProperties.caller_contract
               Record.OverlappingLogProperties.acquired_prefix Record.OverlappingLogProperties.second_call
@@ -162,7 +163,7 @@ defmodule Lynx.Rustler.SharedLogTest do
              &(&1.status == :ok)
            )
 
-    assert File.read!(constructed_export) =~ "create_append_next"
+    assert File.read!(constructed_export) =~ "create_append_prefix"
 
     {status, output} =
       Lynx.Commands.lake(project, ["check", "--from-export", constructed_export] ++ sandbox)

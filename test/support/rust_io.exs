@@ -52,6 +52,7 @@ defmodule Lynx.Rust.IoFixture do
       SharedLogProperties.borrow_prefix SharedLogProperties.aliasing_prefix SharedLogProperties.full_write
       FramedLogProperties.append_success FramedLogProperties.guarded_prefix
       NativeLogProperties.append_prefix NativeLogProperties.facade_prefix
+      NativeLogProperties.adapter_prefix NativeLogProperties.initial_prefix
       NativeLogProperties.adapter_continuation NativeLogProperties.initial_adapter
       OverlappingLogProperties.caller_contract OverlappingLogProperties.acquired_prefix
       OverlappingLogProperties.second_call OverlappingLogProperties.overlap_phases
