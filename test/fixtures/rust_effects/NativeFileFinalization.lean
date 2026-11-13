@@ -76,20 +76,20 @@ preserves the callback marker and every unrelated cell. This is not a VM thread.
 
 /-- A waiting real file destructor remains busy, then completes once after the
 explicit host-completion action. Close does not synchronize the dirty byte. -/
-theorem suspended_cleanup_interleavings :
+theorem suspended_cleanup_interleavings (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 64
-      (.start (initial (.cons (.atom "blocked") (closeChoice "ok"))) (suspendedRace file_resource_release_ack)) = true := by cbv
+      (.start (initial (.cons (.atom "blocked") (closeChoice "ok"))) (suspendedRace file_resource_release_ack) elapsed) = true := by cbv
 
 /-- Rust's file destructor ignores a reported close error and consumes ownership;
 that is distinct from a successful fsync or a reusable file descriptor. -/
-theorem close_error_consumes_file :
+theorem close_error_consumes_file (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 32
-      (.start (initial (closeChoice "error")) (closeOnce file_resource_release_ack)) = true := by cbv
+      (.start (initial (closeChoice "error")) (closeOnce file_resource_release_ack) elapsed) = true := by cbv
 
 /-- An absent close outcome cannot count as a completed callback. -/
-theorem missing_close_rejected :
+theorem missing_close_rejected (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .error .exhausted => true | _ => false) 32
-      (.start (initial .nil) (closeOnce file_resource_release_ack)) = true := by cbv
+      (.start (initial .nil) (closeOnce file_resource_release_ack) elapsed) = true := by cbv
 
 /-- Inspect interpreter failure directly; verification exhaustion cannot be
 caught as an Erlang exception or turned into a successful native return. -/
@@ -109,17 +109,18 @@ theorem interrupted_cleanup_retains_state (choices : List ScheduleChoice) :
   cbv
 
 /-- No eventual completion is inferred for a permanently blocked destructor. -/
-theorem blocked_close_not_completed :
+theorem blocked_close_not_completed (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .deadlock => true | _ => false) 32
-      (.start (initial (.cons (.atom "blocked") .nil)) (closeOnce file_resource_release_ack)) = true := by cbv
+      (.start (initial (.cons (.atom "blocked") .nil)) (closeOnce file_resource_release_ack) elapsed) = true := by cbv
 
-theorem suspended_cleanup_schedules (choices : List ScheduleChoice) :
-    concurrentFrom (initial (.cons (.atom "blocked") (closeChoice "ok"))) (suspendedRace file_resource_release_ack) choices = .ok Term.true := by
-  obtain ⟨_, _, run, final⟩ := Result.run_reaches (suspendedRace file_resource_release_ack)
-    (initial (.cons (.atom "blocked") (closeChoice "ok"))) choices
-  have checked := Concurrent.check_sound suspended_cleanup_interleavings run final
-  rw [← concurrentFrom_eq_run] at checked
+/-- Every actual run completes exactly one suspended destructor after the
+explicit host action, preserving the unsynchronized durable byte. -/
+theorem suspended_cleanup_runs :
+    concurrentFrom (initial (.cons (.atom "blocked") (closeChoice "ok")))
+      (suspendedRace file_resource_release_ack) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (suspended_cleanup_interleavings elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 end FileResource.Finalization

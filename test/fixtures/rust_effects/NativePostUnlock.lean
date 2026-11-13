@@ -60,42 +60,41 @@ theorem composed_contract (mutex : NativeMutex effects_core.Counter)
 
 /-- Both complete real Rust calls, including the unlocked owner-release suffix,
 retain the VM pin and unrelated cell and commit both counter updates. -/
-theorem all_interleavings :
+theorem all_interleavings (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 96
       (.start (initial 7#u64 3#u64)
-        (parallel locked_increment_then_release_resource 3#u64 13#u64 2)) = true := by
+        (parallel locked_increment_then_release_resource 3#u64 13#u64 2) elapsed) = true := by
   simp only [parallel, composed_contract]
   cbv
 
 /-- Checked failure also releases its owner after unlocking. Exactly one update
 fits, and neither attempted call poisons the mutex or loses the VM pin. -/
-theorem overflow_interleavings :
+theorem overflow_interleavings (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 96
       (.start (initial 18446744073709551614#u64 1#u64)
-        (parallel locked_increment_then_release_resource 1#u64 18446744073709551615#u64 1)) = true := by
+        (parallel locked_increment_then_release_resource 1#u64 18446744073709551615#u64 1) elapsed) = true := by
   simp only [parallel, composed_contract]
   cbv
 
-theorem all_choices (choices : List ScheduleChoice) :
+/-- Every actual run preserves both updates and the VM pin after the real
+post-unlock release suffix. -/
+theorem all_runs :
     concurrentFrom (initial 7#u64 3#u64)
-      (parallel locked_increment_then_release_resource 3#u64 13#u64 2) choices = .ok Term.true := by
-  obtain ⟨_, _, run, final⟩ := Result.run_reaches
-    (parallel locked_increment_then_release_resource 3#u64 13#u64 2) (initial 7#u64 3#u64) choices
-  have checked := Concurrent.check_sound all_interleavings run final
-  rw [← concurrentFrom_eq_run] at checked
+      (parallel locked_increment_then_release_resource 3#u64 13#u64 2) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (all_interleavings elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 
-theorem overflow_choices (choices : List ScheduleChoice) :
+/-- Every actual run retains the successful update when the other overflows,
+without poisoning the mutex or losing the surviving VM pin. -/
+theorem overflow_runs :
     concurrentFrom (initial 18446744073709551614#u64 1#u64)
-      (parallel locked_increment_then_release_resource 1#u64 18446744073709551615#u64 1) choices = .ok Term.true := by
-  obtain ⟨_, _, run, final⟩ := Result.run_reaches
-    (parallel locked_increment_then_release_resource 1#u64 18446744073709551615#u64 1)
-    (initial 18446744073709551614#u64 1#u64) choices
-  have checked := Concurrent.check_sound overflow_interleavings run final
-  rw [← concurrentFrom_eq_run] at checked
+      (parallel locked_increment_then_release_resource 1#u64 18446744073709551615#u64 1) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (overflow_interleavings elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 end Tail.PostUnlock
