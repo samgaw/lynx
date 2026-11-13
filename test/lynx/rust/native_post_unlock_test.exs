@@ -55,9 +55,9 @@ defmodule Lynx.Rust.NativePostUnlockTest do
         "Tail.Critical.critical_contract",
         "Tail.PostUnlock.composed_contract",
         "Tail.PostUnlock.all_interleavings",
-        "Tail.PostUnlock.all_choices",
+        "Tail.PostUnlock.all_runs",
         "Tail.PostUnlock.overflow_interleavings",
-        "Tail.PostUnlock.overflow_choices"
+        "Tail.PostUnlock.overflow_runs"
       ]
     ]
 
@@ -67,7 +67,7 @@ defmodule Lynx.Rust.NativePostUnlockTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::locked_increment_then_release_resource" &&
-               guarantee.theorem == "Tail.PostUnlock.all_interleavings"
+               guarantee.theorem == "Tail.PostUnlock.all_runs"
            end)
 
     assert result.verification.owned_drops
@@ -90,7 +90,7 @@ defmodule Lynx.Rust.NativePostUnlockTest do
 
     export = Path.join(tmp, "post-unlock.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
-    assert File.read!(export) =~ "all_choices"
+    assert File.read!(export) =~ "all_runs"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output

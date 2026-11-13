@@ -47,7 +47,7 @@ defmodule Lynx.Rust.NativeFileFinalizationTest do
       proof_modules: ["FileResource.Model", "FileResource.Finalization"],
       required_properties:
         Enum.map(
-          ~w(suspended_cleanup_interleavings suspended_cleanup_schedules close_error_consumes_file missing_close_rejected interrupted_cleanup_retains_state blocked_close_not_completed),
+          ~w(suspended_cleanup_interleavings suspended_cleanup_runs close_error_consumes_file missing_close_rejected interrupted_cleanup_retains_state blocked_close_not_completed),
           &("FileResource.Finalization." <> &1)
         )
     ]
@@ -58,7 +58,7 @@ defmodule Lynx.Rust.NativeFileFinalizationTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::file_resource_release_ack" &&
-               guarantee.theorem == "FileResource.Finalization.suspended_cleanup_interleavings"
+               guarantee.theorem == "FileResource.Finalization.suspended_cleanup_runs"
            end)
 
     assert result.verification.owned_drops
@@ -82,7 +82,7 @@ defmodule Lynx.Rust.NativeFileFinalizationTest do
 
     export = Path.join(tmp, "file-finalization.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
-    assert File.read!(export) =~ "suspended_cleanup_interleavings"
+    assert File.read!(export) =~ "suspended_cleanup_runs"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
