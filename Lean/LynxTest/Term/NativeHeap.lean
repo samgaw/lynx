@@ -55,23 +55,37 @@ theorem unallocated_identity (tag : String) (env : Environment) :
     Result.consumeNativeCapability tag (env.nativeRefCounter + 1) env = (.error .exhausted,env) := by
   simp [Result.consumeNativeCapability]
 
-theorem explicit_initial_state (choices : List ScheduleChoice) :
-    concurrentFrom {nativeRefCounter := 7} (Result.nativeGet fun env => .ok env.nativeRefCounter) choices = .ok 7 := by
-  simp [concurrentFrom_eq_run]
+theorem explicit_initial_state :
+    concurrentFrom {nativeRefCounter := 7}
+      (Result.nativeGet fun env => .ok env.nativeRefCounter) (.ok 7) := by
+  intro elapsed events last result run terminal
+  have trace : Result.ReadyPrefix (.nativeGet fun env => .ok env.nativeRefCounter)
+      {nativeRefCounter := 7} (.ok 7) {nativeRefCounter := 7} :=
+    .nativeGet _ _ _ _ (.refl _ _)
+  exact trace.returns elapsed run terminal
 
-theorem scheduler_choices_remain_universal (initial : Environment) (choices : List ScheduleChoice) :
-    concurrentFrom initial (Result.nativeGet fun env => .ok (env.nativeRefCounter, env.nativeHeap)) choices =
-      .ok (initial.nativeRefCounter, initial.nativeHeap) := by
-  simp [concurrentFrom_eq_run]
+theorem scheduler_choices_remain_universal (initial : Environment) :
+    concurrentFrom initial (Result.nativeGet fun env => .ok (env.nativeRefCounter, env.nativeHeap))
+      (.ok (initial.nativeRefCounter, initial.nativeHeap)) := by
+  intro elapsed events last result run terminal
+  have trace : Result.ReadyPrefix (.nativeGet fun env => .ok (env.nativeRefCounter, env.nativeHeap))
+      initial (.ok (initial.nativeRefCounter, initial.nativeHeap)) initial :=
+    .nativeGet _ _ _ _ (.refl _ _)
+  exact trace.returns elapsed run terminal
 
-theorem fresh_runtime_unchanged (computation : Result α) (choices : List ScheduleChoice) :
-    concurrentFrom {} computation choices = concurrent computation choices := by
-  rw [concurrentFrom_eq_run,concurrent_eq_run]
+theorem fresh_runtime_unchanged (computation : Result α) (outcome : Outcome α) :
+    concurrentFrom {} computation outcome ↔ concurrent computation outcome := Iff.rfl
 
-theorem admitted_cleanup_from_context (choices : List ScheduleChoice) :
+theorem admitted_cleanup_from_context :
     concurrentFrom {nativeRefCounter := 1,nativeHeap := [(1,"expected",.atom "live")]}
-      (Result.consumeNativeCapability "expected" 1) choices = .ok () := by
-  simp [concurrentFrom_eq_run,Result.consumeNativeCapability]
+      (Result.consumeNativeCapability "expected" 1) (.ok ()) := by
+  intro elapsed events last result run terminal
+  have trace : Result.ReadyPrefix (Result.consumeNativeCapability "expected" 1)
+      {nativeRefCounter := 1,nativeHeap := [(1,"expected",.atom "live")]}
+      (.ok ()) {nativeRefCounter := 1} := by
+    refine .wait _ _ (Except.ok ()) _ _ _ _ ?_ (.refl _ _)
+    rfl
+  exact trace.returns elapsed run terminal
 
 private def sharedCleanup : Result :=
   .nativeSet {nativeRefCounter := 1, nativeHeap := [(1,"expected",.atom "live")]} <|
@@ -83,12 +97,13 @@ private def sharedCleanup : Result :=
 
 /-- Capability cleanup in a child uses the shared allocator and is visible to
 its waiting parent under every finite scheduler choice list. -/
-theorem scheduled_cleanup (choices : List ScheduleChoice) :
-    concurrent sharedCleanup choices = .ok (.integer 1) := by
-  have checked := concurrent_of_check sharedCleanup
-    (fun | .ok (.integer 1) => true | _ => false) 24 (by cbv) choices
-  split at checked
-  · assumption
+theorem scheduled_cleanup :
+    concurrent sharedCleanup (.ok (.integer 1)) := by
+  refine concurrent_of_check sharedCleanup
+    (fun | .ok (.integer 1) => true | _ => false) 24 (by intro elapsed; cbv) ?_
+  intro result accepted
+  split at accepted
+  · rfl
   · contradiction
 
 private def competingCleanup : Result :=
@@ -100,10 +115,10 @@ private def competingCleanup : Result :=
 
 /-- Sharing one ownership token between workers cannot certify two successful
 consumptions, regardless of the transition order. -/
-theorem concurrent_double_consumption_rejected :
+theorem concurrent_double_consumption_rejected (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .error .exhausted => true | _ => false) 24
       (.start {nativeRefCounter := 1, nativeHeap := [(1,"expected",.atom "live")]}
-        competingCleanup) = true := by
+        competingCleanup elapsed) = true := by
   cbv
 
 end LynxTest.Term.NativeHeap

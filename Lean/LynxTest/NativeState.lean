@@ -13,12 +13,13 @@ private def sharedUpdate : Result :=
       .nativeGet fun env => .ok (.integer env.nativeRefCounter)
 
 /-- A native write made by a child is visible to the parent under every schedule. -/
-theorem sharedUpdate_every_schedule (choices : List ScheduleChoice) :
-    concurrent sharedUpdate choices = .ok (.integer 7) := by
-  have checked := concurrent_of_check sharedUpdate
-    (fun | .ok (.integer 7) => true | _ => false) 16 (by cbv) choices
-  split at checked
-  · assumption
+theorem sharedUpdate_every_schedule :
+    concurrent sharedUpdate (.ok (.integer 7)) := by
+  refine concurrent_of_check sharedUpdate
+    (fun | .ok (.integer 7) => true | _ => false) 16 (by intro elapsed; cbv) ?_
+  intro result accepted
+  split at accepted
+  · rfl
   · contradiction
 
 private def atomicIncrement : Result Unit :=
@@ -33,9 +34,9 @@ private def concurrentIncrements : Result :=
         .nativeGet fun env => .ok (.integer env.nativeRefCounter)
 
 /-- A synchronous native transition retains every concurrent update. -/
-theorem atomic_updates_every_interleaving :
+theorem atomic_updates_every_interleaving (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.integer 2) => true | _ => false) 20
-      (.start {} concurrentIncrements) = true := by cbv
+      (.start {} concurrentIncrements elapsed) = true := by cbv
 
 /-- A synchronous native transition preserves the caller's scheduling stream. -/
 theorem atomic_transition_run (transition : Environment → β × Environment)
@@ -51,7 +52,7 @@ private def finishesWithCounter : Result :=
 
 private def terminalCounter (expected : Nat) (config : Concurrent.Config Term) : Bool :=
   let correct := match config with
-    | .start env _ => env.nativeRefCounter == expected
+    | .start env _ _ => env.nativeRefCounter == expected
     | .running state .. => state.nativeRefCounter == expected
   match config.outcome with
     | .ok (.atom "true") => correct
@@ -59,19 +60,19 @@ private def terminalCounter (expected : Nat) (config : Concurrent.Config Term) :
 
 /-- The root returns only a boolean; the checked postcondition additionally
 observes the final shared state after both workers have finished. -/
-theorem terminal_shared_counter_checked :
-    Concurrent.checkPost (terminalCounter 2) 20 (.start {} finishesWithCounter) = true := by cbv
+theorem terminal_shared_counter_checked (elapsed : PID → Nat → Nat) :
+    Concurrent.checkPost (terminalCounter 2) 20 (.start {} finishesWithCounter elapsed) = true := by cbv
 
-theorem terminal_shared_counter_every_run
-    (run : Concurrent.Run (.start {} finishesWithCounter) events last)
+theorem terminal_shared_counter_every_run (elapsed : PID → Nat → Nat)
+    (run : Concurrent.Run (.start {} finishesWithCounter elapsed) events last)
     (terminal : Concurrent.Terminal last outcome) : terminalCounter 2 last = true :=
-  Concurrent.checkPost_sound terminal_shared_counter_checked run terminal
+  Concurrent.checkPost_sound (terminal_shared_counter_checked elapsed) run terminal
 
-theorem wrong_terminal_shared_counter_rejected :
-    Concurrent.checkPost (terminalCounter 1) 20 (.start {} finishesWithCounter) = false := by cbv
+theorem wrong_terminal_shared_counter_rejected (elapsed : PID → Nat → Nat) :
+    Concurrent.checkPost (terminalCounter 1) 20 (.start {} finishesWithCounter elapsed) = false := by cbv
 
-theorem exhausted_postcondition_budget_rejected :
-    Concurrent.checkPost (fun _ => true) 0 (.start {} finishesWithCounter) = false := rfl
+theorem exhausted_postcondition_budget_rejected (elapsed : PID → Nat → Nat) :
+    Concurrent.checkPost (fun _ => true) 0 (.start {} finishesWithCounter elapsed) = false := rfl
 
 private def sharedFinalizerPolicy : Result :=
   Result.schedule {} (do
@@ -84,9 +85,9 @@ private def sharedFinalizerPolicy : Result :=
       .ok (message.getD Term.false)
 
 /-- Native callback policy is shared and survives atomic updates and message delivery. -/
-theorem finalizer_policy_every_interleaving :
+theorem finalizer_policy_every_interleaving (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 24
-      (.start {nativeFinalizerMode := .deferred} sharedFinalizerPolicy) = true := by cbv
+      (.start {nativeFinalizerMode := .deferred} sharedFinalizerPolicy elapsed) = true := by cbv
 
 private def localAndNative : Result :=
   .nativeSet {nativeRefCounter := 13} <|
@@ -95,12 +96,13 @@ private def localAndNative : Result :=
         .nativeGet fun nativeEnv => .ok (.tuple #[message.getD .nil, .integer nativeEnv.nativeRefCounter])
 
 /-- Ordinary environment reads remain process-local while native effects share state. -/
-theorem localAndNative_every_schedule (choices : List ScheduleChoice) :
-    concurrent localAndNative choices = .ok (.tuple #[.integer 0, .integer 13]) := by
-  have checked := concurrent_of_check localAndNative
-    (fun | .ok (.tuple ⟨[.integer 0, .integer 13]⟩) => true | _ => false) 20 (by cbv) choices
-  split at checked
-  · assumption
+theorem localAndNative_every_schedule :
+    concurrent localAndNative (.ok (.tuple #[.integer 0, .integer 13])) := by
+  refine concurrent_of_check localAndNative
+    (fun | .ok (.tuple ⟨[.integer 0, .integer 13]⟩) => true | _ => false) 20 (by intro elapsed; cbv) ?_
+  intro result accepted
+  split at accepted
+  · rfl
   · contradiction
 
 /-- Allocating an Erlang reference leaves the native allocator unchanged. -/
