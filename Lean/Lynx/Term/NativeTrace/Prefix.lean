@@ -188,18 +188,18 @@ private theorem prefixCurrent {pid : PID} {computation residual : Result β}
       exact ih _ rfl rfl rfl quiet (distinctTask distinct)
 
 
-private theorem spawnKeepingChoices (parent child : Result Term) (shared : Nat × List (Nat × String × Term))
-    (types : List String) (choices : List ScheduleChoice) :
-    (Result.schedule {} child (fun _ => parent)).run (startEnv shared types) (.current :: choices) =
+private theorem spawnPreferred (parent child : Result Term) (shared : Nat × List (Nat × String × Term))
+    (types : List String) (preferred : ScheduleChoice) (choices : List ScheduleChoice) :
+    (Result.schedule {} child (fun _ => parent)).run (startEnv shared types) (preferred :: choices) =
     Term.Runner.execute [] (rootEnv [] (startEnv shared types) (spawnedState shared types))
       (.running (spawnedState shared types) [([], Concurrent.Task.root parent), ([1], Concurrent.Task.child child)] none false)
-      [] .current choices := by
+      [] preferred choices := by
   change Term.Runner.run _ _ _ = _
   rw [Term.Runner.run]
   change Term.Runner.execute [] (startEnv shared types)
     (.running (State.initial (startEnv shared types))
       [([], Concurrent.Task.root (Result.schedule {} child (fun _ => parent)))] none false)
-    [] .current (.current :: choices) = _
+    [] .current (preferred :: choices) = _
   have own : (Concurrent.Task.root (Result.schedule {} child (fun _ => parent))).own
       (State.initial (startEnv shared types)) [] =
       [{event := .spawn [] [1], state := spawnedState shared types,
@@ -208,7 +208,9 @@ private theorem spawnKeepingChoices (parent child : Result Term) (shared : Nat �
     (before := []) (after := []) (finished := none) (exhausted := false)
     (transition := {
       event := .spawn [] [1], state := spawnedState shared types, tasks := [([], Concurrent.Task.root parent), ([1], Concurrent.Task.child child)]})
-    [] [] (startEnv shared types) .current (.current :: choices) (by simp) rfl own rfl rfl (.inl ⟨rfl, rfl⟩)
+    [] [] (startEnv shared types) .current (preferred :: choices) (by simp) rfl own rfl rfl (.inl ⟨rfl, rfl⟩)
+
+
 
 namespace Lynx.Result
 
@@ -225,7 +227,7 @@ public theorem RegisteredPrefix.spawnCurrent {computation residual : Result Term
       {nativeRefCounter := final.1, nativeHeap := final.2, nativeResourceTypes := finalTypes} (.current :: choices) := by
   change (Result.schedule {} child (fun _ => computation)).run (startEnv initial types) (.current :: choices) =
     (Result.schedule {} child (fun _ => residual)).run (startEnv final finalTypes) (.current :: choices)
-  rw [spawnKeepingChoices computation child initial types choices, spawnKeepingChoices residual child final finalTypes choices]
+  rw [spawnPreferred computation child initial types .current choices, spawnPreferred residual child final finalTypes .current choices]
   simp only [Concurrent.Task.root, Concurrent.Task.child]
   have normalized := prefixCurrent trace [] (startEnv initial types) (spawnedState initial types) []
     [([1], (⟨child, fun _ => none⟩ : Concurrent.Task Term))] some none false choices rfl rfl rfl rfl (by simp)
