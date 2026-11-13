@@ -55,14 +55,14 @@ whatever time elapses before timers are canceled. Runs end once no step
 remains, and no run goes on forever (`Lynx.Concurrent.Config.terminates`).
 Concurrent laws are stated this way: over every interleaving of the processes
 and every step of their timers. -/
-public def concurrent (computation : Result α) (outcome : Outcome α) : Prop :=
+@[expose] public def concurrent (computation : Result α) (outcome : Outcome α) : Prop :=
   ∀ elapsed events last result,
     Concurrent.Run (.start {} computation elapsed) events last →
       Concurrent.Terminal last result → result = outcome
 
 /-- Every run from the explicitly admitted native model environment must end
 with the stated outcome. -/
-public def concurrentFrom (initial : Environment) (computation : Result α)
+@[expose] public def concurrentFrom (initial : Environment) (computation : Result α)
     (outcome : Outcome α) : Prop :=
   ∀ elapsed events last result,
     Concurrent.Run (.start initial computation elapsed) events last →
