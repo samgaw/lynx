@@ -98,6 +98,36 @@ theorem wrong_terminal_shared_counter_rejected (elapsed : PID → Nat → Nat) :
 theorem exhausted_postcondition_budget_rejected (elapsed : PID → Nat → Nat) :
     Concurrent.checkPost (fun _ => true) 0 (.start {} finishesWithCounter elapsed) = false := rfl
 
+/-- State exploration observes child updates after the parent's return,
+for every elapsed-time function. -/
+theorem reduced_terminal_counter_checked (elapsed : PID → Nat → Nat) :
+    Concurrent.checkState (terminalCounter 2) 20 (.start {} finishesWithCounter elapsed) = true := by cbv
+
+theorem reduced_terminal_counter_every_run (elapsed : PID → Nat → Nat)
+    (run : Concurrent.Run (.start {} finishesWithCounter elapsed) events last)
+    (terminal : Concurrent.Terminal last outcome) : terminalCounter 2 last = true :=
+  Concurrent.checkState_sound (reduced_terminal_counter_checked elapsed) run terminal
+
+theorem reduced_wrong_counter_rejected (elapsed : PID → Nat → Nat) :
+    Concurrent.checkState (terminalCounter 1) 20 (.start {} finishesWithCounter elapsed) = false := by cbv
+
+theorem reduced_exhausted_budget_rejected (elapsed : PID → Nat → Nat) :
+    Concurrent.checkState (fun _ => true) 0 (.start {} finishesWithCounter elapsed) = false := rfl
+
+private def competingStates : Result :=
+  Result.schedule {} (.nativeModify (fun env => ((), {env with nativeRefCounter := 1}))
+    (fun _ => .ok .nil)) fun _ =>
+      .nativeModify (fun env => ((), {env with nativeRefCounter := 2})) (fun _ => .ok Term.true)
+
+/-- Both native-write orders return true, while their final counters differ. -/
+theorem same_outcome_distinct_states (elapsed : PID → Nat → Nat) :
+    Concurrent.check Outcome.isTrue 16 (.start {} competingStates elapsed) = true ∧
+    Concurrent.checkState (terminalCounter 1) 16 (.start {} competingStates elapsed) = false ∧
+    Concurrent.checkState (terminalCounter 2) 16 (.start {} competingStates elapsed) = false := by
+  constructor
+  · cbv
+  constructor <;> cbv
+
 private def sharedFinalizerPolicy : Result :=
   Result.schedule {} (do
     atomicIncrement

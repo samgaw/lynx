@@ -115,6 +115,9 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.Result.two_registered_modify_interleave_steps
   have _ := @Lynx.Concurrent.checkPost
   have _ := @Lynx.Concurrent.checkPost_sound
+  have _ := @Lynx.Concurrent.checkState
+  have _ := @Lynx.Concurrent.checkStateFrom
+  have _ := @Lynx.Concurrent.checkState_sound
   have _ := @Lynx.Rustler.withResourceTypes_registeredPrefix
   have _ := @Lynx.Rustler.executeNative_registeredPrefix
   have _ := @Lynx.Result.RegisteredSteps.readyPrefix
@@ -702,6 +705,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.check",
   "Lynx.Concurrent.checkFrom",
   "Lynx.Concurrent.checkPost",
+  "Lynx.Concurrent.checkState",
+  "Lynx.Concurrent.checkStateFrom",
   "Lynx.Concurrent.clock",
   "Lynx.Concurrent.counterexample",
   "Lynx.Concurrent.counterexampleFrom",
