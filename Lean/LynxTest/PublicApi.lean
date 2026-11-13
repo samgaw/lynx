@@ -73,6 +73,8 @@ private theorem publicExceptionEquations : True := by
 -- State waits can be reasoned about without importing scheduler internals.
 private theorem publicWaitTraces : True := by
   have _ := @Lynx.concurrentFrom
+  have _ := @Lynx.concurrentFrom_of_readyPrefix
+  have _ := @Lynx.concurrentFrom_ok
   have _ := @Lynx.sequentialFrom_eq_run
   have _ := @Lynx.concurrent_of_check
   have _ := @Lynx.Result.two_wait_interleave
