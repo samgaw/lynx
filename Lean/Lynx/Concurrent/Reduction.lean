@@ -3121,14 +3121,9 @@ private theorem Step.sorted {first next : Config α} {event : Event} (step : Ste
     intro state tasks finished exhausted equal
     subst equal
     simp only [Step, Config.successors] at step
-    split at step
-    · simp at step
-    · simp at step
-    · split at step
-      · simp only [List.mem_singleton, Prod.mk.injEq, Config.running.injEq] at step
-        obtain ⟨-, rfl, -⟩ := step
-        simp [State.initial, Sorted]
-      · simp at step
+    cases computation <;> simp only [isRequest] at step
+    all_goals repeat' split at step
+    all_goals simp_all [State.initial, Sorted]
   | running state tasks finished exhausted =>
     intro state' tasks' finished' exhausted' equal
     obtain ⟨key, mem⟩ := Step.keyed step
@@ -3486,7 +3481,7 @@ private theorem Task.footprint_grows {state : State} {processId : PID} {task : T
   all_goals (repeat' split at changed)
   all_goals try simp only [Effect.record_andThen] at changed
   all_goals
-    simp only [Effect.record, Effect.change, Effect.send,
+    simp only [Effect.record, Effect.storeNative, Effect.change, Effect.send,
       Effect.ending, List.find?_cons, List.find?_nil, beq_self_eq_true, Function.comp_apply,
       Option.map_some, id, Option.some.injEq, reduceCtorEq, Kernel.find?_eq, Kernel.filter_eq,
           Kernel.foldl_eq] at changed
@@ -3722,7 +3717,8 @@ private theorem inert_square {state : State} {tasks : List (PID × Task α)} {fi
     have agree : footprint.observes.Agree state
         { state with inTransit := arrive envelope.source envelope.target state.inTransit } :=
       ⟨fun _ _ => rfl, fun _ _ => rfl,
-        fun view mem' => footprint_views wellformed mem foundFootprint other view mem', rfl⟩
+        fun view mem' => footprint_views wellformed mem foundFootprint other view mem', rfl,
+        fun _ => rfl⟩
     have supports : Supports key move tasks tasks := by
       cases key with
       | own _ _ => rfl
@@ -3877,29 +3873,40 @@ the steps followed before it asleep, keeping only those that commute with it
       else visit (Kernel.filter (commutes key) (Kernel.append sleep done)) next &&
         explore visit commutes sleep (Kernel.append done [key]) rest
 
-/-- Whether every run ends in an accepted outcome, following at most `depth`
+/-- Whether every explored path ends in an accepted terminal configuration,
+following at most `depth`
 steps along each run, where runs taking a step asleep first are covered
 elsewhere. A step every run can take first (`Config.forced`) is followed
 alone, keeping the same steps asleep: every other step commutes with it or
-absorbs it. Its soundness (`check_sound`) is proven for runs from a start
+absorbs it. Its soundness (`checkState_sound`) is proven for runs from a start
 configuration, whose reachable configurations are well-formed. -/
-@[expose] def checkFrom (accept : Outcome α → Bool) : Nat → List Key → Config α → Bool
+@[expose] def checkStateFrom (accept : Config α → Bool) : Nat → List Key → Config α → Bool
   | 0, _, _ => false
   | depth + 1, sleep, config =>
       match config.steps with
       | [] =>
           match config.successors with
-          | [] => accept config.outcome
-          | successors => Kernel.all successors fun (_, next) => checkFrom accept depth [] next
+          | [] => accept config
+          | successors => Kernel.all successors fun (_, next) => checkStateFrom accept depth [] next
       | steps =>
           match config.forced.bind fun key => Kernel.find? (·.1 == key) steps with
-          | some (_, _, next) => checkFrom accept depth sleep next
-          | none => explore (checkFrom accept depth) config.commutesWith sleep [] steps
+          | some (_, _, next) => checkStateFrom accept depth sleep next
+          | none => explore (checkStateFrom accept depth) config.commutesWith sleep [] steps
+
+/-- The outcome checker specializes exact terminal-state exploration. -/
+@[expose] def checkFrom (accept : Outcome α → Bool) (depth : Nat)
+    (sleep : List Key) (config : Config α) : Bool :=
+  checkStateFrom (fun last => accept last.outcome) depth sleep config
 
 /-- Whether every run from a start configuration ends in an accepted outcome,
 following at most `depth` steps along each run (`check_sound`). -/
 @[expose] def check (accept : Outcome α → Bool) (depth : Nat) (config : Config α) : Bool :=
   checkFrom accept depth [] config
+
+/-- Check an arbitrary predicate of the exact terminal configuration, using
+only reductions proved to preserve that same configuration. -/
+@[expose] def checkState (accept : Config α → Bool) (depth : Nat) (config : Config α) : Bool :=
+  checkStateFrom accept depth [] config
 
 /-- How a run that `check` rejects fails. -/
 inductive Failure (α : Type) where
@@ -4067,21 +4074,21 @@ private theorem forced_facts {state : State} {tasks : List (PID × Task α)}
     exact .inr ⟨_, _, _, _, envelope, rest, rfl, List.mem_of_find?_eq_some head,
       by simpa using List.find?_some head, rfl⟩
 
-private theorem check_wellformed {accept : Outcome α → Bool} :
+private theorem checkState_wellformed {accept : Config α → Bool} :
     ∀ {depth : Nat} {sleep : List Key} {first last : Config α} {events : List Event}
       {outcome : Outcome α},
-      Reachable first → checkFrom accept depth sleep first = true → Run first events last →
+      Reachable first → checkStateFrom accept depth sleep first = true → Run first events last →
       Terminal last outcome →
       (∀ key ∈ sleep, ∃ event next, (key, event, next) ∈ first.steps) →
       (∀ key ∈ sleep, ∀ event next, (key, event, next) ∈ first.steps → ¬Reaches next last) →
-      accept outcome = true := by
+      accept last = true := by
   intro depth
   induction depth with
-  | zero => intro _ _ _ _ _ _ checked; simp [checkFrom] at checked
+  | zero => intro _ _ _ _ _ _ checked; simp [checkStateFrom] at checked
   | succ depth ih =>
     intro sleep first last events outcome reachable checked run terminal awake asleep
     have wellformed := reachable.1
-    unfold checkFrom at checked
+    unfold checkStateFrom at checked
     simp only [Kernel.all_eq, Kernel.find?_eq] at checked
     cases found : first.steps with
     | nil =>
@@ -4089,7 +4096,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
       simp only [found] at checked
       cases run with
       | refl =>
-        simp only [terminal.successors_eq_nil, terminal.outcome_eq] at checked
+        simp only [terminal.successors_eq_nil] at checked
         exact checked
       | step step rest =>
         split at checked
@@ -4148,7 +4155,7 @@ private theorem check_wellformed {accept : Outcome α → Bool} :
               obtain ⟨-, -, -, back⟩ := after key' slept event₀ next₀ mem₀
               exact asleep key' slept event₀ next₀ mem₀ (back event'' next'' mem' reaches)
           · obtain ⟨key, mem⟩ := Step.keyed step
-            exact explore_sound (goal := accept outcome = true)
+            exact explore_sound (goal := accept last = true)
               (fun key event next mem sleep' visited commutes reaches asleep' =>
                 let ⟨_, run'⟩ := reaches
                 ih (Step.reachable (Step.of_mem_steps mem) reachable) visited run' terminal
@@ -4165,8 +4172,22 @@ theorem check_sound {accept : Outcome α → Bool} {depth : Nat} {env : Environm
     {computation : Result α} {elapsed : PID → Nat → Nat} {last : Config α} {events : List Event}
     {outcome : Outcome α} (checked : check accept depth (.start env computation elapsed) = true)
     (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome) :
-    accept outcome = true :=
-  check_wellformed (show Reachable (Config.start env computation elapsed) from
+    accept outcome = true := by
+  have checked' : checkStateFrom (fun last => accept last.outcome) depth []
+      (.start env computation elapsed) = true := checked
+  have accepted := checkState_wellformed
+    (show Reachable (Config.start env computation elapsed) from
+    ⟨trivial, fun _ _ _ _ equal => by cases equal⟩) checked' run terminal (by simp) (by simp)
+  simpa only [terminal.outcome_eq] using accepted
+
+/-- Every actual terminal configuration of a checked start satisfies the state
+predicate, with the exact terminal configuration preserved by the reductions. -/
+theorem checkState_sound {accept : Config α → Bool} {depth : Nat} {env : Environment}
+    {computation : Result α} {elapsed : PID → Nat → Nat} {last : Config α} {events : List Event}
+    {outcome : Outcome α} (checked : checkState accept depth (.start env computation elapsed) = true)
+    (run : Run (.start env computation elapsed) events last) (terminal : Terminal last outcome) :
+    accept last = true :=
+  checkState_wellformed (show Reachable (Config.start env computation elapsed) from
     ⟨trivial, fun _ _ _ _ equal => by cases equal⟩) checked run
     terminal (by simp) (by simp)
 

@@ -179,7 +179,7 @@ private theorem completedStep {state updated : State} {owner pid : PID} {ownerVa
 private theorem terminateOtherView (state : State) (owner pid : PID) (distinct : pid ≠ owner)
     (unlinked : (state.process owner).links = []) (unwatched : (state.process owner).monitors = []) :
     (state.terminate owner (.atom "normal")).nativeView pid = state.nativeView pid := by
-  simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+  simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
   simp [State.nativeView, State.view, State.process, State.update, distinct]
 
 private def capture (isRoot : Bool) : Except Exception Term → Option (Except Exception Term) :=
@@ -218,9 +218,9 @@ private theorem completedDone (owner pid root : PID) (ownerValue value : Term)
       (capture (!ownerRoot)) (capture ownerRoot (.ok ownerValue))
       (by simp [State.terminate, unlinked, unwatched, quiet])
       (by simp [State.terminate, unlinked, unwatched, idle])
-      (by simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+      (by simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
           simpa only [State.process, State.update, ite_eq_right distinct] using unlinked pid)
-      (by simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+      (by simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
           simpa only [State.process, State.update, ite_eq_right distinct] using unwatched pid)
       current preferred choices
     cases ownerRoot <;> simpa [ownerEnded, capture, completion, State.terminate, unlinked, unwatched, State.update] using result
@@ -231,9 +231,9 @@ private theorem completedDone (owner pid root : PID) (ownerValue value : Term)
       (capture ownerRoot) (capture (!ownerRoot) (.ok value))
       (by simp [State.terminate, unlinked, unwatched, quiet])
       (by simp [State.terminate, unlinked, unwatched, idle])
-      (by simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+      (by simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
           simpa only [State.process, State.update, ite_eq_right (Ne.symm distinct)] using unlinked owner)
-      (by simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+      (by simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
           simpa only [State.process, State.update, ite_eq_right (Ne.symm distinct)] using unwatched owner)
       current preferred choices
     cases ownerRoot <;> simpa [peerEnded, capture, completion, State.terminate, unlinked, unwatched, State.update] using result
@@ -262,9 +262,9 @@ private theorem soleAfterOwner {owner pid : PID} {computation : Result Term} {va
     (by simpa [State.terminate, unlinked, unwatched, State.update] using heap)
     (by simp [State.terminate, unlinked, unwatched, quiet])
     (by simp [State.terminate, unlinked, unwatched, idle])
-    (by simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+    (by simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
         simpa only [State.process, State.update, ite_eq_right distinct] using unlinked pid)
-    (by simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+    (by simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
         simpa only [State.process, State.update, ite_eq_right distinct] using unwatched pid)
     current preferred choices
   cases ownerRoot <;> simpa [capture, completion] using result
@@ -334,11 +334,11 @@ private theorem completedShared {owner pid : PID} {computation : Result Term} {v
             (capture (!ownerRoot)) (capture ownerRoot (.ok ownerValue)) rfl rfl endedQuiet endedIdle
             (by change (ended.process pid).links = []
                 dsimp only [ended]
-                simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+                simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
                 simpa only [State.process, State.update, ite_eq_right distinct] using unlinked pid)
             (by change (ended.process pid).monitors = []
                 dsimp only [ended]
-                simp only [State.terminate, unlinked, unwatched, List.foldl_nil]
+                simp only [State.terminate, unlinked, unwatched, Kernel.foldl_eq, List.foldl_nil]
                 simpa only [State.process, State.update, ite_eq_right distinct] using unwatched pid)
             pid preferred' choices'
           cases ownerRoot <;> simpa [capture, completion] using result
