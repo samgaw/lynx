@@ -1589,7 +1589,7 @@ private partial def command (map : FileMap) (j : Json) (parent : Span := {}) :
         let moduleName := env.header.moduleNames[index.toNat]!.toString
         modify fun state => {state with initialModules := state.initialModules.push moduleName}
         pure (some initial)
->>>>>>> conflict 1 of 3 ends    let trueTerm := mkIdent ``Lynx.Term.true
+    let trueTerm := mkIdent ``Lynx.Term.true
     let hypothesis := mkIdent `requires
     -- Each helper is stated as strongly as its purity allows: directly when it
     -- returns `Except`, through `Lynx.sequential` when it needs an environment,
