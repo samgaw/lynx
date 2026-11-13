@@ -29,12 +29,9 @@ theorem blocked_preserves_native_environment (mode : NativeFinalizerMode)
 has no commit at all, and a ready poll cannot overwrite VM messages. -/
 theorem blocked_preserves_mailbox (state : Concurrent.State) (pid target : PID) (env : Environment) :
     ((state.storeNative pid env).process target).mailbox = (state.process target).mailbox := by
-  by_cases same : target = pid
-  · subst target
+  cases found : state.processes pid <;> by_cases same : target = pid <;>
     simp [Concurrent.State.storeNative, Concurrent.State.store, Concurrent.State.process,
-      Concurrent.State.update]
-  · simp [Concurrent.State.storeNative, Concurrent.State.store, Concurrent.State.process,
-      Concurrent.State.update, same]
+      Concurrent.State.update, Concurrent.State.modify, found, same]
 
 private def published : Result Term :=
   .nativeGet fun env => .nativeSet { env with nativeHeap := [(1, "cell", .integer 7)] } (.ok .nil)
