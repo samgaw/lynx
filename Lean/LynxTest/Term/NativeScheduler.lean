@@ -1,7 +1,7 @@
 module
 
 import Lynx.Concurrent.Confluence
-import Lynx.Term.NativeTrace
+import Lynx.Term.NativeTrace.Scheduled
 -- Inspect the private executor while auditing its native scheduling boundaries.
 import all Lynx.Term.Runner
 meta import LynxTest.ProofAudit
@@ -40,6 +40,56 @@ theorem increment_prefix_every_run (env : Environment) (elapsed : PID → Nat �
       { env with nativeRefCounter := env.nativeRefCounter + 1 } :=
     .nativeModify _ _ _ _ _ _ _ rfl (.refl _ _)
   exact trace.returns elapsed run terminal
+
+/-- A source trace advances its own task within an arbitrary surrounding task
+list, retaining the actual scheduler state and every peer task. -/
+theorem increment_scheduled (state : State) (pid : PID)
+    (before after : List (PID × Concurrent.Task Nat)) :
+    ∃ events, Run
+      (.running state (before ++ (pid, Concurrent.Task.root increment) :: after) none false)
+      events
+      (.running {state with nativeRefCounter := state.nativeRefCounter + 1}
+        (before ++ (pid, Concurrent.Task.root (.ok (state.nativeRefCounter + 1))) :: after) none false) := by
+  have trace : Result.SharedSteps pid increment (state.nativeRefCounter, state.nativeHeap)
+      (state.nativeRefCounter + 1) (state.nativeRefCounter + 1, state.nativeHeap) := by
+    refine .modify _ _ _ _ _ _ _ ?_ (.done _ _)
+    intro env _ counter heap
+    simp [counter, heap]
+  simpa only [Concurrent.Task.root] using
+    trace.scheduledRun state before after some none false rfl rfl
+
+private def pendingRead : Result Nat := .wait (fun _ => none) (fun _ : Unit => .ok 1)
+
+private def registerThenWait : Result Nat :=
+  .nativeModify (fun env => ((), {env with nativeResourceTypes := ["counter"]})) fun _ =>
+    .nativeGet fun env =>
+      if env.nativeResourceTypes = ["counter"] then pendingRead else .error .exhausted
+
+/-- Registration and decoding advance inside the real task list, but reaching
+a blocked wait leaves it intact rather than certifying successful completion. -/
+theorem registered_prefix_retains_wait (state : State) (pid : PID)
+    (before after : List (PID × Concurrent.Task Nat)) :
+    ∃ events, Run
+      (.running state (before ++ (pid, Concurrent.Task.root registerThenWait) :: after) none false)
+      events
+      (.running {state with nativeResourceTypes := ["counter"]}
+        (before ++ (pid, Concurrent.Task.root pendingRead) :: after) none false) := by
+  have trace : Result.RegisteredPrefix pid registerThenWait
+      (state.nativeRefCounter, state.nativeHeap) state.nativeResourceTypes pendingRead
+      (state.nativeRefCounter, state.nativeHeap) ["counter"] := by
+    refine .modify _ _ () _ (state.nativeRefCounter, state.nativeHeap) _ _ ["counter"] _ _ ?_ ?_
+    · intro env _ counter heap _
+      simp [counter, heap]
+    · refine .read _ pendingRead _ _ _ _ _ ?_ (.refl _ _ _)
+      intro env _ _ _ registered
+      simp [registered]
+  simpa only [Concurrent.Task.root] using
+    trace.scheduledRun state before after some none false rfl rfl rfl
+
+/-- A blocked native residual has no own step, even alongside runnable peers. -/
+theorem registered_residual_is_blocked (state : State) (pid : PID) :
+    (Concurrent.Task.root pendingRead).own state pid = [] := by
+  simp [Concurrent.Task.root, Concurrent.Task.own, pendingRead]
 
 /-- An unchanged-counter claim is rejected, rather than assumed by the checker. -/
 theorem rejects_wrong_counter (env : Environment) (elapsed : PID → Nat → Nat) :
@@ -98,18 +148,18 @@ theorem distinguishes_native_cell_representation :
 theorem native_writes_are_observed :
     let observes : Observes := { native := true }
     let state : State := {}
-    Effect.keeps { native := some fun native => { native with refCounter := 1 } } observes state = false ∧
-    Effect.keeps { native := some fun native => { native with heap := [(0, "value", .nil)] } }
+    Effect.keepsQueues { native := some fun native => { native with refCounter := 1 } } observes state = false ∧
+    Effect.keepsQueues { native := some fun native => { native with heap := [(0, "value", .nil)] } }
       observes state = false ∧
-    Effect.keeps { native := some fun native => { native with resourceTypes := ["resource"] } }
+    Effect.keepsQueues { native := some fun native => { native with resourceTypes := ["resource"] } }
       observes state = false ∧
-    Effect.keeps { native := some fun native => { native with finalizerMode := .deferred } }
+    Effect.keepsQueues { native := some fun native => { native with finalizerMode := .deferred } }
       observes state = false := by
   decide
 
 /-- Two writes of different snapshots cannot be reordered as independent steps. -/
 theorem conflicting_native_writes_do_not_commute :
-    Effect.commutes
+    Effect.commutesQueues
       { native := some fun native => { native with refCounter := 1 } }
       { native := some fun native => { native with refCounter := 2 } } {} = false := by
   decide
@@ -127,6 +177,7 @@ theorem native_read_write_dependency :
 including their private commutation and transition-matching proofs. -/
 run_cmd do
   LynxTest.ProofAudit.checkModule `Lynx.Term.NativeTrace
+  LynxTest.ProofAudit.checkModule `Lynx.Term.NativeTrace.Scheduled
   LynxTest.ProofAudit.checkModule `Lynx.Term.Runner
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Footprint
   LynxTest.ProofAudit.checkModule `Lynx.Concurrent.Reduction
