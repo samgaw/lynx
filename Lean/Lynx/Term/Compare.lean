@@ -802,7 +802,7 @@ namespace Lynx.Term
   rw [compareExact_step]
   exact Compare.stringCompare_eq a b
 
-theorem compare_atoms (a b : String) :
+@[simp] theorem compare_atoms (a b : String) :
     compare (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
   rw [compare_step]
   exact Compare.stringCompare_eq a b
@@ -929,12 +929,6 @@ end Lynx.Term
 /-! ## Numeric equality -/
 
 namespace Lynx.Term
-
-/-- Atom ordering agrees with the ordering of atom names. -/
-@[simp] theorem compare_atoms (a b : String) :
-    compare (fuel (.atom a) (.atom b)) (.atom a) (.atom b) = Ord.compare a b := by
-  rw [compare_step]
-  rfl
 
 @[simp] theorem compare_reference (a b : List Nat) :
     compare (fuel (.reference a) (.reference b)) (.reference a) (.reference b) = Ord.compare a b := by
@@ -1209,11 +1203,12 @@ theorem compareExact_tuple (a b : Array Term) :
   rfl
 
 /-- Closures with the same identity compare their captures lexicographically. -/
-theorem exactCompare_function_captures (module name : String) (arity : Nat)
+theorem compareExact_function_captures (module name : String) (arity : Nat)
     (a b : Array Term) :
-    exactCompare (.function module name arity a) (.function module name arity b) =
-      List.compareLex exactCompare a.toList b.toList := by
-  rw [exactCompare_eq_step]
+    compareExact (fuel (.function module name arity a) (.function module name arity b))
+      (.function module name arity a) (.function module name arity b) =
+      List.compareLex exactOrder a.toList b.toList := by
+  rw [compareExact_step]
   simp [Compare.compareStep]
 
 /-- Every number precedes every map under ordinary comparison. -/
