@@ -201,7 +201,7 @@ defmodule Lynx.CaseTest do
     refute output =~ "failed"
   end
 
->>>>>>> conflict 1 of 1 ends  test "verifies termination suffixes within their laws group" do
+  test "verifies termination suffixes within their laws group" do
     defmodule TerminationSuffix do
       use ExUnit.Case, register: false
       use Lynx.Case
