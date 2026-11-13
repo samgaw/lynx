@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.NativeTrace
+public import Lynx.Term.NativeTrace.Scheduled
 import all Lynx.Term.Runner
 
 namespace Lynx.Term.NativeRunner
