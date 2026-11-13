@@ -627,7 +627,7 @@ are rejected by the closed LLBC audit, not interpreted as formatting. -/
 /-- Map keys use Erlang exact equality, including distinct integer/float keys. -/
 @[expose] def uniqueMapKeys : List Term → Bool
   | [] => true
-  | key :: rest => !(rest.any fun other => Term.exactCompare key other == .eq) && uniqueMapKeys rest
+  | key :: rest => !(rest.any fun other => Term.compareExact (Term.fuel key other) key other == .eq) && uniqueMapKeys rest
 
 theorem uniqueMapKeys_duplicate (key : Term) : uniqueMapKeys [key, key] = false := by
   simp [uniqueMapKeys]
