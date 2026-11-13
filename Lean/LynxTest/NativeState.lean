@@ -7,6 +7,30 @@ meta import LynxTest.ProofAudit
 namespace LynxTest.NativeState
 open Lynx
 
+private def prefixIncrement : Result Nat :=
+  .nativeModify (fun env => ((), {env with nativeRefCounter := env.nativeRefCounter + 1})) fun _ =>
+    .nativeGet fun env => .ok env.nativeRefCounter
+
+/-- Ordinary public imports can lift actual native modification/read traces to
+all-run properties for arbitrary admitted environments. -/
+theorem native_prefix_every_run (initial : Environment) :
+    concurrentFrom initial prefixIncrement (.ok (initial.nativeRefCounter + 1)) := by
+  apply concurrentFrom_of_readyPrefix
+  exact .nativeModify _ _ () initial _ _ _ rfl (.nativeGet _ _ _ _ (.refl _ _))
+
+/-- A contradictory result cannot be certified by the all-run native interface. -/
+theorem native_prefix_unchanged_rejected (initial : Environment) :
+    ¬ concurrentFrom initial prefixIncrement (.ok initial.nativeRefCounter) := by
+  intro unchanged
+  obtain ⟨events, last, run, terminal⟩ := Result.run_reaches prefixIncrement initial []
+  have returned := native_prefix_every_run initial (fun _ _ => 0) events last _ run terminal
+  have wrong := unchanged (fun _ _ => 0) events last _ run terminal
+  have incompatible := congrArg
+    (fun result : Outcome Nat => match result with | .ok value => value | _ => 0)
+    (returned.symm.trans wrong)
+  simp only at incompatible
+  omega
+
 private def sharedUpdate : Result :=
   Result.schedule {} (.nativeSet {nativeRefCounter := 7} (.ok .nil)) fun _ =>
     .wait (fun env => if env.nativeRefCounter = 7 then some ((), env) else none) fun _ =>

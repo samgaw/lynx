@@ -68,6 +68,18 @@ with the stated outcome. -/
     Concurrent.Run (.start initial computation elapsed) events last →
       Concurrent.Terminal last result → result = outcome
 
+/-- A checked native prefix ending successfully establishes the result of every
+run from its admitted environment. Intermediate effects remain in the trace. -/
+public theorem concurrentFrom_of_readyPrefix
+    {initial final : Environment} {computation : Result α} {value : α}
+    (trace : Result.ReadyPrefix computation initial (.ok value) final) :
+    concurrentFrom initial computation (.ok value) :=
+  fun elapsed _ _ _ run terminal => trace.returns elapsed run terminal
+
+@[simp] public theorem concurrentFrom_ok (initial : Environment) (value : α) :
+    concurrentFrom initial (.ok value) (.ok value) :=
+  concurrentFrom_of_readyPrefix (.refl _ _)
+
 /-- Whether an outcome is `ok true`, the outcome laws expect. -/
 @[expose] public def Outcome.isTrue : Outcome Term → Bool
   | .ok (.atom "true") => true
