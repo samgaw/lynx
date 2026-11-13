@@ -45,20 +45,20 @@ private theorem checked_sum (value amount total : U64)
 
 /-- Destruction consumes the child's cell, preserves the parent's payload and
 never rewinds the shared identity supply under any transition order. -/
-theorem every_interleaving :
+theorem every_interleaving (elapsed : PID → Nat → Nat) :
     Concurrent.check (fun | .ok (.atom "true") => true | _ => false) 32
-      (.start {} (concurrentCleanup mutex_new_incremented mutex_scope_flag)) = true := by
+      (.start {} (concurrentCleanup mutex_new_incremented mutex_scope_flag) elapsed) = true := by
   have sum := checked_sum 7#u64 3#u64 10#u64 (by decide +kernel)
   simp only [concurrentCleanup, mutex_new_incremented, effects_core.increment,
     sum, NativeM.ok, monadLift_self]
   cbv
 
-theorem every_schedule (choices : List ScheduleChoice) :
-    concurrent (concurrentCleanup mutex_new_incremented mutex_scope_flag) choices = .ok Term.true := by
-  have checked := concurrent_of_check (concurrentCleanup mutex_new_incremented mutex_scope_flag)
-    (fun | .ok (.atom "true") => true | _ => false) 32 every_interleaving choices
+theorem every_run :
+    concurrent (concurrentCleanup mutex_new_incremented mutex_scope_flag) (.ok Term.true) := by
+  intro elapsed events last outcome run terminal
+  have checked := Concurrent.check_sound (every_interleaving elapsed) run terminal
   split at checked
-  · assumption
+  · rfl
   · contradiction
 
 end Cleanup.Properties

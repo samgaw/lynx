@@ -40,7 +40,7 @@ defmodule Lynx.Rust.NativeArcConcurrentTest do
       proof_modules: ["Retain.Properties"],
       required_properties: [
         "Retain.Properties.every_interleaving",
-        "Retain.Properties.every_schedule"
+        "Retain.Properties.every_run"
       ]
     ]
 
@@ -50,13 +50,13 @@ defmodule Lynx.Rust.NativeArcConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::scalar_resource_clone" &&
-               guarantee.theorem == "Retain.Properties.every_interleaving"
+               guarantee.theorem == "Retain.Properties.every_run"
            end)
 
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :cross_crate_contract &&
                guarantee.rust_name == "effects_native::scalar_resource_read" &&
-               guarantee.theorem == "Retain.Properties.every_interleaving"
+               guarantee.theorem == "Retain.Properties.every_run"
            end)
 
     assert result.verification.owned_drops
@@ -64,7 +64,7 @@ defmodule Lynx.Rust.NativeArcConcurrentTest do
     assert Enum.any?(result.verification.guarantees, fn guarantee ->
              guarantee.kind == :rust_implementation &&
                guarantee.rust_name == "effects_native::scalar_resource_read" &&
-               guarantee.theorem == "Retain.Properties.every_interleaving"
+               guarantee.theorem == "Retain.Properties.every_run"
            end)
 
     assert [%{status: :ok, cached: true}] =
@@ -78,7 +78,7 @@ defmodule Lynx.Rust.NativeArcConcurrentTest do
 
     export = Path.join(tmp, "retain.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
-    assert File.read!(export) =~ "every_interleaving"
+    assert File.read!(export) =~ "every_run"
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
