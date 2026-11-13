@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.NativeTrace.Prefix
+public import Lynx.Term.NativeTrace.Contended
 import all Lynx.Term.Runner
 
 namespace Lynx.Term.NativeRunner
@@ -1461,66 +1461,6 @@ theorem two_registered_modify_interleave_steps {δ : Type}
      Term.NativeRunner.schedule,  childAcquired]
   simpa +contextual [traceEnv, Term.NativeRunner.activate] using
     sharedSteps_right childTrace rootValue [1] types2
-
-/-- Two contending workers retain every IO wait in their finite ready traces.
-The root acquires first, a child acquisition is attempted while held, then both
-traces execute. This is a concrete schedule theorem, not an arbitrary-schedule
-or fairness guarantee. -/
-theorem two_wait_interleave_steps
-    (parentPoll : Environment → Option (β × Environment)) (parentNext : β → Result Term)
-    (childPoll : Environment → Option (γ × Environment)) (childNext : γ → Result Term)
-    (parentValue : β) (childValue : γ) (rootValue childResult : Term)
-    (s0 s1 s2 s3 s4 : Nat × List (Nat × String × Term)) :
-    let atState := fun (pid : PID) (shared : Nat × List (Nat × String × Term)) =>
-      ({ currentPid := pid, nativeRefCounter := shared.1, nativeHeap := shared.2 } : Environment)
-    parentPoll (atState [] s0) =
-      some (parentValue, atState [] s1) →
-    SharedSteps [] (parentNext parentValue) s1 rootValue s2 →
-    childPoll (atState [1] s1) = none →
-    childPoll (atState [1] s2) = some (childValue, atState [1] s3) →
-    SharedSteps [1] (childNext childValue) s3 childResult s4 →
-    (Result.schedule {} (.wait childPoll childNext) (fun _ => .wait parentPoll parentNext)).run
-      { nativeRefCounter := s0.1, nativeHeap := s0.2} [.current, .swap [1]] =
-      (.ok rootValue, atState [] s4) := by
-  dsimp only
-  intro acquired parent blocked childAcquired child
-  rw [run_spawn_pair]
-  simp only [Term.NativeRunner.schedule, Term.Runner.schedule]
-  rw [Term.NativeRunner.execute_eq]
-  simp +contextual [Term.NativeRunner.choose,
-    Term.NativeRunner.step,  Term.NativeRunner.save,
-     Term.NativeRunner.schedule, acquired]
-  let env := Term.NativeRunner.save (traceEnv [] [([1], {})] s1)
-  let pool : Term.NativeRunner.Pool Term := .parallel
-    (.process [] (parentNext parentValue) some) (.process [1] (.wait childPoll childNext) (fun _ => none))
-  have selected : Term.NativeRunner.choose pool env (.swap [1]) = Term.NativeRunner.choose pool env .current := by
-    dsimp only [pool]
-    generalize computationEq : parentNext parentValue = computation at parent ⊢
-    cases parent with
-    | done => simp +contextual [Term.NativeRunner.choose,  env,
-        Term.NativeRunner.save, blocked]
-    | read => simp +contextual [Term.NativeRunner.choose,  env,
-        Term.NativeRunner.save, blocked]
-    | update | modify => simp +contextual [Term.NativeRunner.choose,  env,
-        Term.NativeRunner.save, blocked]
-    | wait poll next reply before middle final value ready rest =>
-      have polled := ready (Term.NativeRunner.activate env []) rfl rfl rfl
-      simp +contextual [env, Term.NativeRunner.activate, Term.NativeRunner.save] at polled
-      simp +contextual [Term.NativeRunner.choose,  env,
-        Term.NativeRunner.save, blocked, polled]
-  have fallback : Term.NativeRunner.execute [] env pool none (.swap [1]) =
-      Term.NativeRunner.execute [] env pool none .current := by
-    conv => lhs; rw [Term.NativeRunner.execute_eq]
-    conv => rhs; rw [Term.NativeRunner.execute_eq]
-    rw [selected]
-  have ownerDone := sharedSteps_left parent (.wait childPoll childNext) none
-  simp +contextual [env, pool, traceEnv, Term.NativeRunner.save] at fallback ownerDone
-  rw [fallback, ownerDone]
-  rw [Term.NativeRunner.execute_eq]
-  simp +contextual [Term.NativeRunner.choose,
-    Term.NativeRunner.step,
-     Term.NativeRunner.schedule,  childAcquired]
-  simpa +contextual [traceEnv, Term.NativeRunner.activate] using sharedSteps_right child rootValue [1]
 
 /-- A finite two-worker trace: the root acquires, the child blocks, the root
 releases and finishes, then the child acquires and releases. Poll equations

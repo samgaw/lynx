@@ -7,6 +7,7 @@ import LynxTest.Term.NativeHeap
 import LynxTest.Term.NativeScheduler
 import LynxTest.Term.NativeSerial
 import LynxTest.Term.NativePrefix
+import LynxTest.Term.NativeContended
 import LynxTest.Term.ReadyPrefix
 import LynxTest.Term.Bitstring
 import LynxTest.Term.Bitstring.Construction
