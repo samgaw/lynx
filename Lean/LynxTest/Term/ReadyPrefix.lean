@@ -6,6 +6,34 @@ meta import LynxTest.ProofAudit
 namespace LynxTest.Term.ReadyPrefix
 open Lynx
 
+private def localResource (resource : Term) : Result (List (Term × Term) × Nat) :=
+  .get fun before =>
+    .set {before with pdict := [(.atom "resource", resource)]} <|
+      .nativeModify (fun env => ((), {env with nativeRefCounter := env.nativeRefCounter + 1})) fun _ =>
+        .get fun after => .ok (after.pdict, after.nativeRefCounter)
+
+private theorem local_resource_trace (resource : Term) (env : Environment) :
+    Result.ReadyPrefix (localResource resource) env
+      (.ok ([(.atom "resource", resource)], env.nativeRefCounter + 1))
+      {env with pdict := [(.atom "resource", resource)], nativeRefCounter := env.nativeRefCounter + 1} := by
+  exact .get _ _ _ _ (.set _ _ _ _ _ (.nativeModify _ _ () _ _ _ _ rfl (.get _ _ _ _ (.refl _ _))))
+
+/-- A caller can store and read its resource locally while retaining the actual
+native state update, for every run and arbitrary initial environment. -/
+theorem local_resource_every_run (resource : Term) (env : Environment) :
+    concurrentFrom env (localResource resource)
+      (.ok ([(.atom "resource", resource)], env.nativeRefCounter + 1)) :=
+  concurrentFrom_of_readyPrefix (local_resource_trace resource env)
+
+/-- Local/native composition preserves the full final environment as well as
+its returned resource, for arbitrary finite scheduler choices. -/
+theorem local_resource_final_state (resource : Term) (env : Environment) (choices : List ScheduleChoice) :
+    (localResource resource).run env choices =
+      (.ok ([(.atom "resource", resource)], env.nativeRefCounter + 1),
+        {env with pdict := [(.atom "resource", resource)], nativeRefCounter := env.nativeRefCounter + 1}) := by
+  rw [(local_resource_trace resource env).run choices]
+  simp
+
 private def advance (value : Nat) (env : Environment) : Option (Nat × Environment) :=
   some (value,{env with nativeRefCounter := env.nativeRefCounter + value})
 
