@@ -19,7 +19,15 @@ defmodule Lynx.Rust.CacheTest do
 
     prefix = "RustWorkspace.CacheC#{Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)}"
 
+    loop_file = Path.join(@proofs, "RustWorkspace/NativeLoops.lean")
+    loop_source = File.read(loop_file)
+
     on_exit(fn ->
+      case loop_source do
+        {:ok, source} -> File.write!(loop_file, source)
+        {:error, :enoent} -> File.rm(loop_file)
+      end
+
       File.rm_rf!(Path.join(@proofs, String.replace(prefix, ".", "/")))
 
       for path <- Path.wildcard(Path.join(@proofs, String.replace(prefix, ".", "_") <> "*")),
