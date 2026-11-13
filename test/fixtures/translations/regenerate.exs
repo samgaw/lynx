@@ -3,6 +3,7 @@
 #   mix run test/fixtures/translations/regenerate.exs lean
 defmodule Lynx.Fixtures.Regenerate do
   @lean_dir Path.expand("../../../Lean", __DIR__)
+  @project_dir Path.expand("../../..", __DIR__)
 
   def run(["json"]) do
     for fixture <- Path.wildcard(Path.join(__DIR__, "*.erl")) do
@@ -25,6 +26,7 @@ defmodule Lynx.Fixtures.Regenerate do
         Lynx.Translation.new()
         |> Lynx.Translation.add({source, core})
         |> Lynx.Translation.translate(module, exports ++ laws)
+        |> portable_sources()
         |> Lynx.Translation.assemble()
 
       write(
@@ -59,6 +61,18 @@ defmodule Lynx.Fixtures.Regenerate do
   end
 
   def run(_), do: Mix.raise("usage: mix run test/fixtures/translations/regenerate.exs json|lean")
+
+  # Keep developer checkout paths out of committed fixtures and their cache keys.
+  defp portable_sources(translation) do
+    modules =
+      Map.new(translation.modules, fn {name, data} ->
+        relative = Path.relative_to(data.file, @project_dir)
+        file = if relative == data.file, do: data.file, else: "../" <> relative
+        {name, %{data | file: file}}
+      end)
+
+    %{translation | modules: modules}
+  end
 
   defp core(fixture, source) do
     {:ok, module, beam} =
