@@ -6,6 +6,8 @@ public import Lynx.Term.Result
 public import Lynx.Term.Compare
 public import Lynx.Term.Maps
 public import Lynx.Term.Runner
+public import Lynx.Term.NativeTrace
+public import Lynx.Term.NativeSchedule
 public import Lynx.Term.Induction
 public import Lynx.Term.Order
 public import Lynx.Term.Eval
@@ -26,7 +28,7 @@ function table, up to the given call depth. -/
 
 /-- Run from an explicitly admitted model environment. This observation does
 not establish correspondence between the model and an external system. -/
-public def sequentialFrom (initial : Environment) (computation : Result α) : Outcome α :=
+@[expose] public def sequentialFrom (initial : Environment) (computation : Result α) : Outcome α :=
   (computation.run initial []).1
 
 public theorem sequentialFrom_eq_run (initial : Environment) (computation : Result α) :
