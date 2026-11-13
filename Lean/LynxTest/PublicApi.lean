@@ -21,23 +21,25 @@ private def nativeReferenceConstructor : Nat → Lynx.Term := Lynx.Term.nativeRe
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
 -- Closed comparison proofs use public evaluation equations.
-example : Lynx.Term.compare (.atom "a") (.atom "b") = .lt := by cbv
-example : Lynx.Term.compare (.integer 7) (.integer 3) = .gt := by cbv
-example : Lynx.Term.compare (.reference [0, 1]) (.reference [0, 2]) = .lt := by cbv
-example : Lynx.Term.compare (.tuple #[]) (.tuple #[]) = .eq := by cbv
-example : Lynx.Term.exactCompare (.atom "file") (.atom "file") = .eq := by cbv
-example : Lynx.Term.exactCompare (.integer 7) (.integer 3) = .gt := by cbv
-example : Lynx.Term.exactCompare (.reference [0, 1]) (.reference [0, 2]) = .lt := by cbv
-example : Lynx.Term.exactCompare (.tuple #[]) (.tuple #[]) = .eq := by cbv
+example : Lynx.Term.compare 8 (.atom "a") (.atom "b") = .lt := by cbv
+example : Lynx.Term.compare 8 (.integer 7) (.integer 3) = .gt := by cbv
+example : Lynx.Term.compare 8 (.reference [0, 1]) (.reference [0, 2]) = .lt := by cbv
+example : Lynx.Term.compare 8 (.tuple #[]) (.tuple #[]) = .eq := by cbv
+example : Lynx.Term.compareExact 8 (.atom "file") (.atom "file") = .eq := by cbv
+example : Lynx.Term.compareExact 8 (.integer 7) (.integer 3) = .gt := by cbv
+example : Lynx.Term.compareExact 8 (.reference [0, 1]) (.reference [0, 2]) = .lt := by cbv
+example : Lynx.Term.compareExact 8 (.tuple #[]) (.tuple #[]) = .eq := by cbv
 
 example (module name : String) (arity : Nat) (a b : Array Lynx.Term) :
-    Lynx.Term.exactCompare (.function module name arity a) (.function module name arity b) =
-      List.compareLex Lynx.Term.exactCompare a.toList b.toList :=
-  Lynx.Term.exactCompare_function_captures module name arity a b
-example : Lynx.Term.compare (.tuple #[.integer 1]) (.tuple #[.integer 2]) = .lt := by cbv
-example : Lynx.Term.exactCompare (.tuple #[.atom "a"]) (.tuple #[.atom "b"]) = .lt := by cbv
-example : Lynx.Term.compare (.cons (.integer 1) .nil) (.cons (.integer 2) .nil) = .lt := by cbv
-example : Lynx.Term.exactCompare (.cons (.atom "a") .nil) (.cons (.atom "b") .nil) = .lt := by cbv
+    Lynx.Term.compareExact
+      (Lynx.Term.fuel (.function module name arity a) (.function module name arity b))
+      (.function module name arity a) (.function module name arity b) =
+      List.compareLex (fun x y => Lynx.Term.compareExact (Lynx.Term.fuel x y) x y) a.toList b.toList :=
+  Lynx.Term.compareExact_function_captures module name arity a b
+example : Lynx.Term.compare 8 (.tuple #[.integer 1]) (.tuple #[.integer 2]) = .lt := by cbv
+example : Lynx.Term.compareExact 8 (.tuple #[.atom "a"]) (.tuple #[.atom "b"]) = .lt := by cbv
+example : Lynx.Term.compare 8 (.cons (.integer 1) .nil) (.cons (.integer 2) .nil) = .lt := by cbv
+example : Lynx.Term.compareExact 8 (.cons (.atom "a") .nil) (.cons (.atom "b") .nil) = .lt := by cbv
 
 private theorem publicReferenceComparison : True := by
   have _ := @Lynx.Term.compare_eq_reference
@@ -70,17 +72,23 @@ private theorem publicExceptionEquations : True := by
 
 -- State waits can be reasoned about without importing scheduler internals.
 private theorem publicWaitTraces : True := by
-  have _ := @Lynx.concurrentFrom_eq_run
+  have _ := @Lynx.concurrentFrom
   have _ := @Lynx.sequentialFrom_eq_run
-  have _ := @Lynx.concurrent_eq_run
+  have _ := @Lynx.concurrent_of_check
   have _ := @Lynx.Result.two_wait_interleave
   have _ := @Lynx.Result.two_wait_interleave_child_first
   have _ := @Lynx.Result.ReadyPrefix
-  have _ := @Lynx.Result.ReadyPrefix.get
-  have _ := @Lynx.Result.ReadyPrefix.set
+  have _ := @Lynx.Result.ReadyPrefix.nativeGet
+  have _ := @Lynx.Result.ReadyPrefix.nativeSet
   have _ := @Lynx.Rustler.executeNative_readyPrefix
   have _ := @Lynx.Rustler.executeNative_sharedSteps
   have _ := @Lynx.Result.SharedSteps.readyPrefix
+  have _ := @Lynx.Result.ReadyPrefix.terminalRun
+  have _ := @Lynx.Result.ReadyPrefix.returns
+  have _ := @Lynx.Result.SharedSteps.scheduledRun
+  have _ := @Lynx.Result.RegisteredPrefix.scheduledRun
+  have _ := @Lynx.Result.RegisteredSteps.scheduledRun
+  have _ := @Lynx.Result.RegisteredPrefix.spawnCurrent
   have _ := @Lynx.Result.ReadyPrefix.trans
   have _ := @Lynx.Result.ReadyPrefix.apply
   have _ := @Lynx.Result.ReadyPrefix.exists_wait
@@ -102,7 +110,6 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.Result.two_registered_interleave_steps
   have _ := @Lynx.Result.two_registered_modify_interleave_steps
   have _ := @Lynx.Concurrent.checkPost
-  have _ := @Lynx.Concurrent.checkPost_outcome
   have _ := @Lynx.Concurrent.checkPost_sound
   have _ := @Lynx.Rustler.withResourceTypes_registeredPrefix
   have _ := @Lynx.Rustler.executeNative_registeredPrefix
@@ -113,6 +120,7 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.Result.ExclusiveSteps
   have _ := @Lynx.Result.ExclusiveBlocked
   have _ := @Lynx.Result.two_wait_blocked_orders
+  have _ := @Lynx.Result.two_completed_shared_choices
   have _ := @Lynx.Result.ExclusiveSteps.read
   have _ := @Lynx.Result.ExclusiveSteps.update
   have _ := @Lynx.Result.ExclusiveSteps.bind
@@ -496,9 +504,11 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Effect.keepsQueues",
   "Lynx.Concurrent.Effect.keepsRecords",
   "Lynx.Concurrent.Effect.mk",
+  "Lynx.Concurrent.Effect.native",
   "Lynx.Concurrent.Effect.record",
   "Lynx.Concurrent.Effect.records",
   "Lynx.Concurrent.Effect.send",
+  "Lynx.Concurrent.Effect.storeNative",
   "Lynx.Concurrent.Effect.timers",
   "Lynx.Concurrent.Envelope",
   "Lynx.Concurrent.Envelope.before",
@@ -556,10 +566,18 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.Key.deliver",
   "Lynx.Concurrent.Key.fire",
   "Lynx.Concurrent.Key.own",
+  "Lynx.Concurrent.NativeState",
+  "Lynx.Concurrent.NativeState.finalizerMode",
+  "Lynx.Concurrent.NativeState.heap",
+  "Lynx.Concurrent.NativeState.identical",
+  "Lynx.Concurrent.NativeState.mk",
+  "Lynx.Concurrent.NativeState.refCounter",
+  "Lynx.Concurrent.NativeState.resourceTypes",
   "Lynx.Concurrent.Observes",
   "Lynx.Concurrent.Observes.and",
   "Lynx.Concurrent.Observes.inTransit",
   "Lynx.Concurrent.Observes.mk",
+  "Lynx.Concurrent.Observes.native",
   "Lynx.Concurrent.Observes.record",
   "Lynx.Concurrent.Observes.records",
   "Lynx.Concurrent.Observes.timers",
@@ -622,7 +640,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.initial",
   "Lynx.Concurrent.State.mk",
   "Lynx.Concurrent.State.modify",
-  "Lynx.Concurrent.State.monitor",
+  "Lynx.Concurrent.State.native",
   "Lynx.Concurrent.State.nativeFinalizerMode",
   "Lynx.Concurrent.State.nativeHeap",
   "Lynx.Concurrent.State.nativeRefCounter",
@@ -637,11 +655,13 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.State.spawn",
   "Lynx.Concurrent.State.spawnWith",
   "Lynx.Concurrent.State.store",
+  "Lynx.Concurrent.State.storeNative",
   "Lynx.Concurrent.State.terminate",
   "Lynx.Concurrent.State.timers",
   "Lynx.Concurrent.State.update",
   "Lynx.Concurrent.State.view",
   "Lynx.Concurrent.State.weight",
+  "Lynx.Concurrent.State.withNative",
   "Lynx.Concurrent.Step",
   "Lynx.Concurrent.Task",
   "Lynx.Concurrent.Task.child",
@@ -704,6 +724,9 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.isMonitorMessage",
   "Lynx.Concurrent.isNormal",
   "Lynx.Concurrent.isRequest",
+  "Lynx.Concurrent.nativeCellIdentical",
+  "Lynx.Concurrent.nativeEnvironment",
+  "Lynx.Concurrent.nativeModeIdentical",
   "Lynx.Concurrent.oldest",
   "Lynx.Concurrent.pidBefore",
   "Lynx.Concurrent.recordIdentical",
@@ -734,9 +757,11 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Environment.mk",
   "Lynx.Environment.nativeFinalizerMode",
   "Lynx.Environment.nativeHeap",
+  "Lynx.Environment.nativeRefCounter",
   "Lynx.Environment.nativeResourceTypes",
   "Lynx.Environment.pdict",
   "Lynx.Environment.refCounter",
+  "Lynx.Environment.setPdict",
   "Lynx.Except.andAlso",
   "Lynx.Except.bindWith",
   "Lynx.Except.cutoff",
@@ -783,6 +808,8 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Request.trapExit",
   "Lynx.Request.unlink",
   "Lynx.Result",
+  "Lynx.Result.ExclusiveBlocked",
+  "Lynx.Result.ExclusiveSteps",
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
   "Lynx.Result.ReadyPrefix",
@@ -931,6 +958,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Term.mapEnumeration",
   "Lynx.Term.mapLookup",
   "Lynx.Term.monitorAlias",
+  "Lynx.Term.nativeReference",
   "Lynx.Term.nesting",
   "Lynx.Term.nestingEntries",
   "Lynx.Term.nestingList",
