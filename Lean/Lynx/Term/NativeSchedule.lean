@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.NativeTrace.Serial
+public import Lynx.Term.NativeTrace.Prefix
 import all Lynx.Term.Runner
 
 namespace Lynx.Term.NativeRunner
