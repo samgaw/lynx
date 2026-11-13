@@ -156,6 +156,28 @@ private theorem choose_none {config : Config α} {current : PID} {preferred : Sc
     · simp at none
     · exact ih none
 
+private theorem firstWhere_stuck (config : Config α) (stuck : config.successors = [])
+    (keep : Event → Bool) : firstWhere config keep = none := by
+  apply List.find?_eq_none.mpr
+  intro step _
+  have impossible := step.property
+  simp [stuck] at impossible
+
+private theorem choose_stuck (config : Config α) (stuck : config.successors = [])
+    (current : PID) (preferred : ScheduleChoice) (choices : List ScheduleChoice) :
+    choose config current preferred choices = ([], none) := by
+  induction choices generalizing preferred with
+  | nil => cases preferred <;> simp [choose, requested, fallback, firstWhere_stuck config stuck]
+  | cons choice rest ih =>
+    cases preferred <;> simp [choose, requested, firstWhere_stuck config stuck, ih]
+
+private theorem execute_stuck (root : PID) (env : Environment) (config : Config α)
+    (stuck : config.successors = []) (current : PID) (preferred : ScheduleChoice)
+    (choices : List ScheduleChoice) :
+    execute root env config current preferred choices = (config.outcome, env) := by
+  rw [execute]
+  simp [firstWhere_stuck config stuck, choose_stuck config stuck]
+
 private theorem execute_reaches (root : PID) (config : Config α) :
     ∀ env current preferred choices, ∃ events last, Run config events last ∧
       Terminal last (execute root env config current preferred choices).1 := by
@@ -321,30 +343,22 @@ theorem wait_blocked_run (poll : Environment → Option (β × Environment))
     (choices : List ScheduleChoice) :
     (Result.wait poll next).run env choices = (.deadlock, env) := by
   let state := Concurrent.State.initial env
-  let pool : Term.Runner.Pool α := .process env.currentPid (.wait poll next) some
   have view : state.nativeView env.currentPid = env := by
     cases env
     simp [state, Concurrent.State.initial, Concurrent.State.nativeView,
       Concurrent.State.view, Concurrent.State.process]
-  have noSignal : (state.process env.currentPid).signal = none := by
-    simp [state, Concurrent.State.process, Concurrent.State.initial]
-  have noReady (accept : PID → Bool) : Term.Runner.findReady state accept pool = none := by
-    simp [pool, Term.Runner.findReady, view, blocked, noSignal]
-  have noTimeout (accept : PID → Bool) : Term.Runner.findTimeout state accept pool = none := by
-    simp [pool, Term.Runner.findTimeout]
-  have requested (choice : ScheduleChoice) :
-      Term.Runner.requested state env.currentPid pool choice = none := by
-    cases choice <;> simp [Term.Runner.requested, Term.Runner.runnable, noReady, noTimeout]
-  have selected (preferred : ScheduleChoice) (choices : List ScheduleChoice) :
-      Term.Runner.choose pool state env.currentPid preferred choices = ([], none) := by
-    induction choices generalizing preferred with
-    | nil => simp [Term.Runner.choose, requested, Term.Runner.runnable, noReady, noTimeout]
-    | cons choice rest ih => simp [Term.Runner.choose, requested, ih]
+  have own : (Concurrent.Task.root (.wait poll next)).own state env.currentPid = [] := by
+    simp [Concurrent.Task.own, Concurrent.Task.root, view, blocked]
+  have deliveries : (Concurrent.Task.root (.wait poll next)).deliveries state env.currentPid = [] := rfl
+  have stuck : (Concurrent.Config.running state
+      [(env.currentPid, Concurrent.Task.root (.wait poll next))] none false).successors = [] := by
+    simp only [Concurrent.Config.successors, Concurrent.splits, List.flatMap_cons,
+      Concurrent.Task.transitions, own, deliveries]
+    simp [state, Concurrent.State.initial, Concurrent.deliverable, Concurrent.deliverableFrom,
+      Concurrent.State.firing, Concurrent.firstOfEach]
   change Term.Runner.run (.wait poll next) env choices = _
-  rw [Term.Runner.run, blocked, Term.Runner.execute]
-  rw [selected]
-  simp [Term.Runner.stop, Term.Runner.restore, Term.Runner.isEmpty,
-    Concurrent.State.view, Concurrent.State.process, Concurrent.State.initial]
+  rw [Term.Runner.run, blocked, Term.Runner.execute_stuck _ _ _ stuck]
+  rfl
 
 /-- Evaluate a single native wait at its actual environment before simplifying
 its continuation. No scheduler implementation imports are needed by callers. -/

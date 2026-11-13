@@ -57,6 +57,11 @@ private theorem State.keeps_store {state : State} {processId : PID} {env : Envir
     state.Keeps (state.store processId env) :=
   State.keeps_modify fun _ => rfl
 
+private theorem State.keeps_storeNative {state : State} {processId : PID} {env : Environment} :
+    state.Keeps (state.storeNative processId env) := by
+  simpa only [State.Keeps, State.storeNative, State.process] using
+    (State.keeps_store (state := state) (processId := processId) (env := env))
+
 private theorem State.keeps_allocate {state : State} {processId : PID} :
     state.Keeps (state.allocate processId).2 :=
   State.keeps_modify fun _ => rfl
@@ -233,12 +238,26 @@ private theorem transition_shape {state : State} {processId : PID} {task : Task 
       all_goals first
         | exact .inl ⟨rfl, fun _ spawn => by simp [Task.ended] at spawn, state, State.Keeps.refl _, State.processes_terminate⟩
         | exact .inl ⟨rfl, fun _ spawn => by simp at spawn, state, State.Keeps.refl _, rfl⟩
-    | get next =>
+    | get next | nativeGet next =>
       simp only [Task.own, List.mem_singleton] at possible; subst possible
       exact .inr (.inl ⟨_, rfl, State.Keeps.refl _, fun quiet => quiet, fun _ spawn => by simp at spawn⟩)
     | set env next =>
       simp only [Task.own, List.mem_singleton] at possible; subst possible
       exact .inr (.inl ⟨_, rfl, State.keeps_store, fun quiet => quiet, fun _ spawn => by simp at spawn⟩)
+    | nativeSet updated next =>
+      simp only [Task.own, List.mem_singleton] at possible; subst possible
+      exact .inr (.inl ⟨_, rfl, State.keeps_storeNative, fun quiet => quiet, fun _ spawn => by simp at spawn⟩)
+    | nativeModify transition next =>
+      simp only [Task.own, List.mem_singleton] at possible; subst possible
+      exact .inr (.inl ⟨_, rfl, State.keeps_storeNative, fun quiet => quiet, fun _ spawn => by simp at spawn⟩)
+    | wait poll next =>
+      cases ready : poll (state.nativeView processId) with
+      | none => simp [Task.own, ready] at possible
+      | some pair =>
+        obtain ⟨value, updated⟩ := pair
+        simp only [Task.own, ready, List.mem_singleton] at possible
+        subst possible
+        exact .inr (.inl ⟨_, rfl, State.keeps_storeNative, fun quiet => quiet, fun _ spawn => by simp at spawn⟩)
     | schedule options child next =>
       simp only [Task.own, List.mem_singleton] at possible; subst possible
       exact .inr (.inr ⟨_, _, options, rfl, rfl, rfl, fun quiet => quiet, fun _ => rfl⟩)
@@ -559,6 +578,7 @@ private theorem Step.wellformed {first next : Config α} {event : Event}
   | start env computation elapsed =>
     simp only [Step, Config.successors] at step
     cases computation <;> simp only [isRequest] at step
+    all_goals try split at step
     all_goals first
       | (simp only [List.mem_singleton, Prod.mk.injEq] at step; obtain ⟨-, rfl⟩ := step; trivial)
       | (simp at step; done)
@@ -1183,6 +1203,14 @@ private theorem finished_facts {state : State} {processId : PID} {task : Task α
       · simp only [List.mem_singleton] at possible; subst possible; simp at reported
       · split at possible <;> simp only [List.mem_singleton, List.not_mem_nil] at possible <;>
           subst possible <;> simp at reported
+    | wait poll next =>
+      cases ready : poll (state.nativeView processId) with
+      | none => simp [Task.own, ready] at possible
+      | some pair =>
+        obtain ⟨value, updated⟩ := pair
+        simp only [Task.own, ready, List.mem_singleton] at possible
+        subst possible
+        simp at reported
     | _ => simp only [Task.own, List.mem_singleton] at possible; subst possible; simp at reported
   · simp only [Task.deliveries, Task.delivery, List.mem_filterMap] at possible
     obtain ⟨⟨envelope, rest⟩, -, found⟩ := possible
@@ -2210,7 +2238,7 @@ private theorem Effect.apply_modify {effect : Effect} {state : State} {processId
     (commutes : effect.record processId ((state.processes processId).map change) =
       (effect.record processId (state.processes processId)).map change) :
     effect.apply (state.modify processId change) = (effect.apply state).modify processId change := by
-  refine State.ext' (funext fun candidate => ?_) ?_ ?_ ?_
+  refine State.extNative (funext fun candidate => ?_) ?_ ?_ ?_ ?_
   · simp only [Effect.processes_apply, State.processes_modify]
     split
     · subst_vars; exact commutes
@@ -2219,6 +2247,8 @@ private theorem Effect.apply_modify {effect : Effect} {state : State} {processId
   · simp [Effect.apply]
   · simp [Effect.apply]
 
+
+  · simp
 
 /-- A step has a footprint. -/
 private theorem footprint_of_mem {state : State} {tasks : List (PID × Task α)}
@@ -2342,7 +2372,7 @@ private theorem local_square {state : State} {tasks : List (PID × Task α)}
   have touches := footprint_at wellformed found' present other
   have agree : footprint'.observes.Agree state ((task.footprint state processId).effect.apply state) := by
     rw [apply]
-    refine ⟨fun entry mem => ?_, fun _ _ => by simp, fun _ _ => by simp, by simp⟩
+    refine ⟨fun entry mem => ?_, fun _ _ => by simp, fun _ _ => by simp, by simp, fun _ => by simp⟩
     rw [State.processes_modify]
     split
     · rename_i same
@@ -2359,7 +2389,7 @@ private theorem local_square {state : State} {tasks : List (PID × Task α)}
   have agree' : (task.footprint state processId).observes.Agree state (footprint'.effect.apply state) := by
     rw [observes]
     refine ⟨fun entry mem => ?_, fun _ mem => by simp [Observes.record] at mem,
-      fun _ mem => by simp [Observes.record] at mem, by simp⟩
+      fun _ mem => by simp [Observes.record] at mem, by simp, by simp [Observes.record]⟩
     simp only [Observes.record, List.mem_singleton] at mem
     subst mem
     simp only [Effect.processes_apply, record]

@@ -107,6 +107,46 @@ structure State where
   of these, and nothing changes them. -/
   elapsed : PID → Nat → Nat := fun _ _ => 0
 
+/-- The native state shared by every process. This snapshot retains resource
+identity, heap contents, registrations and the admitted finalizer policy. -/
+structure NativeState where
+  refCounter : Nat
+  heap : List (Nat × String × Term)
+  resourceTypes : List String
+  finalizerMode : NativeFinalizerMode
+
+/-- The native component of a process's environment. -/
+@[expose] def nativeEnvironment (env : Environment) : NativeState :=
+  ⟨env.nativeRefCounter, env.nativeHeap, env.nativeResourceTypes, env.nativeFinalizerMode⟩
+
+/-- Observe the shared native state without a process-local projection. -/
+@[expose] def State.native (state : State) : NativeState :=
+  ⟨state.nativeRefCounter, state.nativeHeap, state.nativeResourceTypes, state.nativeFinalizerMode⟩
+
+/-- Replace only the native component. Ordinary process records, timers and
+signals are preserved. -/
+@[expose] def State.withNative (state : State) (native : NativeState) : State :=
+  { state with nativeRefCounter := native.refCounter, nativeHeap := native.heap
+               nativeResourceTypes := native.resourceTypes, nativeFinalizerMode := native.finalizerMode }
+
+@[simp] theorem State.native_withNative (state : State) (native : NativeState) :
+    (state.withNative native).native = native := by cases native; rfl
+
+@[simp] theorem State.withNative_native (state : State) :
+    state.withNative state.native = state := by cases state; rfl
+
+@[simp] theorem State.processes_withNative (state : State) (native : NativeState) :
+    (state.withNative native).processes = state.processes := rfl
+
+@[simp] theorem State.timers_withNative (state : State) (native : NativeState) :
+    (state.withNative native).timers = state.timers := rfl
+
+@[simp] theorem State.inTransit_withNative (state : State) (native : NativeState) :
+    (state.withNative native).inTransit = state.inTransit := rfl
+
+@[simp] theorem State.elapsed_withNative (state : State) (native : NativeState) :
+    (state.withNative native).elapsed = state.elapsed := rfl
+
 /-- Replace the record of one process. -/
 @[expose] def State.update (state : State) (processId : PID) (process : Option ProcessState) :
     State :=
@@ -157,6 +197,9 @@ and its reference counter never goes back, so references stay unique. -/
 @[expose] def State.append (state : State) (processId : PID) (message : Term) : State :=
   state.modify processId fun process =>
     { process with mailbox := Kernel.append process.mailbox [message] }
+
+@[simp] theorem State.native_storeNative (state : State) (processId : PID) (env : Environment) :
+    (state.storeNative processId env).native = nativeEnvironment env := rfl
 
 /-- Whether one PID comes before another, comparing their paths. -/
 @[expose] def pidBefore : PID → PID → Bool

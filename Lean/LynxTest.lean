@@ -4,6 +4,7 @@ import LynxTest.PublicApi
 import LynxTest.Term
 import LynxTest.Term.Wait
 import LynxTest.Term.NativeHeap
+import LynxTest.Term.NativeScheduler
 import LynxTest.Term.ReadyPrefix
 import LynxTest.Term.Bitstring
 import LynxTest.Term.Bitstring.Construction

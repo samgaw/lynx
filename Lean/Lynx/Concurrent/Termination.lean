@@ -154,6 +154,10 @@ theorem State.weight_fire {state : State} {timer : Timer} (mem : timer ∈ state
 /-- A computation and what follows it: the continuation of its request, or a
 child it spawns. -/
 private inductive Follows : (Σ β, Result β) → (Σ β, Result β) → Prop where
+  | nativeGet : Follows ⟨β, next env⟩ ⟨β, .nativeGet next⟩
+  | nativeSet : Follows ⟨β, next⟩ ⟨β, .nativeSet env next⟩
+  | nativeModify : Follows ⟨β, next value⟩ ⟨β, .nativeModify transition next⟩
+  | wait : Follows ⟨β, next value⟩ ⟨β, .wait poll next⟩
   | get : Follows ⟨β, next env⟩ ⟨β, .get next⟩
   | set : Follows ⟨β, next⟩ ⟨β, .set env next⟩
   | spawned : Follows ⟨β, next child⟩ ⟨β, Result.schedule options computation next⟩
@@ -166,8 +170,10 @@ private theorem follows_acc {β : Type} (computation : Result β) :
     Acc Follows ⟨β, computation⟩ := by
   induction computation with
   | ok | error => exact ⟨_, fun _ follows => by cases follows⟩
-  | get next ih => exact ⟨_, fun _ follows => by cases follows; exact ih _⟩
-  | set env next ih => exact ⟨_, fun _ follows => by cases follows; exact ih⟩
+  | get next ih | nativeGet next ih => exact ⟨_, fun _ follows => by cases follows; exact ih _⟩
+  | set env next ih | nativeSet env next ih => exact ⟨_, fun _ follows => by cases follows; exact ih⟩
+  | nativeModify transition next ih | wait transition next ih =>
+    exact ⟨_, fun _ follows => by cases follows; exact ih _⟩
   | schedule options child next childIh nextIh =>
     exact ⟨_, fun _ follows => by cases follows <;> first | exact nextIh _ | exact childIh⟩
   | send destination message next ih => exact ⟨_, fun _ follows => by cases follows; exact ih⟩
@@ -250,9 +256,18 @@ private theorem own_follows {state : State} {processId : PID} {task : Task α}
     intro item mem
     simp only [Task.own] at possible
     (try split at possible) <;> simp_all [Task.ended]
-  | get | set | send =>
+  | get | set | send | nativeGet | nativeSet | nativeModify =>
     simp only [Task.own, List.mem_singleton] at possible; subst possible
     simp only [List.mem_singleton, forall_eq]; constructor
+  | wait poll next =>
+    cases ready : poll (state.nativeView processId) with
+    | none => simp [Task.own, ready] at possible
+    | some pair =>
+      obtain ⟨value, updated⟩ := pair
+      simp only [Task.own, ready, List.mem_singleton] at possible
+      subst possible
+      simp only [List.mem_singleton, forall_eq]
+      exact .wait
   | schedule options child next =>
     simp only [Task.own, List.mem_singleton] at possible; subst possible
     simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq]
@@ -361,14 +376,29 @@ theorem Config.terminates :
       refine ⟨_, fun next ⟨event, step⟩ => ?_⟩
       simp only [Step, Config.successors] at step
       cases computation with
-      | get next =>
+      | get next | nativeGet next =>
         simp only [List.mem_singleton, Prod.mk.injEq] at step
         obtain ⟨-, rfl⟩ := step
-        exact ih _ (equal ▸ .get) _ _ rfl
-      | set env' next =>
+        exact ih _ (equal ▸ (by constructor)) _ _ rfl
+      | set env' next | nativeSet env' next =>
         simp only [List.mem_singleton, Prod.mk.injEq] at step
         obtain ⟨-, rfl⟩ := step
-        exact ih _ (equal ▸ .set) _ _ rfl
+        exact ih _ (equal ▸ (by constructor)) _ _ rfl
+      | nativeModify transition next =>
+        simp only [List.mem_singleton, Prod.mk.injEq] at step
+        obtain ⟨-, rfl⟩ := step
+        exact ih _ (equal ▸ .nativeModify) _ _ rfl
+      | wait poll next =>
+        cases ready : poll env with
+        | none =>
+          simp only [ready, List.mem_singleton, Prod.mk.injEq] at step
+          obtain ⟨-, rfl⟩ := step
+          exact running_acc _ _ _ _
+        | some pair =>
+          obtain ⟨value, updated⟩ := pair
+          simp only [ready, List.mem_singleton, Prod.mk.injEq] at step
+          obtain ⟨-, rfl⟩ := step
+          exact ih _ (equal ▸ .wait) _ _ rfl
       | _ =>
         simp [isRequest] at step <;> obtain ⟨-, rfl⟩ := step <;> exact running_acc _ _ _ _
 
