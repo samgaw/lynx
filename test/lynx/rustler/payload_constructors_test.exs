@@ -74,6 +74,36 @@ defmodule Lynx.Rustler.PayloadConstructorsTest do
     end
   end
 
+  test "retains exact constructor identity after cleanup reference restoration", ctx do
+    {lowered, %{values: %{entries: [entry]}} = proof} =
+      ErrorConstructors.lower!(ctx.document, ctx.layout, @crates, "Payload")
+
+    restored =
+      lowered
+      |> LLBCJson.restore_type_references!(lowered)
+      |> LLBCJson.restore_spans!(lowered)
+
+    assert ErrorConstructors.models!(restored, proof) ==
+             ErrorConstructors.models!(lowered, proof)
+
+    for changed <- [
+          put_in(entry.declaration, ["signature", "abi"], "C"),
+          put_in(entry.declaration, ["signature", "is_unsafe"], true),
+          put_in(entry.declaration, ["signature", "inputs"], []),
+          Map.put(entry.declaration, "body", %{}),
+          put_in(entry.declaration, ["item_meta", "has_errors"], true)
+        ] do
+      document =
+        update_in(restored, ["translated", "fun_decls"], fn functions ->
+          List.replace_at(functions, entry.declaration["def_id"], changed)
+        end)
+
+      assert_raise ArgumentError, ~r/inconsistent validated Rustler atom primitive/, fn ->
+        ErrorConstructors.models!(document, proof)
+      end
+    end
+  end
+
   test "validates the two-lifetime Encoder shim and rejects altered ABI arguments", ctx do
     doc = ctx.document
     translated = doc["translated"]

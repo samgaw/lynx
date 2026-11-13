@@ -79,7 +79,28 @@ defmodule Lynx.Rustler.ValueConstructors do
             )
         end)
 
-      {doc, %{entries: state.entries, sites: Enum.reverse(state.sites)}}
+      # Later cleanup preparation expands shared references. Close only the new
+      # foreign declarations now, so their exact identity receipts survive that
+      # representation change. Leave original implementation bodies untouched.
+      closed =
+        doc
+        |> LLBCJson.restore_type_references!(doc)
+        |> LLBCJson.restore_spans!(doc)
+
+      entries =
+        Enum.map(state.entries, fn entry ->
+          declaration = Enum.at(closed["translated"]["fun_decls"], entry.declaration["def_id"])
+          %{entry | declaration: declaration}
+        end)
+
+      doc =
+        Enum.reduce(entries, doc, fn entry, doc ->
+          update_in(doc, ["translated", "fun_decls"], fn functions ->
+            List.replace_at(functions, entry.declaration["def_id"], entry.declaration)
+          end)
+        end)
+
+      {doc, %{entries: entries, sites: Enum.reverse(state.sites)}}
     end
   end
 
