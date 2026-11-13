@@ -79,6 +79,18 @@ private def schedule : List ScheduleChoice → ScheduleChoice × List ScheduleCh
   | [] => (.current, [])
   | choice :: rest => (choice, rest)
 
+/-- Native polling yields after a successful transition, even though its event
+is internal. Reads and atomic modifications continue locally. -/
+private def schedulingBoundary (config : Config α) : Event → Bool
+  | .internal processId =>
+      match config with
+      | .running _ tasks _ _ =>
+          match tasks.lookup processId with
+          | some ⟨.wait .., _⟩ => true
+          | _ => false
+      | _ => false
+  | _ => true
+
 /-- The root's environment while it is live, and its last one once it ends. -/
 private def track (root : PID) (env : Environment) : Config α → Environment
   | .start env _ _ => env
@@ -98,8 +110,8 @@ private def execute (root : PID) (env : Environment) (config : Config α) (curre
       match choose config current preferred choices with
       | (_, none) => (config.outcome, env)
       | (choices, some ⟨(event, next), _⟩) =>
-          let (preferred, choices) := if event matches .internal _ then (.current, choices)
-            else schedule choices
+          let (preferred, choices) := if schedulingBoundary config event then schedule choices
+            else (.current, choices)
           execute root (track root env next) next ((owner event).getD current) preferred choices
 termination_by config
 decreasing_by all_goals exact ⟨_, ‹_›⟩
