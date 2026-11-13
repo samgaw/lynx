@@ -617,9 +617,10 @@ private theorem agree_of {observes : Observes} {effect : Effect} {state : State}
       (effect.record entry.1 (state.processes entry.1)).map entry.2 = (state.processes entry.1).map entry.2)
     (timers : observes.timers = [])
     (inTransit : ∀ view ∈ observes.inTransit,
-      view ((effect.inTransit.getD id) state.inTransit) = view state.inTransit) :
+      view ((effect.inTransit.getD id) state.inTransit) = view state.inTransit)
+    (native : observes.native = true → (effect.native.getD id) state.native = state.native) :
     observes.Agree state (effect.apply state) :=
-  ⟨records, by simp [timers], inTransit, rfl⟩
+  ⟨records, by simp [timers], inTransit, rfl, by simpa only [Effect.native_apply] using native⟩
 
 private theorem apply_comm_of {first second : Effect} {state : State}
     (records : ∀ processId, first.record processId (second.record processId (state.processes processId)) =
@@ -627,9 +628,12 @@ private theorem apply_comm_of {first second : Effect} {state : State}
     (timers : (first.timers.getD id) ((second.timers.getD id) state.timers) =
       (second.timers.getD id) ((first.timers.getD id) state.timers))
     (inTransit : (first.inTransit.getD id) ((second.inTransit.getD id) state.inTransit) =
-      (second.inTransit.getD id) ((first.inTransit.getD id) state.inTransit)) :
+      (second.inTransit.getD id) ((first.inTransit.getD id) state.inTransit))
+    (native : (first.native.getD id) ((second.native.getD id) state.native) =
+      (second.native.getD id) ((first.native.getD id) state.native)) :
     first.apply (second.apply state) = second.apply (first.apply state) :=
-  State.ext' (funext records) timers inTransit rfl
+  State.extNative (funext records) timers inTransit rfl
+    (by simpa only [Effect.native_apply] using native)
 
 /-- Two steps whose effects keep what the other observes and commute meet again. -/
 private theorem square_of {state : State} {tasks : List (PID × Task α)}
@@ -665,6 +669,7 @@ most one message, to another process; and, unless it ends or may send to
 itself, commutes with a message arriving. -/
 private structure OwnShape (talk : PID → PID → Prop) (state : State) (processId : PID)
     (task : Task α) : Prop where
+  native : (task.footprint state processId).effect.native = none
   view : ∃ view, (task.footprint state processId).observes = Observes.record processId view
   timers : ((task.footprint state processId).effect.timers.getD id) [] = []
   others : ∀ other, other ≠ processId → other ≠ processId ++ [(state.process processId).children + 1] →
@@ -707,32 +712,30 @@ private theorem own_shape {talk : PID → PID → Prop} {state : State} {process
   dsimp only at talks
   cases talks with
   | ok =>
-    refine ⟨⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => ?_, .inr (.inl rfl)⟩
-    · simp only [Task.footprint, Footprint.ending, Effect.ending, Kernel.filter_eq,
-        Kernel.foldl_eq]
+    refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => ?_, .inr (.inl rfl)⟩
+    · simp only [Task.footprint, Footprint.ending, Effect.ending, Kernel.filter_eq, Kernel.foldl_eq]
       exact record_cons_ne different
     · simp [Task.footprint, Footprint.ending, Effect.ending, alone.1, alone.2]
   | error =>
     rename_i exception
     cases exception
     all_goals first
-      | refine ⟨⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => ?_, .inr (.inl rfl)⟩
-        · simp only [Task.footprint, Footprint.ending, Effect.ending, Kernel.filter_eq,
-            Kernel.foldl_eq]
+      | refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => ?_, .inr (.inl rfl)⟩
+        · simp only [Task.footprint, Footprint.ending, Effect.ending, Kernel.filter_eq, Kernel.foldl_eq]
           exact record_cons_ne different
         · simp [Task.footprint, Footprint.ending, Effect.ending, alone.1, alone.2]
-      | refine ⟨⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => rfl, .inr (.inl rfl)⟩
+      | refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun inTransit => rfl, .inr (.inl rfl)⟩
         simp only [Task.footprint]
         exact record_cons_ne different
   | get =>
-    refine ⟨⟨_, rfl⟩, rfl, fun _ _ _ => rfl, .inl fun _ => rfl, .inr (.inr ?_)⟩
+    refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, rfl, fun _ _ _ => rfl, .inl fun _ => rfl, .inr (.inr ?_)⟩
     intro process message _
     exact ⟨rfl, rfl, fun view same => by
       simp only [Task.footprint, Observes.record, Observes.mk.injEq, List.cons.injEq, Prod.mk.injEq,
         true_and, and_true] at same
       subst same; rfl⟩
   | set =>
-    refine ⟨⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun _ => rfl, .inr (.inr ?_)⟩
+    refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, rfl, fun other different _ => ?_, .inl fun _ => rfl, .inr (.inr ?_)⟩
     · simp only [Task.footprint, Effect.change]
       exact record_cons_ne different
     · intro process message _
@@ -745,11 +748,11 @@ private theorem own_shape {talk : PID → PID → Prop} {state : State} {process
     rename_i receiver message continuation
     by_cases self : receiver = processId
     · subst self
-      refine ⟨⟨_, rfl⟩, by simp [Task.footprint, Effect.change], fun other different _ => ?_,
+      refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, by simp [Task.footprint, Effect.change], fun other different _ => ?_,
         .inl fun _ => by simp [Task.footprint, Effect.change], .inl allowed⟩
       simp only [Task.footprint, ↓reduceIte, Effect.change]
       exact record_cons_ne different
-    · refine ⟨⟨_, rfl⟩, by simp [Task.footprint, self, Effect.send], fun other _ _ => ?_,
+    · refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, by simp [Task.footprint, self, Effect.send], fun other _ _ => ?_,
         .inr ⟨receiver, message, self, fun _ => by simp [Task.footprint, self, Effect.send]⟩,
         .inr (.inr ?_)⟩
       · simp [Task.footprint, self, Effect.send, record_nil]
@@ -767,7 +770,7 @@ private theorem own_shape {talk : PID → PID → Prop} {state : State} {process
       · rename_i found; simp [found]
       · simp at enabled
     obtain ⟨⟨message, value, rest⟩, found⟩ := Option.isSome_iff_exists.mp matched
-    refine ⟨⟨_, rfl⟩, by simp [Task.footprint, found, Effect.change], fun other different _ => ?_,
+    refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, by simp [Task.footprint, found, Effect.change], fun other different _ => ?_,
       .inl fun _ => by simp [Task.footprint, found, Effect.change], .inr (.inr ?_)⟩
     · simp only [Task.footprint, found, Effect.change]
       exact record_cons_ne different
@@ -784,7 +787,7 @@ private theorem own_shape {talk : PID → PID → Prop} {state : State} {process
       subst same
       simp [ProcessState.append, selectedEq]
   | schedule =>
-    refine ⟨⟨_, rfl⟩, rfl, fun other different notChild => ?_, .inl fun _ => rfl, .inr (.inr ?_)⟩
+    refine ⟨by first | rfl | (simp only [Task.footprint]; split <;> rfl), ⟨_, rfl⟩, rfl, fun other different notChild => ?_, .inl fun _ => rfl, .inr (.inr ?_)⟩
     · simp only [Task.footprint, Footprint.spawn, Kernel.append_eq]
       rw [record_cons_ne different, record_cons_ne notChild]
       rfl
@@ -880,7 +883,7 @@ private theorem OwnShape.agree {talk : PID → PID → Prop} {state : State} {pr
   rw [observes]
   exact agree_of (fun entry mem => by
     simp only [Observes.record, List.mem_singleton] at mem
-    subst mem; exact unchanged _ observes) rfl (by simp [Observes.record])
+    subst mem; exact unchanged _ observes) rfl (by simp [Observes.record]) (by simp [Observes.record])
 
 private theorem comm_of_id {first second : γ → γ} (identity : first = id ∨ second = id) (item : γ) :
     first (second item) = second (first item) := by
@@ -935,7 +938,7 @@ private theorem own_own {talk : PID → PID → Prop} {state : State} {tasks : L
   refine square_of wellformed mem mem' (by simp [distinct]) (by simp [Config.footprint, found, enabled])
     (by simp [Config.footprint, found', enabled']) (shape'.agree fun _ _ => by rw [recordId]; rfl)
     (shape.agree fun _ _ => by rw [recordId']; rfl) (apply_comm_of (fun candidate => ?_)
-      (shape.timers_comm calm.idle shape'.timers) (shape.transit_comm fun receiver message _ => ?_))
+      (shape.timers_comm calm.idle shape'.timers) (shape.transit_comm fun receiver message _ => ?_) (by simp [shape.native, shape'.native]))
   · by_cases mine : candidate = processId ∨ candidate = processId ++ [(state.process processId).children + 1]
     · refine comm_of_id (.inr ?_) _
       rcases mine with rfl | rfl
@@ -957,6 +960,7 @@ its receiver is live and the oldest signal of its pair, changes at most the
 receiver's record, keeping whether it is live, and takes the signal out of
 transit. -/
 private structure SignalShape (state : State) (source target : PID) (footprint : Footprint) : Prop where
+  native : footprint.effect.native = none
   observes : footprint.observes =
     { records := [(target, ProcessState.live)], inTransit := [oldest source target] }
   others : ∀ other, other ≠ target → footprint.effect.record other = id
@@ -971,7 +975,7 @@ private theorem delivery_shape {state : State} {envelope : Envelope} {message : 
     (found : state.inTransit.find? (Envelope.between envelope.source envelope.target) = some envelope) :
     SignalShape state envelope.source envelope.target (Footprint.delivery state envelope) := by
   rw [delivery_message signal]
-  refine ⟨rfl, fun other different => ?_, fun record => ?_, rfl, rfl, by simp [found]⟩
+  refine ⟨rfl, rfl, fun other different => ?_, fun record => ?_, rfl, rfl, by simp [found]⟩
   · dsimp only; rw [record_cons_ne different]; rfl
   · dsimp only; rw [record_cons_self]; cases record <;> rfl
 
@@ -980,7 +984,7 @@ private theorem bounce_shape {state : State} {envelope : Envelope} {message : Te
     (found : state.inTransit.find? (Envelope.between envelope.source envelope.target) = some envelope) :
     SignalShape state envelope.source envelope.target (Footprint.bounce envelope) := by
   rw [bounce_message signal]
-  exact ⟨rfl, fun _ _ => rfl, fun _ => rfl, rfl, rfl, by simp [found]⟩
+  exact ⟨rfl, rfl, fun _ _ => rfl, fun _ => rfl, rfl, rfl, by simp [found]⟩
 
 private theorem SignalShape.agree {state : State} {source target : PID} {footprint : Footprint}
     {effect : Effect} (shape : SignalShape state source target footprint)
@@ -991,7 +995,7 @@ private theorem SignalShape.agree {state : State} {source target : PID} {footpri
     footprint.observes.Agree state (effect.apply state) := by
   rw [shape.observes]
   exact agree_of (fun entry mem => by simp only [List.mem_singleton] at mem; subst mem; exact live) rfl
-    (fun view mem => by simp only [List.mem_singleton] at mem; subst mem; exact oldestKept)
+    (fun view mem => by simp only [List.mem_singleton] at mem; subst mem; exact oldestKept) (by simp)
 
 /-- Signals of different pairs commute. -/
 private theorem signal_signal {state : State} {tasks : List (PID × Task α)}
@@ -1022,7 +1026,7 @@ private theorem signal_signal {state : State} {tasks : List (PID × Task α)}
       exact oldest_arrive (Ne.symm pairs) _
   refine square_of wellformed mem mem' distinct found found' (keeps shape shape' pairs)
     (keeps shape' shape (Ne.symm pairs)) (apply_comm_of (fun other => comm_of_id (apart other) _)
-      (by simp [shape.timers, shape'.timers]) ?_)
+      (by simp [shape.timers, shape'.timers]) ?_ (by simp [shape.native, shape'.native]))
   simp only [shape.inTransit, shape'.inTransit, Option.getD_some]
   exact arrive_comm pairs _
 
@@ -1053,7 +1057,8 @@ private theorem own_signal {talk : PID → PID → Prop} {state : State} {tasks 
   obtain ⟨oldestFound, oldestFoundEq⟩ := Option.isSome_iff_exists.mp shape'.found
   refine square_of wellformed mem mem' distinct (by simp [Config.footprint, found, enabled]) found'
     (shape'.agree live (shape.oldest calm.sorted oldestFoundEq)) (shape.agree unchanged)
-    (apply_comm_of records (shape.timers_comm calm.idle (by simp [shape'.timers])) ?_)
+    (apply_comm_of records (shape.timers_comm calm.idle (by simp [shape'.timers])) ?_
+      (by simp [shape.native, shape'.native]))
   simp only [shape'.inTransit, Option.getD_some]
   exact shape.transit_comm fun receiver message _ =>
     arrive_enqueue calm.sorted (.inr (by simp [oldestFoundEq]))
@@ -1144,7 +1149,7 @@ private theorem deliver_ends {talk : PID → PID → Prop} {state : State} {task
     cases found : state.processes processId <;> simp_all [State.process]
   have receivedIdle : received.timers = [] := by simp [received, State.append, calm.idle]
   have same : received.update processId none = { state.update processId none with inTransit := rest } := by
-    refine State.ext' (funext fun other => ?_) ?_ ?_ ?_
+    refine State.extNative (funext fun other => ?_) ?_ ?_ ?_ ?_
     rotate_left
     all_goals try (simp only [received, State.append, State.modify, State.update,
         Kernel.append_eq]; split <;> rfl)

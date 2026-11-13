@@ -112,6 +112,43 @@ private theorem eq_of_recordIdentical {first second : Option ProcessState}
   · rfl
   · rw [ProcessState.eq_of_identical same]
 
+/-- Finalizer modes are nominal policies, compared without Erlang equality. -/
+@[expose] def nativeModeIdentical : NativeFinalizerMode → NativeFinalizerMode → Bool
+  | .unspecified, .unspecified | .synchronous, .synchronous | .deferred, .deferred => true
+  | _, _ => false
+
+private theorem nativeMode_eq_of_identical {first second : NativeFinalizerMode}
+    (same : nativeModeIdentical first second = true) : first = second := by
+  cases first <;> cases second <;> simp_all [nativeModeIdentical]
+
+/-- Heap identity preserves the exact Erlang term representation of every cell. -/
+@[expose] def nativeCellIdentical (first second : Nat × String × Term) : Bool :=
+  first.1 == second.1 && first.2.1 == second.2.1 && first.2.2.identical second.2.2
+
+private theorem nativeCell_eq_of_identical {first second : Nat × String × Term}
+    (same : nativeCellIdentical first second = true) : first = second := by
+  obtain ⟨id, tag, value⟩ := first
+  obtain ⟨id', tag', value'⟩ := second
+  simp only [nativeCellIdentical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨⟨rfl, rfl⟩, same⟩ := same
+  rw [Term.eq_of_identical same]
+
+/-- Structural native-state comparison; numeric equality of Erlang terms is
+insufficient when deciding whether scheduler effects commute. -/
+@[expose] def NativeState.identical (first second : NativeState) : Bool :=
+  first.refCounter == second.refCounter &&
+    identicalLists nativeCellIdentical first.heap second.heap &&
+    first.resourceTypes == second.resourceTypes &&
+    nativeModeIdentical first.finalizerMode second.finalizerMode
+
+private theorem NativeState.eq_of_identical {first second : NativeState}
+    (same : first.identical second = true) : first = second := by
+  cases first
+  cases second
+  simp only [NativeState.identical, Bool.and_eq_true, beq_iff_eq] at same
+  obtain ⟨⟨⟨rfl, heap⟩, rfl⟩, mode⟩ := same
+  rw [eq_of_identicalLists nativeCell_eq_of_identical heap, nativeMode_eq_of_identical mode]
+
 /-! ### Footprints -/
 
 /-- What a step does: each record it changes, by a function of the old record,
@@ -120,6 +157,7 @@ structure Effect where
   records : List (PID × (Option ProcessState → Option ProcessState)) := []
   timers : Option (List Timer → List Timer) := none
   inTransit : Option (List Envelope → List Envelope) := none
+  native : Option (NativeState → NativeState) := none
 
 /-- How an effect changes the record of a process. -/
 @[expose] def Effect.record (effect : Effect) (processId : PID) :
@@ -130,7 +168,7 @@ structure Effect where
 
 /-- The state after an effect. -/
 @[expose] def Effect.apply (effect : Effect) (state : State) : State :=
-  { state with
+  { state.withNative ((effect.native.getD id) state.native) with
     processes := fun processId => effect.record processId (state.processes processId)
     timers := (effect.timers.getD id) state.timers
     inTransit := (effect.inTransit.getD id) state.inTransit }
@@ -141,6 +179,7 @@ structure Observes where
   records : List (PID × (ProcessState → ProcessState)) := []
   timers : List (List Timer → List Timer) := []
   inTransit : List (List Envelope → List Envelope) := []
+  native : Bool := false
 
 /-- Two states agree on what a step observes. The time elapsed when timers are
 canceled never changes, so it is always observed. -/
@@ -149,7 +188,7 @@ private def Observes.Agree (observes : Observes) (state other : State) : Prop :=
     (other.processes entry.1).map entry.2 = (state.processes entry.1).map entry.2) ∧
   (∀ view ∈ observes.timers, view other.timers = view state.timers) ∧
   (∀ view ∈ observes.inTransit, view other.inTransit = view state.inTransit) ∧
-  other.elapsed = state.elapsed
+  other.elapsed = state.elapsed ∧ (observes.native = true → other.native = state.native)
 
 /-- A field of a process record, or `live`: whether the process has a record. -/
 inductive ProcessState.Field where
@@ -181,10 +220,15 @@ evaluated at a state. -/
     | some change => Kernel.all observes.timers fun view =>
         identicalLists Timer.identical (view (change state.timers)) (view state.timers)
     | none => true) &&
-  match effect.inTransit with
+  (match effect.inTransit with
   | some change => Kernel.all observes.inTransit fun view =>
       identicalLists Envelope.identical (view (change state.inTransit)) (view state.inTransit)
-  | none => true
+  | none => true) &&
+  if observes.native then
+    match effect.native with
+    | some change => (change state.native).identical state.native
+    | none => true
+  else true
 
 /-- Whether two effects change the records to the same in either order, evaluated at a state. -/
 @[expose] def Effect.commutesRecords (first second : Effect) (state : State) : Bool :=
@@ -202,10 +246,14 @@ same in either order, evaluated at a state. -/
     | some change, some change' =>
         identicalLists Timer.identical (change (change' state.timers)) (change' (change state.timers))
     | _, _ => true) &&
-  match first.inTransit, second.inTransit with
+  (match first.inTransit, second.inTransit with
   | some change, some change' =>
       identicalLists Envelope.identical (change (change' state.inTransit))
         (change' (change state.inTransit))
+  | _, _ => true) &&
+  match first.native, second.native with
+  | some change, some change' =>
+      (change (change' state.native)).identical (change' (change state.native))
   | _, _ => true
 
 /-- Whether two steps touch the records of the processes both touch apart: neither
@@ -248,6 +296,11 @@ touched apart need no evaluation. -/
     | some change, none => some change
     | none, change' => change'
   inTransit := match first.inTransit, second.inTransit with
+    | some change, some change' => some (change' ∘ change)
+    | some change, none => some change
+    | none, change' => change'
+
+  native := match first.native, second.native with
     | some change, some change' => some (change' ∘ change)
     | some change, none => some change
     | none, change' => change'
@@ -326,7 +379,8 @@ canceled, and linked and watching processes get signals. -/
 @[expose] def Observes.and (first second : Observes) : Observes :=
   { records := Kernel.append first.records second.records
     timers := Kernel.append first.timers second.timers
-    inTransit := Kernel.append first.inTransit second.inTransit }
+    inTransit := Kernel.append first.inTransit second.inTransit
+    native := first.native || second.native }
 
 /-- The footprint of a process ending, observing more. -/
 @[expose] def Footprint.ending (state : State) (processId : PID) (reason : Term) : Footprint :=
@@ -470,7 +524,13 @@ canceled, and linked and watching processes get signals. -/
           | none => {}
         frames := some [(processId, [.cancels], [.cancels])] }
 
-/-- The footprint of a process's own step. -/
+/-- A native write updates the shared snapshot and the caller's local record. -/
+@[expose] def Effect.storeNative (processId : PID) (updated : Environment) : Effect :=
+  { Effect.change processId (fun process =>
+      { process with pdict := updated.pdict, refCounter := max process.refCounter updated.refCounter }) with
+    native := some (fun _ => nativeEnvironment updated) }
+
+/-- The footprint of a process's own step, including shared native state. -/
 @[expose] def Task.footprint (state : State) (processId : PID) : Task α → Footprint
   | ⟨computation, _⟩ =>
     match computation with
@@ -479,6 +539,19 @@ canceled, and linked and watching processes get signals. -/
           effect := { records := [(processId, fun _ => none)] } }
     | .ok _ => Footprint.ending state processId (.atom "normal")
     | .error exception => Footprint.ending state processId (exitReason exception)
+    | .nativeGet _ =>
+        { observes := { Observes.record processId ProcessState.env with native := true } }
+    | .nativeSet updated _ =>
+        { observes := .record processId ProcessState.live
+          effect := Effect.storeNative processId updated }
+    | .nativeModify transition _ =>
+        { observes := { Observes.record processId ProcessState.env with native := true }
+          effect := Effect.storeNative processId (transition (state.nativeView processId)).2 }
+    | .wait poll _ =>
+        { observes := { Observes.record processId ProcessState.env with native := true }
+          effect := match poll (state.nativeView processId) with
+            | some (_, updated) => Effect.storeNative processId updated
+            | none => {} }
     | .get _ =>
         { observes := .record processId ProcessState.env
           frames := some [(processId, [.pdict, .refCounter], [])] }
@@ -591,9 +664,44 @@ private theorem arrive_eq {source target : PID} {inTransit : List Envelope} :
 
 /-! ### Commuting footprints -/
 
+@[simp] private theorem State.nativeRefCounter_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} :
+    (state.modify processId change).nativeRefCounter = state.nativeRefCounter := by
+  unfold State.modify
+  split <;> rfl
+
+@[simp] private theorem State.nativeHeap_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} :
+    (state.modify processId change).nativeHeap = state.nativeHeap := by
+  unfold State.modify
+  split <;> rfl
+
+@[simp] private theorem State.nativeResourceTypes_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} :
+    (state.modify processId change).nativeResourceTypes = state.nativeResourceTypes := by
+  unfold State.modify
+  split <;> rfl
+
+@[simp] private theorem State.nativeFinalizerMode_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} :
+    (state.modify processId change).nativeFinalizerMode = state.nativeFinalizerMode := by
+  unfold State.modify
+  split <;> rfl
+
+@[simp] private theorem State.native_modify {state : State} {processId : PID}
+    {change : ProcessState → ProcessState} :
+    (state.modify processId change).native = state.native := by
+  unfold State.modify
+  split <;> rfl
+
 private theorem State.ext' {first second : State} (processes : first.processes = second.processes)
     (timers : first.timers = second.timers) (inTransit : first.inTransit = second.inTransit)
-    (elapsed : first.elapsed = second.elapsed) : first = second := by
+    (elapsed : first.elapsed = second.elapsed)
+    (nativeCounter : first.nativeRefCounter = second.nativeRefCounter := by first | rfl | simp [Effect.apply])
+    (nativeHeap : first.nativeHeap = second.nativeHeap := by first | rfl | simp [Effect.apply])
+    (nativeTypes : first.nativeResourceTypes = second.nativeResourceTypes := by first | rfl | simp [Effect.apply])
+    (nativeMode : first.nativeFinalizerMode = second.nativeFinalizerMode := by first | rfl | simp [Effect.apply]) :
+    first = second := by
   cases first; cases second; simp_all
 
 @[simp] private theorem Effect.processes_apply {effect : Effect} {state : State} {processId : PID} :
@@ -602,6 +710,17 @@ private theorem State.ext' {first second : State} (processes : first.processes =
 
 @[simp] private theorem Effect.elapsed_apply {effect : Effect} {state : State} :
     (effect.apply state).elapsed = state.elapsed := rfl
+
+@[simp] private theorem Effect.native_apply {effect : Effect} {state : State} :
+    (effect.apply state).native = (effect.native.getD id) state.native := rfl
+
+private theorem State.extNative {first second : State}
+    (processes : first.processes = second.processes) (timers : first.timers = second.timers)
+    (inTransit : first.inTransit = second.inTransit) (elapsed : first.elapsed = second.elapsed)
+    (native : first.native = second.native) : first = second :=
+  State.ext' processes timers inTransit elapsed
+    (congrArg NativeState.refCounter native) (congrArg NativeState.heap native)
+    (congrArg NativeState.resourceTypes native) (congrArg NativeState.finalizerMode native)
 
 /-- An effect keeping the records a step observes keeps their views. -/
 private theorem Effect.agree_records {effect : Effect} {observes : Observes} {state : State}
@@ -624,10 +743,11 @@ private theorem Effect.agree_records {effect : Effect} {observes : Observes} {st
 private theorem Effect.agree_queues {effect : Effect} {observes : Observes} {state : State}
     (keeps : effect.keepsQueues observes state = true) :
     (∀ view ∈ observes.timers, view (effect.apply state).timers = view state.timers) ∧
-      ∀ view ∈ observes.inTransit, view (effect.apply state).inTransit = view state.inTransit := by
+      (∀ view ∈ observes.inTransit, view (effect.apply state).inTransit = view state.inTransit) ∧
+      (observes.native = true → (effect.apply state).native = state.native) := by
   simp only [Effect.keepsQueues, Bool.and_eq_true, Kernel.all_eq] at keeps
-  obtain ⟨timers, inTransit⟩ := keeps
-  refine ⟨fun view mem => ?_, fun view mem => ?_⟩
+  obtain ⟨⟨timers, inTransit⟩, native⟩ := keeps
+  refine ⟨fun view mem => ?_, fun view mem => ?_, ?_⟩
   · simp only [Effect.apply]
     split at timers
     · rename_i found
@@ -646,6 +766,13 @@ private theorem Effect.agree_queues {effect : Effect} {observes : Observes} {sta
     · rename_i found
       rw [found]
       rfl
+
+  · intro observed
+    simp only [observed, ↓reduceIte] at native
+    rw [Effect.native_apply]
+    cases found : effect.native with
+    | none => rfl
+    | some change => exact NativeState.eq_of_identical (by simpa [found] using native)
 
 /-- Effects whose changes of records commute change the records to the same in either order. -/
 private theorem Effect.records_comm {first second : Effect} {state : State}
@@ -674,10 +801,11 @@ to the same in either order. -/
 private theorem Effect.queues_comm {first second : Effect} {state : State}
     (commutes : first.commutesQueues second state = true) :
     (first.apply (second.apply state)).timers = (second.apply (first.apply state)).timers ∧
-      (first.apply (second.apply state)).inTransit = (second.apply (first.apply state)).inTransit := by
+      (first.apply (second.apply state)).inTransit = (second.apply (first.apply state)).inTransit ∧
+      (first.apply (second.apply state)).native = (second.apply (first.apply state)).native := by
   simp only [Effect.commutesQueues, Bool.and_eq_true] at commutes
-  obtain ⟨timers, inTransit⟩ := commutes
-  constructor
+  obtain ⟨⟨timers, inTransit⟩, native⟩ := commutes
+  refine ⟨?_, ?_, ?_⟩
   · simp only [Effect.apply]
     split at timers
     · rename_i change change' found found'
@@ -692,6 +820,11 @@ private theorem Effect.queues_comm {first second : Effect} {state : State}
       exact eq_of_identicalLists Envelope.eq_of_identical inTransit
     · rename_i none
       cases found : first.inTransit <;> cases found' : second.inTransit <;> simp_all
+
+  · simp only [Effect.native_apply]
+    cases firstNative : first.native <;> cases secondNative : second.native <;>
+      simp only [Option.getD_none, Option.getD_some, id_eq]
+    exact NativeState.eq_of_identical (by simpa [firstNative, secondNative] using native)
 
 /-! ### Frames -/
 
@@ -914,9 +1047,9 @@ private theorem Footprint.sound_of_independent {first second : Footprint} {state
         second.effect.apply (first.effect.apply state) := by
   simp only [Footprint.independent, Bool.and_eq_true, Bool.or_eq_true] at independent
   obtain ⟨⟨⟨records, keepsQueues⟩, keepsQueues'⟩, commutesQueues⟩ := independent
-  obtain ⟨timers, inTransit⟩ := Effect.agree_queues keepsQueues
-  obtain ⟨timers', inTransit'⟩ := Effect.agree_queues keepsQueues'
-  obtain ⟨timersComm, inTransitComm⟩ := Effect.queues_comm commutesQueues
+  obtain ⟨timers, inTransit, native⟩ := Effect.agree_queues keepsQueues
+  obtain ⟨timers', inTransit', native'⟩ := Effect.agree_queues keepsQueues'
+  obtain ⟨timersComm, inTransitComm, nativeComm⟩ := Effect.queues_comm commutesQueues
   have parts : (∀ entry ∈ second.observes.records,
         ((first.effect.apply state).processes entry.1).map entry.2 =
           (state.processes entry.1).map entry.2) ∧
@@ -938,8 +1071,8 @@ private theorem Footprint.sound_of_independent {first second : Footprint} {state
             ((apart_frames apart found found' lookup lookup').2.1 field written).1⟩,
         Footprint.records_comm_of_apart framed framed' apart⟩
     · exact ⟨Effect.agree_records keeps, Effect.agree_records keeps', Effect.records_comm commutes⟩
-  exact ⟨⟨parts.1, timers, inTransit, rfl⟩, ⟨parts.2.1, timers', inTransit', rfl⟩,
-    State.ext' parts.2.2 timersComm inTransitComm rfl⟩
+  exact ⟨⟨parts.1, timers, inTransit, rfl, native⟩, ⟨parts.2.1, timers', inTransit', rfl, native'⟩,
+    State.extNative parts.2.2 timersComm inTransitComm rfl nativeComm⟩
 
 /-! ### Frames of steps -/
 
@@ -1237,19 +1370,19 @@ open Lynx
 
 private theorem Observes.Agree.refl (observes : Observes) (state : State) :
     observes.Agree state state :=
-  ⟨fun _ _ => rfl, fun _ _ => rfl, fun _ _ => rfl, rfl⟩
+  ⟨fun _ _ => rfl, fun _ _ => rfl, fun _ _ => rfl, rfl, fun _ => rfl⟩
 
 private theorem Observes.Agree.left {first second : Observes} {state other : State}
     (agree : (first.and second).Agree state other) : first.Agree state other :=
   ⟨fun entry mem => agree.1 entry (by simp [Observes.and, mem]),
     fun view mem => agree.2.1 view (by simp [Observes.and, mem]),
-    fun view mem => agree.2.2.1 view (by simp [Observes.and, mem]), agree.2.2.2⟩
+    fun view mem => agree.2.2.1 view (by simp [Observes.and, mem]), agree.2.2.2.1, fun observed => agree.2.2.2.2 (by simp [Observes.and, observed])⟩
 
 private theorem Observes.Agree.right {first second : Observes} {state other : State}
     (agree : (first.and second).Agree state other) : second.Agree state other :=
   ⟨fun entry mem => agree.1 entry (by simp [Observes.and, mem]),
     fun view mem => agree.2.1 view (by simp [Observes.and, mem]),
-    fun view mem => agree.2.2.1 view (by simp [Observes.and, mem]), agree.2.2.2⟩
+    fun view mem => agree.2.2.1 view (by simp [Observes.and, mem]), agree.2.2.2.1, fun observed => agree.2.2.2.2 (by simp [Observes.and, observed])⟩
 
 /-- What agreeing on a view of a record says about the record. -/
 private theorem Observes.Agree.view {observes : Observes} {state other : State} {processId : PID}
@@ -1298,6 +1431,9 @@ private theorem Effect.record_andThen {first second : Effect} {processId : PID} 
   · simp only [Effect.apply, Effect.andThen, Kernel.append_eq, Kernel.map_eq]
     cases first.inTransit <;> cases second.inTransit <;> rfl
   · rfl
+  all_goals
+    simp only [Effect.apply, Effect.andThen, State.withNative, State.native]
+    cases first.native <;> cases second.native <;> rfl
 
 @[simp] private theorem Effect.apply_change {processId : PID} {change : ProcessState → ProcessState}
     {state : State} : (Effect.change processId change).apply state = state.modify processId change := by
@@ -1356,6 +1492,7 @@ private theorem Effect.apply_ending {processId : PID} {reason : Term} {state : S
   · rfl
   · simp [Effect.apply, Effect.ending]; rfl
   · rfl
+  all_goals rfl
 
 /-- Ending depends only on whom the process signals. -/
 private theorem Effect.ending_congr {processId : PID} {process process' : ProcessState} {reason : Term}
@@ -1377,6 +1514,7 @@ private theorem Effect.apply_remove {processId : PID} {state : State} :
   · rfl
   · rfl
   · rfl
+  all_goals rfl
 
 /-! ### Which signals arrive and which timers fire -/
 
@@ -1688,7 +1826,7 @@ private theorem delivery_matches {state other : State} {processId : PID} {task :
   subst target
   obtain ⟨source, target, signal⟩ := envelope
   have channel : (Observes.mk [(target, ProcessState.live)] []
-      [oldest source target]).Agree state other := by
+      [oldest source target] false).Agree state other := by
     unfold Footprint.delivery at agree
     dsimp only at agree
     split at agree
@@ -1823,7 +1961,7 @@ private theorem State.spawnWith_eq {state : State} {processId : PID} {options : 
       Kernel.append_eq]
   refine Prod.ext rfl ?_
   dsimp only
-  refine State.ext' (funext fun candidate => ?_) ?_ ?_ ?_
+  refine State.ext' (funext fun candidate => ?_) ?_ ?_ ?_ ?_ ?_ ?_ ?_
   · simp only [Effect.processes_apply, Effect.record, Footprint.spawn, State.process, found,
       Option.getD_some, List.find?_cons, List.find?_nil, Kernel.find?_eq, Kernel.append_eq]
     by_cases parent : processId = candidate
@@ -2081,12 +2219,12 @@ private theorem request_matches {state other : State} {processId : PID} {query :
     have found : other.timers.find? (·.reference == reference) =
         state.timers.find? (·.reference == reference) := by
       rw [← List.head?_filter, ← List.head?_filter, timers]
-    simp only [State.request, found, cancels.2, agree.2.2.2, Kernel.filter_eq, Kernel.find?_eq]
+    simp only [State.request, found, cancels.2, agree.2.2.2.1, Kernel.filter_eq, Kernel.find?_eq]
     cases found' : state.timers.find? (·.reference == reference) with
     | some timer =>
       refine .some ⟨rfl, rfl, ?_⟩
       refine State.ext' (funext fun candidate => ?_) (by simp [Effect.apply])
-        (by simp [Effect.apply]) (by simp [Effect.apply, agree.2.2.2])
+        (by simp [Effect.apply]) (by simp [Effect.apply, agree.2.2.2.1])
       simp only [Effect.processes_apply, Effect.record, List.find?_cons, List.find?_nil,
         State.processes_modify, Kernel.find?_eq]
       by_cases same : processId = candidate
@@ -2095,6 +2233,31 @@ private theorem request_matches {state other : State} {processId : PID} {query :
         simp [this, Ne.symm same]
     | none =>
       exact .some ⟨rfl, rfl, by simp⟩
+
+private theorem State.nativeView_eq {state other : State} {processId : PID}
+    (view : (other.process processId).env = (state.process processId).env)
+    (native : other.native = state.native) :
+    other.nativeView processId = state.nativeView processId := by
+  have ordinaryView := State.view_eq view
+  simp only [State.native, NativeState.mk.injEq] at native
+  obtain ⟨counter, heap, types, mode⟩ := native
+  simp only [State.nativeView, ordinaryView, counter, heap, types, mode]
+
+private theorem Effect.apply_storeNative {state : State} {processId : PID} {updated : Environment} :
+    (Effect.storeNative processId updated).apply state = state.storeNative processId updated := by
+  have stored := Effect.apply_change (state := state) (processId := processId)
+    (change := fun process =>
+      { process with pdict := updated.pdict, refCounter := max process.refCounter updated.refCounter })
+  refine State.extNative ?_ ?_ ?_ ?_ ?_
+  · simpa only [Effect.storeNative, Effect.apply, Effect.record, State.storeNative, State.store, State.withNative]
+      using congrArg State.processes stored
+  · simpa only [Effect.storeNative, Effect.apply, Effect.record, State.storeNative, State.store, State.withNative]
+      using congrArg State.timers stored
+  · simpa only [Effect.storeNative, Effect.apply, Effect.record, State.storeNative, State.store, State.withNative]
+      using congrArg State.inTransit stored
+  · simpa only [Effect.storeNative, Effect.apply, Effect.record, State.storeNative, State.store, State.withNative]
+      using congrArg State.elapsed stored
+  · simp [Effect.native_apply, Effect.storeNative]
 
 private theorem own_matches {state other : State} {processId : PID} {task : Task α}
     (live : (state.processes processId).isSome)
@@ -2114,6 +2277,31 @@ private theorem own_matches {state other : State} {processId : PID} {task : Task
     | _ =>
       have := (agree : (Footprint.ending state processId _).observes.Agree state other).record
       exact related_single (ending_matches this.2)
+  | nativeGet next =>
+    have view := agree.view (processId := processId) (view := ProcessState.env)
+      (by simp [Task.footprint, Observes.record])
+    have equal := State.nativeView_eq view.2 (agree.2.2.2.2 rfl)
+    simp only [Task.own, Task.footprint, equal]
+    exact related_single ⟨rfl, rfl, rfl, rfl, Effect.apply_empty.symm⟩
+  | nativeSet updated next =>
+    exact related_single ⟨rfl, rfl, rfl, rfl, Effect.apply_storeNative.symm⟩
+  | nativeModify transition next =>
+    have view := agree.view (processId := processId) (view := ProcessState.env)
+      (by simp [Task.footprint, Observes.record])
+    have equal := State.nativeView_eq view.2 (agree.2.2.2.2 rfl)
+    simp only [Task.own, Task.footprint, equal]
+    exact related_single ⟨rfl, rfl, rfl, rfl, Effect.apply_storeNative.symm⟩
+  | wait poll next =>
+    have view := agree.view (processId := processId) (view := ProcessState.env)
+      (by simp [Task.footprint, Observes.record])
+    have equal := State.nativeView_eq view.2 (agree.2.2.2.2 rfl)
+    simp only [Task.own, Task.footprint, equal]
+    cases ready : poll (state.nativeView processId) with
+    | none => simp only [ready]; exact .nil
+    | some pair =>
+      obtain ⟨value, updated⟩ := pair
+      simp only [ready]
+      exact related_single ⟨rfl, rfl, rfl, rfl, Effect.apply_storeNative.symm⟩
   | get next =>
     have view := (agree : (Observes.record processId ProcessState.env).Agree state other).record
     refine related_single ⟨rfl, ?_, rfl, rfl, Effect.apply_empty.symm⟩
@@ -2230,6 +2418,7 @@ private theorem Task.own_length {state : State} {processId : PID} {task : Task �
   | request query next =>
     simp only [Task.own]
     split <;> simp
+  | wait poll next => cases ready : poll (state.nativeView processId) <;> simp [Task.own, ready]
   | error exception => cases exception <;> simp [Task.own]
   | _ => simp [Task.own]
 
@@ -2292,13 +2481,16 @@ private theorem Task.footprint_changes {state : State} {processId : PID} {task :
         Kernel.contains_eq, Kernel.erase_eq, Kernel.eraseP_eq, Kernel.filter_eq,
         Kernel.find?_eq] <;> (repeat' split) <;>
       simp [Effect.andThen, Effect.change, Effect.send, Effect.ending]
+  | wait poll next =>
+    simp only [Task.footprint]
+    split <;> simp [Effect.storeNative, Effect.change]
   | receive timeout select next =>
     simp only [Task.footprint]
     split <;> simp [Effect.change]
   | send destination message next =>
     simp only [Task.footprint]
     split <;> simp [Effect.change, Effect.send]
-  | _ => simp [Task.footprint, Footprint.ending, Footprint.spawn, Effect.change, Effect.ending]
+  | _ => simp [Task.footprint, Footprint.ending, Footprint.spawn, Effect.storeNative, Effect.change, Effect.ending]
 
 /-- A signal arriving changes the receiver's record only. -/
 private theorem Footprint.delivery_changes {state : State} {envelope : Envelope} :

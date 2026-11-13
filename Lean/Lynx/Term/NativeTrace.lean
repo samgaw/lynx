@@ -91,6 +91,61 @@ theorem ReadyPrefix.run {computation residual : Result α} {before after : Envir
     rw [nativeModify_run transition next before choices, ready]
     exact ih
 
+/-- A terminal run must take the unique enabled successor. -/
+private theorem run_after_single {first next last : Concurrent.Config α}
+    {event : Concurrent.Event} {events : List Concurrent.Event} {outcome : Outcome α}
+    (successor : first.successors = [(event, next)])
+    (run : Concurrent.Run first events last) (terminal : Concurrent.Terminal last outcome) :
+    ∃ rest, Concurrent.Run next rest last := by
+  cases run with
+  | refl =>
+      have stuck := terminal.successors_eq_nil
+      simp [successor] at stuck
+  | step step rest =>
+      simp only [Concurrent.Step, successor, List.mem_singleton, Prod.mk.injEq] at step
+      obtain ⟨rfl, rfl⟩ := step
+      exact ⟨_, rest⟩
+
+/-- A ready native prefix preserves the actual terminal configurations of every
+run, including their state and errors. It does not identify all-run verification
+with evaluation under a particular scheduler choice stream. -/
+theorem ReadyPrefix.terminalRun {computation residual : Result α} {before after : Environment}
+    (trace : ReadyPrefix computation before residual after) (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config α} {outcome : Outcome α}
+    (run : Concurrent.Run (.start before computation elapsed) events last)
+    (terminal : Concurrent.Terminal last outcome) :
+    ∃ rest, Concurrent.Run (.start after residual elapsed) rest last := by
+  induction trace generalizing events with
+  | refl => exact ⟨_, run⟩
+  | nativeGet next before residual after rest ih =>
+      obtain ⟨_, run⟩ := run_after_single rfl run terminal
+      exact ih run
+  | nativeSet middle next before residual after rest ih =>
+      obtain ⟨_, run⟩ := run_after_single rfl run terminal
+      exact ih run
+  | nativeModify transition next reply before middle residual after ready rest ih =>
+      obtain ⟨_, run⟩ := run_after_single
+        (next := .start middle (next reply) elapsed) (event := .internal before.currentPid)
+        (by simp [Concurrent.Config.successors, ready]) run terminal
+      exact ih run
+  | wait poll next reply before middle residual after ready rest ih =>
+      obtain ⟨_, run⟩ := run_after_single
+        (next := .start middle (next reply) elapsed) (event := .internal before.currentPid)
+        (by simp [Concurrent.Config.successors, ready]) run terminal
+      exact ih run
+
+/-- Finishing a ready prefix proves its return value for every run. The proof
+retains every native transition, rather than substituting a single execution. -/
+theorem ReadyPrefix.returns {computation : Result α} {before after : Environment} {value : α}
+    (trace : ReadyPrefix computation before (.ok value) after) (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config α} {outcome : Outcome α}
+    (run : Concurrent.Run (.start before computation elapsed) events last)
+    (terminal : Concurrent.Terminal last outcome) : outcome = .ok value := by
+  obtain ⟨_, rest⟩ := trace.terminalRun elapsed run terminal
+  cases rest with
+  | refl => exact terminal.outcome_eq.symm
+  | step step _ => simp [Concurrent.Step, Concurrent.Config.successors, Concurrent.isRequest] at step
+
 /-- Extend an existential ready prefix without choosing or rewriting the
 residual computation by hand. -/
 theorem ReadyPrefix.exists_wait {α β : Type}
