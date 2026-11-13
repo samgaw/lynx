@@ -10,6 +10,7 @@ import LynxTest.Term.NativePrefix
 import LynxTest.Term.NativeContended
 import LynxTest.Term.NativeTwoPoll
 import LynxTest.Term.NativeRegistered
+import LynxTest.Term.NativeBlocked
 import LynxTest.Term.ReadyPrefix
 import LynxTest.Term.Bitstring
 import LynxTest.Term.Bitstring.Construction
