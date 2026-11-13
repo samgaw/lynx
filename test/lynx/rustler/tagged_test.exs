@@ -311,8 +311,32 @@ defmodule Lynx.Rustler.TaggedTest do
           false
       end)
 
-    assert drop
-    changed = poison_drop(raw.document, drop["def_id"])
+    changed =
+      if drop do
+        poison_drop(raw.document, drop["def_id"])
+      else
+        # Some compiler profiles omit the intermediate Result cleanup. Retain
+        # the drop-type mutation when captured, and otherwise corrupt an actual
+        # initializer call instead of requiring nonexistent metadata.
+        update_in(raw.document, ["translated", "fun_decls"], fn functions ->
+          Enum.map(functions, fn
+            %{"item_meta" => %{"name" => name}} = function ->
+              if List.last(name) == %{"Ident" => ["expect", 0]} do
+                put_in(
+                  function,
+                  ["item_meta", "name"],
+                  Enum.drop(name, -1) ++ [%{"Ident" => ["unsupported_call", 0]}]
+                )
+              else
+                function
+              end
+
+            function ->
+              function
+          end)
+        end)
+      end
+
     refute changed == raw.document
 
     assert_raise ArgumentError, ~r/compiled Rustler atom cache/, fn ->
