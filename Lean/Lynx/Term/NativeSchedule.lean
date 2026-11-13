@@ -1,6 +1,6 @@
 module
 
-public import Lynx.Term.NativeTrace.Scheduled
+public import Lynx.Term.NativeTrace.Serial
 import all Lynx.Term.Runner
 
 namespace Lynx.Term.NativeRunner
@@ -244,91 +244,6 @@ private theorem sharedSteps_right {α : Type} {computation : Result Term} {value
   | modify transition next reply before middle final value ready rest ih =>
       rw [Term.NativeRunner.execute_eq]
       have evaluated := ready (traceEnv [1] [] before types) rfl rfl rfl
-      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
-      by_cases same : previous = [1]
-      all_goals
-        simp +contextual [Term.NativeRunner.choose,
-          Term.NativeRunner.step, Term.NativeRunner.activate,
-           traceEnv, evaluated, same,
-          (eq_comm (a := [1]) (b := previous))]
-        simpa +contextual [traceEnv, Term.NativeRunner.activate] using ih [1]
-
-private theorem registeredSteps_left {α : Type} {computation : Result α} {value : α}
-    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
-    (trace : RegisteredSteps [] computation before types value after finalTypes)
-    (child : Result Term) (finished : Term.NativeRunner.Finished α) :
-    Term.NativeRunner.execute [] (Term.NativeRunner.save (traceEnv [] [([1], {})] before types))
-      (.parallel (.process [] computation some) (.process [1] child (fun _ => none))) finished .current =
-    Term.NativeRunner.execute [] (traceEnv [] [([1], {})] after finalTypes)
-      (.parallel .empty (.process [1] child (fun _ => none))) (some (.ok value, {})) .current := by
-  induction trace with
-  | shared trace types => exact sharedSteps_left trace child finished types
-  | read read body before final types finalTypes value ready rest ih =>
-      rw [Term.NativeRunner.execute_eq]
-      have evaluated := ready (traceEnv [] [([1], {})] before types) rfl rfl rfl rfl
-      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
-      simp +contextual [Term.NativeRunner.choose,  Term.NativeRunner.step,
-         Term.NativeRunner.save,
-         traceEnv, evaluated]
-      simpa +contextual [traceEnv, Term.NativeRunner.save] using ih
-  | update read body before middle final types middleTypes finalTypes value ready rest ih =>
-      rw [Term.NativeRunner.execute_eq]
-      have evaluated := ready (traceEnv [] [([1], {})] before types) rfl rfl rfl rfl
-      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
-      simp +contextual [Term.NativeRunner.choose,  Term.NativeRunner.step,
-         Term.NativeRunner.save,
-         traceEnv, evaluated]
-      rw [Term.NativeRunner.execute_eq]
-      simpa +contextual [Term.NativeRunner.choose, Term.NativeRunner.findReady, Term.NativeRunner.step,
-        Term.NativeRunner.activate, Term.NativeRunner.save,
-         traceEnv] using ih
-
-  | modify transition next reply before middle final types middleTypes finalTypes value ready rest ih =>
-      rw [Term.NativeRunner.execute_eq]
-      have evaluated := ready (traceEnv [] [([1], {})] before types) rfl rfl rfl rfl
-      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
-      simp +contextual [Term.NativeRunner.choose,  Term.NativeRunner.step,
-         Term.NativeRunner.save,
-         traceEnv, evaluated]
-      simpa +contextual [traceEnv, Term.NativeRunner.save] using ih
-
-private theorem registeredSteps_right {α : Type} {computation : Result Term} {value : Term}
-    {before after : Nat × List (Nat × String × Term)} {types finalTypes : List String}
-    (trace : RegisteredSteps [1] computation before types value after finalTypes) (rootValue : α) (previous : PID) :
-    Term.NativeRunner.execute [] (traceEnv previous [([1], {})] before types)
-      (.parallel .empty (.process [1] computation (fun _ => none))) (some (.ok rootValue, {})) .current =
-      (Outcome.ok rootValue, (traceEnv [] [] after finalTypes : Environment)) := by
-  induction trace generalizing previous with
-  | shared trace types => exact sharedSteps_right trace rootValue previous types
-  | read read body before final types finalTypes value ready rest ih =>
-      rw [Term.NativeRunner.execute_eq]
-      have evaluated := ready (traceEnv [1] [] before types) rfl rfl rfl rfl
-      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
-      by_cases same : previous = [1]
-      all_goals
-        simp +contextual [Term.NativeRunner.choose,
-          Term.NativeRunner.step, Term.NativeRunner.activate,
-           traceEnv, evaluated, same,
-          (eq_comm (a := [1]) (b := previous))]
-        simpa +contextual [traceEnv, Term.NativeRunner.activate] using ih [1]
-  | update read body before middle final types middleTypes finalTypes value ready rest ih =>
-      rw [Term.NativeRunner.execute_eq]
-      have evaluated := ready (traceEnv [1] [] before types) rfl rfl rfl rfl
-      simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
-      by_cases same : previous = [1]
-      all_goals
-        simp +contextual [Term.NativeRunner.choose,
-          Term.NativeRunner.step, Term.NativeRunner.activate,
-           traceEnv, evaluated, same,
-          (eq_comm (a := [1]) (b := previous))]
-        rw [Term.NativeRunner.execute_eq]
-        simpa +contextual [Term.NativeRunner.choose, Term.NativeRunner.findReady, Term.NativeRunner.step,
-          Term.NativeRunner.activate, Term.NativeRunner.save,
-           traceEnv] using ih [1]
-
-  | modify transition next reply before middle final types middleTypes finalTypes value ready rest ih =>
-      rw [Term.NativeRunner.execute_eq]
-      have evaluated := ready (traceEnv [1] [] before types) rfl rfl rfl rfl
       simp +contextual [traceEnv, Term.NativeRunner.activate] at evaluated
       by_cases same : previous = [1]
       all_goals
@@ -1441,39 +1356,6 @@ theorem two_wait_blocked_orders
   simp only [run_spawn_pair]
   cases choices <;> simp only [Term.NativeRunner.schedule, Term.Runner.schedule]
   all_goals apply serial <;> first | exact Or.inl rfl | rfl | native_calm
-
-/-- Execute two complete shared-state traces through the actual process pool.
-The empty choice list keeps the ready parent current, then runs the child.
-Reads and writes stay local steps; IO waits retain their scheduler boundaries. -/
-theorem two_shared_serial_steps (parent child : Result Term) (rootValue childValue : Term)
-    (before middle after : Nat × List (Nat × String × Term))
-    (parentTrace : SharedSteps [] parent before rootValue middle)
-    (childTrace : SharedSteps [1] child middle childValue after) :
-    (Result.schedule {} child (fun _ => parent)).run {nativeRefCounter := before.1, nativeHeap := before.2} [] =
-      (.ok rootValue, {currentPid := [], nativeRefCounter := after.1, nativeHeap := after.2}) := by
-  rw [run_spawn_pair]
-  simp only [Term.NativeRunner.schedule, Term.Runner.schedule]
-  simpa +contextual [traceEnv, Term.NativeRunner.save, Term.NativeRunner.activate,
-    State.nativeView, State.view, State.process] using
-    (sharedSteps_left parentTrace child none).trans (sharedSteps_right childTrace rootValue [])
-
-/-- Execute complete native calls whose local prefixes register resource types
-and decode ownership, then retain all waits of their extracted implementations.
-This is the parent-first schedule; it does not establish arbitrary interleavings. -/
-theorem two_registered_serial_steps (parent child : Result Term) (rootValue childValue : Term)
-    (before middle after : Nat × List (Nat × String × Term))
-    (types middleTypes finalTypes : List String)
-    (parentTrace : RegisteredSteps [] parent before types rootValue middle middleTypes)
-    (childTrace : RegisteredSteps [1] child middle middleTypes childValue after finalTypes) :
-    (Result.schedule {} child (fun _ => parent)).run {nativeRefCounter := before.1, nativeHeap := before.2, nativeResourceTypes := types} [] =
-      (.ok rootValue, {
-        currentPid := [], nativeRefCounter := after.1, nativeHeap := after.2,
-        nativeResourceTypes := finalTypes}) := by
-  rw [run_spawn_pair]
-  simp only [Term.NativeRunner.schedule, Term.Runner.schedule]
-  simpa +contextual [traceEnv, Term.NativeRunner.save, Term.NativeRunner.activate,
-    State.nativeView, State.view, State.process] using
-    (registeredSteps_left parentTrace child none).trans (registeredSteps_right childTrace rootValue [])
 
 section ConcreteNativeTraces
 
