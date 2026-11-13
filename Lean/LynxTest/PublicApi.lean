@@ -2,6 +2,7 @@ module
 
 meta import Lean
 public import Lynx.Runner
+public import Lynx.Runner.CheckPost
 public import Lynx
 public import Lynx.Rustler
 public import Lynx.Modules.Erlang.erlang
