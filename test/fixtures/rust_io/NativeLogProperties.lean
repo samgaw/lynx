@@ -93,6 +93,23 @@ theorem facade_prefix (env : Environment) (data : ByteArray) (value : U16)
     (fun _ => NativeM.ok true)
   exact append.trans (by simpa only [Result.ok_bind, NativeM.ok] using release)
 
+/-- The actual decoder, compiled export and encoder form a complete ready
+prefix, preserving the VM pin and the synchronized file state. -/
+theorem adapter_prefix (env : Environment) (data : ByteArray) (value : U16)
+    (position : Nat) (rest : Term)
+    (registered : NativeResourceArc.typeName shared_log.LogResource ∈ env.nativeResourceTypes)
+    (fits : data.size + 4 ≤ limit) (offset : position ≤ limit) :
+    Result.ReadyPrefix (do
+      let resource ← NativeResourceArc.decode (.nativeReference 6)
+      Rustler.executeNative (__APPEND__ resource value) Rustler.encodeBool)
+      (pinned env (appendInput data position rest)) (.ok Term.true)
+      (returned env (appended (appendInput data position rest) value rest)) := by
+  have first := (decode_prefix env (appendInput data position rest) registered).bind
+    (fun resource => Rustler.executeNative (__APPEND__ resource value) Rustler.encodeBool)
+  have body := Rustler.executeNative_readyPrefix
+    (facade_prefix env data value position rest fits offset) Rustler.encodeBool
+  exact first.trans (by simpa [Rustler.executeNative_ok, Rustler.encodeBool] using body)
+
 /-- Decoding, executing the actual compiled export and encoding its result all
 compose with an arbitrary ordinary Elixir continuation. -/
 theorem adapter_continuation {α : Type} (env : Environment) (data : ByteArray) (value : U16)
@@ -105,12 +122,7 @@ theorem adapter_continuation {α : Type} (env : Environment) (data : ByteArray) 
       Rustler.executeNative (__APPEND__ resource value) Rustler.encodeBool) >>= next).run
       (pinned env (appendInput data position rest)) choices =
         (next Term.true).run (returned env (appended (appendInput data position rest) value rest)) choices := by
-  have first := (decode_prefix env (appendInput data position rest) registered).bind
-    (fun resource => Rustler.executeNative (__APPEND__ resource value) Rustler.encodeBool)
-  have body := Rustler.executeNative_readyPrefix
-    (facade_prefix env data value position rest fits offset) Rustler.encodeBool
-  have trace := first.trans (by simpa only [Result.ok_bind, Rustler.encodeBool] using body)
-  simpa [Rustler.encodeBool] using (trace.bind next).run choices
+  exact ((adapter_prefix env data value position rest registered fits offset).bind next).run choices
 
 /-- An admitted existing resource and ready file actions. Constructor reachability
 is a separate obligation; this initial state makes no constructor claim. -/
@@ -121,6 +133,19 @@ is a separate obligation; this initial state makes no constructor claim. -/
 
 /-- The existing-resource law can vary process-local fields and registration
 without changing its admitted file and resource heap. -/
+theorem initial_prefix (value : U16) (env : Environment)
+    (counter : env.nativeRefCounter = 6) (heap : env.nativeHeap = initial.nativeHeap)
+    (registered : NativeResourceArc.typeName shared_log.LogResource ∈ env.nativeResourceTypes) :
+    Result.ReadyPrefix (do
+      let resource ← NativeResourceArc.decode (.nativeReference 6)
+      Rustler.executeNative (__APPEND__ resource value) Rustler.encodeBool) env
+      (.ok Term.true) (returned env (appended (appendInput ByteArray.empty 0 .nil) value .nil)) := by
+  have shape : pinned env (appendInput ByteArray.empty 0 .nil) = env := by
+    cases env
+    simp_all [pinned, framedEnv, initial]
+  simpa only [shape] using adapter_prefix env ByteArray.empty value 0 .nil registered
+    (by decide) (by decide)
+
 theorem initial_adapter {α : Type} (value : U16) (next : Term → Result α) (env : Environment)
     (counter : env.nativeRefCounter = 6) (heap : env.nativeHeap = initial.nativeHeap)
     (registered : NativeResourceArc.typeName shared_log.LogResource ∈ env.nativeResourceTypes)
@@ -130,10 +155,7 @@ theorem initial_adapter {α : Type} (value : U16) (next : Term → Result α) (e
       let result ← Rustler.executeNative (__APPEND__ resource value) Rustler.encodeBool
       next result) : Result α).run env choices =
       (next Term.true).run (returned env (appended (appendInput ByteArray.empty 0 .nil) value .nil)) choices := by
-  have shape : pinned env (appendInput ByteArray.empty 0 .nil) = env := by
-    cases env
-    simp_all [pinned, framedEnv, initial]
-  simpa only [shape, bind_assoc] using adapter_continuation env ByteArray.empty value 0 .nil next registered
-    (by decide) (by decide) choices
+  simpa only [bind_assoc, Result.ok_bind] using
+    ((initial_prefix value env counter heap registered).bind next).run choices
 
 end Record.NativeLogProperties
