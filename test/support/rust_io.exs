@@ -82,6 +82,11 @@ defmodule Lynx.Rust.IoFixture do
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "Record"))
 
+    extra_modules =
+      if "FileReturnIdentity" in extra_modules,
+        do: Enum.uniq(extra_modules ++ ~w(RecoveryVisibleFrame RepairVisibleInvariant)),
+        else: extra_modules
+
     sources =
       [
         {"Properties", [{"Disk", "Record"}]},

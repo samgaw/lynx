@@ -31,13 +31,17 @@ defmodule Lynx.Rust.LockedPrefixTest do
         "RecoveryPrefixInvariant",
         "RepairPrefixInvariant",
         "RepairAppendPrefixInvariant",
+        "RecoveryVisibleFrame",
+        "RepairVisibleInvariant",
         "FileReturnIdentity",
         "LockedPrefixInvariant",
-        "LockedPrefixWitness"
+        "LockedPrefixWitness",
+        "UnsyncedRepairWitness"
       ])
 
     modules =
-      ~w(Record.FileReturnIdentity Record.LockedPrefixInvariant Record.LockedPrefixWitness)
+      ~w(Record.RecoveryVisibleFrame Record.RepairVisibleInvariant Record.FileReturnIdentity
+      Record.LockedPrefixInvariant Record.LockedPrefixWitness Record.UnsyncedRepairWitness)
 
     properties = ~w(Record.FileReturnIdentity.recover_returns
       Record.FileReturnIdentity.repair_returns
@@ -52,7 +56,16 @@ defmodule Lynx.Rust.LockedPrefixTest do
       Record.LockedPrefixWitness.read_error_releases
       Record.LockedPrefixWitness.sync_error_releases
       Record.LockedPrefixWitness.capped_releases
-      Record.LockedPrefixWitness.blocked_keeps_guard)
+      Record.LockedPrefixWitness.blocked_keeps_guard
+      Record.RecoveryVisibleFrame.word_returns Record.RecoveryVisibleFrame.record_returns
+      Record.RecoveryVisibleFrame.recover_returns_prefix Record.RecoveryVisibleFrame.recover_returns
+      Record.RepairVisibleInvariant.repair_returns_prefix Record.RepairVisibleInvariant.repair_log_invariant
+      Record.RepairVisibleInvariant.repair_append_invariant
+      Record.FileReturnIdentity.repair_returns_general Record.FileReturnIdentity.repair_append_returns_general
+      Record.LockedPrefixInvariant.critical_invariant_general Record.LockedPrefixInvariant.critical_returns_general
+      Record.UnsyncedRepairWitness.shorter_durable_success Record.UnsyncedRepairWitness.longer_durable_success
+      Record.UnsyncedRepairWitness.longer_durable_sync_error Record.UnsyncedRepairWitness.shorter_durable_read_error
+      Record.UnsyncedRepairWitness.longer_durable_blocked)
 
     options =
       base
@@ -100,6 +113,12 @@ defmodule Lynx.Rust.LockedPrefixTest do
            "(failed image image 12)"},
           {"Record/LockedPrefixWitness.lean", "effects true true repaired image 12",
            "effects true false repaired image 12"},
+          {"Record/RecoveryVisibleFrame.lean", "after.position = before.position + 4",
+           "after.position = before.position + 3"},
+          {"Record/RepairVisibleInvariant.lean", "returned.val = values ++ suffix",
+           "returned.val = values ++ [0#u16] ++ suffix"},
+          {"Record/UnsyncedRepairWitness.lean", "failed repaired longDurable 12",
+           "failed repaired repaired 12"},
           {"Record/LockedPrefixWitness.lean", "env.nativeRefCounter == 10",
            "env.nativeRefCounter == 9"}
         ] do

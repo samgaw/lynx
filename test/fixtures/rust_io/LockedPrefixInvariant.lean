@@ -70,23 +70,22 @@ private theorem release_poll (base : Environment) (counter : Nat) (frame : List 
 the actual returned file on all Rust result branches. Arbitrary suffixes, host
 scripts, poison state and unrelated resource cells are admitted. Native failure,
 blocking and exhaustion retain their actual phase rather than becoming success. -/
-theorem critical_invariant (base : Environment) (counter : Nat) (frame : List (Nat × String × Term))
+theorem critical_invariant_general (base : Environment) (counter : Nat) (frame : List (Nat × String × Term))
     (poisoned : Bool) (before : State) (values : List U16) (maximum : Usize) (value : U16)
     (bound : 2 ≤ counter) (mutexApart : Separate (⟨1⟩ : NativeFile) frame) (fileApart : Separate (⟨2⟩ : NativeFile) frame)
     (fresh : frame.any (fun cell => cell.1 == counter + 1) = false)
-    (valid : Admitted before) (stable : before.durable = before.visible)
+    (valid : Admitted before) (durable : Prefix (disk (logBytes values)) before.durable)
     (visible : Prefix (disk (logBytes values)) before.visible) :
     Result.NativeInvariant (Holds base counter frame poisoned (disk (logBytes values)))
       (locked_repair_and_append ⟨1⟩ maximum value) (view base counter frame (free poisoned) before) := by
-  have durable : Prefix (disk (logBytes values)) before.durable := stable ▸ visible
   have separate : Separate (⟨2⟩ : NativeFile)
       ((1,NativeMutex.typeName NativeFile,held base counter poisoned) :: frame) := by
     simp only [Separate,List.mem_cons,forall_eq_or_imp]
     exact ⟨by decide,fileApart⟩
-  have body := Record.RepairAppendPrefixInvariant.repair_append_invariant
+  have body := Record.RepairVisibleInvariant.repair_append_invariant
     {base with nativeRefCounter := counter + 1} ⟨2⟩
     ((1,NativeMutex.typeName NativeFile,held base counter poisoned) :: frame)
-    values before maximum value separate valid stable visible
+    values before maximum value separate valid durable visible
   have weakened : Result.NativeInvariant (Holds base counter frame poisoned (disk (logBytes values)))
       (repair_and_append ⟨2⟩ maximum value) (view base (counter + 1) frame (held base counter poisoned) before) := by
     intro residual world trace
@@ -107,10 +106,10 @@ theorem critical_invariant (base : Environment) (counter : Nat) (frame : List (N
   apply Result.NativeInvariant.bind (computation := repair_and_append ⟨2⟩ maximum value) weakened
   intro output world completed
   obtain ⟨reply,returnedFile⟩ := output
-  have identity := Record.FileReturnIdentity.repair_append_returns ⟨2⟩
+  have identity := Record.FileReturnIdentity.repair_append_returns_general ⟨2⟩
     {base with nativeRefCounter := counter + 1}
     ((1,NativeMutex.typeName NativeFile,held base counter poisoned) :: frame)
-    before maximum value reply returnedFile world separate valid stable completed
+    before maximum value reply returnedFile world separate valid completed
   subst returnedFile
   obtain ⟨state,rfl,admitted,v,d⟩ := (body _ _ completed).1
   simp only [NativeGuard.release,Result.wait_bind]
@@ -123,13 +122,24 @@ theorem critical_invariant (base : Environment) (counter : Nat) (frame : List (N
   simp only [Result.ok_bind]
   exact .ok _ _ _ ⟨state,admitted,v,d,.inr (.inr rfl)⟩
 
-/-- Every actual Rust return releases the same file identity, including I/O
-errors and capped/rollback false. Earlier mutations and the exact frame survive. -/
-theorem critical_returns (base : Environment) (counter : Nat) (frame : List (Nat × String × Term))
+theorem critical_invariant (base : Environment) (counter : Nat) (frame : List (Nat × String × Term))
     (poisoned : Bool) (before : State) (values : List U16) (maximum : Usize) (value : U16)
     (bound : 2 ≤ counter) (mutexApart : Separate (⟨1⟩ : NativeFile) frame) (fileApart : Separate (⟨2⟩ : NativeFile) frame)
     (fresh : frame.any (fun cell => cell.1 == counter + 1) = false)
     (valid : Admitted before) (stable : before.durable = before.visible)
+    (visible : Prefix (disk (logBytes values)) before.visible) :
+    Result.NativeInvariant (Holds base counter frame poisoned (disk (logBytes values)))
+      (locked_repair_and_append ⟨1⟩ maximum value) (view base counter frame (free poisoned) before) := by
+  exact critical_invariant_general base counter frame poisoned before values maximum value
+    bound mutexApart fileApart fresh valid (stable ▸ visible) visible
+
+/-- Every actual Rust return releases the same file identity, including I/O
+errors and capped/rollback false. Earlier mutations and the exact frame survive. -/
+theorem critical_returns_general (base : Environment) (counter : Nat) (frame : List (Nat × String × Term))
+    (poisoned : Bool) (before : State) (values : List U16) (maximum : Usize) (value : U16)
+    (bound : 2 ≤ counter) (mutexApart : Separate (⟨1⟩ : NativeFile) frame) (fileApart : Separate (⟨2⟩ : NativeFile) frame)
+    (fresh : frame.any (fun cell => cell.1 == counter + 1) = false)
+    (valid : Admitted before) (durable : Prefix (disk (logBytes values)) before.durable)
     (visible : Prefix (disk (logBytes values)) before.visible)
     (reply : core.result.Result Bool NativeIoError) (world : Environment)
     (trace : Result.ReadyPrefix (locked_repair_and_append ⟨1⟩ maximum value)
@@ -152,12 +162,12 @@ theorem critical_returns (base : Environment) (counter : Nat) (frame : List (Nat
       have separate : Separate (⟨2⟩ : NativeFile)
           ((1,NativeMutex.typeName NativeFile,held base counter poisoned) :: frame) := by
         simp only [Separate,List.mem_cons,forall_eq_or_imp]; exact ⟨by decide,fileApart⟩
-      have identity := Record.FileReturnIdentity.repair_append_returns ⟨2⟩
+      have identity := Record.FileReturnIdentity.repair_append_returns_general ⟨2⟩
         {base with nativeRefCounter := counter + 1} _ before maximum value bodyReply returnedFile middle
-        separate valid stable bodyTrace
+        separate valid bodyTrace
       subst returnedFile
-      have safe := Record.RepairAppendPrefixInvariant.repair_append_invariant
-        {base with nativeRefCounter := counter + 1} ⟨2⟩ _ values before maximum value separate valid stable visible
+      have safe := Record.RepairVisibleInvariant.repair_append_invariant
+        {base with nativeRefCounter := counter + 1} ⟨2⟩ _ values before maximum value separate valid durable visible
       obtain ⟨after,rfl,admitted,v,d⟩ := (safe _ _ bodyTrace).1
       simp only [NativeGuard.release,Result.wait_bind] at continuation
       cases continuation with
@@ -169,6 +179,20 @@ theorem critical_returns (base : Environment) (counter : Nat) (frame : List (Nat
           simp only [Result.ok_bind,NativeM.ok] at continuation
           cases continuation
           exact ⟨after,rfl,admitted,v,d⟩
+
+theorem critical_returns (base : Environment) (counter : Nat) (frame : List (Nat × String × Term))
+    (poisoned : Bool) (before : State) (values : List U16) (maximum : Usize) (value : U16)
+    (bound : 2 ≤ counter) (mutexApart : Separate (⟨1⟩ : NativeFile) frame) (fileApart : Separate (⟨2⟩ : NativeFile) frame)
+    (fresh : frame.any (fun cell => cell.1 == counter + 1) = false)
+    (valid : Admitted before) (stable : before.durable = before.visible)
+    (visible : Prefix (disk (logBytes values)) before.visible)
+    (reply : core.result.Result Bool NativeIoError) (world : Environment)
+    (trace : Result.ReadyPrefix (locked_repair_and_append ⟨1⟩ maximum value)
+      (view base counter frame (free poisoned) before) (.ok reply) world) :
+    ∃ after, world = view base (counter + 1) frame (free poisoned) after ∧
+      Admitted after ∧ Prefix (disk (logBytes values)) after.visible ∧ Prefix (disk (logBytes values)) after.durable := by
+  exact critical_returns_general base counter frame poisoned before values maximum value
+    bound mutexApart fileApart fresh valid (stable ▸ visible) visible reply world trace
 
 /-- Actual body execution retains the owned mutex token and prevents any peer
 context from acquiring it. The host script and suffix are unrestricted. -/
