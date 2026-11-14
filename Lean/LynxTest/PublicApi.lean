@@ -705,6 +705,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Concurrent.arrive",
   "Lynx.Concurrent.check",
   "Lynx.Concurrent.checkFrom",
+  "Lynx.Concurrent.checkInvariant",
   "Lynx.Concurrent.checkPost",
   "Lynx.Concurrent.checkState",
   "Lynx.Concurrent.checkStateFrom",

@@ -777,6 +777,27 @@ theorem Run.invariant {invariant : Config α → Prop}
   | refl => exact initial
   | step step _ ih => exact ih (preserved _ _ _ initial step)
 
+/-- Check a state invariant before every step, including the initial and terminal
+configurations. Every raw successor is followed; no terminal-only reduction is
+applied to a property that can observe intermediate native state. -/
+@[expose] def checkInvariant (accept : Config α → Bool) : Nat → Config α → Bool
+  | 0, _ => false
+  | depth + 1, config =>
+      accept config && Kernel.all config.successors fun (_, next) => checkInvariant accept depth next
+
+/-- Successful bounded exploration establishes the invariant at every reachable
+prefix, without requiring that the prefix is terminal or the computation succeeds. -/
+theorem checkInvariant_sound {accept : Config α → Bool} {depth : Nat} {first last : Config α}
+    {events : List Event} (checked : checkInvariant accept depth first = true)
+    (run : Run first events last) : accept last = true := by
+  induction depth generalizing first events with
+  | zero => simp [checkInvariant] at checked
+  | succ depth ih =>
+    simp only [checkInvariant, Bool.and_eq_true, Kernel.all_eq, List.all_eq_true] at checked
+    cases run with
+    | refl => exact checked.1
+    | step step rest => exact ih (checked.2 _ step) rest
+
 /-- Check the exact terminal state along every successor, with explicit fuel.
 No state-sensitive observation is passed through outcome-only reductions. -/
 @[expose] def checkPost (accept : Config α → Bool) : Nat → Config α → Bool
