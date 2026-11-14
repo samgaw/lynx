@@ -275,6 +275,30 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
 
     refute Enum.any?(bounded_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
 
+    wrong_composition =
+      String.replace(
+        coowned_source,
+        "left + right <= 18_446_744_073_709_551_608",
+        "left <= 18_446_744_073_709_551_608 and right <= 18_446_744_073_709_551_608"
+      )
+
+    refute wrong_composition == coowned_source
+    [{_, wrong_composition_beam}] = Code.compile_string(wrong_composition, coowned_path)
+    wrong_composition_reports = Lynx.Laws.verify([wrong_composition_beam], coowned_options)
+
+    assert %{status: :error, diagnostics: composition_diagnostics} =
+             Enum.find(
+               wrong_composition_reports,
+               &(&1.module == "Elixir.LynxEffectsFixture.CoownedResourceLaws.laws")
+             )
+
+    assert Enum.any?(
+             composition_diagnostics,
+             &match?(%{severity: :error, declaration: "bounded_adds_compose/2"}, &1)
+           )
+
+    refute Enum.any?(composition_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
+
     wrong_contract =
       String.replace(framed_calls, "else cell} ∧", "else (cell.1,cell.2.1,.nil)} ∧",
         global: false

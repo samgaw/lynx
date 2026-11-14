@@ -1,5 +1,6 @@
 module
 public import Shared.FramedCalls
+public import Lynx.Modules.Erlang.erlang
 public import Shared.Extraction.RustlerAdapter
 public section
 open Aeneas Aeneas.Std Lynx effects_native
@@ -233,6 +234,53 @@ theorem owned_add_success (dispatcher : Dispatcher) (value amount : U64) (counte
   cases changed with
   | false => exact False.elim ((Nat.not_lt_of_ge fits) arithmetic.2)
   | true => exact ⟨updated,trace,arithmetic⟩
+
+/-- Sequence calls to the compiled-export adapter, keeping every returned term.
+This is a caller of the extracted implementation, not a replacement for it. -/
+@[expose] def addSequence (dispatcher : Dispatcher) : List U64 → Result (List Term)
+  | [] => .ok []
+  | amount :: rest => do
+    let handle ← Erlang.erlang.«get/1» dispatcher (.atom "counter")
+    let reply ← Elixir.LynxEffectsFixture.Native.«counter_add/2» dispatcher
+      handle (Rustler.encodeUnsigned amount)
+    let replies ← addSequence dispatcher rest
+    pure (reply :: replies)
+
+/-- Any finite sequence whose total fits preserves the complete retained-owner
+frame. Its actual adapter calls all return true and store the exact sum. -/
+theorem owned_add_sequence (dispatcher : Dispatcher) (amounts : List U64)
+    (value : U64) (counter : Nat) (counterBound : 44 ≤ counter)
+    (fits : value.val + (amounts.map UScalar.val).sum ≤ U64.max) :
+    ∃ updated, Result.ReadyPrefix (addSequence dispatcher amounts)
+      (owned value counter) (.ok (List.replicate amounts.length Term.true))
+      (owned updated (counter + 2 * amounts.length)) ∧
+      updated.val = value.val + (amounts.map UScalar.val).sum := by
+  induction amounts generalizing value counter with
+  | nil => exact ⟨value, by simpa [addSequence] using
+      (Result.ReadyPrefix.refl (.ok ([] : List Term)) (owned value counter)), by simp⟩
+  | cons amount rest ih =>
+    have headFits : value.val + amount.val ≤ U64.max := by
+      simp only [List.map_cons,List.sum_cons] at fits
+      omega
+    obtain ⟨middle,headTrace,headSum⟩ := owned_add_success dispatcher value amount counter counterBound headFits
+    have tailFits : middle.val + (rest.map UScalar.val).sum ≤ U64.max := by
+      simp only [List.map_cons,List.sum_cons] at fits
+      omega
+    obtain ⟨updated,tailTrace,tailSum⟩ := ih middle (counter + 2) (by omega) tailFits
+    refine ⟨updated,?_,?_⟩
+    · have first := headTrace.bind (fun reply => do
+        let replies ← addSequence dispatcher rest
+        pure (reply :: replies))
+      have last := tailTrace.bind (fun replies => Result.ok (Term.true :: replies))
+      simp only [Result.ok_bind] at first last
+      have combined := first.trans last
+      have counters : counter + 2 + 2 * rest.length = counter + 2 * (rest.length + 1) := by omega
+      simp only [addSequence,Erlang.erlang.«get/1»]
+      apply Result.ReadyPrefix.get
+      simpa [Result.bind,Result.ok_bind,List.replicate_succ,counters,owned,
+        Shared.Properties.Framed.initialFor] using combined
+    · simp only [List.map_cons,List.sum_cons]
+      omega
 
 /-- The admitted extra owners are produced by the real decoder followed by the
 actual extracted internal Rust clone, rather than an assumed ownership header. -/
