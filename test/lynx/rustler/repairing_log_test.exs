@@ -18,7 +18,8 @@ defmodule Lynx.Rustler.RepairingLogTest do
         RepairAcknowledgement RepairWriterProperties AppendAcknowledgement
         RepairAppendAcknowledgement EncodedPrefixRecovery AppendPrefixInvariant
         RecoveryFrame RepairPrefixReturn RecoveryPrefixInvariant RepairPrefixInvariant
-        RepairAppendPrefixInvariant FileReturnIdentity LockedPrefixInvariant))
+        RepairAppendPrefixInvariant RecoveryVisibleFrame RepairVisibleInvariant RecoveryPrefixWitness
+        FileReturnIdentity LockedPrefixInvariant UnsyncedRepairLogProperties))
 
     for module <- base[:proof_modules] do
       path = Path.join(project, String.replace(module, ".", "/") <> ".lean")
@@ -92,10 +93,21 @@ defmodule Lynx.Rustler.RepairingLogTest do
           &("Record.GuardedRepairAdapter." <> &1)
         )
 
+    properties =
+      properties ++
+        ~w(Record.RecoveryVisibleFrame.word_returns Record.RecoveryVisibleFrame.record_returns
+      Record.RecoveryVisibleFrame.recover_returns_prefix Record.RecoveryVisibleFrame.recover_returns
+      Record.RepairVisibleInvariant.repair_returns_prefix Record.RepairVisibleInvariant.repair_log_invariant
+      Record.RepairVisibleInvariant.repair_append_invariant
+      Record.FileReturnIdentity.repair_returns_general Record.FileReturnIdentity.repair_append_returns_general
+      Record.LockedPrefixInvariant.critical_invariant_general Record.LockedPrefixInvariant.critical_returns_general)
+
     options =
       options ++
         [
-          proof_modules: ["Record.RepairingLogProperties", "Record.GuardedRepairAdapter"],
+          proof_modules: ~w(Record.RepairingLogProperties Record.GuardedRepairAdapter
+            Record.RecoveryVisibleFrame Record.RepairVisibleInvariant Record.FileReturnIdentity
+            Record.LockedPrefixInvariant Record.UnsyncedRepairLogProperties),
           required_properties: properties
         ]
 
@@ -113,20 +125,24 @@ defmodule Lynx.Rustler.RepairingLogTest do
 
     calibrate(prepared.library, tmp)
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
-    laws = Code.compile_file(Path.join(@fixture, "RepairingLogLaws.exs"))
+
+    laws =
+      Code.compile_file(Path.join(@fixture, "RepairingLogLaws.exs")) ++
+        Code.compile_file(Path.join(@fixture, "UnsyncedRepairLogLaws.exs"))
 
     for {module, beam} <- laws do
       initial =
         case module do
-          LynxIoFixture.RepairingLimitLaws -> "limitInitial"
-          LynxIoFixture.RepairingErrorLaws -> "errorInitial"
-          _ -> "initial"
+          LynxIoFixture.UnsyncedRepairLogLaws -> "Record.UnsyncedRepairLogProperties.initial"
+          LynxIoFixture.RepairingLimitLaws -> "Record.RepairingLogProperties.limitInitial"
+          LynxIoFixture.RepairingErrorLaws -> "Record.RepairingLogProperties.errorInitial"
+          _ -> "Record.RepairingLogProperties.initial"
         end
 
       law_options = [
         native: {Lynx.Rustler, options},
         preludes: [Lynx.Lean.from_file!(term_adapter_path)],
-        initial_environment: "Record.RepairingLogProperties." <> initial,
+        initial_environment: initial,
         options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192]
       ]
 
@@ -145,7 +161,13 @@ defmodule Lynx.Rustler.RepairingLogTest do
         Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
 
       assert status == 0, output
-      assert Enum.any?(File.stream!(export), &String.contains?(&1, "generated_adapter_safe"))
+
+      assert Enum.any?(
+               File.stream!(export),
+               &String.contains?(&1, "generated_adapter_safe_general")
+             )
+
+      assert Enum.any?(File.stream!(export), &String.contains?(&1, "unsynced_initial_safe"))
     end
 
     # An incorrect Elixir expectation must fail after the native proofs succeed.
