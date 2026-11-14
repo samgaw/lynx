@@ -2,7 +2,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
   use ExUnit.Case
   @fixture Path.expand("../../fixtures/rust_effects", __DIR__)
   @tools System.get_env("LYNX_AENEAS_DIR")
-  @moduletag timeout: 900_000
+  @moduletag timeout: 3_600_000
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
                String.contains?(
                  File.read!(Path.join(@tools, "lynx-toolchain")),
@@ -96,7 +96,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
               "Shared.Critical.locked_read_handled_next"
             ] ++
               Enum.map(
-                ~w(payload_cleanup create_next update_native_handled_next read_native_handled_next add_call_next read_call_next add_safe_call_at add_overflow_call_at),
+                ~w(payload_cleanup create_next update_native_handled_next read_native_handled_next add_call_next read_call_next add_safe_call_at add_overflow_call_at update_framed_handled_next read_framed_handled_next Framed.coowned_update),
                 &("Shared.Properties." <> &1)
               )
         ]
@@ -155,6 +155,68 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
+
+    framed_path = Path.join(tmp, "framed_laws.ex")
+    framed_source = File.read!(Path.join(@fixture, "framed_resource_laws.ex"))
+    File.write!(framed_path, framed_source)
+    framed_beams = Code.compile_file(framed_path)
+
+    for {module, framed_beam} <- framed_beams do
+      initial =
+        if module == LynxEffectsFixture.FramedResourceLaws,
+          do: "Shared.Properties.Framed.initial",
+          else: "Shared.Properties.Framed.overflowInitial"
+
+      framed_options = Keyword.put(law_options, :initial_environment, initial)
+      framed_export = Path.join(tmp, Atom.to_string(module) <> ".export")
+
+      framed_reports =
+        Lynx.Laws.verify([framed_beam], Keyword.put(framed_options, :export, framed_export))
+
+      assert Enum.all?(framed_reports, &(&1.status == :ok)),
+             inspect(framed_reports, limit: :infinity)
+
+      assert Enum.all?(
+               Lynx.Laws.verify([framed_beam], framed_options),
+               &(&1.status == :ok and &1.cached)
+             )
+
+      {status, output} =
+        Lynx.Commands.lake(project, ["check", "--from-export", framed_export] ++ sandbox)
+
+      assert status == 0, output
+    end
+
+    # The postcondition independently checks the other resource's heap payload.
+    wrong_frame =
+      String.replace(properties, "(heap value 11#u64).all", "(heap value 12#u64).all")
+
+    refute wrong_frame == properties
+    File.write!(property, wrong_frame)
+
+    {_, framed_beam} =
+      Enum.find(framed_beams, fn {module, _} ->
+        module == LynxEffectsFixture.FramedResourceLaws
+      end)
+
+    wrong_reports =
+      Lynx.Laws.verify(
+        [framed_beam],
+        Keyword.put(law_options, :initial_environment, "Shared.Properties.Framed.initial")
+      )
+
+    assert %{status: :error, diagnostics: frame_diagnostics} =
+             Enum.find(
+               wrong_reports,
+               &(&1.module == "Elixir.LynxEffectsFixture.FramedResourceLaws.laws")
+             )
+
+    assert Enum.any?(
+             frame_diagnostics,
+             &String.contains?(&1.message, "postcondition rejected at a terminal configuration")
+           )
+
+    File.write!(property, properties)
 
     for extra <- [
           "private axiom resourceTrust : False",
