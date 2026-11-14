@@ -45,7 +45,7 @@ theorem pending_drop (resource : NativeResourceArc CounterResource) (amount : U6
     resource_suspending.closure.drop_owned (pending resource amount) = resource_release resource := rfl
 
 /-- Pending is cancelled at scope exit. A no-op wake never implies completion. -/
-theorem cancel_contract (resource : NativeResourceArc CounterResource) (amount : U64) :
+@[cbv_eval] theorem cancel_contract (resource : NativeResourceArc CounterResource) (amount : U64) :
     __CANCEL__ resource amount = (do
       resource_release resource
       Result.ok true) := by

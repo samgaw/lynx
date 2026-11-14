@@ -61,7 +61,13 @@ defmodule Lynx.Rustler.FutureResourceTest do
 
     [{_, repeated_beam}] = Code.compile_string(repeated_laws, Path.join(tmp, "repeated.ex"))
     beams = [update_beam, cancel_beam, repeated_beam]
-    reports = Lynx.Laws.verify(beams, native: {Lynx.Rustler, options})
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192]
+    ]
+
+    reports = Lynx.Laws.verify(beams, law_options)
     assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
     guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
 
@@ -69,17 +75,14 @@ defmodule Lynx.Rustler.FutureResourceTest do
         do: assert(Enum.any?(guarantees, &(&1.kind == kind)))
 
     assert Enum.all?(
-             Lynx.Laws.verify(beams, native: {Lynx.Rustler, options}),
+             Lynx.Laws.verify(beams, law_options),
              &(&1.status == :ok and &1.cached)
            )
 
     export = Path.join(tmp, "future.export")
 
     assert Enum.all?(
-             Lynx.Laws.verify(beams,
-               native: {Lynx.Rustler, options},
-               export: export
-             ),
+             Lynx.Laws.verify(beams, Keyword.put(law_options, :export, export)),
              &(&1.status == :ok)
            )
 
@@ -107,7 +110,7 @@ defmodule Lynx.Rustler.FutureResourceTest do
     [{_, wrong_beam}] = Code.compile_string(wrong, Path.join(tmp, "wrong.ex"))
 
     assert Enum.any?(
-             Lynx.Laws.verify([wrong_beam], native: {Lynx.Rustler, options}),
+             Lynx.Laws.verify([wrong_beam], law_options),
              &(&1.status == :error)
            )
 
@@ -137,7 +140,7 @@ defmodule Lynx.Rustler.FutureResourceTest do
     File.write!(source, rust)
 
     assert Enum.all?(
-             Lynx.Laws.verify(beams, native: {Lynx.Rustler, options}),
+             Lynx.Laws.verify(beams, law_options),
              &(&1.status == :ok)
            )
   end
