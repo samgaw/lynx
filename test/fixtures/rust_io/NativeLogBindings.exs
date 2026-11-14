@@ -5,5 +5,6 @@ defmodule LynxIoFixture.Native do
   def commit(_), do: :erlang.nif_error(:not_loaded)
   def log_reopen(_), do: :erlang.nif_error(:not_loaded)
   def log_create, do: :erlang.nif_error(:not_loaded)
+  def log_repair_append(_, _, _), do: :erlang.nif_error(:not_loaded)
   def log_append(_, _), do: :erlang.nif_error(:not_loaded)
 end

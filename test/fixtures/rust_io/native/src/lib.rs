@@ -75,6 +75,40 @@ pub mod shared_log {
         io_protocol::locked_append_or_rollback(&resource.file, value)
     }
 
+    /// Repair and append while holding the resource's single file mutex.
+    ///
+    /// # Errors
+    /// Propagates repair, append, rollback and synchronization failures.
+    ///
+    /// # Panics
+    /// Recursive acquisition may block or panic; callers must not hold this mutex.
+    pub fn repair_append(
+        resource: &rustler::ResourceArc<LogResource>,
+        max_records: usize,
+        value: u16,
+    ) -> io::Result<bool> {
+        io_protocol::locked_repair_and_append(&resource.file, max_records, value)
+    }
+
+    /// Acknowledge only a synchronized repair/append, consuming the decoded owner.
+    /// An I/O error or recovery limit returns false without promising rollback.
+    #[rustler::nif(name = "log_repair_append", schedule = "DirtyIo")]
+    pub fn repair_append_nif(
+        resource: rustler::ResourceArc<LogResource>,
+        max_records: u32,
+        value: u16,
+    ) -> bool {
+        let result = repair_append(&resource, max_records as usize, value);
+        drop(resource);
+        match result {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                drop(error);
+                false
+            }
+        }
+    }
+
     /// Create and publish an owned file before transferring it to a shared resource.
     ///
     /// # Errors
