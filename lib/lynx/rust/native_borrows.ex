@@ -31,6 +31,31 @@ defmodule Lynx.Rust.NativeBorrows do
     end
   end
 
+  # Shared by borrow and owner audits: integer casts retain their actual typed
+  # operation and cannot unwind. Floating-point/pointer casts remain excluded.
+  def integer_cast?(
+        %{"UnaryOp" => [%{"Cast" => %{"Scalar" => %{"Integer" => _} = target}}, operand]},
+        refs
+      ) do
+    source =
+      case operand do
+        %{"Move" => %{"ty" => type}} -> type
+        %{"Copy" => %{"ty" => type}} -> type
+        _ -> nil
+      end
+
+    case CallModels.expand(source, refs) do
+      %{"Scalar" => %{"Integer" => _}} = source ->
+        Lynx.Rust.DropModels.primitive_scalar?(source) and
+          Lynx.Rust.DropModels.primitive_scalar?(%{"Scalar" => target})
+
+      _ ->
+        false
+    end
+  end
+
+  def integer_cast?(_, _), do: false
+
   def nonpanicking_calls(functions, models, context \\ %{}) do
     by_id = implementations(functions, context)
 
@@ -377,23 +402,10 @@ defmodule Lynx.Rust.NativeBorrows do
          _,
          _
        ) do
-    source =
-      case operand do
-        %{"Move" => %{"ty" => type}} -> type
-        %{"Copy" => %{"ty" => type}} -> type
-        _ -> nil
-      end
-
-    refs = get_in(functions, [:context, :references]) || %{}
-
-    case CallModels.expand(source, refs) do
-      %{"Scalar" => %{"Integer" => _}} = source ->
-        Lynx.Rust.DropModels.primitive_scalar?(source) and
-          Lynx.Rust.DropModels.primitive_scalar?(%{"Scalar" => target})
-
-      _ ->
-        false
-    end
+    integer_cast?(
+      %{"UnaryOp" => [%{"Cast" => %{"Scalar" => target}}, operand]},
+      get_in(functions, [:context, :references]) || %{}
+    )
   end
 
   defp statement?(%{"Assign" => [_, value]}, _, _, _),

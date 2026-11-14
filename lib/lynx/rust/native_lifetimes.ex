@@ -1047,8 +1047,10 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp statement!(%{"Assign" => [dest, value]}, live, ctx) do
-    if MapSet.size(live) > 0 and not (administrative?(value) or match?(%{"Ref" => _}, value)),
-      do: reject!(ctx)
+    if MapSet.size(live) > 0 and
+         not (administrative?(value) or Lynx.Rust.NativeBorrows.integer_cast?(value, ctx.refs) or
+                match?(%{"Ref" => _}, value)),
+       do: reject!(ctx)
 
     transfer!(dest, value, live, ctx)
   end
