@@ -89,7 +89,7 @@ defmodule Lynx.Rustler.RepairingLogTest do
     properties =
       properties ++
         Enum.map(
-          ~w(locked_safe borrow_safe borrow_returns facade_safe adapter_safe),
+          ~w(locked_safe borrow_safe borrow_returns facade_safe facade_returns adapter_safe),
           &("Record.GuardedRepairAdapter." <> &1)
         )
 
@@ -167,7 +167,10 @@ defmodule Lynx.Rustler.RepairingLogTest do
                &String.contains?(&1, "generated_adapter_safe_general")
              )
 
-      assert Enum.any?(File.stream!(export), &String.contains?(&1, "unsynced_initial_safe"))
+      for theorem <-
+            ~w(unsynced_initial_safe returned_pinned term_body_returns term_adapter_returns generated_adapter_returns calls_safe later_calls_safe later_calls_checked) do
+        assert Enum.any?(File.stream!(export), &String.contains?(&1, theorem))
+      end
     end
 
     # An incorrect Elixir expectation must fail after the native proofs succeed.
@@ -216,13 +219,17 @@ defmodule Lynx.Rustler.RepairingLogTest do
     # A false owner identity and a prefix claimed before it is appended both fail
     # against the extracted facade, including the actual resource decoder.
     for {correct, wrong} <- [
-          {"owner = ⟨3,7⟩ ∧ world = decoded", "owner = ⟨3,8⟩ ∧ world = decoded"},
+          {"owner = ⟨3,admission.counter + 1⟩ ∧ world = decoded",
+           "owner = ⟨3,admission.counter + 2⟩ ∧ world = decoded"},
           {"Result.NativeInvariant (Safe values) (do",
            "Result.NativeInvariant (Safe (values ++ [value])) (do"},
           {"Result.NativeInvariant (Safe values)\n      (Rustler.withResourceTypes",
            "Result.NativeInvariant (Safe (values ++ [0#u16]))\n      (Rustler.withResourceTypes"},
-          {"Record.LockedPrefixInvariant.view base 7 pinnedFrame",
-           "Record.LockedPrefixInvariant.view base 8 pinnedFrame"}
+          {"Record.LockedPrefixInvariant.view base (admission.counter + 1) pinnedFrame",
+           "Record.LockedPrefixInvariant.view base (admission.counter + 2) pinnedFrame"},
+          {"⟨admission.counter + 2,by have := admission.bound; omega,admission.errorAvailable && !consumed⟩",
+           "⟨admission.counter + 3,by have := admission.bound; omega,admission.errorAvailable && !consumed⟩"},
+          {"admission.errorAvailable && !consumed", "admission.errorAvailable"}
         ] do
       broken = String.replace(adapter_source, correct, wrong, global: false)
       refute broken == adapter_source

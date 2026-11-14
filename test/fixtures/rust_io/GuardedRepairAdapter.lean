@@ -7,24 +7,71 @@ open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol
 namespace Record.GuardedRepairAdapter
 open NativeFile Record.Properties Record.ResizeProperties Record.LogProperties Record.RepairCrashProperties Record.CrashProperties
 
-local instance ownerLayout : HeapLayout := HeapLayout.ownerFirst 7
+/-- Logical allocation admission for a pinned resource at a call boundary.
+The error capability may already have been consumed by an earlier call. -/
+class Admission where
+  counter : Nat
+  bound : 6 ≤ counter
+  errorAvailable : Bool
+
+instance initialAdmission : Admission := ⟨6,by decide,true⟩
+
+variable [admission : Admission]
+
+local instance ownerLayout : HeapLayout := HeapLayout.ownerFirst (admission.counter + 1)
+
+@[simp] private theorem small_le_counter (id : Nat) (small : id ≤ 6) : id ≤ admission.counter :=
+  small.trans admission.bound
+@[simp] private theorem small_ne_owner (id : Nat) (small : id ≤ 6) : id ≠ admission.counter + 1 := by
+  have := admission.bound; omega
+@[simp] private theorem owner_ne_small (id : Nat) (small : id ≤ 6) : admission.counter + 1 ≠ id :=
+  (small_ne_owner id small).symm
+@[simp] private theorem small_ne_lease (id : Nat) (small : id ≤ 6) : id ≠ admission.counter + 2 := by
+  have := admission.bound; omega
+@[simp] private theorem owner_ne_lease : admission.counter + 1 ≠ admission.counter + 2 := by omega
+@[simp] private theorem counter_ne_small (id : Nat) (small : id < 6) : admission.counter ≠ id := by
+  have := admission.bound; omega
+@[simp] private theorem small_ne_counter (id : Nat) (small : id < 6) : id ≠ admission.counter :=
+  (counter_ne_small id small).symm
+@[simp] private theorem counter_not_lt_small (id : Nat) (small : id ≤ 6) : ¬admission.counter < id := by
+  have := admission.bound; omega
+@[simp] private theorem owner_not_lt_small (id : Nat) (small : id ≤ 6) : ¬admission.counter + 1 < id := by
+  have := admission.bound; omega
+@[simp] private theorem lease_not_lt_small (id : Nat) (small : id ≤ 6) : ¬admission.counter + 2 < id := by
+  have := admission.bound; omega
+@[simp] private theorem small_beq_owner (id : Nat) (small : id ≤ 6) : (id == admission.counter + 1) = false :=
+  Bool.eq_false_iff.mpr (fun equal => small_ne_owner id small (_root_.beq_iff_eq.mp equal))
+@[simp] private theorem owner_beq_small (id : Nat) (small : id ≤ 6) : (admission.counter + 1 == id) = false :=
+  Bool.eq_false_iff.mpr (fun equal => owner_ne_small id small (_root_.beq_iff_eq.mp equal))
+@[simp] private theorem counter_beq_small (id : Nat) (small : id < 6) : (admission.counter == id) = false :=
+  Bool.eq_false_iff.mpr (fun equal => counter_ne_small id small (_root_.beq_iff_eq.mp equal))
+@[simp] private theorem small_beq_counter (id : Nat) (small : id < 6) : (id == admission.counter) = false :=
+  Bool.eq_false_iff.mpr (fun equal => small_ne_counter id small (_root_.beq_iff_eq.mp equal))
+@[simp] private theorem counter_bne_small (id : Nat) (small : id < 6) : (admission.counter != id) = true := by
+  simp only [bne,counter_beq_small id small,Bool.not_false]
+@[simp] private theorem max_counter : max admission.counter 2 = admission.counter :=
+  Nat.max_eq_left (small_le_counter 2 (by decide))
+@[simp] private theorem max_owner : max (admission.counter + 1) 2 = admission.counter + 1 := by
+  apply Nat.max_eq_left; have := admission.bound; omega
+@[simp] private theorem max_lease : max (admission.counter + 2) 2 = admission.counter + 2 := by
+  apply Nat.max_eq_left; have := admission.bound; omega
 
 @[expose] def payload : shared_log.LogResource := ⟨⟨1⟩⟩
 @[expose] def pinCells : List (Nat × String × Term) := [
   (5,NativeResourceArc.handleType shared_log.LogResource,.nativeReference 3),
   (6,NativeResourceArc.termType shared_log.LogResource,.tuple #[.nativeReference 3,.nativeReference 5])]
 @[expose] def errorCell : Nat × String × Term := (4,NativeIoError.typeName,.atom "live")
-@[expose] def pinnedFrame : List (Nat × String × Term) := NativeResourceArc.vmCells payload 3 5 6 ++ [errorCell]
+@[expose] def pinnedFrame : List (Nat × String × Term) := NativeResourceArc.vmCells payload 3 5 6 ++ (if admission.errorAvailable then [errorCell] else [])
 @[expose] def decodedFrame : List (Nat × String × Term) :=
-  (7,NativeResourceArc.handleType shared_log.LogResource,.nativeReference 3) :: pinnedFrame.map (fun cell =>
+  (admission.counter + 1,NativeResourceArc.handleType shared_log.LogResource,.nativeReference 3) :: pinnedFrame.map (fun cell =>
     if cell.1 = 3 then (3,NativeResourceArc.typeName shared_log.LogResource,
       .tuple #[.integer 2,NativeCodec.encode payload]) else cell)
 @[expose] def pinned (base : Environment) (poisoned : Bool) (state : State) : Environment :=
-  Record.LockedPrefixInvariant.view base 6 pinnedFrame (Record.LockedPrefixInvariant.free poisoned) state
+  Record.LockedPrefixInvariant.view base admission.counter pinnedFrame (Record.LockedPrefixInvariant.free poisoned) state
 @[expose] def decoded (base : Environment) (poisoned : Bool) (state : State) : Environment :=
-  Record.LockedPrefixInvariant.view base 7 decodedFrame (Record.LockedPrefixInvariant.free poisoned) state
+  Record.LockedPrefixInvariant.view base (admission.counter + 1) decodedFrame (Record.LockedPrefixInvariant.free poisoned) state
 @[expose] def returned (base : Environment) (poisoned consumed : Bool) (state : State) : Environment :=
-  Record.LockedPrefixInvariant.view base 8
+  Record.LockedPrefixInvariant.view base (admission.counter + 2)
     (if consumed then NativeResourceArc.vmCells payload 3 5 6 else pinnedFrame)
     (Record.LockedPrefixInvariant.free poisoned) state
 
@@ -56,10 +103,15 @@ private theorem pinned_proof (base : Environment) (poisoned : Bool) (state : Sta
   constructor
   · simp [pinned,Record.LockedPrefixInvariant.view,fileEnv]
   · intro cell member
-    simp only [pinned,Record.LockedPrefixInvariant.view,fileEnv,HeapLayout.mem_arrange,
-      pinnedFrame,NativeResourceArc.vmCells,List.cons_append,List.nil_append,List.mem_cons,List.not_mem_nil,or_false] at member
-    rcases member with rfl | rfl | rfl | rfl | rfl | rfl <;> simp [pinned,Record.LockedPrefixInvariant.view,fileEnv,errorCell]
-  all_goals simp [pinned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
+    have small : ∀ cell ∈ ((2,NativeFile.typeName,NativeFile.encode state) ::
+        (1,NativeMutex.typeName NativeFile,Record.LockedPrefixInvariant.free poisoned) :: pinnedFrame),
+        cell.1 ≤ admission.counter := by
+      cases live : admission.errorAvailable <;>
+        simp [pinnedFrame,NativeResourceArc.vmCells,errorCell,live]
+    simp only [pinned,Record.LockedPrefixInvariant.view,fileEnv,max_counter]
+    apply small cell
+    simpa only [pinned,Record.LockedPrefixInvariant.view,fileEnv,HeapLayout.mem_arrange] using member
+  all_goals cases live : admission.errorAvailable <;> simp [live,pinned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
     NativeResourceArc.vmCells,Record.LockedPrefixInvariant.free,errorCell,
     NativeResourceArc.handleType,NativeResourceArc.typeName,NativeResourceArc.termType,
     NativeCodec.typeName,NativeMutex.typeName,NativeFile.typeName,NativeCodec.encode]
@@ -69,10 +121,10 @@ pin, mutex and complete file state in their real heap order. -/
 theorem decode_prefix (base : Environment) (poisoned : Bool) (state : State)
     (registered : NativeResourceArc.typeName shared_log.LogResource ∈ base.nativeResourceTypes) :
     Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 6)) (pinned base poisoned state)
-      (.ok (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)) (decoded base poisoned state) := by
+      (.ok (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)) (decoded base poisoned state) := by
   have trace := NativeResourceArc.decode_pinned_prefix payload (pinned base poisoned state) 3 5 6
     (pinned_proof base poisoned state) registered
-  simpa [pinned,decoded,Record.LockedPrefixInvariant.view,fileEnv,
+  cases live : admission.errorAvailable <;> simpa [live,List.filter,pinned,decoded,Record.LockedPrefixInvariant.view,fileEnv,
     decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell] using trace
 
 /-- General guarded Rust safety applies to the actual owner-first decoder
@@ -82,10 +134,10 @@ theorem locked_safe (base : Environment) (poisoned : Bool) (before : State) (val
     (visible : Prefix (disk (logBytes values)) before.visible) :
     Result.NativeInvariant (Safe values) (locked_repair_and_append ⟨1⟩ maximum value)
       (decoded base poisoned before) := by
-  have safe := Record.LockedPrefixInvariant.critical_invariant_general base 7 decodedFrame poisoned before values maximum value
-    (by decide) (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
+  have safe := Record.LockedPrefixInvariant.critical_invariant_general base (admission.counter + 1) decodedFrame poisoned before values maximum value
+    (by have := admission.bound; omega) (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
     (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
-    (by decide) valid durable visible
+    (by simp [decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell]) valid durable visible
   intro residual world trace
   obtain ⟨⟨state,admitted,v,d,phase⟩,fragment⟩ := safe residual world trace
   refine ⟨?_,fragment⟩
@@ -94,25 +146,25 @@ theorem locked_safe (base : Environment) (poisoned : Bool) (before : State) (val
       decoded_pins admitted v d
 
 private theorem ownership_decoded (base : Environment) (counter : Nat) (contents : Term) (state : State) :
-    NativeResourceArc.ownership (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
+    NativeResourceArc.ownership (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)
       (Record.LockedPrefixInvariant.view base counter decodedFrame contents state) = some (2,payload) := by
-  simp [NativeResourceArc.ownership,Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,
+  cases live : admission.errorAvailable <;> simp [live,List.filter,NativeResourceArc.ownership,Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,
     NativeResourceArc.vmCells,errorCell,NativeResourceArc.typeName,NativeResourceArc.handleType,
     NativeResourceArc.termType,NativeCodec.typeName,NativeMutex.typeName,NativeFile.typeName,
-    NativeResourceArc.referenceLimit,NativeCodec.roundtrip]
+    NativeResourceArc.referenceLimit,NativeCodec.roundtrip,NativeIoError.typeName]
 
 /-- The actual first-party resource borrow reaches the verified mutex wrapper
 without consuming an owner or changing file state. -/
 theorem borrow_safe (base : Environment) (poisoned : Bool) (before : State) (values : List U16)
     (maximum : Usize) (value : U16) (valid : Admitted before) (durable : Prefix (disk (logBytes values)) before.durable)
     (visible : Prefix (disk (logBytes values)) before.visible) :
-    Result.NativeInvariant (Safe values) (shared_log.repair_append ⟨3,7⟩ maximum value)
+    Result.NativeInvariant (Safe values) (shared_log.repair_append ⟨3,admission.counter + 1⟩ maximum value)
       (decoded base poisoned before) := by
   rw [Record.RepairingLogProperties.critical_contract]
   simp only [NativeResourceArc.deref,Result.nativeGet_bind]
   apply Result.NativeInvariant.nativeGet
-  rw [show NativeResourceArc.ownership (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
-      (decoded base poisoned before) = some (2,payload) from ownership_decoded base 7 _ before]
+  rw [show NativeResourceArc.ownership (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)
+      (decoded base poisoned before) = some (2,payload) from ownership_decoded base (admission.counter + 1) _ before]
   simp only [Result.ok_bind,payload]
   exact locked_safe base poisoned before values maximum value valid durable visible
 
@@ -122,9 +174,9 @@ theorem borrow_returns (base : Environment) (poisoned : Bool) (before : State) (
     (maximum : Usize) (value : U16) (valid : Admitted before) (durable : Prefix (disk (logBytes values)) before.durable)
     (visible : Prefix (disk (logBytes values)) before.visible)
     (reply : core.result.Result Bool NativeIoError) (world : Environment)
-    (trace : Result.ReadyPrefix (shared_log.repair_append ⟨3,7⟩ maximum value)
+    (trace : Result.ReadyPrefix (shared_log.repair_append ⟨3,admission.counter + 1⟩ maximum value)
       (decoded base poisoned before) (.ok reply) world) :
-    ∃ after, world = Record.LockedPrefixInvariant.view base 8 decodedFrame
+    ∃ after, world = Record.LockedPrefixInvariant.view base (admission.counter + 2) decodedFrame
       (Record.LockedPrefixInvariant.free poisoned) after ∧ Admitted after ∧
       Prefix (disk (logBytes values)) after.visible ∧ Prefix (disk (logBytes values)) after.durable := by
   rw [Record.RepairingLogProperties.critical_contract] at trace
@@ -132,21 +184,21 @@ theorem borrow_returns (base : Environment) (poisoned : Bool) (before : State) (
   cases trace with
   | nativeGet _ _ _ _ continuation =>
       dsimp only at continuation
-      rw [show NativeResourceArc.ownership (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
-          (decoded base poisoned before) = some (2,payload) from ownership_decoded base 7 _ before] at continuation
+      rw [show NativeResourceArc.ownership (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)
+          (decoded base poisoned before) = some (2,payload) from ownership_decoded base (admission.counter + 1) _ before] at continuation
       simp only [Result.ok_bind,payload] at continuation
-      exact Record.LockedPrefixInvariant.critical_returns_general base 7 decodedFrame poisoned before values maximum value
-        (by decide) (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
+      exact Record.LockedPrefixInvariant.critical_returns_general base (admission.counter + 1) decodedFrame poisoned before values maximum value
+        (by have := admission.bound; omega) (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
         (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
-        (by decide) valid durable visible reply world continuation
+        (by simp [decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell]) valid durable visible reply world continuation
 
 private theorem release_state (base : Environment) (poisoned : Bool) (state : State) :
-    NativeResourceArc.ownedState (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
-      (Record.LockedPrefixInvariant.view base 8 decodedFrame (Record.LockedPrefixInvariant.free poisoned) state) =
+    NativeResourceArc.ownedState (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)
+      (Record.LockedPrefixInvariant.view base (admission.counter + 2) decodedFrame (Record.LockedPrefixInvariant.free poisoned) state) =
       (.ok none,returned base poisoned false state) := by
   simp only [NativeResourceArc.ownedState,NativeResourceArc.ownerState]
   rw [ownership_decoded]
-  simp [returned,
+  cases live : admission.errorAvailable <;> simp [live,returned,
     Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell,List.filter]
 
 private theorem pinned_pins : ∀ cell ∈ pinCells, cell ∈ pinnedFrame := by
@@ -157,15 +209,15 @@ private theorem pinned_pins : ∀ cell ∈ pinCells, cell ∈ pinnedFrame := by
 private theorem returned_safe (base : Environment) (poisoned : Bool) (state : State) (values : List U16)
     (valid : Admitted state) (visible : Prefix (disk (logBytes values)) state.visible)
     (durable : Prefix (disk (logBytes values)) state.durable) : Safe values (returned base poisoned false state) := by
-  exact safe_view base 8 pinnedFrame _ state values
+  exact safe_view base (admission.counter + 2) pinnedFrame _ state values
     (by simp [Separate,pinnedFrame,NativeResourceArc.vmCells,errorCell]) pinned_pins valid visible durable
 
 private theorem owner_release_safe (base : Environment) (poisoned : Bool) (state : State) (values : List U16)
     (valid : Admitted state) (visible : Prefix (disk (logBytes values)) state.visible)
     (durable : Prefix (disk (logBytes values)) state.durable) :
     Result.NativeInvariant (Safe values)
-      (NativeOwnedDrop.drop (⟨3,7⟩ : NativeResourceArc shared_log.LogResource))
-      (Record.LockedPrefixInvariant.view base 8 decodedFrame (Record.LockedPrefixInvariant.free poisoned) state) := by
+      (NativeOwnedDrop.drop (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource))
+      (Record.LockedPrefixInvariant.view base (admission.counter + 2) decodedFrame (Record.LockedPrefixInvariant.free poisoned) state) := by
   simp only [NativeOwnedDrop.drop,NativeResourceArc.releaseOwned,Result.nativeModify_bind]
   apply Result.NativeInvariant.nativeModify _ _ _
     (safe_view _ _ _ _ _ _ (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
@@ -174,8 +226,8 @@ private theorem owner_release_safe (base : Environment) (poisoned : Bool) (state
   exact .ok _ _ _ (returned_safe base poisoned state values valid visible durable)
 
 private theorem owner_release_returns (base : Environment) (poisoned : Bool) (state : State) (world : Environment)
-    (trace : Result.ReadyPrefix (NativeOwnedDrop.drop (⟨3,7⟩ : NativeResourceArc shared_log.LogResource))
-      (Record.LockedPrefixInvariant.view base 8 decodedFrame (Record.LockedPrefixInvariant.free poisoned) state)
+    (trace : Result.ReadyPrefix (NativeOwnedDrop.drop (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource))
+      (Record.LockedPrefixInvariant.view base (admission.counter + 2) decodedFrame (Record.LockedPrefixInvariant.free poisoned) state)
       (.ok ()) world) : world = returned base poisoned false state := by
   simp only [NativeOwnedDrop.drop,NativeResourceArc.releaseOwned,Result.nativeModify_bind] at trace
   cases trace with
@@ -188,7 +240,7 @@ private theorem owner_release_returns (base : Environment) (poisoned : Bool) (st
 private theorem returned_without_error_safe (base : Environment) (poisoned : Bool) (state : State) (values : List U16)
     (valid : Admitted state) (visible : Prefix (disk (logBytes values)) state.visible)
     (durable : Prefix (disk (logBytes values)) state.durable) : Safe values (returned base poisoned true state) := by
-  apply safe_view base 8 (NativeResourceArc.vmCells payload 3 5 6) _ state values
+  apply safe_view base (admission.counter + 2) (NativeResourceArc.vmCells payload 3 5 6) _ state values
     (by simp [Separate,NativeResourceArc.vmCells]) _ valid visible durable
   intro cell member
   simp only [pinCells,List.mem_cons,List.not_mem_nil,or_false] at member
@@ -203,18 +255,108 @@ private theorem error_release_safe (base : Environment) (poisoned : Bool) (state
       simp only [NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability]
       apply Result.NativeInvariant.wait _ _ _ (returned_safe base poisoned state values valid visible durable)
       intro actual world ready
-      by_cases bounded : identity ≤ 8
-      · interval_cases identity <;>
-          simp [returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
+      by_cases bounded : identity ≤ 6
+      · cases live : admission.errorAvailable <;> interval_cases identity <;>
+          simp [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
             NativeResourceArc.vmCells,errorCell,List.filter] at ready
         all_goals obtain ⟨rfl,rfl⟩ := ready
         all_goals first
-          | exact .error _ _ _ (returned_safe base poisoned state values valid visible durable)
-          | exact .ok _ _ _ (returned_without_error_safe base poisoned state values valid visible durable)
-      · have beyond : 8 < identity := by omega
-        simp [returned,Record.LockedPrefixInvariant.view,fileEnv,beyond] at ready
-        obtain ⟨rfl,rfl⟩ := ready
-        exact .error _ _ _ (returned_safe base poisoned state values valid visible durable)
+          | simpa [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,NativeResourceArc.vmCells,errorCell] using
+              (Result.NativeInvariant.error (Safe values) .exhausted _ (returned_safe base poisoned state values valid visible durable) :
+                Result.NativeInvariant (Safe values) (Result.error .exhausted : Result Unit) (returned base poisoned false state))
+          | simpa [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,NativeResourceArc.vmCells,errorCell] using
+              (Result.NativeInvariant.ok (Safe values) () _ (returned_without_error_safe base poisoned state values valid visible durable))
+      · have beyond : 6 < identity := by omega
+        have positive : identity ≠ 0 := by omega
+        have absent (id : Nat) (small : id ≤ 6) : id ≠ identity := by omega
+        have absentBool (id : Nat) (small : id ≤ 6) : (id == identity) = false :=
+          Bool.eq_false_iff.mpr (fun equal => absent id small (_root_.beq_iff_eq.mp equal))
+        cases live : admission.errorAvailable <;> by_cases within : admission.counter + 2 < identity <;>
+          simp [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
+            NativeResourceArc.vmCells,errorCell,List.filter,positive,absentBool,within] at ready
+        all_goals obtain ⟨rfl,rfl⟩ := ready
+        all_goals simpa [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,NativeResourceArc.vmCells,errorCell] using
+          (Result.NativeInvariant.error (Safe values) .exhausted _ (returned_safe base poisoned state values valid visible durable) :
+            Result.NativeInvariant (Safe values) (Result.error .exhausted : Result Unit) (returned base poisoned false state))
+
+/-- A successful error destructor consumes exactly the admitted live capability.
+An unavailable or incorrectly typed capability cannot return successfully. -/
+private theorem error_release_returns (base : Environment) (poisoned : Bool) (state : State)
+    (error : NativeIoError) (world : Environment)
+    (trace : Result.ReadyPrefix (NativeOwnedDrop.drop error) (returned base poisoned false state)
+      (.ok ()) world) : world = returned base poisoned true state := by
+  cases error with
+  | mk identity =>
+      simp only [NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability] at trace
+      cases trace with
+      | wait _ _ actual _ updated _ _ ready continuation =>
+          by_cases bounded : identity ≤ 6
+          · cases live : admission.errorAvailable <;> interval_cases identity <;>
+              simp [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
+                NativeResourceArc.vmCells,errorCell,List.filter] at ready
+            all_goals obtain ⟨rfl,rfl⟩ := ready
+            all_goals cases continuation
+            all_goals simp [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
+              NativeResourceArc.vmCells,errorCell]
+          · have positive : identity ≠ 0 := by omega
+            have absent (id : Nat) (small : id ≤ 6) : id ≠ identity := by omega
+            have absentBool (id : Nat) (small : id ≤ 6) : (id == identity) = false :=
+              Bool.eq_false_iff.mpr (fun equal => absent id small (_root_.beq_iff_eq.mp equal))
+            cases live : admission.errorAvailable <;> by_cases within : admission.counter + 2 < identity <;>
+              simp [live,returned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,
+                NativeResourceArc.vmCells,errorCell,List.filter,positive,absentBool,within] at ready
+            all_goals obtain ⟨rfl,rfl⟩ := ready
+            all_goals cases continuation
+
+/-- Successful facade returns expose the exact released resource frame, for
+both boolean replies. Every I/O error converted to false has been disposed. -/
+theorem facade_returns (base : Environment) (poisoned : Bool) (before : State) (values : List U16)
+    (maximum : U32) (value : U16) (valid : Admitted before)
+    (durable : Prefix (disk (logBytes values)) before.durable)
+    (visible : Prefix (disk (logBytes values)) before.visible)
+    (accepted : Bool) (world : Environment)
+    (trace : Result.ReadyPrefix (__REPAIR_APPEND__ ⟨3,admission.counter + 1⟩ maximum value)
+      (decoded base poisoned before) (.ok accepted) world) :
+    ∃ state consumed, world = returned base poisoned consumed state ∧ Admitted state ∧
+      Prefix (disk (logBytes values)) state.visible ∧ Prefix (disk (logBytes values)) state.durable := by
+  rw [Record.RepairingLogProperties.facade_contract] at trace
+  simp only [NativeM.lift,Result.ok_bind] at trace
+  obtain ⟨reply,middle,borrowed,continuation⟩ := trace.bind_returns
+  obtain ⟨state,rfl,admitted,v,d⟩ := borrow_returns base poisoned before values _ value valid durable visible reply middle borrowed
+  obtain ⟨releasedUnit,releasedWorld,released,continuation⟩ := continuation.bind_returns
+  have identity := owner_release_returns base poisoned state releasedWorld (by cases releasedUnit; exact released)
+  subst releasedWorld
+  cases reply with
+  | Ok answer =>
+      cases continuation
+      exact ⟨state,false,rfl,admitted,v,d⟩
+  | Err error =>
+      obtain ⟨releasedUnit,final,disposed,continuation⟩ := continuation.bind_returns
+      have identity := error_release_returns base poisoned state error final (by cases releasedUnit; exact disposed)
+      subst final
+      cases continuation
+      exact ⟨state,true,rfl,admitted,v,d⟩
+
+/-- Advance admission by the two fresh identities allocated by a completed
+resource call: its temporary Rust owner and its mutex lease. -/
+@[expose, instance_reducible] def nextAdmission (consumed : Bool) : Admission :=
+  ⟨admission.counter + 2,by have := admission.bound; omega,admission.errorAvailable && !consumed⟩
+
+/-- A completed call is admitted again without resetting allocation counters,
+recreating disposed errors, or changing the heap order. -/
+theorem returned_pinned (base : Environment) (poisoned consumed : Bool) (state : State) :
+    returned base poisoned consumed state = @pinned (nextAdmission consumed) base poisoned state := by
+  unfold returned pinned nextAdmission pinnedFrame
+  dsimp only
+  have fresh (id : Nat) (small : id ≤ 6) : (id == admission.counter + 2 + 1) = false := by
+    apply Bool.eq_false_iff.mpr
+    intro equal
+    have := _root_.beq_iff_eq.mp equal
+    have := admission.bound
+    omega
+  cases live : admission.errorAvailable <;> cases consumed <;>
+    simp [live,Record.LockedPrefixInvariant.view,fileEnv,HeapLayout.ownerFirst,
+      HeapLayout.arrange,NativeResourceArc.vmCells,errorCell,fresh]
 
 /-- The actual compiled facade preserves the known prefix and VM pin on every
 native prefix. It consumes its nonfinal owner before converting I/O errors to
@@ -222,16 +364,16 @@ false; an unadmitted error destructor exhausts instead of fabricating success. -
 theorem facade_safe (base : Environment) (poisoned : Bool) (before : State) (values : List U16)
     (maximum : U32) (value : U16) (valid : Admitted before) (durable : Prefix (disk (logBytes values)) before.durable)
     (visible : Prefix (disk (logBytes values)) before.visible) :
-    Result.NativeInvariant (Safe values) (__REPAIR_APPEND__ ⟨3,7⟩ maximum value)
+    Result.NativeInvariant (Safe values) (__REPAIR_APPEND__ ⟨3,admission.counter + 1⟩ maximum value)
       (decoded base poisoned before) := by
   rw [Record.RepairingLogProperties.facade_contract]
   simp only [NativeM.lift,Result.ok_bind]
-  apply Result.NativeInvariant.bind (computation := shared_log.repair_append ⟨3,7⟩ (UScalar.cast .Usize maximum) value)
+  apply Result.NativeInvariant.bind (computation := shared_log.repair_append ⟨3,admission.counter + 1⟩ (UScalar.cast .Usize maximum) value)
     (borrow_safe base poisoned before values _ value valid durable visible)
   intro reply world completed
   obtain ⟨state,rfl,admitted,v,d⟩ := borrow_returns base poisoned before values _ value valid durable visible reply world completed
   apply Result.NativeInvariant.bind
-    (computation := NativeOwnedDrop.drop (⟨3,7⟩ : NativeResourceArc shared_log.LogResource))
+    (computation := NativeOwnedDrop.drop (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource))
     (owner_release_safe base poisoned state values admitted v d)
   intro releasedUnit world released
   have identity := owner_release_returns base poisoned state world (by cases releasedUnit; exact released)
@@ -247,17 +389,17 @@ theorem facade_safe (base : Environment) (poisoned : Bool) (before : State) (val
 private theorem pinned_safe (base : Environment) (poisoned : Bool) (state : State) (values : List U16)
     (valid : Admitted state) (visible : Prefix (disk (logBytes values)) state.visible)
     (durable : Prefix (disk (logBytes values)) state.durable) : Safe values (pinned base poisoned state) := by
-  exact safe_view base 6 pinnedFrame _ state values
+  exact safe_view base admission.counter pinnedFrame _ state values
     (by simp [Separate,pinnedFrame,NativeResourceArc.vmCells,errorCell]) pinned_pins valid visible durable
 
 private theorem clone_prefix (base : Environment) (poisoned : Bool) (state : State) :
     Result.ReadyPrefix (NativeResourceArc.clone (⟨3,5⟩ : NativeResourceArc shared_log.LogResource))
-      (pinned base poisoned state) (.ok (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)) (decoded base poisoned state) := by
+      (pinned base poisoned state) (.ok (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)) (decoded base poisoned state) := by
   have pin := pinned_proof base poisoned state
   have trace := NativeResourceArc.clone_live_prefix (⟨3,5⟩ : NativeResourceArc shared_log.LogResource)
     payload 1 (pinned base poisoned state) (by decide) (by decide) pin.owner pin.allocation pin.owners
     (by simp [pinned,Record.LockedPrefixInvariant.view,fileEnv,pinnedFrame,NativeResourceArc.vmCells,errorCell])
-  simpa [pinned,decoded,Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,
+  cases live : admission.errorAvailable <;> simpa [live,List.filter,pinned,decoded,Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,
     NativeResourceArc.vmCells,errorCell] using trace
 
 private theorem clone_safe (base : Environment) (poisoned : Bool) (state : State) (values : List U16)
@@ -276,7 +418,7 @@ private theorem clone_safe (base : Environment) (poisoned : Bool) (state : State
           apply Result.NativeInvariant.nativeModify _ _ _ (pinned_safe base poisoned state values valid visible durable)
           dsimp only at ready
           rw [ready]
-          exact .ok _ _ _ (safe_view base 7 decodedFrame _ state values
+          exact .ok _ _ _ (safe_view base (admission.counter + 1) decodedFrame _ state values
             (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell]) decoded_pins valid visible durable)
 
 /-- Every decoder prefix retains the VM pin and bytes, including the actual
@@ -297,7 +439,7 @@ private theorem decode_returns (base : Environment) (poisoned : Bool) (state : S
     (registered : NativeResourceArc.typeName shared_log.LogResource ∈ base.nativeResourceTypes)
     (owner : NativeResourceArc shared_log.LogResource) (world : Environment)
     (trace : Result.ReadyPrefix (NativeResourceArc.decode (.nativeReference 6)) (pinned base poisoned state) (.ok owner) world) :
-    owner = ⟨3,7⟩ ∧ world = decoded base poisoned state := by
+    owner = ⟨3,admission.counter + 1⟩ ∧ world = decoded base poisoned state := by
   have expected := (decode_prefix base poisoned state registered).run []
   have actual := trace.run []
   rw [Result.ok_apply] at expected actual
@@ -328,14 +470,14 @@ theorem argument_release_safe (base : Environment) (poisoned : Bool) (state : St
     (valid : Admitted state) (visible : Prefix (disk (logBytes values)) state.visible)
     (durable : Prefix (disk (logBytes values)) state.durable) :
     Result.NativeInvariant (Safe values)
-      (NativeOwnedDrop.drop (⟨3,7⟩ : NativeResourceArc shared_log.LogResource))
+      (NativeOwnedDrop.drop (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource))
       (decoded base poisoned state) := by
-  have released : NativeResourceArc.ownedState (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
+  have released : NativeResourceArc.ownedState (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)
       (decoded base poisoned state) = (.ok none,
-        Record.LockedPrefixInvariant.view base 7 pinnedFrame (Record.LockedPrefixInvariant.free poisoned) state) := by
+        Record.LockedPrefixInvariant.view base (admission.counter + 1) pinnedFrame (Record.LockedPrefixInvariant.free poisoned) state) := by
     simp only [NativeResourceArc.ownedState,NativeResourceArc.ownerState,decoded]
     rw [ownership_decoded]
-    simp [Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,
+    cases live : admission.errorAvailable <;> simp [live,Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,
       NativeResourceArc.vmCells,errorCell,List.filter]
   simp only [NativeOwnedDrop.drop,NativeResourceArc.releaseOwned,Result.nativeModify_bind]
   apply Result.NativeInvariant.nativeModify _ _ _
@@ -355,7 +497,7 @@ private theorem scalar_continuation_safe (base : Environment) (poisoned : Bool) 
     (accepted : ∀ value, Result.NativeInvariant (Safe values) (next value) (decoded base poisoned state)) :
     Result.NativeInvariant (Safe values) (do
       let value ← Result.handle (Result.ofExcept reply) (fun error => do
-        NativeOwnedDrop.drop (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
+        NativeOwnedDrop.drop (⟨3,admission.counter + 1⟩ : NativeResourceArc shared_log.LogResource)
         Result.error error)
       next value) (decoded base poisoned state) := by
   have safe := argument_release_safe base poisoned state values valid visible durable
@@ -413,5 +555,68 @@ theorem term_adapter_safe (base : Environment) (poisoned : Bool) (before : State
     (base.nativeResourceTypes ++ [NativeResourceArc.typeName shared_log.LogResource]).eraseDups}
   change Result.NativeInvariant (Safe values) (termBody maximum value) (pinned registered poisoned before)
   exact term_body_safe registered poisoned before values maximum value valid durable visible (by simp [registered])
+
+/-- Failed scalar conversion cannot produce a successful native return, even
+when its error handler releases the resource before propagating the exception. -/
+private theorem scalar_continuation_returns (owner : NativeResourceArc shared_log.LogResource)
+    (reply : Except Exception α) (next : α → Result β) (before after : Environment) (result : β)
+    (trace : Result.ReadyPrefix (do
+      let value ← Result.handle (Result.ofExcept reply) (fun error => do
+        NativeOwnedDrop.drop owner
+        Result.error error)
+      next value) before (.ok result) after) :
+    ∃ value, Result.ReadyPrefix (next value) before (.ok result) after := by
+  cases reply with
+  | ok value => exact ⟨value,trace⟩
+  | error exception =>
+      cases exception <;> simp only [Result.ofExcept,Result.handle,Result.error_bind,bind_assoc] at trace
+      all_goals first
+        | obtain ⟨_,_,_,impossible⟩ := trace.bind_returns
+          cases impossible
+        | cases trace
+
+/-- Every successful term return comes from the actual facade and can be used
+as admission for a subsequent call. Invalid scalars never fabricate success. -/
+theorem term_body_returns (base : Environment) (poisoned : Bool) (before : State) (values : List U16)
+    (maximum value result : Term) (valid : Admitted before)
+    (durable : Prefix (disk (logBytes values)) before.durable)
+    (visible : Prefix (disk (logBytes values)) before.visible)
+    (registered : NativeResourceArc.typeName shared_log.LogResource ∈ base.nativeResourceTypes)
+    (world : Environment)
+    (trace : Result.ReadyPrefix (termBody maximum value) (pinned base poisoned before) (.ok result) world) :
+    ∃ state consumed accepted, result = Rustler.encodeBool accepted ∧
+      world = @pinned (nextAdmission consumed) base poisoned state ∧ Admitted state ∧
+      Prefix (disk (logBytes values)) state.visible ∧ Prefix (disk (logBytes values)) state.durable := by
+  unfold termBody at trace
+  obtain ⟨owner,decodedWorld,decodedTrace,trace⟩ := trace.bind_returns
+  obtain ⟨rfl,rfl⟩ := decode_returns base poisoned before registered owner decodedWorld decodedTrace
+  obtain ⟨maximum,trace⟩ := scalar_continuation_returns _ _ _ _ _ _ trace
+  obtain ⟨value,trace⟩ := scalar_continuation_returns _ _ _ _ _ _ trace
+  obtain ⟨accepted,encoded,returned⟩ := Rustler.executeNative_returns trace
+  obtain ⟨state,consumed,identity,admitted,v,d⟩ :=
+    facade_returns base poisoned before values maximum value valid durable visible accepted world returned
+  exact ⟨state,consumed,accepted,encoded,identity.trans (returned_pinned base poisoned consumed state),admitted,v,d⟩
+
+/-- Resource registration is retained in the next call's base environment. -/
+@[expose] def registeredBase (base : Environment) : Environment :=
+  {base with nativeResourceTypes :=
+    (base.nativeResourceTypes ++ [NativeResourceArc.typeName shared_log.LogResource]).eraseDups}
+
+theorem term_adapter_returns (base : Environment) (poisoned : Bool) (before : State) (values : List U16)
+    (maximum value result : Term) (valid : Admitted before)
+    (durable : Prefix (disk (logBytes values)) before.durable)
+    (visible : Prefix (disk (logBytes values)) before.visible) (world : Environment)
+    (trace : Result.ReadyPrefix
+      (Rustler.withResourceTypes [NativeResourceArc.typeName shared_log.LogResource] (termBody maximum value))
+      (pinned base poisoned before) (.ok result) world) :
+    ∃ state consumed accepted, result = Rustler.encodeBool accepted ∧
+      world = @pinned (nextAdmission consumed) (registeredBase base) poisoned state ∧ Admitted state ∧
+      Prefix (disk (logBytes values)) state.visible ∧ Prefix (disk (logBytes values)) state.durable := by
+  unfold Rustler.withResourceTypes at trace
+  cases trace with
+  | nativeModify _ _ actual _ updated _ _ ready continuation =>
+      obtain ⟨rfl,rfl⟩ := ready
+      exact term_body_returns (registeredBase base) poisoned before values maximum value result valid durable visible
+        (by simp [registeredBase]) world continuation
 
 end Record.GuardedRepairAdapter
