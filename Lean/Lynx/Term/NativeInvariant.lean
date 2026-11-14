@@ -212,6 +212,68 @@ private theorem blocked_stuck {poll : Environment → Option (β × Environment)
     Concurrent.State.firing, Concurrent.firstOfEach, Concurrent.Kernel.map_eq,
     Concurrent.State.nativeView, Concurrent.State.view, Concurrent.State.process]
 
+/-- Every raw runtime prefix of a native computation retains its actual ready
+prefix. A blocked wait enters an initial scheduler state without completing. -/
+theorem run_prefix {holds : Environment → Prop} {computation : Result α} {before : Environment}
+    (safe : NativeInvariant holds computation before) (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config α}
+    (executed : Concurrent.Run (.start before computation elapsed) events last) :
+    ∃ env residual, ReadyPrefix computation before residual env ∧
+      (last = .start env residual elapsed ∨
+        last = .running (Concurrent.State.initial env elapsed)
+          [(env.currentPid, Concurrent.Task.root residual)] none false) := by
+  induction events generalizing before computation last with
+  | nil => cases executed; exact ⟨before, computation, .refl _ _, .inl rfl⟩
+  | cons event events ih =>
+      cases executed with
+      | step moved rest =>
+          have extend {next : Result α} {middle : Environment}
+              (headTrace : ReadyPrefix computation before next middle)
+              (remaining : Concurrent.Run (.start middle next elapsed) events last) :
+              ∃ env residual, ReadyPrefix computation before residual env ∧
+                (last = .start env residual elapsed ∨
+                  last = .running (Concurrent.State.initial env elapsed)
+                    [(env.currentPid, Concurrent.Task.root residual)] none false) := by
+            obtain ⟨env, residual, tailTrace, ending⟩ := ih (safe.after_prefix headTrace) remaining
+            exact ⟨env, residual, headTrace.trans tailTrace, ending⟩
+          cases computation with
+          | get next | nativeGet next =>
+              simp only [Concurrent.Step, Concurrent.Config.successors, List.mem_singleton,
+                Prod.mk.injEq] at moved
+              obtain ⟨rfl, rfl⟩ := moved
+              apply extend ?_ rest
+              first | exact .get _ _ _ _ (.refl _ _) | exact .nativeGet _ _ _ _ (.refl _ _)
+          | set updated next | nativeSet updated next =>
+              simp only [Concurrent.Step, Concurrent.Config.successors, List.mem_singleton,
+                Prod.mk.injEq] at moved
+              obtain ⟨rfl, rfl⟩ := moved
+              apply extend ?_ rest
+              first | exact .set _ _ _ _ _ (.refl _ _) | exact .nativeSet _ _ _ _ _ (.refl _ _)
+          | nativeModify transition next =>
+              simp only [Concurrent.Step, Concurrent.Config.successors, List.mem_singleton,
+                Prod.mk.injEq] at moved
+              obtain ⟨rfl, rfl⟩ := moved
+              exact extend (.nativeModify _ _ _ _ _ _ _ rfl (.refl _ _)) rest
+          | wait poll next =>
+              cases ready : poll before with
+              | none =>
+                  simp only [Concurrent.Step, Concurrent.Config.successors, ready, List.mem_singleton,
+                    Prod.mk.injEq] at moved
+                  obtain ⟨rfl, rfl⟩ := moved
+                  cases rest with
+                  | refl => exact ⟨before, _, .refl _ _, .inr rfl⟩
+                  | step moved _ =>
+                      have stuck := blocked_stuck next before elapsed ready
+                      simp only [Concurrent.Step, stuck, List.not_mem_nil] at moved
+              | some reply =>
+                  obtain ⟨value, updated⟩ := reply
+                  simp only [Concurrent.Step, Concurrent.Config.successors, ready, List.mem_singleton,
+                    Prod.mk.injEq] at moved
+                  obtain ⟨rfl, rfl⟩ := moved
+                  exact extend (.wait _ _ _ _ _ _ _ ready (.refl _ _)) rest
+          | ok | error => simp [Concurrent.Step, Concurrent.Config.successors, Concurrent.isRequest] at moved
+          | schedule | send | receive | request => exact False.elim (safe _ _ (.refl _ _)).2
+
 /-- A native invariant covers every raw runtime prefix. A blocked wait can enter
 an initial scheduler state but, with no peers or timers, cannot change the native
 snapshot while blocked. This asserts neither completion nor concurrent safety. -/
@@ -223,49 +285,28 @@ theorem run {holds : Environment → Prop} {computation : Result α} {before : E
       ((∃ residual, last = .start env residual elapsed) ∨
         ∃ residual, last = .running (Concurrent.State.initial env elapsed)
           [(env.currentPid, Concurrent.Task.root residual)] none false) := by
-  induction events generalizing before computation last with
-  | nil => cases executed; exact ⟨before, safe.initial, .inl ⟨_, rfl⟩⟩
-  | cons event events ih =>
-      cases executed with
-      | step moved rest =>
-          cases computation with
-          | get next | nativeGet next =>
-              simp only [Concurrent.Step, Concurrent.Config.successors, List.mem_singleton,
-                Prod.mk.injEq] at moved
-              obtain ⟨rfl, rfl⟩ := moved
-              apply ih (safe.after_prefix ?_) rest
-              first | exact .get _ _ _ _ (.refl _ _) | exact .nativeGet _ _ _ _ (.refl _ _)
-          | set updated next | nativeSet updated next =>
-              simp only [Concurrent.Step, Concurrent.Config.successors, List.mem_singleton,
-                Prod.mk.injEq] at moved
-              obtain ⟨rfl, rfl⟩ := moved
-              apply ih (safe.after_prefix ?_) rest
-              first | exact .set _ _ _ _ _ (.refl _ _) | exact .nativeSet _ _ _ _ _ (.refl _ _)
-          | nativeModify transition next =>
-              simp only [Concurrent.Step, Concurrent.Config.successors, List.mem_singleton,
-                Prod.mk.injEq] at moved
-              obtain ⟨rfl, rfl⟩ := moved
-              apply ih (safe.after_prefix (.nativeModify _ _ _ _ _ _ _ rfl (.refl _ _))) rest
-          | wait poll next =>
-              cases ready : poll before with
-              | none =>
-                  simp only [Concurrent.Step, Concurrent.Config.successors, ready, List.mem_singleton,
-                    Prod.mk.injEq] at moved
-                  obtain ⟨rfl, rfl⟩ := moved
-                  cases rest with
-                  | refl => exact ⟨before, safe.initial, .inr ⟨_, rfl⟩⟩
-                  | step moved _ =>
-                      have stuck := blocked_stuck next before elapsed ready
-                      simp only [Concurrent.Step, stuck, List.not_mem_nil] at moved
-              | some reply =>
-                  obtain ⟨value, updated⟩ := reply
-                  simp only [Concurrent.Step, Concurrent.Config.successors, ready, List.mem_singleton,
-                    Prod.mk.injEq] at moved
-                  obtain ⟨rfl, rfl⟩ := moved
-                  exact ih (safe.after_prefix (.wait _ _ _ _ _ _ _ ready (.refl _ _))) rest
-          | ok | error => simp [Concurrent.Step, Concurrent.Config.successors, Concurrent.isRequest] at moved
-          | schedule | send | receive | request => exact False.elim (safe _ _ (.refl _ _)).2
+  obtain ⟨env, residual, trace, ending⟩ := safe.run_prefix elapsed executed
+  refine ⟨env, (safe _ _ trace).1, ?_⟩
+  exact ending.elim (fun equal => .inl ⟨residual, equal⟩) (fun equal => .inr ⟨residual, equal⟩)
 
+/-- Every successful terminal native runtime execution has a concrete successful
+ready prefix. Deadlock, verification exhaustion and pending waits cannot supply
+this witness. This is a partial-correctness rule, not a termination guarantee. -/
+theorem run_returns {holds : Environment → Prop} {computation : Result α} {before : Environment}
+    (safe : NativeInvariant holds computation before) (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config α} {value : α}
+    (executed : Concurrent.Run (.start before computation elapsed) events last)
+    (terminal : Concurrent.Terminal last (.ok value)) :
+    ∃ env, ReadyPrefix computation before (.ok value) env ∧
+      last = .start env (.ok value) elapsed := by
+  obtain ⟨env, residual, trace, ending⟩ := safe.run_prefix elapsed executed
+  have output := terminal.outcome_eq
+  rcases ending with rfl | rfl
+  · cases residual <;> simp only [Concurrent.Config.outcome, Outcome.ok.injEq,
+      reduceCtorEq] at output
+    subst value
+    exact ⟨env, trace, rfl⟩
+  · simp only [Concurrent.Config.outcome, reduceCtorEq] at output
 
 end NativeInvariant
 end Lynx.Result
