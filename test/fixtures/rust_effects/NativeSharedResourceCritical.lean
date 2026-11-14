@@ -156,6 +156,51 @@ theorem critical_state_handled_next {α β : Type} (finish : Bool → NativeM α
   refine ⟨changed,updated,?_,arithmetic⟩
   simpa only [Result.ok_bind] using (((trace.bind finish).handle handler).bind next).apply
 
+/-- The actual recovered guard read has a ready prefix for either poison
+status. It observes the stored value and retains that status after release. -/
+theorem locked_read_prefix (mutex : NativeMutex effects_core.Counter)
+    (value : effects_core.Counter) (poisoned : Bool) (env : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode value])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    Result.ReadyPrefix (do
+      let acquired ← NativeMutex.lock mutex
+      let guard ← effects_core.recover_guard acquired
+      let observed ← effects_core.read_guard guard
+      effects_core.release_guard guard
+      Result.ok observed) env (.ok value.value) {env with
+        nativeRefCounter := env.nativeRefCounter + 1
+        nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+          (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+            .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode value]) else cell} := by
+  let acquired : Environment := {env with
+    nativeRefCounter := env.nativeRefCounter + 1
+    nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
+      (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value)}
+  have held := replacement_filter env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter) _
+    (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value) stored
+  have released := (NativeGuard.release_owned_prefix
+    (⟨mutex,env.nativeRefCounter + 1,env.currentPid,value⟩ : NativeGuard effects_core.Counter)
+    value poisoned acquired rfl held).bind (fun _ => Result.ok value.value)
+  simp only [Result.ok_bind] at released
+  change Result.ReadyPrefix _ acquired (.ok value.value) {acquired with
+    nativeHeap := replaceCell acquired.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
+      (.tuple #[.atom "unlocked",.atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode value])} at released
+  have completed : Result.ReadyPrefix (do
+      NativeGuard.release (⟨mutex,env.nativeRefCounter + 1,env.currentPid,value⟩ : NativeGuard effects_core.Counter)
+      Result.ok value.value) acquired (.ok value.value) {env with
+        nativeRefCounter := env.nativeRefCounter + 1
+        nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
+          (.tuple #[.atom "unlocked",.atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode value])} := by
+    simpa only [acquired,replacement_overwrite] using released
+  unfold NativeMutex.lock
+  simp only [Result.wait_bind]
+  refine .wait _ _ _ env acquired _ _ (NativeMutex.pollLock_unlocked mutex value poisoned env stored fresh) ?_
+  cases poisoned <;> simpa [effects_core.recover_guard,NativePoisonError.into_inner,
+    effects_core.read_guard,NativeGuard.deref,effects_core.release_guard,NativeOwnedDrop.drop,
+    NativeM.ok,acquired,replaceCell] using completed
+
 theorem locked_read_handled_next {α β : Type} (finish : U64 → NativeM α)
     (handler : Exception → NativeM α) (next : α → NativeM β)
     (mutex : NativeMutex effects_core.Counter) (value : effects_core.Counter) (env : Environment)
@@ -174,31 +219,7 @@ theorem locked_read_handled_next {α β : Type} (finish : U64 → NativeM α)
         nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
           (mutex.id, NativeMutex.typeName effects_core.Counter,
             .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]) else cell} := by
-  let heldEnv : Environment := { env with
-    nativeRefCounter := env.nativeRefCounter + 1
-    nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-      (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) false value)}
-  have held := replacement_filter env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter) _
-    (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) false value) stored
-  have released := NativeGuard.release_owned_handled_next
-    (⟨mutex, env.nativeRefCounter + 1, env.currentPid, value⟩ : NativeGuard effects_core.Counter)
-    value false (finish value.value) handler next heldEnv rfl held
-  have result : ((Result.handle (do
-      NativeGuard.release (⟨mutex, env.nativeRefCounter + 1, env.currentPid, value⟩ : NativeGuard effects_core.Counter)
-      finish value.value) handler) >>= next) heldEnv =
-      ((Result.handle (finish value.value) handler) >>= next) { env with
-        nativeRefCounter := env.nativeRefCounter + 1
-        nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-          (.tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value])} := by
-    change _ = ((Result.handle (finish value.value) handler) >>= next) { heldEnv with
-      nativeHeap := replaceCell heldEnv.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-        (.tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]) } at released
-    simpa only [heldEnv, replacement_overwrite] using released
-  unfold NativeMutex.lock
-  simp only [Result.wait_bind, Result.handle]
-  rw [Result.wait_ready_run _ _ _ _ _
-    (NativeMutex.pollLock_unlocked mutex value false env stored fresh)]
-  simpa [effects_core.recover_guard, effects_core.read_guard, NativeGuard.deref,
-    effects_core.release_guard, NativeOwnedDrop.drop, NativeM.ok, heldEnv, replaceCell, Result.handle] using result
+  have trace := locked_read_prefix mutex value false env stored fresh
+  simpa only [bind_assoc,Result.ok_bind,Bool.false_eq_true,↓reduceIte] using (((trace.bind finish).handle handler).bind next).apply
 
 end Shared.Critical
