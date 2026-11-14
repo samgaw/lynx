@@ -310,6 +310,67 @@ defmodule Lynx.RunnerTest do
   end
 
   @tag :tmp_dir
+  test "exports large certificate chains and unused private roots without a large argument list",
+       %{tmp_dir: tmp} do
+    # The old export command passed over 1 MiB of names on macOS. Every theorem
+    # remains in the export, although just the last one needs to be a CLI root.
+    stem = "certificate_" <> String.duplicate("x", 400)
+    count = 3000
+
+    declarations =
+      for index <- 0..(count - 1) do
+        proof = if index == 0, do: "True.intro", else: "#{stem}#{index - 1}"
+        "private theorem #{stem}#{index} : True := #{proof}"
+      end
+
+    source = """
+    module
+    #{Enum.join(declarations, "\n")}
+    private theorem unusedLargeExportSentinel : True := True.intro
+    public theorem exportedChain : True := #{stem}#{count - 1}
+    """
+
+    input = %{
+      "module" => "LargeCertificateExport",
+      "file" => "large-certificate-export.lean",
+      "imports" => [],
+      "contents" => [],
+      "preludes" => [
+        %{
+          "source" => source,
+          "file" => "large-certificate-export.lean",
+          "span" => [1],
+          "indentation" => 0
+        }
+      ],
+      "audit_modules" => ["LargeCertificateExport"]
+    }
+
+    export = Path.join(tmp, "large.export")
+    assert [%{status: :ok}] = Lynx.Commands.verify!(@lean_dir, [input], export: export)
+    exported = File.read!(export)
+
+    names =
+      MapSet.new(
+        for line <- String.split(exported, "\n", trim: true),
+            %{"str" => %{"str" => name}} <- [JSON.decode!(line)],
+            do: name
+      )
+
+    assert MapSet.member?(names, "unusedLargeExportSentinel")
+
+    for index <- 0..(count - 1),
+        do: assert(MapSet.member?(names, stem <> Integer.to_string(index)))
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+
+    {status, output} =
+      Lynx.Commands.lake(@lean_dir, ["check", "--from-export", export] ++ sandbox)
+
+    assert status == 0, output
+  end
+
+  @tag :tmp_dir
   test "fresh exports populate the cache and recheck already cached laws", %{tmp_dir: tmp} do
     input =
       file(@literal_erl, "Elixir.ExportCache", [

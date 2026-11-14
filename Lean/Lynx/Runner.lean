@@ -2422,6 +2422,48 @@ private def layoutArtifacts (root : System.FilePath) (modules : Array Name)
       IO.FS.createDirAll (target.parent.getD root)
       IO.FS.writeBinFile target (← IO.FS.readBinFile file)
 
+private def exportDependencies (info : ConstantInfo) : Array Name :=
+  info.type.getUsedConstants ++ match info with
+    | .defnInfo value => value.value.getUsedConstants
+    | .thmInfo value => value.value.getUsedConstants
+    | .opaqueInfo value => value.value.getUsedConstants
+    | _ => #[]
+
+private def exportClosure (env : Lean.Environment) (names : Array Name) : NameHashSet := Id.run do
+  let mut visited : NameHashSet := {}
+  let mut pending := names
+  while !pending.isEmpty do
+    let name := pending.back!
+    pending := pending.pop
+    if visited.contains name then continue
+    visited := visited.insert name
+    if let some info := env.find? name then
+      pending := pending ++ exportDependencies info
+  return visited
+
+/-- Keep every requested declaration, either as a root or in a root's dependency
+closure. In particular, unused private declarations remain roots. This avoids
+passing every generated successor certificate through the host's argv limit. -/
+private def exportDependencyRoots (env : Lean.Environment) (constants : List Name) : Array Name := Id.run do
+  let mut covered : NameHashSet := {}
+  let mut roots : NameHashSet := {}
+  for name in constants do
+    if covered.contains name then continue
+    let mut pending := #[name]
+    while !pending.isEmpty do
+      let dependency := pending.back!
+      pending := pending.pop
+      if covered.contains dependency then
+        -- This existing root is now covered by the new root. Its dependencies
+        -- have already been visited, so no re-traversal is necessary.
+        roots := roots.erase dependency
+        continue
+      covered := covered.insert dependency
+      if let some info := env.find? dependency then
+        pending := pending ++ exportDependencies info
+    roots := roots.insert name
+  return constants.toArray.filter roots.contains
+
 /-- Export the declarations of the given modules, with everything they depend on, using
 the toolchain's `leanexport`. Modules are imported with their private data so the
 export includes proofs. Unsafe and partial declarations, such as compiled
@@ -2456,9 +2498,13 @@ private def exportModules (path : System.FilePath) (modules : Array Name)
     layoutModules := layoutModules.push moduleName
   layoutArtifacts root layoutModules exportArtifacts
   let searchPath := (← IO.getEnv "LEAN_PATH").map (System.SearchPath.separator.toString ++ ·)
+  let roots := exportDependencyRoots env constants
+  let covered := exportClosure env roots
+  unless constants.all covered.contains do
+    throw (IO.userError "export roots do not cover every audited declaration")
   let output ← IO.Process.output {
     cmd := ((← findSysroot) / "bin" / "leanexport").toString
-    args := (modules.map toString) ++ #["--"] ++ constants.toArray.map toString
+    args := (modules.map toString) ++ #["--"] ++ roots.map toString
     env := #[("LEAN_PATH", some (root.toString ++ searchPath.getD ""))]
   }
   unless output.exitCode == 0 do
