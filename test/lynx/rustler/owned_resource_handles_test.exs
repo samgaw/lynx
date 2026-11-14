@@ -96,6 +96,13 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     framed_property = Path.join(project, "Shared/FramedCalls.lean")
     File.write!(framed_property, framed_calls)
 
+    term_adapter =
+      File.read!(Path.join(@fixture, "FramedResourceTermAdapter.lean"))
+      |> String.replace("__ADD__", add_binding["lean_name"])
+
+    term_adapter_path = Path.join(tmp, "framed-resource-term-adapter.lean")
+    File.write!(term_adapter_path, term_adapter)
+
     options =
       options ++
         [
@@ -201,6 +208,46 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
       assert status == 0, output
     end
 
+    coowned_path = Path.join(tmp, "coowned_laws.ex")
+    coowned_source = File.read!(Path.join(@fixture, "coowned_resource_laws.ex"))
+    File.write!(coowned_path, coowned_source)
+    [{LynxEffectsFixture.CoownedResourceLaws, coowned_beam}] = Code.compile_file(coowned_path)
+
+    coowned_options =
+      law_options
+      |> Keyword.put(:initial_environment, "Shared.FramedTermAdapter.initial")
+      |> Keyword.put(:preludes, [Lynx.Lean.from_file!(term_adapter_path)])
+
+    coowned_export = Path.join(tmp, "coowned-resource.export")
+
+    coowned_reports =
+      Lynx.Laws.verify([coowned_beam], Keyword.put(coowned_options, :export, coowned_export))
+
+    assert Enum.all?(coowned_reports, &(&1.status == :ok)),
+           inspect(coowned_reports, limit: :infinity)
+
+    assert Enum.any?(
+             Enum.flat_map(coowned_reports, &Map.get(&1, :guarantees, [])),
+             &match?(
+               %{
+                 kind: :rust_implementation,
+                 rust_name: "effects_native::resource_clone",
+                 theorem: "Shared.FramedCalls.clone_prefix"
+               },
+               &1
+             )
+           )
+
+    assert Enum.all?(
+             Lynx.Laws.verify([coowned_beam], coowned_options),
+             &(&1.status == :ok and &1.cached)
+           )
+
+    {status, output} =
+      Lynx.Commands.lake(project, ["check", "--from-export", coowned_export] ++ sandbox)
+
+    assert status == 0, output
+
     wrong_contract =
       String.replace(framed_calls, "else cell} ∧", "else (cell.1,cell.2.1,.nil)} ∧",
         global: false
@@ -214,6 +261,24 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     end
 
     File.write!(framed_property, framed_calls)
+
+    File.write!(term_adapter_path, term_adapter <> "\nprivate axiom framedAdapterTrust : False\n")
+
+    untrusted_options =
+      Keyword.put(coowned_options, :preludes, [Lynx.Lean.from_file!(term_adapter_path)])
+
+    untrusted_reports = Lynx.Laws.verify([coowned_beam], untrusted_options)
+    assert Enum.any?(untrusted_reports, &(&1.status == :error)), inspect(untrusted_reports)
+
+    assert Enum.any?(
+             Enum.flat_map(untrusted_reports, &Map.get(&1, :diagnostics, [])),
+             fn diagnostic ->
+               diagnostic.severity == :error and
+                 String.contains?(diagnostic.message, "framedAdapterTrust")
+             end
+           )
+
+    File.write!(term_adapter_path, term_adapter)
 
     # The postcondition independently checks the other resource's heap payload.
     wrong_frame =

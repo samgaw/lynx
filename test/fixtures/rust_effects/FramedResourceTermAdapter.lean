@@ -1,0 +1,198 @@
+module
+public import Shared.FramedCalls
+public import Shared.Extraction.RustlerAdapter
+public section
+open Aeneas Aeneas.Std Lynx effects_native
+namespace Shared.FramedTermAdapter
+set_option maxRecDepth 8192
+
+/-- The generated library adapter retains its actual registration normalization. -/
+@[expose] def registeredEnv (env : Environment) : Environment :=
+  {env with nativeResourceTypes :=
+    (env.nativeResourceTypes ++ [NativeResourceArc.typeName CounterResource]).eraseDups}
+
+private theorem adapter_valid (dispatcher : Dispatcher) (term : Nat) (amount : U64) : Elixir.LynxEffectsFixture.Native.«counter_add/2» dispatcher (.nativeReference term)
+      (Rustler.encodeUnsigned amount) = Rustler.withResourceTypes [NativeResourceArc.typeName CounterResource] (do
+        let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference term)
+        Rustler.executeNative (__ADD__ owner amount) Rustler.encodeBool) := by
+  have decoded : Rustler.decodeUnsigned .U64 64 (Rustler.encodeUnsigned amount) = .ok amount :=
+    Rustler.decodeUnsigned_encodeUnsigned amount
+  rw [Elixir.LynxEffectsFixture.Native.«counter_add:adapter/2»]
+  conv_rhs =>
+    arg 1
+    simp only [NativeResourceArc.typeName,
+      Shared.Extraction.NativeCodecs.«typeName::effects_native::CounterResource»]
+    cbv
+  apply congrArg (Rustler.withResourceTypes _)
+  apply congrArg (fun continuation =>
+    NativeResourceArc.decode (α := CounterResource) (.nativeReference term) >>= continuation)
+  funext owner
+  rw [decoded]
+  simp only [Result.ofExcept,Result.handle,Result.ok_bind]
+
+/-- Full generated term adaptation uses the real unsigned decoder, retaining the
+resource owner on success and disposing it on conversion failure. -/
+theorem generated_add_call_next {α : Type} (dispatcher : Dispatcher)
+    (pin : NativeResourceArc CounterResource) (term : Nat) (mutex : NativeMutex effects_core.Counter)
+    (value amount : U64) (count : Nat) (poisoned : Bool) (env : Environment)
+    (next : Term → NativeM α)
+    (positive : 0 < count) (bounded : count < NativeResourceArc.referenceLimit)
+    (keys : ∀ cell ∈ env.nativeHeap, cell.1 ≤ env.nativeRefCounter)
+    (registry : env.nativeHeap.filter (fun cell => cell.1 == term) =
+      [(term,NativeResourceArc.termType CounterResource,.tuple #[.nativeReference pin.id,.nativeReference pin.token])])
+    (token : env.nativeHeap.filter (fun cell => cell.1 == pin.token) =
+      [(pin.token,NativeResourceArc.handleType CounterResource,.nativeReference pin.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == pin.id) =
+      [(pin.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode ({state := mutex} : CounterResource)])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference pin.id).length = count)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])])
+    (different : pin.id ≠ mutex.id) :
+    ∃ changed updated,
+      (Elixir.LynxEffectsFixture.Native.«counter_add/2» dispatcher (.nativeReference term)
+        (Rustler.encodeUnsigned amount) >>= next) env = next (Rustler.encodeBool changed) {registeredEnv env with
+          nativeRefCounter := env.nativeRefCounter + 2,
+          nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+            (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+              .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value := updated} : effects_core.Counter)])
+            else cell} ∧
+      (if changed then updated.val = value.val + amount.val
+       else updated = value ∧ U64.max < value.val + amount.val) := by
+  have registered : NativeResourceArc.typeName CounterResource ∈ (registeredEnv env).nativeResourceTypes := by
+    simp [registeredEnv]
+  obtain ⟨changed,updated,computed,arithmetic⟩ := Shared.FramedCalls.add_call_next pin term mutex
+    value amount count poisoned (registeredEnv env) next registered positive bounded keys registry token allocation owners stored different
+  refine ⟨changed,updated,?_,arithmetic⟩
+  have adapter := adapter_valid dispatcher term amount
+  have adapterBind :
+      (Elixir.LynxEffectsFixture.Native.«counter_add/2» dispatcher (.nativeReference term)
+        (Rustler.encodeUnsigned amount) >>= next) =
+      Rustler.withResourceTypes [NativeResourceArc.typeName CounterResource] (do
+        let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference term)
+        let answer ← Rustler.executeNative (__ADD__ owner amount) Rustler.encodeBool
+        next answer) := by
+    rw [adapter]
+    simp only [Rustler.withResourceTypes,Result.nativeModify_bind,bind_assoc]
+  rw [adapterBind,Rustler.withResourceTypes_apply]
+  exact computed
+
+private theorem adapter_rejected (dispatcher : Dispatcher) (term : Nat) (input : Term)
+    (rejected : Rustler.decodeUnsigned .U64 64 input = .error (.error (.atom "badarg"))) :
+    Elixir.LynxEffectsFixture.Native.«counter_add/2» dispatcher (.nativeReference term) input =
+      Rustler.withResourceTypes [NativeResourceArc.typeName CounterResource] (do
+        let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference term)
+        resource_release owner
+        Result.error (.error (.atom "badarg"))) := by
+  rw [Elixir.LynxEffectsFixture.Native.«counter_add:adapter/2»]
+  conv_rhs =>
+    arg 1
+    simp only [NativeResourceArc.typeName,
+      Shared.Extraction.NativeCodecs.«typeName::effects_native::CounterResource»]
+    cbv
+  apply congrArg (Rustler.withResourceTypes _)
+  apply congrArg (fun continuation =>
+    NativeResourceArc.decode (α := CounterResource) (.nativeReference term) >>= continuation)
+  funext owner
+  rw [rejected]
+  simp only [Result.ofExcept,Result.handle,bind_assoc,Result.error_bind,
+    resource_release,monadLift_self]
+
+/-- Failed scalar conversion uses the generated owner cleanup and the original
+badarg exception. Existing owners, payloads and unrelated cells are preserved. -/
+theorem generated_decoder_failure_next {β : Type} (dispatcher : Dispatcher)
+    (pin : NativeResourceArc CounterResource) (term : Nat) (payload : CounterResource)
+    (count : Nat) (env : Environment) (input : Term)
+    (rejected : Rustler.decodeUnsigned .U64 64 input = .error (.error (.atom "badarg")))
+    (handler : Exception → NativeM Term) (next : Term → NativeM β)
+    (positive : 0 < count) (bounded : count < NativeResourceArc.referenceLimit)
+    (keys : ∀ cell ∈ env.nativeHeap, cell.1 ≤ env.nativeRefCounter)
+    (registry : env.nativeHeap.filter (fun cell => cell.1 == term) =
+      [(term,NativeResourceArc.termType CounterResource,.tuple #[.nativeReference pin.id,.nativeReference pin.token])])
+    (token : env.nativeHeap.filter (fun cell => cell.1 == pin.token) =
+      [(pin.token,NativeResourceArc.handleType CounterResource,.nativeReference pin.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == pin.id) =
+      [(pin.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode payload])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference pin.id).length = count) :
+    ((Result.handle (Elixir.LynxEffectsFixture.Native.«counter_add/2» dispatcher
+      (.nativeReference term) input) handler) >>= next) env =
+      ((Result.handle (Result.error (.error (.atom "badarg"))) handler) >>= next)
+        {registeredEnv env with nativeRefCounter := env.nativeRefCounter + 1} := by
+  have registered : NativeResourceArc.typeName CounterResource ∈ (registeredEnv env).nativeResourceTypes := by
+    simp [registeredEnv]
+  have computed := Shared.FramedCalls.decoder_cleanup_next pin term payload count (registeredEnv env)
+    (.error (.atom "badarg")) handler next registered positive bounded keys registry token allocation owners
+  have normalize (body : Result Term) :
+      ((Result.handle (Rustler.withResourceTypes [NativeResourceArc.typeName CounterResource] body) handler) >>= next) =
+      Rustler.withResourceTypes [NativeResourceArc.typeName CounterResource] ((Result.handle body handler) >>= next) := by
+    simp only [Rustler.withResourceTypes,Result.handle_nativeModify,Result.nativeModify_bind]
+  rw [adapter_rejected dispatcher term input rejected,normalize,Rustler.withResourceTypes_apply]
+  exact computed
+
+/-- A decoder owner and an actual Rust clone coexist with the VM pin.
+The independent resource and unrelated cell are inherited from the base frame. -/
+@[expose] def owned (value : U64) (counter : Nat) : Environment :=
+  {Shared.Properties.Framed.initialFor value with
+    nativeRefCounter := counter
+    nativeHeap :=
+      (44,NativeResourceArc.handleType CounterResource,.nativeReference 2) ::
+      (43,NativeResourceArc.handleType CounterResource,.nativeReference 2) ::
+      (Shared.Properties.Framed.heap value 11#u64).map fun cell => if cell.1 == 2 then
+        (2,NativeResourceArc.typeName CounterResource,
+          .tuple #[.integer 3,NativeCodec.encode ({state := ⟨1⟩} : CounterResource)]) else cell}
+
+@[expose] def initial : Environment := owned 7#u64 44
+
+/-- The admitted extra owners are produced by the real decoder followed by the
+actual extracted internal Rust clone, rather than an assumed ownership header. -/
+theorem initial_owners_constructed :
+    Result.ReadyPrefix (do
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference 5)
+      resource_clone owner) Shared.Properties.Framed.initial
+      (.ok (⟨2,44⟩ : NativeResourceArc CounterResource)) initial := by
+  let payload : CounterResource := {state := ⟨1⟩}
+  let decoded : Environment := {Shared.Properties.Framed.initial with
+    nativeRefCounter := 43
+    nativeHeap := (43,NativeResourceArc.handleType CounterResource,.nativeReference 2) ::
+      (Shared.Properties.Framed.heap 7#u64 11#u64).map fun cell => if cell.1 == 2 then
+        (2,NativeResourceArc.typeName CounterResource,.tuple #[.integer 2,NativeCodec.encode payload]) else cell}
+  have pinned : NativeResourceArc.Pinned payload 2 4 5 Shared.Properties.Framed.initial := by
+    constructor <;> simp [payload,Shared.Properties.Framed.initial,Shared.Properties.Framed.initialFor,
+      Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells,
+      NativeResourceArc.typeName,NativeResourceArc.handleType,NativeResourceArc.termType,NativeMutex.typeName]
+  have head := (NativeResourceArc.decode_pinned_prefix payload Shared.Properties.Framed.initial 2 4 5 pinned
+    (by simp [Shared.Properties.Framed.initial,Shared.Properties.Framed.initialFor])).bind resource_clone
+  simp only [Result.ok_bind] at head
+  have tail := Shared.FramedCalls.clone_prefix (⟨2,43⟩ : NativeResourceArc CounterResource)
+    payload 2 decoded (by decide) (by decide)
+    (by simp [decoded,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells])
+    (by simp [decoded,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells])
+    (by simp [decoded,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells,
+      NativeResourceArc.typeName,NativeResourceArc.handleType,NativeResourceArc.termType,NativeMutex.typeName])
+    (by simp [decoded,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells])
+  have cloned : Result.ReadyPrefix (resource_clone (⟨2,43⟩ : NativeResourceArc CounterResource))
+      decoded (.ok (⟨2,44⟩ : NativeResourceArc CounterResource)) initial := by
+    simpa [decoded,initial,owned,payload,Shared.Properties.Framed.initial,Shared.Properties.Framed.initialFor,
+      Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells] using tail
+  exact head.trans cloned
+
+@[expose] def accepted (value : U64) (counter : Nat) (config : Concurrent.Config Term) : Bool :=
+  let env := match config with
+    | .start env .. => env
+    | .running state .. => state.nativeView []
+  let expected := (owned value counter).nativeHeap
+  config.outcome.isTrue && env.nativeRefCounter == counter &&
+    expected.all env.nativeHeap.contains && env.nativeHeap.length == expected.length &&
+    env.nativeResourceTypes.contains (NativeResourceArc.typeName CounterResource)
+
+theorem accepted_outcome (value : U64) (counter : Nat) (config : Concurrent.Config Term)
+    (checked : accepted value counter config = true) : config.outcome = .ok Term.true := by
+  apply Outcome.eq_of_isTrue
+  simp only [accepted,Bool.and_eq_true] at checked
+  exact checked.1.1.1.1
+
+end Shared.FramedTermAdapter
