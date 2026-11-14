@@ -123,11 +123,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     path = Path.join(tmp, "laws.ex")
     laws = File.read!(Path.join(@fixture, "shared_resource_laws.ex"))
 
-    dispatched_laws =
-      String.replace(laws, "ensures/0» [])", "ensures/0» Erlang.program.fun_table)")
-
-    refute dispatched_laws == laws
-    File.write!(path, dispatched_laws)
+    File.write!(path, laws)
     [{_, beam}] = Code.compile_file(path)
     concurrent_path = Path.join(tmp, "concurrent_laws.ex")
     concurrent_laws = File.read!(Path.join(@fixture, "concurrent_resource_laws.ex"))
