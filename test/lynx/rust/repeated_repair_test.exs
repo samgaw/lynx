@@ -18,7 +18,7 @@ defmodule Lynx.Rust.RepeatedRepairTest do
       |> Keyword.put(
         :required_properties,
         Enum.map(
-          ~w(clean_repair repair_idempotent repair_repeated),
+          ~w(clean_repair repair_idempotent repair_repeated interrupt_admitted interruptions_preserve retry_after_interruptions interruptions_witness),
           &("Record.RepeatedRepairProperties." <> &1)
         )
       )
@@ -26,7 +26,8 @@ defmodule Lynx.Rust.RepeatedRepairTest do
     result = Lynx.Rust.verify!(workspace, "io-protocol", options)
     assert [%{status: :ok}] = result.reports
 
-    for theorem <- ~w(clean_repair repair_idempotent repair_repeated) do
+    for theorem <-
+          ~w(clean_repair repair_idempotent repair_repeated interrupt_admitted retry_after_interruptions interruptions_witness) do
       assert Enum.any?(result.verification.guarantees, fn evidence ->
                evidence.kind == :cross_crate_contract &&
                  evidence.theorem == "Record.RepeatedRepairProperties." <> theorem
@@ -59,23 +60,70 @@ defmodule Lynx.Rust.RepeatedRepairTest do
     assert error.message =~ "RepeatedRepairProperties.lean:"
     File.write!(property, source)
 
+    [prefix, retry] = String.split(source, "theorem retry_after_interruptions", parts: 2)
+    [retry, suffix] = String.split(retry, "theorem interruptions_witness", parts: 2)
+
+    wrong_retry =
+      prefix <>
+        "theorem retry_after_interruptions" <>
+        String.replace(retry, "alloc.vec.Vec.from values", "alloc.vec.Vec.from values.reverse") <>
+        "theorem interruptions_witness" <> suffix
+
+    stale_capability =
+      String.replace(
+        source,
+        "after.highWater = before.highWater + count",
+        "after.highWater = before.highWater"
+      )
+
+    for false_property <- [wrong_retry, stale_capability] do
+      refute false_property == source
+      File.write!(property, false_property)
+
+      error =
+        assert_raise RuntimeError, fn -> Project.build!(project, options[:proof_modules]) end
+
+      assert error.message =~ "RepeatedRepairProperties.lean:"
+      refute error.message =~ "Unknown identifier"
+    end
+
+    for extra <- [
+          "private axiom uncheckedRepair : False",
+          "private theorem unfinishedRepair : True := by sorry"
+        ] do
+      File.write!(property, source <> "\n" <> extra <> "\n")
+
+      error =
+        assert_raise RuntimeError, fn -> Lynx.Rust.verify!(workspace, "io-protocol", options) end
+
+      assert error.message =~ "audit"
+    end
+
+    File.write!(property, source)
+
     rust = Path.join(workspace, "protocol/src/lib.rs")
     original = File.read!(rust)
 
-    broken =
+    wrong_length =
       String.replace(
         original,
         "(values.len() as u64).checked_mul(4)",
         "(values.len() as u64).checked_mul(3)"
       )
 
-    refute broken == original
-    File.write!(rust, broken)
+    missing_sync =
+      String.replace(original, "Ok(()) => io_core::synchronize(file),", "Ok(()) => Ok(()),")
 
-    error =
-      assert_raise RuntimeError, fn -> Lynx.Rust.verify!(workspace, "io-protocol", options) end
+    for broken <- [wrong_length, missing_sync] do
+      refute broken == original
+      File.write!(rust, broken)
 
-    assert error.message =~ ".lean:"
+      error =
+        assert_raise RuntimeError, fn -> Lynx.Rust.verify!(workspace, "io-protocol", options) end
+
+      assert error.message =~ ".lean:"
+    end
+
     File.write!(rust, original)
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
   end
