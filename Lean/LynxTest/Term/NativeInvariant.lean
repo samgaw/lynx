@@ -1,0 +1,76 @@
+module
+
+import Lynx
+meta import LynxTest.ProofAudit
+
+namespace LynxTest.Term.NativeInvariant
+open Lynx Result
+
+private def increments : Nat → Result Unit
+  | 0 => .ok ()
+  | count + 1 => .nativeModify (fun env => ((), {env with
+      nativeRefCounter := env.nativeRefCounter + 1})) fun _ => increments count
+
+theorem increments_preserve (count minimum : Nat) (env : Environment)
+    (bounded : minimum ≤ env.nativeRefCounter) :
+    NativeInvariant (fun state => minimum ≤ state.nativeRefCounter) (increments count) env := by
+  induction count generalizing env with
+  | zero => exact .ok _ _ _ bounded
+  | succ count ih =>
+      apply NativeInvariant.nativeModify _ _ _ bounded
+      apply ih
+      dsimp
+      omega
+
+theorem composed_preserve (first second minimum : Nat) (env : Environment)
+    (bounded : minimum ≤ env.nativeRefCounter) :
+    NativeInvariant (fun state => minimum ≤ state.nativeRefCounter)
+      (increments first >>= fun _ => increments second) env := by
+  have safe := increments_preserve first minimum env bounded
+  apply safe.bind
+  intro value middle completed
+  exact increments_preserve second minimum middle (safe _ _ completed).1
+
+/-- The composition theorem covers every finite raw prefix and keeps the
+scheduler snapshot when a native operation blocks. -/
+theorem composed_run (first second minimum : Nat) (env : Environment)
+    (bounded : minimum ≤ env.nativeRefCounter) (elapsed : PID → Nat → Nat)
+    (executed : Concurrent.Run
+      (.start env (increments first >>= fun _ => increments second) elapsed) events last) :
+    ∃ state, minimum ≤ state.nativeRefCounter ∧
+      ((∃ residual, last = .start state residual elapsed) ∨
+        ∃ residual, last = .running (Concurrent.State.initial state elapsed)
+          [(state.currentPid, Concurrent.Task.root residual)] none false) :=
+  (composed_preserve first second minimum env bounded).run elapsed executed
+
+private def transient : Result Term :=
+  .nativeSet {nativeRefCounter := 7} (.nativeSet {} (.ok .true))
+
+theorem transient_rejected : ¬ NativeInvariant (fun env => env.nativeRefCounter = 0) transient {} := by
+  intro safe
+  have trace : ReadyPrefix transient {} (.nativeSet {} (.ok .true)) {nativeRefCounter := 7} :=
+    .nativeSet _ _ _ _ _ (.refl _ _)
+  have impossible := (safe _ _ trace).1
+  contradiction
+
+private def pending : Result Term := .wait (fun _ => none) fun _ : Unit => .ok .true
+
+theorem pending_preserves (env : Environment) :
+    NativeInvariant (fun state => state.nativeHeap = env.nativeHeap) pending env := by
+  apply NativeInvariant.wait (holds := fun state => state.nativeHeap = env.nativeHeap) _ _ env rfl
+  intro reply updated impossible
+  contradiction
+
+theorem pending_not_success (elapsed : PID → Nat → Nat) :
+    Concurrent.check Outcome.isTrue 4 (.start {} pending elapsed) = false := by cbv
+
+theorem scheduler_boundary_rejected :
+    ¬ NativeInvariant (fun _ => True) (Result.schedule {} (.ok .nil) fun _ => .ok Term.true) {} := by
+  intro safe
+  exact (safe _ _ (.refl _ _)).2
+
+end LynxTest.Term.NativeInvariant
+
+run_cmd do
+  LynxTest.ProofAudit.checkModule `Lynx.Term.NativeInvariant
+  LynxTest.ProofAudit.checkModule `LynxTest.Term.NativeInvariant

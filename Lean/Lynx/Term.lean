@@ -7,6 +7,7 @@ public import Lynx.Term.Compare
 public import Lynx.Term.Maps
 public import Lynx.Term.Runner
 public import Lynx.Term.NativeTrace
+public import Lynx.Term.NativeInvariant
 public import Lynx.Term.NativeSchedule
 public import Lynx.Term.Induction
 public import Lynx.Term.Order
