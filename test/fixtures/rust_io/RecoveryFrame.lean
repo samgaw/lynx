@@ -3,10 +3,12 @@ public import Record.RepairReturnProperties
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RecoveryFrame
+variable [heapLayout : Record.Properties.HeapLayout]
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.ResizeProperties Record.CrashProperties Record.LogProperties Record.RepairCrashProperties
   Record.IntegrityProperties
 
+omit heapLayout in
 private theorem read_frame (before : State) (buffer : Slice U8)
     (reply : core.result.Result Usize NativeIoError) (after : State) (updated : Slice U8)
     (valid : Valid before) (stable : before.durable = before.visible)
@@ -53,6 +55,7 @@ private theorem read_frame (before : State) (buffer : Slice U8)
                 · contradiction
               · contradiction
 
+omit heapLayout in
 private theorem pure_next_returns (computation : RustM α) (next : α → NativeM β)
     (env world : Environment) (returned : β)
     (trace : Result.ReadyPrefix (NativeM.fromRust computation >>= next) env (.ok returned) world) :

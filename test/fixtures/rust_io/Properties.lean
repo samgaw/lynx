@@ -24,14 +24,99 @@ theorem decode_encode (state : State) (valid : Valid state) :
   have durableBound := Nat.le_trans durable visible
   simp [decode, encode, not_lt.mpr visible, not_lt.mpr durableBound, not_lt.mpr position]
 
+/-- A proof-level heap layout preserves cells and keyed lookups, and commutes
+with updates that retain the cell identity. It changes no native operation. -/
+class HeapLayout where
+  arrange : List (Nat × String × Term) → List (Nat × String × Term)
+  perm : ∀ cells, (arrange cells).Perm cells
+  filter_key : ∀ cells id, (arrange cells).filter (fun cell => cell.1 == id) = cells.filter (fun cell => cell.1 == id)
+  map_update : ∀ cells id replacement, replacement.1 = id →
+    (arrange cells).map (fun cell => if cell.1 = id then replacement else cell) =
+      arrange (cells.map (fun cell => if cell.1 = id then replacement else cell))
+  singleton : ∀ cell, arrange [cell] = [cell]
+
+namespace HeapLayout
+instance canonical : HeapLayout where
+  arrange := id
+  perm := fun _ => .refl _
+  filter_key := fun _ _ => rfl
+  map_update := fun _ _ _ _ => rfl
+  singleton := fun _ => rfl
+
+attribute [simp] filter_key map_update singleton
+
+private theorem map_filter_stable (f : α → α) (p : α → Bool) (cells : List α)
+    (stable : ∀ cell, p (f cell) = p cell) : (cells.filter p).map f = (cells.map f).filter p := by
+  induction cells with
+  | nil => rfl
+  | cons cell cells ih =>
+      by_cases accepted : p cell = true <;> simp [accepted,stable,ih]
+
+/-- Moving an owner token before the file models the actual decoder's prepend;
+relative cell order otherwise remains intact. All layout laws are proved. -/
+@[expose, instance_reducible] def ownerFirst (owner : Nat) : HeapLayout where
+  arrange cells := cells.filter (fun cell => cell.1 == owner) ++ cells.filter (fun cell => !(cell.1 == owner))
+  perm cells := List.filter_append_perm _ cells
+  filter_key cells id := by
+    simp only [List.filter_append,List.filter_filter]
+    by_cases same : id = owner
+    · subst id
+      simp
+    · have left : (fun cell : Nat × String × Term => (cell.1 == id) && (cell.1 == owner)) = fun _ => false := by
+        funext cell
+        by_cases a : cell.1 = owner <;> by_cases b : cell.1 = id <;> simp_all
+      have right : (fun cell : Nat × String × Term => (cell.1 == id) && (!(cell.1 == owner))) = fun cell => cell.1 == id := by
+        funext cell
+        by_cases a : cell.1 = owner <;> by_cases b : cell.1 = id <;> simp_all
+      rw [left,right]
+      simp
+  map_update cells id replacement identity := by
+    let f := fun cell : Nat × String × Term => if cell.1 = id then replacement else cell
+    have preserves (cell) : (f cell).1 = cell.1 := by
+      dsimp [f]
+      split <;> simp_all
+    change (cells.filter (fun cell => cell.1 == owner) ++ cells.filter (fun cell => !(cell.1 == owner))).map f = _
+    rw [List.map_append,map_filter_stable f _ cells (by intro cell; rw [preserves cell]),
+      map_filter_stable f _ cells (by intro cell; rw [preserves cell])]
+  singleton cell := by
+    by_cases same : cell.1 = owner <;> simp [same]
+
+@[simp] theorem arrange_canonical (cells : List (Nat × String × Term)) : canonical.arrange cells = cells := rfl
+
+@[simp] theorem arrange_ownerFirst (owner : Nat) (cells : List (Nat × String × Term)) :
+    (ownerFirst owner).arrange cells =
+      cells.filter (fun cell => cell.1 == owner) ++ cells.filter (fun cell => !(cell.1 == owner)) := rfl
+
+@[simp] theorem map_update_bool [layout : HeapLayout] (cells : List (Nat × String × Term))
+    (id : Nat) (replacement : Nat × String × Term) (identity : replacement.1 = id) :
+    (layout.arrange cells).map (fun cell => if cell.1 == id then replacement else cell) =
+      layout.arrange (cells.map (fun cell => if cell.1 == id then replacement else cell)) := by
+  simpa only [beq_iff_eq] using layout.map_update cells id replacement identity
+
+@[simp] theorem any_arrange [layout : HeapLayout] (cells : List (Nat × String × Term))
+    (predicate : Nat × String × Term → Bool) : (layout.arrange cells).any predicate = cells.any predicate :=
+  (layout.perm cells).any_eq
+
+@[simp] theorem mem_arrange [layout : HeapLayout] (cell : Nat × String × Term) (cells : List (Nat × String × Term)) :
+    cell ∈ layout.arrange cells ↔ cell ∈ cells := (layout.perm cells).mem_iff
+
+end HeapLayout
+
+section
+variable [layout : HeapLayout]
+
 @[expose] def fileEnv (env : Environment) (file : NativeFile) (state : State)
     (frame : List (Nat × String × Term)) : Environment :=
   { env with
     nativeRefCounter := Nat.max env.nativeRefCounter file.id
-    nativeHeap := (file.id, typeName, encode state) :: frame }
+    nativeHeap := layout.arrange ((file.id, typeName, encode state) :: frame) }
 
 @[expose] def Separate (file : NativeFile) (frame : List (Nat × String × Term)) : Prop :=
   ∀ cell ∈ frame, cell.1 ≠ file.id
+
+@[simp] theorem fileEnv_empty_layout (env : Environment) (file : NativeFile) (state : State) :
+    fileEnv env file state [] = fileEnv (layout := HeapLayout.canonical) env file state [] := by
+  simp [fileEnv]
 
 theorem lookup_at (env : Environment) (file : NativeFile) (state : State)
     (frame : List (Nat × String × Term)) (separate : Separate file frame) (valid : Valid state) :
@@ -65,6 +150,8 @@ theorem store_at (env : Environment) (file : NativeFile) (before after : State)
     intro cell member
     simpa using separate cell member
   simp [store, fileEnv, filtered, unchanged]
+
+end
 
 theorem bytes_size (data : Slice U8) : (bytes data).size = data.val.length := by
   simp [bytes, ← ByteArray.size_data]

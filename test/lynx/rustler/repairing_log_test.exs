@@ -15,7 +15,10 @@ defmodule Lynx.Rustler.RepairingLogTest do
     {workspace, project, base} =
       Lynx.Rust.IoFixture.prepare!(tmp, @tools, ~w(RepeatedRepairProperties
         RecoveryScanInvariant RepairReturnProperties RepairImageInvariant
-        RepairAcknowledgement RepairWriterProperties))
+        RepairAcknowledgement RepairWriterProperties AppendAcknowledgement
+        RepairAppendAcknowledgement EncodedPrefixRecovery AppendPrefixInvariant
+        RecoveryFrame RepairPrefixReturn RecoveryPrefixInvariant RepairPrefixInvariant
+        RepairAppendPrefixInvariant FileReturnIdentity LockedPrefixInvariant))
 
     for module <- base[:proof_modules] do
       path = Path.join(project, String.replace(module, ".", "/") <> ".lean")
@@ -65,6 +68,13 @@ defmodule Lynx.Rustler.RepairingLogTest do
       File.read!(Path.join(@fixture, "RepairingLogProperties.lean"))
       |> String.replace("__REPAIR_APPEND__", binding["lean_name"])
 
+    adapter_source =
+      File.read!(Path.join(@fixture, "GuardedRepairAdapter.lean"))
+      |> String.replace("__REPAIR_APPEND__", binding["lean_name"])
+
+    adapter_property = Path.join(project, "Record/GuardedRepairAdapter.lean")
+    File.write!(adapter_property, adapter_source)
+
     property = Path.join(project, "Record/RepairingLogProperties.lean")
     File.write!(property, source)
 
@@ -75,9 +85,19 @@ defmodule Lynx.Rustler.RepairingLogTest do
         &("Record.RepairingLogProperties." <> &1)
       )
 
+    properties =
+      properties ++
+        Enum.map(
+          ~w(locked_safe borrow_safe borrow_returns facade_safe adapter_safe),
+          &("Record.GuardedRepairAdapter." <> &1)
+        )
+
     options =
       options ++
-        [proof_modules: ["Record.RepairingLogProperties"], required_properties: properties]
+        [
+          proof_modules: ["Record.RepairingLogProperties", "Record.GuardedRepairAdapter"],
+          required_properties: properties
+        ]
 
     checked = Lynx.Rustler.prepare!(options)
 
@@ -163,6 +183,25 @@ defmodule Lynx.Rustler.RepairingLogTest do
       assert error.message =~ "RepairingLogProperties.lean:"
       refute error.message =~ "Unknown identifier"
     end
+
+    File.write!(property, source)
+
+    # A false owner identity and a prefix claimed before it is appended both fail
+    # against the extracted facade, including the actual resource decoder.
+    for {correct, wrong} <- [
+          {"owner = ⟨3,7⟩ ∧ world = decoded", "owner = ⟨3,8⟩ ∧ world = decoded"},
+          {"Result.NativeInvariant (Safe values) (do",
+           "Result.NativeInvariant (Safe (values ++ [value])) (do"}
+        ] do
+      broken = String.replace(adapter_source, correct, wrong)
+      refute broken == adapter_source
+      File.write!(adapter_property, broken)
+      error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+      assert error.message =~ "GuardedRepairAdapter.lean:"
+      refute error.message =~ "Unknown identifier"
+    end
+
+    File.write!(adapter_property, adapter_source)
 
     for extra <- [
           "private axiom repairTrust : False",

@@ -17,7 +17,7 @@ theorem decode_admitted (state : State) (valid : Admitted state) :
   obtain ⟨visible, durable, position⟩ := valid
   simp [decode, encode, not_lt.mpr visible, not_lt.mpr durable, not_lt.mpr position]
 
-theorem lookup_admitted (env : Environment) (file : NativeFile) (state : State)
+theorem lookup_admitted [heapLayout : Record.Properties.HeapLayout] (env : Environment) (file : NativeFile) (state : State)
     (frame : List (Nat × String × Term)) (separate : Separate file frame) (valid : Admitted state) :
     lookup file (fileEnv env file state frame) = some state := by
   have filtered : frame.filter (fun cell => cell.1 == file.id) = [] := by

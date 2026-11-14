@@ -10,7 +10,7 @@ open NativeFile Read.Properties
   core.num.U16.from_le_bytes (Array.make 2#usize [low, high])
 
 /-- The actual low-level crate retains the file identity and the mutable buffer. -/
-theorem read_next (file : NativeFile) (buffer : Slice U8) (env : Environment)
+theorem read_next [heapLayout : Read.Properties.HeapLayout] (file : NativeFile) (buffer : Slice U8) (env : Environment)
     (frame : List (Nat × String × Term)) (before after : State)
     (reply : core.result.Result Usize NativeIoError) (updated : Slice U8)
     (separate : Separate file frame) (valid : Valid before)
@@ -29,7 +29,7 @@ theorem read_next (file : NativeFile) (buffer : Slice U8) (env : Environment)
 
 /-- Unfold the real parser, including both mutable array reconstructions,
 checked element projections and little-endian decoding. -/
-theorem parser_ready (file : NativeFile) (env : Environment)
+theorem parser_ready [heapLayout : Read.Properties.HeapLayout] (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before middle after : State) (low high : U8)
     (separate : Separate file frame) (valid : Valid before) (validMiddle : Valid middle)
     (notBlocked : blocked before = false) (notBlockedMiddle : blocked middle = false)

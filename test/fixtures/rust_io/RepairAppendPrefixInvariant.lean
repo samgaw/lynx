@@ -3,6 +3,7 @@ public import Record.RepairPrefixInvariant
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RepairAppendPrefixInvariant
+variable [heapLayout : Record.Properties.HeapLayout]
 open NativeFile Record.Properties Record.CrashProperties Record.LogProperties
   Record.RecoveryProperties Record.ResizeProperties Record.RepairCrashProperties
   Record.AppendPrefixInvariant

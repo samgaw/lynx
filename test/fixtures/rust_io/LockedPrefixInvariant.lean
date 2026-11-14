@@ -3,6 +3,7 @@ public import Record.FileReturnIdentity
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.LockedPrefixInvariant
+variable [heapLayout : Record.Properties.HeapLayout]
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.CrashProperties Record.LogProperties Record.ResizeProperties Record.RepairCrashProperties
   Record.AppendPrefixInvariant Record.LockedProperties
@@ -28,12 +29,14 @@ file state may change; both images retain the known prefix. -/
       world = view base (counter + 1) frame (held base counter poisoned) state ∨
       world = view base (counter + 1) frame (free poisoned) state)
 
+omit heapLayout in
 private theorem filter_apart (id : Nat) (frame : List (Nat × String × Term))
     (apart : Separate (⟨id⟩ : NativeFile) frame) : frame.filter (fun cell => cell.1 == id) = [] := by
   apply List.filter_eq_nil_iff.mpr
   intro cell member
   simpa using apart cell member
 
+omit heapLayout in
 private theorem map_apart (id : Nat) (replacement : Nat × String × Term) (frame : List (Nat × String × Term))
     (apart : Separate (⟨id⟩ : NativeFile) frame) :
     frame.map (fun cell => if cell.1 = id then replacement else cell) = frame := by

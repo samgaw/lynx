@@ -33,7 +33,7 @@ private theorem resize_step_returns (before : State) (length : U64) (after : Sta
                 obtain ⟨_, rfl⟩ := step
                 exact ⟨rfl, rfl, resize_admitted before length mask data rest valid (by omega) accepted⟩
 
-private theorem resize_returns (file : NativeFile) (length : U64) (env : Environment)
+private theorem resize_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (length : U64) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result Unit NativeIoError) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)
@@ -82,7 +82,7 @@ private theorem sync_step_returns (before after : State)
 
 /-- Successful synchronization preserves the visible bytes and cursor and makes
 the durable image exactly those bytes, for every admitted host script. -/
-theorem synchronize_returns (file : NativeFile) (env : Environment)
+theorem synchronize_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)
     (trace : Result.ReadyPrefix (io_core.synchronize file) (fileEnv env file before frame)
@@ -112,7 +112,7 @@ theorem synchronize_returns (file : NativeFile) (env : Environment)
 /-- A successful actual resize/sync call has made both images exactly the
 requested resize, under every admitted host script. A failed or blocked sync
 cannot provide the successful-prefix premise. -/
-theorem resize_then_sync_returns (file : NativeFile) (length : U64) (env : Environment)
+theorem resize_then_sync_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (length : U64) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)
     (trace : Result.ReadyPrefix (resize_then_sync file length) (fileEnv env file before frame)
