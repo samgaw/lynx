@@ -97,4 +97,53 @@ defmodule LynxEffectsFixture.CoownedResourceLaws do
         Shared.Properties.Framed.initialFor] using trace
     exact returned.returns elapsed run terminal
     """
+
+  law bounded_adds_compose(left, right),
+    requires:
+      is_integer(left) and is_integer(right) and left >= 0 and right >= 0 and
+        left + right <= 18_446_744_073_709_551_608,
+    expects:
+      {LynxEffectsFixture.Native.counter_add(:erlang.get(:counter), left),
+       LynxEffectsFixture.Native.counter_add(:erlang.get(:counter), right)} == {true, true},
+    proof: ~LEAN"""
+    set_option maxRecDepth 8192 in
+    cases left <;> simp [«bounded_adds_compose:requires/2», Erlang.erlang.«is_integer/1»] at requires
+    rename_i leftNumber
+    cases right <;> simp at requires
+    rename_i rightNumber
+    have bounds : 0 ≤ leftNumber ∧ 0 ≤ rightNumber ∧
+        leftNumber + rightNumber ≤ 18446744073709551608 := by
+      simpa [«bounded_adds_compose:requires/2»] using requires
+    let leftValue : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 leftNumber.toNat⟩
+    let rightValue : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 rightNumber.toNat⟩
+    have leftDecoded : leftValue.val = leftNumber.toNat := by
+      simp [leftValue,Aeneas.Std.UScalar.val]
+      omega
+    have rightDecoded : rightValue.val = rightNumber.toNat := by
+      simp [rightValue,Aeneas.Std.UScalar.val]
+      omega
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    have pending := Shared.FramedTermAdapter.owned_add_sequence
+      (Lynx.Dispatcher.ofTable [] depth) [leftValue,rightValue] 7#u64 44 (by decide)
+    simp only [List.map_cons,List.map_nil,List.sum_cons,List.sum_nil,Nat.add_zero] at pending
+    have fits : (7#u64).val + (leftValue.val + rightValue.val) ≤ Aeneas.Std.U64.max := by
+      rw [leftDecoded,rightDecoded]
+      scalar_tac
+    obtain ⟨updated,trace,total⟩ := pending fits
+    have returned : Lynx.Result.ReadyPrefix
+        (Lynx.apply «bounded_adds_compose:ensures/2» [] depth
+          (.integer leftNumber) (.integer rightNumber))
+        Shared.FramedTermAdapter.initial (.ok Lynx.Term.true)
+        (Shared.FramedTermAdapter.owned updated 48) := by
+      let conclude := fun replies : List Lynx.Term => Lynx.Result.ofExcept
+        (Erlang.erlang.«==/2» (.tuple replies.toArray) (.tuple #[Lynx.Term.true,Lynx.Term.true]))
+      have finished := trace.bind conclude
+      simpa [Lynx.apply,«bounded_adds_compose:ensures/2»,
+        Shared.FramedTermAdapter.addSequence,conclude,bind_assoc,
+        Lynx.Result.ok_bind,Lynx.Rustler.encodeUnsigned,leftDecoded,rightDecoded,
+        Int.toNat_of_nonneg bounds.1,Int.toNat_of_nonneg bounds.2.1,
+        Shared.FramedTermAdapter.initial] using finished
+    exact returned.returns elapsed run terminal
+    """
 end
