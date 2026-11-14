@@ -31,6 +31,18 @@ private theorem adapter_valid (dispatcher : Dispatcher) (term : Nat) (amount : U
   rw [decoded]
   simp only [Result.ofExcept,Result.handle,Result.ok_bind]
 
+private theorem adapter_read_valid (dispatcher : Dispatcher) (term : Nat) :
+    Elixir.LynxEffectsFixture.Native.«counter_value/1» dispatcher (.nativeReference term) =
+      Rustler.withResourceTypes [NativeResourceArc.typeName CounterResource] (do
+        let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference term)
+        Rustler.executeNative (__READ__ owner) Rustler.encodeUnsigned) := by
+  rw [Elixir.LynxEffectsFixture.Native.«counter_value:adapter/1»]
+  conv_rhs =>
+    arg 1
+    simp only [NativeResourceArc.typeName,
+      Shared.Extraction.NativeCodecs.«typeName::effects_native::CounterResource»]
+    cbv
+
 private theorem registration_prefix {α : Type} (body : Result α) (env : Environment) :
     Result.ReadyPrefix (Rustler.withResourceTypes [NativeResourceArc.typeName CounterResource] body)
       env body (registeredEnv env) := by
@@ -73,6 +85,36 @@ theorem generated_add_prefix (dispatcher : Dispatcher)
     value amount count poisoned (registeredEnv env) registered positive bounded keys registry token allocation owners stored different
   refine ⟨changed,updated,?_,arithmetic⟩
   rw [adapter_valid dispatcher term amount]
+  exact (registration_prefix _ env).trans trace
+
+/-- The generated read adapter observes the shared payload and preserves every
+heap cell and owner after disposing its temporary decoder owner. -/
+theorem generated_read_prefix (dispatcher : Dispatcher)
+    (pin : NativeResourceArc CounterResource) (term : Nat) (mutex : NativeMutex effects_core.Counter)
+    (value : U64) (count : Nat) (poisoned : Bool) (env : Environment)
+    (positive : 0 < count) (bounded : count < NativeResourceArc.referenceLimit)
+    (keys : ∀ cell ∈ env.nativeHeap, cell.1 ≤ env.nativeRefCounter)
+    (registry : env.nativeHeap.filter (fun cell => cell.1 == term) =
+      [(term,NativeResourceArc.termType CounterResource,.tuple #[.nativeReference pin.id,.nativeReference pin.token])])
+    (token : env.nativeHeap.filter (fun cell => cell.1 == pin.token) =
+      [(pin.token,NativeResourceArc.handleType CounterResource,.nativeReference pin.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == pin.id) =
+      [(pin.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode ({state := mutex} : CounterResource)])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference pin.id).length = count)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])])
+    (different : pin.id ≠ mutex.id) :
+    Result.ReadyPrefix (Elixir.LynxEffectsFixture.Native.«counter_value/1» dispatcher (.nativeReference term))
+      env (.ok (Rustler.encodeUnsigned value))
+      {registeredEnv env with nativeRefCounter := env.nativeRefCounter + 2} := by
+  have registered : NativeResourceArc.typeName CounterResource ∈ (registeredEnv env).nativeResourceTypes := by
+    simp [registeredEnv]
+  have trace := Shared.FramedCalls.read_call_prefix pin term mutex value count poisoned (registeredEnv env)
+    registered positive bounded keys registry token allocation owners stored different
+  rw [adapter_read_valid dispatcher term]
   exact (registration_prefix _ env).trans trace
 
 theorem generated_add_call_next {α : Type} (dispatcher : Dispatcher)
@@ -234,6 +276,42 @@ theorem owned_add_success (dispatcher : Dispatcher) (value amount : U64) (counte
   cases changed with
   | false => exact False.elim ((Nat.not_lt_of_ge fits) arithmetic.2)
   | true => exact ⟨updated,trace,arithmetic⟩
+
+/-- Read any value established by earlier calls, retaining the complete owner
+frame and advancing only the fresh-identity counter. -/
+theorem owned_read_prefix (dispatcher : Dispatcher) (value : U64) (counter : Nat)
+    (counterBound : 44 ≤ counter) :
+    Result.ReadyPrefix (Elixir.LynxEffectsFixture.Native.«counter_value/1» dispatcher (.nativeReference 5))
+      (owned value counter) (.ok (Rustler.encodeUnsigned value)) (owned value (counter + 2)) := by
+  have trace := generated_read_prefix dispatcher
+    (⟨2,4⟩ : NativeResourceArc CounterResource) 5 (⟨1⟩ : NativeMutex effects_core.Counter)
+    value 3 false (owned value counter) (by decide) (by decide)
+    (by simp [owned,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells]; omega)
+    (by simp [owned,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells])
+    (by simp [owned,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells])
+    (by simp [owned,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells])
+    (by simp [owned,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells,
+      NativeResourceArc.typeName,NativeResourceArc.handleType,NativeResourceArc.termType,NativeMutex.typeName])
+    (by simp [owned,Shared.Properties.Framed.heap,Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells])
+    (by decide)
+  have dedup : [NativeResourceArc.typeName CounterResource,NativeResourceArc.typeName CounterResource].eraseDups =
+      [NativeResourceArc.typeName CounterResource] := by cbv
+  simpa [owned,registeredEnv,dedup,Shared.Properties.Framed.initialFor,Shared.Properties.Framed.heap,
+    Shared.Properties.Framed.counterCell,NativeResourceArc.vmCells] using trace
+
+/-- Checked overflow returns false and retains the value for later readers. -/
+theorem owned_add_overflow (dispatcher : Dispatcher) (value amount : U64) (counter : Nat)
+    (counterBound : 44 ≤ counter) (overflow : U64.max < value.val + amount.val) :
+    Result.ReadyPrefix (Elixir.LynxEffectsFixture.Native.«counter_add/2» dispatcher (.nativeReference 5)
+      (Rustler.encodeUnsigned amount)) (owned value counter) (.ok Term.false) (owned value (counter + 2)) := by
+  obtain ⟨changed,updated,trace,arithmetic⟩ := owned_add_prefix dispatcher value amount counter counterBound
+  cases changed with
+  | false =>
+      rcases arithmetic with ⟨rfl,_⟩
+      exact trace
+  | true =>
+      exfalso
+      scalar_tac
 
 /-- Sequence calls to the compiled-export adapter, keeping every returned term.
 This is a caller of the extracted implementation, not a replacement for it. -/

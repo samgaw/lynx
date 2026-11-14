@@ -87,11 +87,13 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     )
 
     add_binding = Enum.find(prepared.bindings.bindings, &(&1["name"] == "counter_add"))
+    read_binding = Enum.find(prepared.bindings.bindings, &(&1["name"] == "counter_value"))
     refute Enum.any?(prepared.bindings.bindings, &(&1["name"] == "resource_clone"))
 
     framed_calls =
       File.read!(Path.join(@fixture, "NativeFramedResourceCalls.lean"))
       |> String.replace("__ADD__", add_binding["lean_name"])
+      |> String.replace("__READ__", read_binding["lean_name"])
 
     framed_property = Path.join(project, "Shared/FramedCalls.lean")
     File.write!(framed_property, framed_calls)
@@ -99,6 +101,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
     term_adapter =
       File.read!(Path.join(@fixture, "FramedResourceTermAdapter.lean"))
       |> String.replace("__ADD__", add_binding["lean_name"])
+      |> String.replace("__READ__", read_binding["lean_name"])
 
     term_adapter_path = Path.join(tmp, "framed-resource-term-adapter.lean")
     File.write!(term_adapter_path, term_adapter)
@@ -113,6 +116,8 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
               "Shared.Critical.critical_prefix",
               "Shared.Critical.critical_state_handled_next",
               "Shared.Critical.locked_read_handled_next",
+              "Shared.Critical.locked_read_prefix",
+              "Shared.FramedCalls.read_call_prefix",
               "Shared.FramedCalls.add_call_next",
               "Shared.FramedCalls.add_call_prefix",
               "Shared.FramedCalls.decoder_cleanup_prefix",
@@ -120,7 +125,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
               "Shared.FramedCalls.clone_prefix"
             ] ++
               Enum.map(
-                ~w(payload_cleanup create_next update_native_handled_next read_native_handled_next add_call_next read_call_next add_safe_call_at add_overflow_call_at update_framed_handled_next read_framed_handled_next Framed.coowned_update update_framed_prefix),
+                ~w(payload_cleanup create_next update_native_handled_next read_native_handled_next add_call_next read_call_next add_safe_call_at add_overflow_call_at update_framed_handled_next read_framed_handled_next Framed.coowned_update update_framed_prefix read_framed_prefix),
                 &("Shared.Properties." <> &1)
               )
         ]
@@ -298,6 +303,26 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
            )
 
     refute Enum.any?(composition_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
+
+    wrong_observation =
+      String.replace(coowned_source, "== 7 + left + right", "== 8 + left + right")
+
+    refute wrong_observation == coowned_source
+    [{_, wrong_observation_beam}] = Code.compile_string(wrong_observation, coowned_path)
+    wrong_observation_reports = Lynx.Laws.verify([wrong_observation_beam], coowned_options)
+
+    assert %{status: :error, diagnostics: observation_diagnostics} =
+             Enum.find(
+               wrong_observation_reports,
+               &(&1.module == "Elixir.LynxEffectsFixture.CoownedResourceLaws.laws")
+             )
+
+    assert Enum.any?(
+             observation_diagnostics,
+             &match?(%{severity: :error, declaration: "bounded_adds_are_observed/2"}, &1)
+           )
+
+    refute Enum.any?(observation_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
 
     wrong_contract =
       String.replace(framed_calls, "else cell} ∧", "else (cell.1,cell.2.1,.nil)} ∧",

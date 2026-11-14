@@ -77,6 +77,19 @@ private theorem replace_restore (heap : List Cell) (id : Nat) (tag : String) (be
       · simp [replace,same])
     _ = heap := List.map_id' heap
 
+private theorem replace_same (heap : List Cell) (id : Nat) (tag : String) (contents : Term)
+    (stored : heap.filter (fun cell => cell.1 == id) = [(id,tag,contents)]) :
+    heap.map (replace id tag contents) = heap := by
+  calc
+    _ = heap.map (fun cell => cell) := List.map_congr_left (by
+      intro cell member
+      by_cases same : cell.1 = id
+      · have equal := known_cell heap id tag contents stored cell member same
+        subst cell
+        simp [replace]
+      · simp [replace,same])
+    _ = heap := List.map_id' heap
+
 private theorem replace_commute (heap : List Cell) (left right : Nat)
     (leftTag rightTag : String) (leftValue rightValue : Term) (different : left ≠ right) :
     (heap.map (replace left leftTag leftValue)).map (replace right rightTag rightValue) =
@@ -239,6 +252,112 @@ theorem add_call_prefix
   have headTrace := (NativeResourceArc.decode_live_prefix pin term payload count env registered
     positive bounded registry token allocation owners fresh).bind (fun owner =>
       Rustler.executeNative (__ADD__ owner amount) Rustler.encodeBool)
+  simp only [Result.ok_bind] at headTrace
+  exact headTrace.trans executed
+
+/-- Decode a temporary owner, observe the actual shared payload through the
+extracted cross-crate guard read, and release that owner. Every heap cell and
+original owner is preserved, including poison status. -/
+theorem read_call_prefix
+    (pin : NativeResourceArc CounterResource) (term : Nat) (mutex : NativeMutex effects_core.Counter)
+    (value : U64) (count : Nat) (poisoned : Bool) (env : Environment)
+    (registered : NativeResourceArc.typeName CounterResource ∈ env.nativeResourceTypes)
+    (positive : 0 < count) (bounded : count < NativeResourceArc.referenceLimit)
+    (keys : ∀ cell ∈ env.nativeHeap, cell.1 ≤ env.nativeRefCounter)
+    (registry : env.nativeHeap.filter (fun cell => cell.1 == term) =
+      [(term,NativeResourceArc.termType CounterResource,.tuple #[.nativeReference pin.id,.nativeReference pin.token])])
+    (token : env.nativeHeap.filter (fun cell => cell.1 == pin.token) =
+      [(pin.token,NativeResourceArc.handleType CounterResource,.nativeReference pin.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == pin.id) =
+      [(pin.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode ({state := mutex} : CounterResource)])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference pin.id).length = count)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])])
+    (different : pin.id ≠ mutex.id) :
+    Result.ReadyPrefix (do
+      let owner ← NativeResourceArc.decode (α := CounterResource) (.nativeReference term)
+      Rustler.executeNative (__READ__ owner) Rustler.encodeUnsigned) env
+      (.ok (Rustler.encodeUnsigned value)) {env with nativeRefCounter := env.nativeRefCounter + 2} := by
+  let payload : CounterResource := {state := mutex}
+  let owner : NativeResourceArc CounterResource := ⟨pin.id,env.nativeRefCounter + 1⟩
+  let decoded : Environment := {env with
+    nativeRefCounter := env.nativeRefCounter + 1
+    nativeHeap := (env.nativeRefCounter + 1,NativeResourceArc.handleType CounterResource,.nativeReference pin.id) ::
+      env.nativeHeap.map (replace pin.id (NativeResourceArc.typeName CounterResource)
+        (.tuple #[.integer (count + 1),NativeCodec.encode payload]))}
+  have resourceBound := key_bounded env.nativeHeap env.nativeRefCounter pin.id _ _ keys allocation
+  have mutexBound := key_bounded env.nativeHeap env.nativeRefCounter mutex.id _ _ keys stored
+  have resourceFresh : env.nativeRefCounter + 1 ≠ pin.id := by omega
+  have mutexFresh : env.nativeRefCounter + 1 ≠ mutex.id := by omega
+  have absent := filter_fresh env.nativeHeap env.nativeRefCounter (env.nativeRefCounter + 1) keys (by omega)
+  have fresh := fresh_key env.nativeHeap env.nativeRefCounter (env.nativeRefCounter + 1) keys (by omega)
+  have newToken : decoded.nativeHeap.filter (fun cell => cell.1 == owner.token) =
+      [(owner.token,NativeResourceArc.handleType CounterResource,.nativeReference owner.id)] := by
+    simp [decoded,owner,filter_replace,absent]
+  have newAllocation : decoded.nativeHeap.filter (fun cell => cell.1 == owner.id) =
+      [(owner.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer (count + 1),NativeCodec.encode payload])] := by
+    simp [decoded,owner,filter_replace,allocation,replace,resourceFresh]
+  have newOwners : (decoded.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference owner.id).length = count + 1 := by
+    simp [decoded,owner,replace_owners env.nativeHeap pin.id pin.id _ _ _ allocation,owners]
+  have newStored : decoded.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])] := by
+    simp [decoded,filter_replace,stored,replace,Ne.symm different,mutexFresh]
+  have leaseFresh : decoded.nativeHeap.any (fun cell => cell.1 == decoded.nativeRefCounter + 1) = false := by
+    simp only [decoded,List.any_cons,List.any_map,Function.comp_def,replace_key]
+    simp [fresh_key env.nativeHeap env.nativeRefCounter ((env.nativeRefCounter + 1) + 1) keys (by omega)]
+
+  have observed := Shared.Properties.read_framed_prefix owner mutex value (count + 1) poisoned decoded
+    (by omega) (by omega) newToken newAllocation newOwners newStored leaseFresh
+  have readHeap := replace_same decoded.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
+    (.tuple #[.atom "unlocked",.atom (if poisoned then "poisoned" else "unpoisoned"),
+      NativeCodec.encode ({value} : effects_core.Counter)]) newStored
+  let after : Environment := {decoded with nativeRefCounter := decoded.nativeRefCounter + 1}
+  have computed : Result.ReadyPrefix (resource_locked_value owner) decoded (.ok value) after := by
+    change (decoded.nativeHeap.map fun cell => if cell.1 == mutex.id then
+      (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])
+      else cell) = decoded.nativeHeap at readHeap
+    simpa only [readHeap] using observed
+  have released := NativeResourceArc.releaseOwned_live_prefix owner payload (count + 1) after
+    (by omega) (by omega) newToken newAllocation newOwners
+  have restored : {after with nativeHeap :=
+      (after.nativeHeap.filter fun cell => cell.1 != owner.token).map fun cell =>
+        if cell.1 == owner.id then
+          (owner.id,NativeResourceArc.typeName CounterResource,
+            .tuple #[.integer ((↑(count + 1) : Int) - 1),NativeCodec.encode payload]) else cell} =
+        {env with nativeRefCounter := env.nativeRefCounter + 2} := by
+    change {after with
+      nativeHeap := (after.nativeHeap.filter fun (cell : Cell) => cell.1 != owner.token).map
+        (replace owner.id (NativeResourceArc.typeName CounterResource)
+          (.tuple #[.integer ((↑(count + 1) : Int) - 1),NativeCodec.encode payload]))} = _
+    simp only [after,decoded,owner,List.filter_cons,bne_self_eq_false,Bool.false_eq_true,↓reduceIte]
+    rw [erase_replace,erase_fresh env.nativeHeap env.nativeRefCounter
+      (env.nativeRefCounter + 1) keys (by omega)]
+    have decrement : ((↑(count + 1) : Int) - 1) = count := by omega
+    rw [decrement,replace_restore env.nativeHeap pin.id _ _ _ allocation]
+  have releaseTrace : Result.ReadyPrefix (do resource_release owner; Result.ok value)
+      after (.ok value) {env with nativeRefCounter := env.nativeRefCounter + 2} := by
+    simpa only [Result.ok_bind,resource_release,monadLift_self,NativeOwnedDrop.drop,restored] using
+      released.bind (fun _ => Result.ok value)
+  have bodyTrace : Result.ReadyPrefix (__READ__ owner) decoded (.ok value)
+      {env with nativeRefCounter := env.nativeRefCounter + 2} := by
+    rw [__READ__]
+    simp only [monadLift_self,NativeM.ok]
+    have headTrace := computed.bind (fun value => do resource_release owner; Result.ok value)
+    simp only [Result.ok_bind] at headTrace
+    exact headTrace.trans releaseTrace
+  have executed : Result.ReadyPrefix (Rustler.executeNative (__READ__ owner) Rustler.encodeUnsigned)
+      decoded (.ok (Rustler.encodeUnsigned value)) {env with nativeRefCounter := env.nativeRefCounter + 2} := by
+    simpa only [Rustler.executeNative_ok] using Rustler.executeNative_readyPrefix bodyTrace Rustler.encodeUnsigned
+  have headTrace := (NativeResourceArc.decode_live_prefix pin term payload count env registered
+    positive bounded registry token allocation owners fresh).bind (fun owner =>
+      Rustler.executeNative (__READ__ owner) Rustler.encodeUnsigned)
   simp only [Result.ok_bind] at headTrace
   exact headTrace.trans executed
 
