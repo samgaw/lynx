@@ -417,6 +417,20 @@ This is lifetime bookkeeping, not a Rust destructor or a VM GC callback. -/
     | .SeqCst,some previous => (Except.ok previous,update atomic (wrappingAdd previous value) env)
     | _,_ => (Except.error .exhausted,env)) Result.ofExcept
 
+
+/-- Strong SC compare-and-exchange has no spurious-failure branch. Both success
+and failure orderings are admitted as SeqCst only; read/compare/write is one step. -/
+@[expose] def compareExchange (atomic : NativeAtomic U64 (NativeAtomicStorage U64))
+    (expected replacement : U64) (success failure : NativeAtomicOrdering) :
+    NativeM (core.result.Result U64 U64) :=
+  .nativeModify (fun env =>
+    match success,failure,lookup atomic env with
+    | .SeqCst,.SeqCst,some previous =>
+      if previous == expected then
+        (Except.ok (.Ok previous),update atomic replacement env)
+      else (Except.ok (.Err previous),env)
+    | _,_,_ => (Except.error .exhausted,env)) Result.ofExcept
+
 end NativeAtomic
 
 /-- Movable logical mutex identity. Mutable payloads live in the shared heap. -/

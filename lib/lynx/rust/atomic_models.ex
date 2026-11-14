@@ -47,7 +47,7 @@ defmodule Lynx.Rust.AtomicModels do
            }
          } <- function,
          true <- [a, b, c] == path(@base),
-         true <- method in ~w(new load store fetch_add),
+         true <- method in ~w(new load store fetch_add compare_exchange),
          %{"kind" => "InherentImplBlock", "params" => parent_params, "skip_binder" => self} <-
            parent,
          true <- params?(parent_params, 0, 0),
@@ -56,11 +56,16 @@ defmodule Lynx.Rust.AtomicModels do
          ordering <- ordering(translated),
          true <- method == "new" or ordering != nil,
          true <- params?(params, 0, if(method == "new", do: 0, else: 1)),
-         true <- signature?(method, sig, self, ordering && ordering["def_id"], refs) do
+         true <- signature?(method, sig, self, ordering && ordering["def_id"], refs, translated) do
       %{
         rust_name:
           "core::sync::atomic::{core::sync::atomic::Atomic<u64,core::sync::atomic::private::Align8<u64>>}::#{method}",
-        lean: "Lynx.NativeAtomic.#{if method == "fetch_add", do: "fetchAdd", else: method}",
+        lean:
+          "Lynx.NativeAtomic.#{case method do
+            "fetch_add" -> "fetchAdd"
+            "compare_exchange" -> "compareExchange"
+            other -> other
+          end}",
         builtin: false,
         can_fail: true,
         lift: true,
@@ -70,14 +75,14 @@ defmodule Lynx.Rust.AtomicModels do
         native_atomic_storage_type: storage,
         native_atomic_ordering_type: ordering && ordering["def_id"],
         label:
-          "Sequentially consistent AtomicU64 #{method} model: shared typed identity and atomic state transition; fetch_add wraps at 64 bits and returns the prior value; only SeqCst ordering is admitted; owned identities use the native lifetime audit; Rust core, hardware memory ordering, allocation and FFI remain unverified"
+          "Sequentially consistent AtomicU64 #{method} model: shared typed identity and atomic state transition; fetch_add wraps at 64 bits and returns the prior value; strong compare_exchange returns Ok with the prior value on replacement or Err with the observed value without mutation; only SeqCst ordering is admitted; owned identities use the native lifetime audit; Rust core, hardware memory ordering, allocation and FFI remain unverified"
       }
     else
       _ -> nil
     end
   end
 
-  defp signature?(method, sig, self, ordering, refs) do
+  defp signature?(method, sig, self, ordering, refs, translated) do
     order = %{
       "Adt" => %{"id" => ordering, "builtin" => nil, "generics" => ResourceModels.args([])}
     }
@@ -86,10 +91,32 @@ defmodule Lynx.Rust.AtomicModels do
 
     {inputs, output} =
       case method do
-        "new" -> {[@u64], self}
-        "load" -> {[borrowed, order], @u64}
-        "store" -> {[borrowed, @u64, order], unit()}
-        "fetch_add" -> {[borrowed, @u64, order], @u64}
+        "new" ->
+          {[@u64], self}
+
+        "load" ->
+          {[borrowed, order], @u64}
+
+        "store" ->
+          {[borrowed, @u64, order], unit()}
+
+        "fetch_add" ->
+          {[borrowed, @u64, order], @u64}
+
+        "compare_exchange" ->
+          output = CallModels.expand(sig["output"], refs)
+
+          valid =
+            case output do
+              %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
+                args == ResourceModels.args([@u64, @u64]) and
+                  LLBC.result_type?(id, %{translated: translated, references: refs})
+
+              _ ->
+                false
+            end
+
+          {[borrowed, @u64, @u64, order, order], if(valid, do: output, else: :unsupported)}
       end
 
     CallModels.expand(sig["inputs"], refs) == inputs and

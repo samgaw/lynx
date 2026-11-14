@@ -52,13 +52,51 @@ defmodule Lynx.Rust.AtomicModelsTest do
       }
     ]
 
+    types =
+      if method == "compare_exchange" do
+        types ++
+          [
+            %{
+              "def_id" => 9,
+              "item_meta" => %{"name" => path(~w(core result Result))},
+              "generics" => params([0, 1], []),
+              "kind" => %{
+                "Enum" => [
+                  %{
+                    "id" => 0,
+                    "name" => "Ok",
+                    "fields" => [%{"ty" => %{"TypeVar" => %{"Free" => 0}}}],
+                    "discriminant" => %{"Signed" => ["Isize", "0"]}
+                  },
+                  %{
+                    "id" => 1,
+                    "name" => "Err",
+                    "fields" => [%{"ty" => %{"TypeVar" => %{"Free" => 1}}}],
+                    "discriminant" => %{"Signed" => ["Isize", "1"]}
+                  }
+                ]
+              }
+            }
+          ]
+      else
+        types
+      end
+
     borrowed = %{"Ref" => [%{"Var" => %{"Free" => 0}}, atomic, "Shared"]}
-    inputs = if method == "load", do: [borrowed, adt(6)], else: [borrowed, @u64, adt(6)]
+
+    inputs =
+      case method do
+        "load" -> [borrowed, adt(6)]
+        "compare_exchange" -> [borrowed, @u64, @u64, adt(6), adt(6)]
+        _ -> [borrowed, @u64, adt(6)]
+      end
 
     output =
       if method == "store",
         do: %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => ResourceModels.args([])}},
         else: @u64
+
+    output = if method == "compare_exchange", do: adt(9, [@u64, @u64]), else: output
 
     function = %{
       "def_id" => 22,
@@ -137,6 +175,39 @@ defmodule Lynx.Rust.AtomicModelsTest do
               is_nil(AtomicModels.resolve(function, %{translated | "type_decls" => types}, %{}))
             )
     end
+  end
+
+  test "strong compare_exchange requires both orderings and the canonical Result shape" do
+    {function, translated, _} = fixture("compare_exchange")
+
+    assert %{lean: "Lynx.NativeAtomic.compareExchange"} =
+             AtomicModels.resolve(function, translated, %{})
+
+    for changed <- [
+          put_in(
+            function,
+            ["signature", "inputs"],
+            Enum.drop(function["signature"]["inputs"], -1)
+          ),
+          put_in(function, ["signature", "output"], adt(9, [@u64, %{"Scalar" => "Bool"}])),
+          put_in(function, ["signature", "output"], adt(6)),
+          put_in(
+            function,
+            ["item_meta", "name"],
+            Enum.drop(function["item_meta"]["name"], -1) ++
+              [%{"Ident" => ["compare_exchange_weak", 0]}]
+          )
+        ],
+        do: assert(is_nil(AtomicModels.resolve(changed, translated, %{})))
+
+    changed =
+      Map.update!(translated, "type_decls", fn types ->
+        Enum.map(types, fn type ->
+          if type["def_id"] == 9, do: Map.put(type, "kind", "Opaque"), else: type
+        end)
+      end)
+
+    assert is_nil(AtomicModels.resolve(function, changed, %{}))
   end
 
   test "constructor-only extraction needs no Ordering declaration or type mapping" do
