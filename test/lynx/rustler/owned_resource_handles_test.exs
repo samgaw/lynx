@@ -114,6 +114,8 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
               "Shared.Critical.critical_state_handled_next",
               "Shared.Critical.locked_read_handled_next",
               "Shared.FramedCalls.add_call_next",
+              "Shared.FramedCalls.add_call_prefix",
+              "Shared.FramedCalls.decoder_cleanup_prefix",
               "Shared.FramedCalls.decoder_cleanup_next",
               "Shared.FramedCalls.clone_prefix"
             ] ++
@@ -248,6 +250,30 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
       Lynx.Commands.lake(project, ["check", "--from-export", coowned_export] ++ sandbox)
 
     assert status == 0, output
+
+    wrong_bounded =
+      String.replace(
+        coowned_source,
+        "amount <= 18_446_744_073_709_551_608",
+        "amount <= 18_446_744_073_709_551_615"
+      )
+
+    refute wrong_bounded == coowned_source
+    [{_, wrong_bounded_beam}] = Code.compile_string(wrong_bounded, coowned_path)
+    wrong_bounded_reports = Lynx.Laws.verify([wrong_bounded_beam], coowned_options)
+
+    assert %{status: :error, diagnostics: bounded_diagnostics} =
+             Enum.find(
+               wrong_bounded_reports,
+               &(&1.module == "Elixir.LynxEffectsFixture.CoownedResourceLaws.laws")
+             )
+
+    assert Enum.any?(
+             bounded_diagnostics,
+             &match?(%{severity: :error, declaration: "bounded_add_succeeds/1"}, &1)
+           )
+
+    refute Enum.any?(bounded_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
 
     wrong_contract =
       String.replace(framed_calls, "else cell} ∧", "else (cell.1,cell.2.1,.nil)} ∧",
