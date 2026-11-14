@@ -25,6 +25,10 @@ defmodule Lynx.Rust.AppendPrefixTest do
         "AppendAcknowledgementWitness",
         "EncodedPrefixRecovery",
         "AppendPrefixInvariant",
+        "RecoveryFrame",
+        "RepairPrefixReturn",
+        "RecoveryPrefixInvariant",
+        "RepairPrefixInvariant",
         "RepairAppendPrefixInvariant",
         "AppendPrefixWitness"
       ])

@@ -227,7 +227,7 @@ private theorem sync_invariant (env : Environment) (file : NativeFile)
 
 /-- The actual resize/sync implementation preserves acknowledged records at
 all prefixes, for every admitted persistence mask and host outcome. -/
-private theorem resize_invariant (env : Environment) (file : NativeFile)
+theorem resize_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (head : ByteArray) (before : State) (length : U64)
     (separate : Separate file frame) (valid : Admitted before)
     (visible : Prefix head before.visible) (durable : Prefix head before.durable)
