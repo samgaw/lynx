@@ -107,6 +107,18 @@ theorem executeNative_readyPrefix {α : Type} {computation residual : Result α}
   unfold executeNative
   exact (trace.bind _).handle _
 
+/-- Panic conversion and pure result encoding preserve all native invariant
+prefixes, including blocking and mutations made before an error. -/
+theorem executeNative_invariant {holds : Environment → Prop} {computation : Result α}
+    {before : Environment} (safe : Result.NativeInvariant holds computation before) (encode : α → Term) :
+    Result.NativeInvariant holds (executeNative computation encode) before := by
+  unfold executeNative
+  apply Result.NativeInvariant.handle
+    (safe.bind (fun value => .ok (encode value))
+      (fun _ world trace => .ok _ _ _ (safe _ world trace).1))
+  intro exception world valid
+  split <;> exact .error _ _ _ valid
+
 /-- Local decoder/borrow steps retain the actual exception adapter at their
 residual. A wait there is still interpreted by the scheduler. -/
 theorem executeNative_registeredPrefix {α : Type} {pid : PID} {computation residual : Result α}
