@@ -181,6 +181,26 @@ pub fn repair_log(file: &mut File, max_records: usize) -> io::Result<Option<Vec<
     }
 }
 
+/// Repairs a shared log while holding its file mutex through synchronization.
+///
+/// Reaching the record limit returns `None` without acknowledging repair.
+///
+/// # Errors
+/// Propagates read, truncation and synchronization errors.
+///
+/// # Panics
+/// Recursive acquisition may panic or block. Callers must not hold this mutex.
+pub fn locked_repair(
+    mutex: &std::sync::Mutex<File>,
+    max_records: usize,
+) -> io::Result<Option<Vec<u16>>> {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    repair_log(&mut guard, max_records)
+}
+
 /// Appends under a single native file mutex, retaining IO effects on release.
 ///
 /// # Errors
