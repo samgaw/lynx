@@ -77,7 +77,8 @@ private theorem read_eof_return (before : State) (count : Usize) (after : State)
   obtain ⟨rfl, rfl, rfl⟩ := step
   exact ⟨rest, rfl, rfl, rfl⟩
 
-private theorem read_returns (file : NativeFile) (env : Environment)
+/-- A completed actual read retains file identity and exposes its actual file-model step. -/
+theorem read_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (buffer : Slice U8)
     (output : core.result.Result Usize NativeIoError × NativeFile × Slice U8) (world : Environment)
     (separate : Separate file frame) (valid : Valid before)
@@ -225,7 +226,8 @@ private theorem word_short_return (file : NativeFile) (env : Environment)
               exact ⟨rfl, rfl, rest2, rfl⟩
 
 
-private theorem record_returns (file : NativeFile) (env : Environment)
+/-- A known encoded record is decoded before any arbitrary following bytes. -/
+theorem record_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (value : U16) (tail : List U8)
     (option : Option U16) (returnedFile : NativeFile) (world : Environment)
     (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
@@ -461,7 +463,8 @@ private theorem seek_zero_step (before : State) (offset : U64) (after : State)
               obtain ⟨rfl, rfl⟩ := step
               exact ⟨rest, by apply UScalar.eq_of_val_eq; rfl, rfl⟩
 
-private theorem seek_returns (file : NativeFile) (env : Environment)
+/-- A successful actual initial seek retains file identity and the stable byte image. -/
+theorem seek_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (offset : U64) (returnedFile : NativeFile) (world : Environment)
     (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
