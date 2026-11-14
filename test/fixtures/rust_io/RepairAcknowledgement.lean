@@ -80,7 +80,9 @@ private theorem sync_step_returns (before after : State)
           obtain ⟨_, rfl⟩ := step
           exact ⟨rfl, rfl, rfl⟩
 
-private theorem sync_returns (file : NativeFile) (env : Environment)
+/-- Successful synchronization preserves the visible bytes and cursor and makes
+the durable image exactly those bytes, for every admitted host script. -/
+theorem synchronize_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)
     (trace : Result.ReadyPrefix (io_core.synchronize file) (fileEnv env file before frame)
@@ -128,7 +130,7 @@ theorem resize_then_sync_returns (file : NativeFile) (length : U64) (env : Envir
   | Ok returnedUnit =>
       cases returnedUnit
       obtain ⟨visible, position, admitted⟩ := resize_step_returns before length resizedState valid step
-      obtain ⟨after, rfl, v, d, p⟩ := sync_returns file env frame resizedState world separate admitted continuation
+      obtain ⟨after, rfl, v, d, p⟩ := synchronize_returns file env frame resizedState world separate admitted continuation
       exact ⟨after, rfl, v.trans visible, d.trans visible, p.trans position,
         ⟨by rw [v]; exact admitted.1, by rw [d]; exact admitted.1, by rw [p]; exact admitted.2.2⟩⟩
 
