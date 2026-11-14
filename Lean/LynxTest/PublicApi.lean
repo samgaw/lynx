@@ -21,6 +21,18 @@ private def referenceConstructor : List Nat → Lynx.Term := Lynx.Term.reference
 private def nativeReferenceConstructor : Nat → Lynx.Term := Lynx.Term.nativeReference
 private def makeRef : Lynx.Result := Erlang.erlang.«make_ref/0» (Lynx.Dispatcher.ofTable [] 0)
 
+-- Native exception adaptation preserves the public invariant interface.
+example (holds : Lynx.Environment → Prop) (computation : Lynx.Result Bool) (env : Lynx.Environment)
+    (safe : Lynx.Result.NativeInvariant holds computation env) :
+    Lynx.Result.NativeInvariant holds (Lynx.Rustler.executeNative computation Lynx.Rustler.encodeBool) env :=
+  Lynx.Rustler.executeNative_invariant safe _
+
+example (holds : Lynx.Environment → Prop) (computation : Lynx.Result Bool) (env : Lynx.Environment)
+    (safe : Lynx.Result.NativeInvariant holds computation env) (handler : Lynx.Exception → Lynx.Result Bool)
+    (handled : ∀ exception world, holds world → Lynx.Result.NativeInvariant holds (handler exception) world) :
+    Lynx.Result.NativeInvariant holds (Lynx.Result.handle computation handler) env :=
+  Lynx.Result.NativeInvariant.handle safe handler handled
+
 -- Closed comparison proofs use public evaluation equations.
 example : Lynx.Term.compare 8 (.atom "a") (.atom "b") = .lt := by cbv
 example : Lynx.Term.compare 8 (.integer 7) (.integer 3) = .gt := by cbv

@@ -201,6 +201,58 @@ theorem wait {holds : Environment → Prop} (poll : Environment → Option (β �
   | refl => exact ⟨valid, trivial⟩
   | wait _ _ reply _ updated _ _ ready rest => exact safe _ _ ready _ _ rest
 
+/-- Exception handling retains every native prefix when both the protected
+computation and the handler preserve the same predicate. Handlers receive the
+actual failure environment; exhaustion still bypasses them. -/
+theorem handle {holds : Environment → Prop} {computation : Result α} {before : Environment}
+    (safe : NativeInvariant holds computation before) (handler : Exception → Result α)
+    (handled : ∀ exception world, holds world → NativeInvariant holds (handler exception) world) :
+    NativeInvariant holds (Result.handle computation handler) before := by
+  induction computation generalizing before with
+  | ok value => exact .ok _ _ _ safe.initial
+  | error exception =>
+      cases exception <;> first
+        | exact .error _ _ _ safe.initial
+        | exact handled _ _ safe.initial
+  | get body ih =>
+      rw [handle_get]
+      apply NativeInvariant.get
+      apply ih before ?_ handler handled
+      intro residual world trace
+      exact safe _ _ (.get _ _ _ _ trace)
+  | nativeGet body ih =>
+      rw [handle_nativeGet]
+      apply NativeInvariant.nativeGet
+      apply ih before ?_ handler handled
+      intro residual world trace
+      exact safe _ _ (.nativeGet _ _ _ _ trace)
+  | set updated body ih =>
+      rw [handle_set]
+      apply NativeInvariant.set _ _ _ safe.initial
+      apply ih ?_ handler handled
+      intro residual world trace
+      exact safe _ _ (.set _ _ _ _ _ trace)
+  | nativeSet updated body ih =>
+      rw [handle_nativeSet]
+      apply NativeInvariant.nativeSet _ _ _ safe.initial
+      apply ih ?_ handler handled
+      intro residual world trace
+      exact safe _ _ (.nativeSet _ _ _ _ _ trace)
+  | nativeModify transition body ih =>
+      rw [handle_nativeModify]
+      apply NativeInvariant.nativeModify _ _ _ safe.initial
+      apply ih (transition before).1 ?_ handler handled
+      intro residual world trace
+      exact safe _ _ (.nativeModify _ _ _ _ _ _ _ rfl trace)
+  | wait poll body ih =>
+      change NativeInvariant holds (.wait poll (fun reply => Result.handle (body reply) handler)) before
+      apply NativeInvariant.wait _ _ _ safe.initial
+      intro reply updated ready
+      apply ih reply ?_ handler handled
+      intro residual world trace
+      exact safe _ _ (.wait _ _ reply _ _ _ _ ready trace)
+  | schedule | send | receive | request => exact False.elim (safe _ _ (.refl _ _)).2
+
 private theorem blocked_stuck {poll : Environment → Option (β × Environment)}
     (next : β → Result α) (env : Environment) (elapsed : PID → Nat → Nat)
     (blocked : poll env = none) :
