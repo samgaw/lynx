@@ -1420,6 +1420,25 @@ theorem deref_single_next {α β : Type} [NativeCodec α]
     (deref handle >>= next) env = next value env := by
   simp [deref, ownership, token, stored, owners, NativeCodec.roundtrip, referenceLimit]
 
+/-- A validated borrow preserves every heap cell for any admitted live owner
+count. The handler and continuation keep their actual effects. -/
+theorem deref_live_handled_next {α β γ : Type} [NativeCodec α]
+    (handle : NativeResourceArc α) (value : α) (count : Nat)
+    (finish : α → NativeM β) (handler : Exception → NativeM β)
+    (next : β → NativeM γ) (env : Environment)
+    (positive : 0 < count) (bounded : count ≤ referenceLimit)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == handle.token) =
+      [(handle.token, handleType α, .nativeReference handle.id)])
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == handle.id) =
+      [(handle.id, typeName α, .tuple #[.integer count, NativeCodec.encode value])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == handleType α && cell.2.2 == .nativeReference handle.id).length = count) :
+    ((Result.handle (deref handle >>= finish) handler) >>= next) env =
+      ((Result.handle (finish value) handler) >>= next) env := by
+  have boundInt : (count : Int) ≤ referenceLimit := by exact_mod_cast bounded
+  simp [Result.handle, deref, ownership, token, stored, owners, NativeCodec.roundtrip,
+    positive, boundInt]
+
 theorem deref_retained_handled_next {α β γ : Type} [NativeCodec α]
     (handle : NativeResourceArc α) (value : α) (finish : α → NativeM β) (handler : Exception → NativeM β)
     (next : β → NativeM γ) (env : Environment)

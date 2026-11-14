@@ -341,4 +341,159 @@ theorem decoder_badarg_cleanup_at {α β : Type} (env : Environment) (value : U6
     release_handled_next env value (counter+1) (counter+1) (by omega)]
   simp [Result.handle]
 
+/-- The actual cross-crate Rust borrow/update accepts arbitrary unrelated heap
+cells and any validated owner count. Only the mutex cell changes; overflow
+preserves its value, and poisoned acquisition preserves the poison status. -/
+theorem update_framed_handled_next {α β : Type}
+    (resource : NativeResourceArc CounterResource) (mutex : NativeMutex effects_core.Counter)
+    (value amount : U64) (count : Nat) (poisoned : Bool) (env : Environment)
+    (finish : Bool → NativeM α) (handler : Exception → NativeM α) (next : α → NativeM β)
+    (positive : 0 < count) (bounded : count ≤ NativeResourceArc.referenceLimit)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == resource.token) =
+      [(resource.token,NativeResourceArc.handleType CounterResource,.nativeReference resource.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == resource.id) =
+      [(resource.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode ({state := mutex} : CounterResource)])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference resource.id).length = count)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    ∃ changed updated,
+      ((Result.handle (resource_locked_increment resource amount >>= finish) handler) >>= next) env =
+      ((Result.handle (finish changed) handler) >>= next) {env with
+        nativeRefCounter := env.nativeRefCounter + 1,
+        nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+          (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+            .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value := updated} : effects_core.Counter)])
+          else cell} ∧
+      (if changed then updated.val = value.val + amount.val
+       else updated = value ∧ U64.max < value.val + amount.val) := by
+  simp only [resource_locked_increment,monadLift_self,bind_assoc]
+  simp only [NativeResourceArc.deref_live_handled_next resource ({state := mutex} : CounterResource)
+    count _ handler next env positive bounded token allocation owners]
+  obtain ⟨changed,updated,computed,arithmetic⟩ := Shared.Critical.critical_state_handled_next
+    finish handler next mutex ({value} : effects_core.Counter) amount poisoned env stored fresh
+  cases updated
+  refine ⟨changed,_,computed,?_⟩
+  cases changed <;> simpa using arithmetic
+
+/-- Reading through the actual resource and cross-crate guard leaves unrelated
+heap cells in place, independently of the number of other validated owners. -/
+theorem read_framed_handled_next {α β : Type}
+    (resource : NativeResourceArc CounterResource) (mutex : NativeMutex effects_core.Counter)
+    (value : U64) (count : Nat) (env : Environment)
+    (finish : U64 → NativeM α) (handler : Exception → NativeM α) (next : α → NativeM β)
+    (positive : 0 < count) (bounded : count ≤ NativeResourceArc.referenceLimit)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == resource.token) =
+      [(resource.token,NativeResourceArc.handleType CounterResource,.nativeReference resource.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == resource.id) =
+      [(resource.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode ({state := mutex} : CounterResource)])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference resource.id).length = count)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom "unpoisoned",NativeCodec.encode ({value} : effects_core.Counter)])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    ((Result.handle (resource_locked_value resource >>= finish) handler) >>= next) env =
+      ((Result.handle (finish value) handler) >>= next) {env with
+        nativeRefCounter := env.nativeRefCounter + 1,
+        nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+          (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+            .atom "unpoisoned",NativeCodec.encode ({value} : effects_core.Counter)]) else cell} := by
+  simp only [resource_locked_value,monadLift_self,bind_assoc]
+  simp only [NativeResourceArc.deref_live_handled_next resource ({state := mutex} : CounterResource)
+    count _ handler next env positive bounded token allocation owners]
+  exact Shared.Critical.locked_read_handled_next finish handler next mutex ({value} : effects_core.Counter) env stored fresh
+
+namespace Framed
+
+@[expose] def counterCell (id : Nat) (value : U64) : Nat × String × Term :=
+  (id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",.atom "unpoisoned",
+    NativeCodec.encode ({value} : effects_core.Counter)])
+
+/-- Two independent VM-pinned resources share an otherwise ordinary runtime.
+The two mutexes and their ownership/registry cells have distinct identities. -/
+@[expose] def heap (value other : U64) : List (Nat × String × Term) :=
+  NativeResourceArc.vmCells ({state := ⟨1⟩} : CounterResource) 2 4 5 ++
+  [counterCell 1 value] ++
+  NativeResourceArc.vmCells ({state := ⟨11⟩} : CounterResource) 12 14 15 ++
+  [counterCell 11 other,(17,"unrelated",.tuple #[.integer 99])]
+
+@[expose] def initialFor (value : U64) : Environment :=
+  {nativeRefCounter := 42, nativeHeap := heap value 11#u64,
+    nativeResourceTypes := [NativeResourceArc.typeName CounterResource],
+    pdict := [(.atom "counter",.nativeReference 5),(.atom "other",.nativeReference 15)]}
+@[expose] def initial : Environment := initialFor 7#u64
+@[expose] def overflowInitial : Environment := initialFor 18446744073709551615#u64
+
+/-- Two Rust owners and a VM pin of the first resource coexist with an entirely
+separate resource and its mutex. No decoder count of two is assumed. -/
+@[expose] def coowned (value : U64) (counter : Nat) : Environment :=
+  {nativeRefCounter := counter,nativeHeap :=
+    [(3,NativeResourceArc.handleType CounterResource,.nativeReference 2),
+     (6,NativeResourceArc.handleType CounterResource,.nativeReference 2),
+     (4,NativeResourceArc.handleType CounterResource,.nativeReference 2),
+     (5,NativeResourceArc.termType CounterResource,.tuple #[.nativeReference 2,.nativeReference 4]),
+     (2,NativeResourceArc.typeName CounterResource,
+       .tuple #[.integer 3,NativeCodec.encode ({state := ⟨1⟩} : CounterResource)]),counterCell 1 value] ++
+    NativeResourceArc.vmCells ({state := ⟨11⟩} : CounterResource) 12 14 15 ++
+    [counterCell 11 11#u64,(17,"unrelated",.tuple #[.integer 99])]}
+
+set_option maxRecDepth 8192 in
+set_option maxHeartbeats 8000000 in
+/-- Actual cross-crate Rust mutation preserves all three owners and every
+foreign cell while changing only the first mutex payload and fresh counter. -/
+theorem coowned_update :
+    Rustler.executeNative (resource_locked_increment ⟨2,3⟩ 3#u64) Rustler.encodeBool
+      (coowned 7#u64 42) = (.ok Term.true,coowned 10#u64 43) := by
+  let finish : Bool → NativeM Term := fun changed => Result.ok (Rustler.encodeBool changed)
+  let handler : Exception → NativeM Term := fun error => match error with
+    | .error (.atom "rust_panicked") => Result.error (.error (.atom "nif_panicked"))
+    | _ => Result.error .exhausted
+  have execute (body : NativeM Bool) :
+      Rustler.executeNative body Rustler.encodeBool = Result.handle (body >>= finish) handler := by
+    simp only [Rustler.executeNative,finish]
+    congr 1
+  obtain ⟨changed,updated,computed,arithmetic⟩ := update_framed_handled_next
+    (⟨2,3⟩ : NativeResourceArc CounterResource) (⟨1⟩ : NativeMutex effects_core.Counter)
+    7#u64 3#u64 3 false (coowned 7#u64 42) finish handler Result.ok (by decide) (by decide)
+    (by simp [coowned,counterCell,NativeResourceArc.vmCells])
+    (by simp [coowned,counterCell,NativeResourceArc.vmCells])
+    (by simp [coowned,counterCell,NativeResourceArc.vmCells,NativeMutex.typeName,
+      NativeResourceArc.typeName,NativeResourceArc.handleType,NativeResourceArc.termType])
+    (by simp [coowned,counterCell,NativeResourceArc.vmCells])
+    (by simp [coowned,counterCell,NativeResourceArc.vmCells])
+  cases changed with
+  | false =>
+      have overflow : U64.max < (7#u64).val + (3#u64).val := arithmetic.2
+      have fits : (7#u64).val + (3#u64).val ≤ U64.max := by scalar_tac
+      exact False.elim ((Nat.not_lt_of_ge fits) overflow)
+  | true =>
+      have equal : updated = 10#u64 := UScalar.eq_of_val_eq (by simpa using arithmetic)
+      subst updated
+      simp only [finish,handler,Result.bind_ok,Result.handle,Result.ok_apply,Rustler.encodeBool] at computed
+      change _ = (Outcome.ok Term.true,coowned 10#u64 43) at computed
+      rw [execute]
+      exact computed
+
+@[expose] def accepted (value : U64) (config : Concurrent.Config Term) : Bool :=
+  let env := match config with
+    | .start env .. => env
+    | .running state .. => state.nativeView []
+  config.outcome.isTrue && env.nativeRefCounter == 48 &&
+    (heap value 11#u64).all env.nativeHeap.contains &&
+    env.nativeHeap.length == (heap value 11#u64).length &&
+    env.nativeResourceTypes.contains (NativeResourceArc.typeName CounterResource)
+
+theorem accepted_outcome (value : U64) (config : Concurrent.Config Term)
+    (checked : accepted value config = true) : config.outcome = .ok Term.true := by
+  apply Outcome.eq_of_isTrue
+  simp only [accepted,Bool.and_eq_true] at checked
+  exact checked.1.1.1.1
+
+end Framed
+
 end Shared.Properties
