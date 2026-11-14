@@ -31,6 +31,58 @@ defmodule Lynx.Rust.NativeLifetimesTest do
     audit([create(1), operation, create(0), returned()], false)
   end
 
+  test "typed integer casts retain live-owner disposal obligations" do
+    for source <- [scalar()],
+        target <- [%{"Unsigned" => "U8"}, %{"Unsigned" => "Usize"}, %{"Signed" => "I32"}] do
+      operation = %{
+        "kind" => %{
+          "Assign" => [
+            %{"kind" => %{"Local" => 4}, "ty" => %{"Scalar" => %{"Integer" => target}}},
+            %{
+              "UnaryOp" => [
+                %{"Cast" => %{"Scalar" => %{"Integer" => target}}},
+                %{"Copy" => %{place(3) | "ty" => source}}
+              ]
+            }
+          ]
+        }
+      }
+
+      audit([create(1), operation, dispose(1), create(0), returned()], true, nil, %{}, %{
+        4 => %{"Scalar" => %{"Integer" => target}}
+      })
+
+      audit([create(1), operation, create(0), returned()], false, nil, %{}, %{
+        4 => %{"Scalar" => %{"Integer" => target}}
+      })
+    end
+  end
+
+  test "integer cast admission excludes native owners and noninteger casts" do
+    for {source, target} <- [
+          {owner(), %{"Integer" => %{"Unsigned" => "U64"}}},
+          {scalar(), %{"Float" => "F64"}},
+          {%{"Scalar" => "Bool"}, %{"Integer" => %{"Unsigned" => "U32"}}},
+          {scalar(), %{"Integer" => %{"Unsigned" => "Unknown"}}}
+        ] do
+      operation = %{
+        "kind" => %{
+          "Assign" => [
+            place(3),
+            %{
+              "UnaryOp" => [
+                %{"Cast" => %{"Scalar" => target}},
+                %{"Copy" => %{place(3) | "ty" => source}}
+              ]
+            }
+          ]
+        }
+      }
+
+      audit([create(1), operation, dispose(1), create(0), returned()], false)
+    end
+  end
+
   test "loop exits retain transferred owners and backedges cannot retain them" do
     for {body, tail, accepted} <- [
           {[create(0), edge("Break", 0)], [returned()], true},
@@ -348,7 +400,7 @@ defmodule Lynx.Rust.NativeLifetimesTest do
     }
   end
 
-  defp audit(statements, accepted, drops \\ nil, models \\ %{}) do
+  defp audit(statements, accepted, drops \\ nil, models \\ %{}, local_types \\ %{}) do
     params =
       Map.merge(args([%{"index" => 0}]), %{
         "trait_clauses" => [],
@@ -373,7 +425,8 @@ defmodule Lynx.Rust.NativeLifetimesTest do
         "Structured" => %{
           "locals" => %{
             "arg_count" => 0,
-            "locals" => for(i <- 0..3, do: %{"index" => i, "ty" => place(i)["ty"]})
+            "locals" =>
+              for(i <- 0..4, do: %{"index" => i, "ty" => Map.get(local_types, i, place(i)["ty"])})
           },
           "body" => %{"statements" => statements}
         }
