@@ -99,6 +99,38 @@ theorem blocking_not_caught : checkPost blockedRetained 8
     (.start {} (Rustler.executeNative blockedAfterMutation Rustler.encodeBool)) = true := by
   cbv
 
+private def successful : Result Bool :=
+  .nativeModify (fun env => ((),{env with nativeRefCounter := env.nativeRefCounter + 1})) fun _ =>
+    .wait (fun env => some ((),{env with nativeRefCounter := env.nativeRefCounter + 2})) fun _ : Unit => .ok true
+
+/-- The inverse adapter rule returns the actual computation prefix, including
+both native state changes. The premise is witnessed by the real forward rule. -/
+theorem encoded_success_has_origin :
+    ∃ value, Term.true = Rustler.encodeBool value ∧
+      Result.ReadyPrefix successful {} (.ok value) {nativeRefCounter := 3} := by
+  have native : Result.ReadyPrefix successful {} (.ok true) {nativeRefCounter := 3} := by
+    unfold successful
+    exact .nativeModify _ _ () _ _ _ _ rfl (.wait _ _ () _ _ _ _ rfl (.refl _ _))
+  exact Rustler.executeNative_returns (Rustler.executeNative_readyPrefix native Rustler.encodeBool)
+
+private theorem failing_no_return (exception : Exception) (encoded : Term) (world : Environment)
+    (trace : Result.ReadyPrefix (Rustler.executeNative (failing exception) Rustler.encodeBool)
+      {} (.ok encoded) world) : False := by
+  obtain ⟨value,_,original⟩ := Rustler.executeNative_returns trace
+  unfold failing at original
+  cases original with
+  | nativeModify _ _ _ _ _ _ _ _ rest => cases rest
+
+/-- Neither panic conversion nor verification exhaustion can fabricate a
+successful encoded result after the native mutation. -/
+theorem panic_cannot_return (encoded : Term) (world : Environment)
+    (trace : Result.ReadyPrefix (Rustler.executeNative (failing (.error (.atom "rust_panicked"))) Rustler.encodeBool)
+      {} (.ok encoded) world) : False := failing_no_return _ encoded world trace
+
+theorem exhaustion_cannot_return (encoded : Term) (world : Environment)
+    (trace : Result.ReadyPrefix (Rustler.executeNative (failing .exhausted) Rustler.encodeBool)
+      {} (.ok encoded) world) : False := failing_no_return _ encoded world trace
+
 end LynxTest.NativeInvariant
 
 run_cmd do

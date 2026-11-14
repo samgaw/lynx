@@ -106,6 +106,51 @@ theorem ReadyPrefix.bind_returns {computation : Result α} {next : α → Result
       | contradiction
   · exact ⟨returned, middle, headTrace, rest⟩
 
+/-- A handler that only converts exceptions cannot fabricate a successful
+return. The successful protected prefix retains its exact intermediate state. -/
+theorem ReadyPrefix.handle_error_returns {computation : Result α} {before after : Environment}
+    {value : α} (handler : Exception → Result α)
+    (errors : ∀ exception, ∃ mapped, handler exception = .error mapped)
+    (trace : ReadyPrefix (Result.handle computation handler) before (.ok value) after) :
+    ReadyPrefix computation before (.ok value) after := by
+  induction computation generalizing before after with
+  | ok returned => exact trace
+  | error exception =>
+      have impossible (exception : Exception)
+          (converted : ReadyPrefix (handler exception) before (.ok value) after) : False := by
+        obtain ⟨mapped,equal⟩ := errors exception
+        rw [equal] at converted
+        cases converted
+      cases exception <;> simp only [Result.handle] at trace
+      all_goals first | exact (impossible _ trace).elim | cases trace
+  | get body ih =>
+      rw [handle_get] at trace
+      cases trace with
+      | get _ _ _ _ rest => exact .get _ _ _ _ (by apply ih <;> assumption)
+  | nativeGet body ih =>
+      rw [handle_nativeGet] at trace
+      cases trace with
+      | nativeGet _ _ _ _ rest => exact .nativeGet _ _ _ _ (by apply ih <;> assumption)
+  | set updated body ih =>
+      rw [handle_set] at trace
+      cases trace with
+      | set _ _ _ _ _ rest => exact .set _ _ _ _ _ (by apply ih <;> assumption)
+  | nativeSet updated body ih =>
+      rw [handle_nativeSet] at trace
+      cases trace with
+      | nativeSet _ _ _ _ _ rest => exact .nativeSet _ _ _ _ _ (by apply ih <;> assumption)
+  | nativeModify transition body ih =>
+      rw [handle_nativeModify] at trace
+      cases trace with
+      | nativeModify _ _ reply _ _ _ _ ready rest =>
+          exact .nativeModify _ _ reply _ _ _ _ ready (by apply ih <;> assumption)
+  | wait poll body ih =>
+      change ReadyPrefix (.wait poll (fun reply => Result.handle (body reply) handler)) before (.ok value) after at trace
+      cases trace with
+      | wait _ _ reply _ _ _ _ ready rest => exact .wait _ _ reply _ _ _ _ ready (by apply ih <;> assumption)
+  | schedule | send | receive | request => cases trace
+
+
 namespace NativeInvariant
 
 theorem initial {holds : Environment → Prop} {computation : Result α} {before : Environment}

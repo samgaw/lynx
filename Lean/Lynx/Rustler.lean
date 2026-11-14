@@ -119,6 +119,20 @@ theorem executeNative_invariant {holds : Environment → Prop} {computation : Re
   intro exception world valid
   split <;> exact .error _ _ _ valid
 
+/-- A successful encoded result comes from an actual successful native
+return, with the same environment. Panic conversion cannot supply success. -/
+theorem executeNative_returns {computation : Result α} {encode : α → Term}
+    {before after : Environment} {encoded : Term}
+    (trace : Result.ReadyPrefix (executeNative computation encode) before (.ok encoded) after) :
+    ∃ value, encoded = encode value ∧ Result.ReadyPrefix computation before (.ok value) after := by
+  unfold executeNative at trace
+  have original := trace.handle_error_returns _ (by
+    intro exception
+    split <;> exact ⟨_,rfl⟩)
+  obtain ⟨value,middle,returned,encoding⟩ := original.bind_returns
+  cases encoding
+  exact ⟨value,rfl,returned⟩
+
 /-- Local decoder/borrow steps retain the actual exception adapter at their
 residual. A wait there is still interpreted by the scheduler. -/
 theorem executeNative_registeredPrefix {α : Type} {pid : PID} {computation residual : Result α}

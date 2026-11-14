@@ -33,6 +33,21 @@ example (holds : Lynx.Environment → Prop) (computation : Lynx.Result Bool) (en
     Lynx.Result.NativeInvariant holds (Lynx.Result.handle computation handler) env :=
   Lynx.Result.NativeInvariant.handle safe handler handled
 
+-- Successful exception-adapted prefixes retain their implementation origin.
+example (computation : Lynx.Result α) (handler : Lynx.Exception → Lynx.Result α)
+    (errors : ∀ exception, ∃ mapped, handler exception = .error mapped)
+    (before after : Lynx.Environment) (value : α)
+    (trace : Lynx.Result.ReadyPrefix (Lynx.Result.handle computation handler) before (.ok value) after) :
+    Lynx.Result.ReadyPrefix computation before (.ok value) after :=
+  trace.handle_error_returns handler errors
+
+example (computation : Lynx.Result Bool) (before after : Lynx.Environment) (encoded : Lynx.Term)
+    (trace : Lynx.Result.ReadyPrefix (Lynx.Rustler.executeNative computation Lynx.Rustler.encodeBool)
+      before (.ok encoded) after) :
+    ∃ value, encoded = Lynx.Rustler.encodeBool value ∧
+      Lynx.Result.ReadyPrefix computation before (.ok value) after :=
+  Lynx.Rustler.executeNative_returns trace
+
 -- Closed comparison proofs use public evaluation equations.
 example : Lynx.Term.compare 8 (.atom "a") (.atom "b") = .lt := by cbv
 example : Lynx.Term.compare 8 (.integer 7) (.integer 3) = .gt := by cbv
