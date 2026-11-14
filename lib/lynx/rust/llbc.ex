@@ -223,6 +223,8 @@ defmodule Lynx.Rust.LLBC do
       |> Map.merge(cache_models)
       |> Map.merge(Lynx.Rustler.ErrorConstructors.models!(document, opts[:rustler_constructors]))
 
+    Lynx.Rust.AtomicModels.audit!(functions, available_models, translated, refs)
+
     if :rustler_decoders in Keyword.get(opts, :external_calls, []) do
       case Lynx.Rustler.ResultConversions.audit(functions, available_models, translated, refs) do
         :ok -> :ok

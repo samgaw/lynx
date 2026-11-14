@@ -346,6 +346,66 @@ verification without changing state. -/
 
 end NativeM
 
+/-- Supported atomic storage is represented by a typed logical identity.
+The storage parameter records Rust's compiler-selected alignment type. -/
+structure NativeAtomic (α storage : Type) where
+  id : Nat
+
+abbrev NativeAtomicStorage (_α : Type) := Unit
+
+inductive NativeAtomicOrdering where
+  | Relaxed | Release | Acquire | AcqRel | SeqCst
+  deriving DecidableEq, BEq
+
+namespace NativeAtomic
+
+@[expose] def typeName : String := "core::sync::atomic::AtomicU64:seqcst-v1"
+
+instance {α storage : Type} : NativeCodec (NativeAtomic α storage) where
+  typeName := NativeAtomic.typeName
+  encode atomic := .nativeReference atomic.id
+  decode
+    | .nativeReference id => some ⟨id⟩
+    | _ => none
+  decode_encode atomic := by cases atomic; rfl
+
+@[expose] def lookup (atomic : NativeAtomic U64 (NativeAtomicStorage U64)) (env : Environment) : Option U64 := do
+  let [(_,tag,value)] := env.nativeHeap.filter (fun cell => cell.1 == atomic.id) | none
+  if tag == typeName then NativeCodec.decode value else none
+
+@[expose] def update (atomic : NativeAtomic U64 (NativeAtomicStorage U64)) (value : U64)
+    (env : Environment) : Environment :=
+  {env with nativeHeap := env.nativeHeap.map fun cell =>
+    if cell.1 == atomic.id then (atomic.id,typeName,NativeCodec.encode value) else cell}
+
+/-- The mathematical word operation retains AtomicU64's wrapping semantics. -/
+@[expose] def wrappingAdd (left right : U64) : U64 := ⟨left.bv + right.bv⟩
+
+/-- Only sequential consistency is admitted. Other orderings exhaust verification. -/
+@[expose] def load (atomic : NativeAtomic U64 (NativeAtomicStorage U64))
+    (order : NativeAtomicOrdering) : NativeM U64 :=
+  .nativeModify (fun env =>
+    match order,lookup atomic env with
+    | .SeqCst,some value => (Except.ok value,env)
+    | _,_ => (Except.error .exhausted,env)) Result.ofExcept
+
+@[expose] def store (atomic : NativeAtomic U64 (NativeAtomicStorage U64)) (value : U64)
+    (order : NativeAtomicOrdering) : NativeM Unit :=
+  .nativeModify (fun env =>
+    match order,lookup atomic env with
+    | .SeqCst,some _ => (Except.ok (),update atomic value env)
+    | _,_ => (Except.error .exhausted,env)) Result.ofExcept
+
+/-- The read, wrapping addition and write are one atomic scheduler transition. -/
+@[expose] def fetchAdd (atomic : NativeAtomic U64 (NativeAtomicStorage U64)) (value : U64)
+    (order : NativeAtomicOrdering) : NativeM U64 :=
+  .nativeModify (fun env =>
+    match order,lookup atomic env with
+    | .SeqCst,some previous => (Except.ok previous,update atomic (wrappingAdd previous value) env)
+    | _,_ => (Except.error .exhausted,env)) Result.ofExcept
+
+end NativeAtomic
+
 /-- Movable logical mutex identity. Mutable payloads live in the shared heap. -/
 structure NativeMutex (α : Type) where
   id : Nat

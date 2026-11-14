@@ -379,6 +379,7 @@ defmodule Lynx.Rust.Extraction do
 
     models =
       models ++
+        Lynx.Rust.AtomicModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.MutexModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.RwLockModels.type_models(audit.external_calls, module) ++
         Lynx.Rust.LockModels.type_models(audit.external_calls, module) ++
@@ -765,6 +766,8 @@ defmodule Lynx.Rust.Extraction do
           "std",
           "--include",
           "core::result::Result",
+          "--include",
+          "core::sync::atomic::Ordering",
           "--include",
           "core::option::Option",
           "--include",
