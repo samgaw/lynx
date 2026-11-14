@@ -40,6 +40,9 @@ defmodule Lynx.Rust.ResourceLifetimes do
         declaration = Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id))
 
         cond do
+          Lynx.Rust.AtomicModels.supported?(type, translated, refs) != nil ->
+            true
+
           RwLockModels.type?(declaration) ->
             true
 
@@ -59,6 +62,18 @@ defmodule Lynx.Rust.ResourceLifetimes do
       _ ->
         false
     end
+  end
+
+  # Explicit owned-drop extraction must not turn a no-drop native payload into
+  # a no-op: its interpretation can still own shared logical cells. This is a
+  # per-type decision so observable destructors retain their extracted cleanup.
+  def logical_payload?(type, translated, refs) do
+    payload = %{
+      "Adt" => %{"id" => type["def_id"], "builtin" => nil, "generics" => ResourceModels.args([])}
+    }
+
+    NativeDrops.destructor_free?(payload, translated, refs) and
+      owned_cells?(payload, translated, refs, [])
   end
 
   def cleanup_fields!(type, audit) do
@@ -96,6 +111,13 @@ defmodule Lynx.Rust.ResourceLifetimes do
     type = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
     cond do
+      Lynx.Rust.AtomicModels.supported?(
+        %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}},
+        audit.translated,
+        audit.references
+      ) != nil ->
+        "NativeAtomic.dispose"
+
       RwLockModels.type?(type) ->
         with %{"types" => [payload]} <- args,
              true <- args == ResourceModels.args([payload]),

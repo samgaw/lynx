@@ -47,15 +47,16 @@ defmodule Lynx.Rust.AtomicModels do
            }
          } <- function,
          true <- [a, b, c] == path(@base),
-         true <- method in ~w(load store fetch_add),
+         true <- method in ~w(new load store fetch_add),
          %{"kind" => "InherentImplBlock", "params" => parent_params, "skip_binder" => self} <-
            parent,
          true <- params?(parent_params, 0, 0),
          %{atomic: atomic, storage: storage} <- supported?(self, translated, refs),
          self <- CallModels.expand(self, refs),
-         ordering when not is_nil(ordering) <- ordering(translated),
-         true <- params?(params, 0, 1),
-         true <- signature?(method, sig, self, ordering["def_id"], refs) do
+         ordering <- ordering(translated),
+         true <- method == "new" or ordering != nil,
+         true <- params?(params, 0, if(method == "new", do: 0, else: 1)),
+         true <- signature?(method, sig, self, ordering && ordering["def_id"], refs) do
       %{
         rust_name:
           "core::sync::atomic::{core::sync::atomic::Atomic<u64,core::sync::atomic::private::Align8<u64>>}::#{method}",
@@ -64,11 +65,12 @@ defmodule Lynx.Rust.AtomicModels do
         can_fail: true,
         lift: true,
         native_cutoff_only: true,
+        native_transfer: method == "new",
         native_atomic_type: atomic,
         native_atomic_storage_type: storage,
-        native_atomic_ordering_type: ordering["def_id"],
+        native_atomic_ordering_type: ordering && ordering["def_id"],
         label:
-          "Sequentially consistent AtomicU64 #{method} model: shared typed identity and atomic state transition; fetch_add wraps at 64 bits and returns the prior value; only SeqCst construction and shared borrowing are admitted; Rust core, hardware memory ordering, allocation and FFI remain unverified"
+          "Sequentially consistent AtomicU64 #{method} model: shared typed identity and atomic state transition; fetch_add wraps at 64 bits and returns the prior value; only SeqCst ordering is admitted; owned identities use the native lifetime audit; Rust core, hardware memory ordering, allocation and FFI remain unverified"
       }
     else
       _ -> nil
@@ -84,6 +86,7 @@ defmodule Lynx.Rust.AtomicModels do
 
     {inputs, output} =
       case method do
+        "new" -> {[@u64], self}
         "load" -> {[borrowed, order], @u64}
         "store" -> {[borrowed, @u64, order], unit()}
         "fetch_add" -> {[borrowed, @u64, order], @u64}
@@ -108,29 +111,28 @@ defmodule Lynx.Rust.AtomicModels do
   def audit!(functions, models, translated, refs) do
     if Enum.any?(models, fn {_, model} -> model[:native_atomic_type] end) do
       order = ordering(translated)
-      seq_cst = Enum.find(order["kind"]["Enum"], &(&1["name"] == "SeqCst"))["id"]
+      seq_cst = order && Enum.find(order["kind"]["Enum"], &(&1["name"] == "SeqCst"))["id"]
 
-      # Owning cells require explicit lifetime/codec support. This initial model
-      # admits only shared references to the exact compiler-validated U64 type.
-      for type <- translated["type_decls"], type != nil, is_map(type["kind"]) do
-        if contains_order?(type["kind"], order["def_id"], refs) or
-             contains_atomic?(type["kind"], translated, refs),
-           do:
-             raise(
-               ArgumentError,
-               "atomic cells and ordering values in aggregate fields are unsupported"
-             )
+      # NativeLifetimes separately tracks ownership, moves and cleanup. Validate
+      # every instantiation here, including fields of first-party payloads.
+      for type <- translated["type_decls"], type != nil, field <- fields(type["kind"]) do
+        if contains_order?(field["ty"], order && order["def_id"], refs),
+          do: raise(ArgumentError, "atomic ordering values in aggregate fields are unsupported")
+
+        audit_types!(field["ty"], type, translated, refs)
       end
 
+      # Global initializers and discriminants have their own hash-cons families.
+      # Expand only declared types; a constant's ID is never a type reference.
       for global <- translated["global_decls"], global != nil do
-        if contains_order?(global, order["def_id"], refs) or
-             contains_atomic?(global, translated, refs),
+        if contains_order?(global["ty"], order && order["def_id"], refs) or
+             contains_atomic?(global["ty"], translated, refs),
            do: raise(ArgumentError, "global atomic cells and ordering values are unsupported")
       end
 
       for function <- functions do
-        if contains_order?(function["signature"], order["def_id"], refs) or
-             contains_order?(function["generics"], order["def_id"], refs),
+        if contains_order?(function["signature"], order && order["def_id"], refs) or
+             contains_order?(function["generics"], order && order["def_id"], refs),
            do:
              LLBC.failure!(
                function,
@@ -144,12 +146,17 @@ defmodule Lynx.Rust.AtomicModels do
           for local <- locals, do: audit_types!(local["ty"], function, translated, refs)
         end
 
-        audit_body!(function["body"], order["def_id"], seq_cst, function, translated, refs)
+        if order,
+          do: audit_body!(function["body"], order["def_id"], seq_cst, function, translated, refs)
       end
     end
 
     :ok
   end
+
+  defp fields(%{"Struct" => fields}), do: fields
+  defp fields(%{"Enum" => variants}), do: Enum.flat_map(variants, & &1["fields"])
+  defp fields(_), do: []
 
   defp audit_body!(
          %{"Aggregate" => [%{"Adt" => [%{"id" => id}, variant, _]}, _]},
@@ -175,6 +182,8 @@ defmodule Lynx.Rust.AtomicModels do
     do: Enum.each(list, &audit_body!(&1, id, seq, function, translated, refs))
 
   defp audit_body!(_, _, _, _, _, _), do: :ok
+
+  defp contains_order?(_, nil, _), do: false
 
   defp contains_order?(type, id, refs) do
     case CallModels.expand(type, refs) do
@@ -215,15 +224,17 @@ defmodule Lynx.Rust.AtomicModels do
         end
 
       %{"Adt" => %{"id" => id, "builtin" => nil}} = value ->
-        if type?(find(translated["type_decls"], id)),
-          do:
-            LLBC.failure!(
-              function,
-              translated,
-              "only shared borrows of AtomicU64 are supported; owned cells, other widths and storage layouts require separate models"
-            )
-
-        audit_type_children!(value, function, translated, refs)
+        if type?(find(translated["type_decls"], id)) do
+          unless supported?(value, translated, refs),
+            do:
+              LLBC.failure!(
+                function,
+                translated,
+                "only AtomicU64 with its compiler-selected storage is supported"
+              )
+        else
+          audit_type_children!(value, function, translated, refs)
+        end
 
       value ->
         audit_type_children!(value, function, translated, refs)
@@ -255,18 +266,24 @@ defmodule Lynx.Rust.AtomicModels do
           lean: "Lynx.NativeAtomicStorage",
           import: module,
           label: "Phantom atomic storage alignment; physical Rust layout remains unverified"
-        },
-        %{
-          rust: "core::sync::atomic::Ordering",
-          lean: "Lynx.NativeAtomicOrdering",
-          import: module,
-          body: %{
-            "kind" => "enum",
-            "variants" => Enum.map(@variants, &%{"rust" => &1, "extract" => &1})
-          },
-          label: "Compiler-validated atomic Ordering variants; extraction admits SeqCst only"
         }
-      ]
+      ] ++
+        if Enum.any?(models, fn {_, model} -> model[:native_atomic_ordering_type] != nil end) do
+          [
+            %{
+              rust: "core::sync::atomic::Ordering",
+              lean: "Lynx.NativeAtomicOrdering",
+              import: module,
+              body: %{
+                "kind" => "enum",
+                "variants" => Enum.map(@variants, &%{"rust" => &1, "extract" => &1})
+              },
+              label: "Compiler-validated atomic Ordering variants; extraction admits SeqCst only"
+            }
+          ]
+        else
+          []
+        end
     else
       []
     end

@@ -6,7 +6,9 @@ defmodule Lynx.Rust.ResourceLifetimesTest do
     {payload, audit} = fixture(%{"Scalar" => "Bool"})
     assert [{"state", "NativeRwLock.dispose"}] = ResourceLifetimes.cleanup_fields!(payload, audit)
     assert ResourceLifetimes.enabled?(audit.translated)
-    refute ResourceLifetimes.enabled?(put_in(audit.translated, ["options", "owned_drops"], true))
+    owned = put_in(audit.translated, ["options", "owned_drops"], true)
+    refute ResourceLifetimes.enabled?(owned)
+    assert ResourceLifetimes.logical_payload?(payload, owned, audit.references)
   end
 
   test "rejects missing and observable destructor certificates" do
@@ -16,6 +18,7 @@ defmodule Lynx.Rust.ResourceLifetimesTest do
       changed = Map.put(payload, "needs_drop", needs_drop)
       audit = put_in(audit, [:translated, "type_decls", Access.at(0)], changed)
       refute ResourceLifetimes.enabled?(audit.translated)
+      refute ResourceLifetimes.logical_payload?(changed, audit.translated, audit.references)
 
       assert_raise ArgumentError, ~r/compiler-certified no-drop/, fn ->
         ResourceLifetimes.cleanup_fields!(changed, audit)

@@ -139,7 +139,38 @@ defmodule Lynx.Rust.AtomicModelsTest do
     end
   end
 
-  test "rejects weaker orderings, dynamic ordering, owned and aggregate cells" do
+  test "constructor-only extraction needs no Ordering declaration or type mapping" do
+    {function, translated, atomic} = fixture("load")
+
+    function =
+      function
+      |> put_in(
+        ["item_meta", "name"],
+        Enum.drop(function["item_meta"]["name"], -1) ++ [%{"Ident" => ["new", 0]}]
+      )
+      |> put_in(["generics"], params([], []))
+      |> put_in(["signature", "inputs"], [@u64])
+      |> put_in(["signature", "output"], atomic)
+
+    translated =
+      Map.update!(translated, "type_decls", &Enum.reject(&1, fn type -> type["def_id"] == 6 end))
+
+    assert %{native_atomic_ordering_type: nil, native_transfer: true} =
+             model = AtomicModels.resolve(function, translated, %{})
+
+    assert :ok =
+             AtomicModels.audit!(
+               [Map.put(function, "body", %{"Structured" => %{"locals" => %{"locals" => []}}})],
+               %{22 => model},
+               translated,
+               %{}
+             )
+
+    assert [%{rust: "core::sync::atomic::Atomic"}, %{rust: "core::sync::atomic::private::Align8"}] =
+             AtomicModels.type_models(%{22 => model}, "Atomic.Extraction")
+  end
+
+  test "rejects weaker orderings, dynamic ordering and unsupported atomic shapes" do
     {external, translated, atomic} = fixture("fetch_add")
     models = %{22 => AtomicModels.resolve(external, translated, %{})}
     borrowed = hd(external["signature"]["inputs"])
@@ -174,22 +205,59 @@ defmodule Lynx.Rust.AtomicModelsTest do
       )
     end
 
-    assert_raise CompileError, ~r/only shared borrows/, fn ->
-      AtomicModels.audit!(
-        [put_in(function, ["signature", "inputs"], [atomic])],
-        models,
-        translated,
-        %{}
-      )
-    end
+    assert :ok =
+             AtomicModels.audit!(
+               [put_in(function, ["signature", "inputs"], [atomic])],
+               models,
+               translated,
+               %{}
+             )
 
     wrapped = %{"def_id" => 9, "kind" => %{"Struct" => [%{"ty" => atomic}]}}
+
+    assert :ok =
+             AtomicModels.audit!(
+               [function],
+               models,
+               Map.update!(translated, "type_decls", &(&1 ++ [wrapped])),
+               %{}
+             )
+
+    ordered = put_in(wrapped, ["kind", "Struct"], [%{"ty" => adt(6)}])
 
     assert_raise ArgumentError, ~r/aggregate fields/, fn ->
       AtomicModels.audit!(
         [function],
         models,
-        Map.update!(translated, "type_decls", &(&1 ++ [wrapped])),
+        Map.update!(translated, "type_decls", &(&1 ++ [ordered])),
+        %{}
+      )
+    end
+
+    # A constant family ID must not be interpreted as a shared type ID.
+    globals = [%{"ty" => %{"Scalar" => "Bool"}, "value" => %{"Deduplicated" => 12}}]
+
+    assert :ok =
+             AtomicModels.audit!([function], models, %{translated | "global_decls" => globals}, %{
+               12 => atomic
+             })
+
+    assert_raise ArgumentError, ~r/global atomic cells/, fn ->
+      AtomicModels.audit!(
+        [function],
+        models,
+        %{translated | "global_decls" => [%{"ty" => atomic}]},
+        %{}
+      )
+    end
+
+    unsupported = adt(5, [%{"Scalar" => %{"Integer" => %{"Unsigned" => "U32"}}}, adt(8, [@u64])])
+
+    assert_raise CompileError, ~r/only AtomicU64/, fn ->
+      AtomicModels.audit!(
+        [put_in(function, ["signature", "inputs"], [unsupported])],
+        models,
+        translated,
         %{}
       )
     end

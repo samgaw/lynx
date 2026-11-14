@@ -10,6 +10,7 @@ defmodule Lynx.Rust.NativeLifetimes do
       for type <- translated["type_decls"],
           type &&
             (MutexModels.type?(type) or Lynx.Rust.RwLockModels.type?(type) or
+               Lynx.Rust.AtomicModels.type?(type) or
                LockModels.guard?(type, refs) or
                Lynx.Rust.ResourceModels.type?(type) or
                (Lynx.Rust.FileModels.file_type?(translated, type["def_id"]) and

@@ -45,14 +45,13 @@ defmodule Lynx.Rust.CapturedUnwind do
         unless match?(%{"Structured" => _}, function["body"]) and
                  function["src"] == "Normal" and function["generics"]["types"] == [] and
                  function["generics"]["trait_clauses"] == [] and
-                 (DropModels.primitive_scalar?(CallModels.expand(output, refs)) or
-                    CallModels.expand(output, refs) == CallModels.expand(unit, refs) or
+                 (trivial_output?(output, refs, 16) or
                     resource_output?(output, translated, refs, runtime)),
                do:
                  LLBC.failure!(
                    function,
                    translated,
-                   "captured unwind requires a monomorphic ordinary function with scalar, unit or destructor-free ResourceArc output; fallible trait methods are unsupported"
+                   "captured unwind requires a monomorphic ordinary function with scalar/unit tuples or destructor-free ResourceArc output; fallible trait methods are unsupported"
                  )
 
         adt = %{
@@ -151,6 +150,22 @@ defmodule Lynx.Rust.CapturedUnwind do
   defp block(%{"statements" => statements} = block, state, cleanup) do
     {lists, state} = Enum.map_reduce(statements, state, &lower(&1, &2, cleanup))
     {Map.put(block, "statements", List.flatten(lists)), state}
+  end
+
+  # Wrapping a destructor-free tuple in Result preserves its complete returned
+  # value. Tuples containing owners or references need separate cleanup/borrow
+  # reasoning and are deliberately excluded from this structural admission.
+  defp trivial_output?(_, _, 0), do: false
+
+  defp trivial_output?(output, refs, depth) do
+    case CallModels.expand(output, refs) do
+      %{"Adt" => %{"builtin" => "Tuple", "generics" => args}} ->
+        args == arguments(args["types"]) and
+          Enum.all?(args["types"], &trivial_output?(&1, refs, depth - 1))
+
+      value ->
+        DropModels.primitive_scalar?(value)
+    end
   end
 
   defp resource_output?(output, translated, refs, true) do

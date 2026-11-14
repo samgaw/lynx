@@ -25,7 +25,12 @@ defmodule Lynx.Rust.NativeCodecs do
       schema = schema!(type, audit, Map.new(plan, &{&1["def_id"], &1}))
 
       cleanup =
-        if Lynx.Rust.ResourceLifetimes.enabled?(audit.translated) do
+        if Lynx.Rust.ResourceLifetimes.enabled?(audit.translated) or
+             Lynx.Rust.ResourceLifetimes.logical_payload?(
+               type,
+               audit.translated,
+               audit.references
+             ) do
           {:logical, Lynx.Rust.ResourceLifetimes.cleanup_fields!(type, audit)}
         else
           if get_in(audit.translated, ["options", "owned_drops"]) == true do
@@ -108,6 +113,12 @@ defmodule Lynx.Rust.NativeCodecs do
 
       %{"Scalar" => %{"Integer" => %{"Unsigned" => width}}}
       when width in ~w(U8 U16 U32 U64 U128 Usize) ->
+        found
+
+      %{"Adt" => %{"generics" => %{"types" => [_, _]}}} = atomic ->
+        unless Lynx.Rust.AtomicModels.supported?(atomic, audit.translated, audit.references),
+          do: raise(ArgumentError, "unsupported atomic heap handle identity")
+
         found
 
       %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => [payload]} = args}} ->
@@ -314,6 +325,12 @@ defmodule Lynx.Rust.NativeCodecs do
 
       %{"Scalar" => %{"Integer" => %{"Unsigned" => width}}} ->
         String.downcase(width)
+
+      %{"Adt" => %{"generics" => %{"types" => [_, _]}}} = atomic ->
+        unless Lynx.Rust.AtomicModels.supported?(atomic, audit.translated, audit.references),
+          do: raise(ArgumentError, "unsupported atomic heap handle schema")
+
+        "core::sync::atomic::AtomicU64:seqcst-v1"
 
       %{"Adt" => %{"id" => id, "generics" => %{"types" => [payload]}}} ->
         declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))

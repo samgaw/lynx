@@ -381,6 +381,19 @@ instance {α storage : Type} : NativeCodec (NativeAtomic α storage) where
 /-- The mathematical word operation retains AtomicU64's wrapping semantics. -/
 @[expose] def wrappingAdd (left right : U64) : U64 := ⟨left.bv + right.bv⟩
 
+/-- Logical allocation represents movable shared identity, not physical storage. -/
+@[expose] def new (value : U64) : NativeM (NativeAtomic U64 (NativeAtomicStorage U64)) := do
+  let id ← NativeM.allocate typeName (NativeCodec.encode value)
+  .ok ⟨id⟩
+
+/-- Retire a compiler-certified destructor-free resource's logical atomic cell.
+This is lifetime bookkeeping, not a Rust destructor or a VM GC callback. -/
+@[expose] def dispose (atomic : NativeAtomic U64 (NativeAtomicStorage U64)) : NativeM Unit :=
+  .nativeModify (fun env =>
+    match lookup atomic env with
+    | some _ => (Except.ok (), {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != atomic.id)})
+    | none => (Except.error .exhausted,env)) Result.ofExcept
+
 /-- Only sequential consistency is admitted. Other orderings exhaust verification. -/
 @[expose] def load (atomic : NativeAtomic U64 (NativeAtomicStorage U64))
     (order : NativeAtomicOrdering) : NativeM U64 :=
