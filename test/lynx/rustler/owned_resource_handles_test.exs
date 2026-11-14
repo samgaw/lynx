@@ -39,6 +39,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
       module_prefix: "Shared.Extraction",
       build_dir: Path.join(tmp, "build"),
       cargo: [features: ["locked-resource-handles"]],
+      proof_roots: ["effects_native::resource_clone"],
       only: [counter_new: 1, counter_add: 2, counter_value: 1]
     ]
 
@@ -85,15 +86,28 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
       Path.join(project, "Shared/Critical.lean")
     )
 
+    add_binding = Enum.find(prepared.bindings.bindings, &(&1["name"] == "counter_add"))
+    refute Enum.any?(prepared.bindings.bindings, &(&1["name"] == "resource_clone"))
+
+    framed_calls =
+      File.read!(Path.join(@fixture, "NativeFramedResourceCalls.lean"))
+      |> String.replace("__ADD__", add_binding["lean_name"])
+
+    framed_property = Path.join(project, "Shared/FramedCalls.lean")
+    File.write!(framed_property, framed_calls)
+
     options =
       options ++
         [
-          proof_modules: ["Shared.Critical", "Shared.Properties"],
+          proof_modules: ["Shared.Critical", "Shared.Properties", "Shared.FramedCalls"],
           required_properties:
             [
               "Shared.Critical.increment_spec",
               "Shared.Critical.critical_state_handled_next",
-              "Shared.Critical.locked_read_handled_next"
+              "Shared.Critical.locked_read_handled_next",
+              "Shared.FramedCalls.add_call_next",
+              "Shared.FramedCalls.decoder_cleanup_next",
+              "Shared.FramedCalls.clone_prefix"
             ] ++
               Enum.map(
                 ~w(payload_cleanup create_next update_native_handled_next read_native_handled_next add_call_next read_call_next add_safe_call_at add_overflow_call_at update_framed_handled_next read_framed_handled_next Framed.coowned_update),
@@ -187,6 +201,20 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
       assert status == 0, output
     end
 
+    wrong_contract =
+      String.replace(framed_calls, "else cell} ∧", "else (cell.1,cell.2.1,.nil)} ∧",
+        global: false
+      )
+
+    refute wrong_contract == framed_calls
+    File.write!(framed_property, wrong_contract)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(framed_property, framed_calls)
+
     # The postcondition independently checks the other resource's heap payload.
     wrong_frame =
       String.replace(properties, "(heap value 11#u64).all", "(heap value 12#u64).all")
@@ -270,6 +298,29 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
            )
 
     refute Enum.any?(wrong_diagnostics, &String.contains?(&1.message, "Unknown identifier"))
+
+    native_source = Path.join(workspace, "native/src/lib.rs")
+    native_original = File.read!(native_source)
+
+    wrong_clone =
+      String.replace(
+        native_original,
+        "pub fn resource_clone(\n    resource: &rustler::ResourceArc<CounterResource>,\n) -> rustler::ResourceArc<CounterResource> {\n    resource.clone()\n}",
+        "pub fn resource_clone(\n    resource: &rustler::ResourceArc<CounterResource>,\n) -> rustler::ResourceArc<CounterResource> {\n    let _ = resource;\n    resource_new(0)\n}"
+      )
+
+    refute wrong_clone == native_original
+    File.write!(native_source, wrong_clone)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+    assert String.contains?(error.message, "Shared/FramedCalls.lean")
+    File.write!(native_source, native_original)
+    restored = Lynx.Rustler.prepare!(options)
+    assert Enum.all?(restored.reports, &(&1.status == :ok))
 
     core = Path.join(workspace, "core/src/lib.rs")
     original = File.read!(core)
