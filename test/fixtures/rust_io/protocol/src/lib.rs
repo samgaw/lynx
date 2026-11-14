@@ -260,6 +260,41 @@ pub fn locked_append_or_rollback(mutex: &std::sync::Mutex<File>, value: u16) -> 
     append_record_or_rollback(&mut guard, value)
 }
 
+/// Repairs an existing log before attempting a synchronized append.
+///
+/// `Ok(false)` does not acknowledge an append: either recovery reached its
+/// record limit or a short write was durably rolled back. Callers must serialize
+/// the complete repair/append sequence, not only its individual operations.
+///
+/// # Errors
+/// Propagates repair and append errors; a failure can leave an unsynchronized
+/// tail which a subsequent call must repair before appending.
+pub fn repair_and_append(file: &mut File, max_records: usize, value: u16) -> io::Result<bool> {
+    match repair_log(file, max_records)? {
+        Some(_records) => append_record_or_rollback(file, value),
+        None => Ok(false),
+    }
+}
+
+/// Holds one file mutex guard through repair, append and synchronization.
+///
+/// # Errors
+/// Propagates repair and append errors without releasing a stale file snapshot.
+///
+/// # Panics
+/// Recursive acquisition may panic or block. Callers must not hold this mutex.
+pub fn locked_repair_and_append(
+    mutex: &std::sync::Mutex<File>,
+    max_records: usize,
+    value: u16,
+) -> io::Result<bool> {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    repair_and_append(&mut guard, max_records, value)
+}
+
 /// Consumes an owned file. Native close errors are ignored by Rust's destructor.
 pub fn consume_file(file: File) {
     drop(file);
