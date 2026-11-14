@@ -43,6 +43,21 @@ theorem composed_run (first second minimum : Nat) (env : Environment)
           [(state.currentPid, Concurrent.Task.root residual)] none false) :=
   (composed_preserve first second minimum env bounded).run elapsed executed
 
+/-- Bind inversion retains the actual post-mutation environment supplied to the
+continuation, even if the continuation subsequently changes it again. -/
+theorem completed_bind_middle (before after : Environment) (next : Nat → Result α) (value : α)
+    (trace : ReadyPrefix
+      ((Result.nativeModify (fun env => (env.nativeRefCounter,
+        {env with nativeRefCounter := env.nativeRefCounter + 1})) Result.ok) >>= next)
+      before (.ok value) after) :
+    ReadyPrefix (next before.nativeRefCounter)
+      {before with nativeRefCounter := before.nativeRefCounter + 1} (.ok value) after := by
+  obtain ⟨returned, middle, callee, continuation⟩ := trace.bind_returns
+  have actual := callee.apply
+  simp only [nativeModify_apply, ok_apply, Prod.mk.injEq, Outcome.ok.injEq] at actual
+  obtain ⟨rfl, rfl⟩ := actual
+  exact continuation
+
 private def transient : Result Term :=
   .nativeSet {nativeRefCounter := 7} (.nativeSet {} (.ok .true))
 

@@ -90,6 +90,22 @@ private theorem bind_prefix (computation : Result α) (next : α → Result β)
       cases trace
       exact .inl ⟨_, .refl _ _, rfl⟩
 
+
+/-- A successful bound computation actually completes its callee before entering
+the continuation. Both prefixes retain their concrete intermediate environment. -/
+theorem ReadyPrefix.bind_returns {computation : Result α} {next : α → Result β}
+    {before after : Environment} {value : β}
+    (trace : ReadyPrefix (computation >>= next) before (.ok value) after) :
+    ∃ returned middle, ReadyPrefix computation before (.ok returned) middle ∧
+      ReadyPrefix (next returned) middle (.ok value) after := by
+  have split := bind_prefix computation next before after (.ok value) trace
+  rcases split with ⟨residual, headTrace, equal⟩ | ⟨returned, middle, headTrace, rest⟩
+  · cases residual
+    all_goals first
+      | exact ⟨_, after, headTrace, equal ▸ ReadyPrefix.refl _ _⟩
+      | contradiction
+  · exact ⟨returned, middle, headTrace, rest⟩
+
 namespace NativeInvariant
 
 theorem initial {holds : Environment → Prop} {computation : Result α} {before : Environment}
