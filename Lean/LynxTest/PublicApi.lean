@@ -823,6 +823,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.ExclusiveSteps",
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
+  "Lynx.Result.NativeInvariant",
   "Lynx.Result.ReadyPrefix",
   "Lynx.Result.RegisteredPrefix",
   "Lynx.Result.RegisteredSteps",
