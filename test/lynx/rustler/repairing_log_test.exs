@@ -3,7 +3,7 @@ defmodule Lynx.Rustler.RepairingLogTest do
   Code.require_file("../../support/rust_io.exs", __DIR__)
   @fixture Path.expand("../../fixtures/rust_io", __DIR__)
   @tools System.get_env("LYNX_AENEAS_DIR")
-  @moduletag timeout: 1_800_000
+  @moduletag timeout: 3_600_000
   unless @tools && File.regular?(Path.join(@tools, "lynx-toolchain")),
     do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned native backend")
 
@@ -123,27 +123,40 @@ defmodule Lynx.Rustler.RepairingLogTest do
     term_adapter_path = Path.join(tmp, "guarded-repair-term-adapter.lean")
     File.cp!(Path.join(@fixture, "GuardedRepairTermAdapter.lean"), term_adapter_path)
 
+    concurrent_adapter_path = Path.join(tmp, "concurrent-repair-adapter.lean")
+    File.cp!(Path.join(@fixture, "ConcurrentRepairLogProperties.lean"), concurrent_adapter_path)
+
     calibrate(prepared.library, tmp)
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
 
     laws =
       Code.compile_file(Path.join(@fixture, "RepairingLogLaws.exs")) ++
-        Code.compile_file(Path.join(@fixture, "UnsyncedRepairLogLaws.exs"))
+        Code.compile_file(Path.join(@fixture, "UnsyncedRepairLogLaws.exs")) ++
+        Code.compile_file(Path.join(@fixture, "ConcurrentRepairLogLaws.exs"))
 
     for {module, beam} <- laws do
       initial =
         case module do
+          LynxIoFixture.ConcurrentRepairLogLaws -> "Record.ConcurrentRepairLogProperties.initial"
           LynxIoFixture.UnsyncedRepairLogLaws -> "Record.UnsyncedRepairLogProperties.initial"
           LynxIoFixture.RepairingLimitLaws -> "Record.RepairingLogProperties.limitInitial"
           LynxIoFixture.RepairingErrorLaws -> "Record.RepairingLogProperties.errorInitial"
           _ -> "Record.RepairingLogProperties.initial"
         end
 
+      prelude =
+        if module == LynxIoFixture.ConcurrentRepairLogLaws,
+          do: concurrent_adapter_path,
+          else: term_adapter_path
+
+      heartbeats =
+        if module == LynxIoFixture.ConcurrentRepairLogLaws, do: 64_000_000, else: 16_000_000
+
       law_options = [
         native: {Lynx.Rustler, options},
-        preludes: [Lynx.Lean.from_file!(term_adapter_path)],
+        preludes: [Lynx.Lean.from_file!(prelude)],
         initial_environment: initial,
-        options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192]
+        options: [maxHeartbeats: heartbeats, maxRecDepth: 8192]
       ]
 
       export = Path.join(tmp, Atom.to_string(module) <> ".export")
@@ -162,16 +175,65 @@ defmodule Lynx.Rustler.RepairingLogTest do
 
       assert status == 0, output
 
-      assert Enum.any?(
-               File.stream!(export),
-               &String.contains?(&1, "generated_adapter_safe_general")
-             )
+      theorems =
+        if module == LynxIoFixture.ConcurrentRepairLogLaws do
+          ~w(concurrent_durable_appends accepted_outcome)
+        else
+          ~w(generated_adapter_safe_general unsynced_initial_safe returned_pinned
+            term_body_returns term_adapter_returns generated_adapter_returns calls_safe
+            later_calls_safe later_calls_checked)
+        end
 
-      for theorem <-
-            ~w(unsynced_initial_safe returned_pinned term_body_returns term_adapter_returns generated_adapter_returns calls_safe later_calls_safe later_calls_checked) do
+      for theorem <- theorems do
         assert Enum.any?(File.stream!(export), &String.contains?(&1, theorem))
       end
     end
+
+    # A successful reply alone does not establish the concurrent ownership
+    # postcondition. An incorrect final allocation counter must fail too.
+    {_, concurrent_beam} =
+      Enum.find(laws, fn {module, _} -> module == LynxIoFixture.ConcurrentRepairLogLaws end)
+
+    concurrent_source = File.read!(concurrent_adapter_path)
+
+    wrong_counter =
+      String.replace(
+        concurrent_source,
+        "env.nativeRefCounter == 46",
+        "env.nativeRefCounter == 45"
+      )
+
+    refute wrong_counter == concurrent_source
+    File.write!(concurrent_adapter_path, wrong_counter)
+
+    reports =
+      Lynx.Laws.verify([concurrent_beam],
+        native: {Lynx.Rustler, options},
+        preludes: [Lynx.Lean.from_file!(concurrent_adapter_path)],
+        initial_environment: "Record.ConcurrentRepairLogProperties.initial",
+        options: [maxHeartbeats: 64_000_000, maxRecDepth: 8192]
+      )
+
+    assert Enum.any?(reports, &(&1.status == :error)), failures(reports)
+
+    assert Enum.any?(reports, fn report ->
+             Enum.any?(Map.get(report, :diagnostics, []), fn diagnostic ->
+               String.contains?(
+                 diagnostic.message,
+                 "postcondition rejected at a terminal configuration"
+               )
+             end)
+           end),
+           failures(reports)
+
+    refute Enum.any?(reports, fn report ->
+             Enum.any?(
+               Map.get(report, :diagnostics, []),
+               &String.contains?(&1.message, "Unknown identifier")
+             )
+           end)
+
+    File.write!(concurrent_adapter_path, concurrent_source)
 
     # An incorrect Elixir expectation must fail after the native proofs succeed.
     law_file = Path.join(@fixture, "RepairingLogLaws.exs")
