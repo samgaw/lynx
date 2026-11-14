@@ -7,7 +7,8 @@ open NativeFile Record.Properties Record.ReadProperties Record.RecoveryPropertie
   Record.IntegrityProperties Record.CrashProperties Record.AppendProperties Record.LogProperties Record.ResizeProperties
   Record.RepairCrashProperties Record.RecoveryScanInvariant
 
-private theorem seek_end_returns (file : NativeFile) (env : Environment)
+/-- Every actual end seek return retains the borrowed file and exposes its model step. -/
+theorem seek_end_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result U64 NativeIoError) (returnedFile : NativeFile) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)
@@ -63,7 +64,8 @@ theorem seek_end_shape (before : State) (offset : U64) (after : State)
               exact ⟨by simp [U64.ofNatCore, seekTarget], rfl, by simp [seekTarget],
                 vb, by dsimp; omega, by simpa [seekTarget] using vb⟩
 
-private theorem write_returns (file : NativeFile) (value : U16) (env : Environment)
+/-- Every actual write return retains the borrowed file and exposes its model step. -/
+theorem write_returns (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result Usize NativeIoError) (returnedFile : NativeFile) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)
