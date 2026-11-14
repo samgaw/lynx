@@ -35,7 +35,8 @@ private theorem seek_end_returns (file : NativeFile) (env : Environment)
                 obtain ⟨rfl, rfl⟩ := ready
                 exact ⟨rfl, after, store_at env file before after frame separate, rfl⟩
 
-private theorem seek_end_shape (before : State) (offset : U64) (after : State)
+/-- A successful end-relative seek returns the actual visible length and cursor. -/
+theorem seek_end_shape (before : State) (offset : U64) (after : State)
     (valid : Admitted before) (step : seekStep before (.end_ 0#i64) = some (.Ok offset, after)) :
     offset.val = before.visible.size ∧ after.visible = before.visible ∧
       after.position = before.visible.size ∧ Admitted after := by
@@ -91,7 +92,8 @@ private theorem write_returns (file : NativeFile) (value : U16) (env : Environme
                 obtain ⟨rfl, rfl⟩ := ready
                 exact ⟨rfl, after, store_at env file before after frame separate, rfl⟩
 
-private theorem write_shape (before : State) (value : U16) (amount : Usize) (after : State)
+/-- Successful writes retain the actual count, resulting bytes and cursor bounds. -/
+theorem write_shape (before : State) (value : U16) (amount : Usize) (after : State)
     (valid : Admitted before)
     (step : writeStep before (payload value) = some (.Ok amount, after)) :
     amount.val ≤ 4 ∧
