@@ -12,19 +12,22 @@ defmodule Lynx.Rust.RepairInvariantTest do
     {workspace, project, base} =
       Lynx.Rust.IoFixture.prepare!(tmp, @tools, [
         "RepeatedRepairProperties",
-        "RepairInvariantProperties"
+        "RepairInvariantProperties",
+        "RepairPrefixRecoveryProperties"
       ])
 
     properties =
-      ~w(old_image_checked truncated_image_checked padded_image_checked recover_after_prefix)
+      ~w(Record.RepairInvariantProperties.mask_checked
+      Record.RepairPrefixRecoveryProperties.malformed_exhausts
+      Record.RepairPrefixRecoveryProperties.recover_after_prefix)
 
     options =
       base
-      |> Keyword.put(:proof_modules, ["Record.RepairInvariantProperties"])
-      |> Keyword.put(
-        :required_properties,
-        Enum.map(properties, &("Record.RepairInvariantProperties." <> &1))
-      )
+      |> Keyword.put(:proof_modules, [
+        "Record.RepairInvariantProperties",
+        "Record.RepairPrefixRecoveryProperties"
+      ])
+      |> Keyword.put(:required_properties, properties)
 
     result = Lynx.Rust.verify!(workspace, "io-protocol", options)
     assert [%{status: :ok}] = result.reports
@@ -32,7 +35,7 @@ defmodule Lynx.Rust.RepairInvariantTest do
     for property <- properties do
       assert Enum.any?(
                result.verification.guarantees,
-               &(&1.theorem == "Record.RepairInvariantProperties." <> property)
+               &(&1.kind == :cross_crate_contract and &1.theorem == property)
              )
     end
 
@@ -49,7 +52,7 @@ defmodule Lynx.Rust.RepairInvariantTest do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
-    property = Path.join(project, "Record/RepairInvariantProperties.lean")
+    property = Path.join(project, "Record/RepairPrefixRecoveryProperties.lean")
     source = File.read!(property)
     wrong = String.replace(source, "Vec.from [13#u16]", "Vec.from [14#u16]")
     refute wrong == source
