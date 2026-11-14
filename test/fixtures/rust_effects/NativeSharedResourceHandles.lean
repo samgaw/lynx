@@ -412,6 +412,37 @@ theorem update_framed_handled_next {α β : Type}
 
 /-- Reading through the actual resource and cross-crate guard leaves unrelated
 heap cells in place, independently of the number of other validated owners. -/
+theorem read_framed_prefix
+    (resource : NativeResourceArc CounterResource) (mutex : NativeMutex effects_core.Counter)
+    (value : U64) (count : Nat) (poisoned : Bool) (env : Environment)
+    (positive : 0 < count) (bounded : count ≤ NativeResourceArc.referenceLimit)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == resource.token) =
+      [(resource.token,NativeResourceArc.handleType CounterResource,.nativeReference resource.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == resource.id) =
+      [(resource.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode ({state := mutex} : CounterResource)])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference resource.id).length = count)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    Result.ReadyPrefix (resource_locked_value resource) env (.ok value) {env with
+      nativeRefCounter := env.nativeRefCounter + 1
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+        (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)]) else cell} := by
+  have head := (NativeResourceArc.deref_live_prefix resource ({state := mutex} : CounterResource)
+    count env positive bounded token allocation owners).bind (fun payload => do
+      let acquired ← NativeMutex.lock payload.state
+      let guard ← effects_core.recover_guard acquired
+      let observed ← effects_core.read_guard guard
+      effects_core.release_guard guard
+      Result.ok observed)
+  simp only [Result.ok_bind] at head
+  have read := Shared.Critical.locked_read_prefix mutex ({value} : effects_core.Counter) poisoned env stored fresh
+  simpa only [resource_locked_value,monadLift_self,NativeM.ok] using head.trans read
+
 theorem read_framed_handled_next {α β : Type}
     (resource : NativeResourceArc CounterResource) (mutex : NativeMutex effects_core.Counter)
     (value : U64) (count : Nat) (env : Environment)
@@ -434,10 +465,8 @@ theorem read_framed_handled_next {α β : Type}
         nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
           (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
             .atom "unpoisoned",NativeCodec.encode ({value} : effects_core.Counter)]) else cell} := by
-  simp only [resource_locked_value,monadLift_self,bind_assoc]
-  simp only [NativeResourceArc.deref_live_handled_next resource ({state := mutex} : CounterResource)
-    count _ handler next env positive bounded token allocation owners]
-  exact Shared.Critical.locked_read_handled_next finish handler next mutex ({value} : effects_core.Counter) env stored fresh
+  have trace := read_framed_prefix resource mutex value count false env positive bounded token allocation owners stored fresh
+  simpa only [Result.ok_bind,Bool.false_eq_true,↓reduceIte] using (((trace.bind finish).handle handler).bind next).apply
 
 namespace Framed
 
