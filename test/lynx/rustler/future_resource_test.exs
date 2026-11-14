@@ -187,7 +187,147 @@ defmodule Lynx.Rustler.FutureResourceTest do
     assert Enum.any?(Lynx.Laws.verify([wrong_beam], law_options), &(&1.status == :error))
   end
 
-  defp prepare_fixture(tmp) do
+  @tag :tmp_dir
+  test "composes resumed and cancelled resource futures with retained owners", %{tmp_dir: tmp} do
+    %{options: options, prepared: prepared, project: project} =
+      prepare_fixture(tmp, proof_roots: ["effects_native::resource_clone"])
+
+    load_native(prepared.library, tmp)
+    native = LynxEffectsFixture.Native
+    resource = apply(native, :counter_new, [7])
+    assert apply(native, :counter_poll_cancel, [resource, 3])
+    assert apply(native, :counter_poll_resume, [resource, 3])
+    assert apply(native, :counter_value, [resource]) == 10
+
+    names = Map.new(prepared.bindings.bindings, &{&1["name"], &1["lean_name"]})
+
+    fill = fn source ->
+      Enum.reduce(
+        [
+          {"__ADD__", "counter_poll_add"},
+          {"__READ__", "counter_value"},
+          {"__CANCEL__", "counter_poll_cancel"},
+          {"__RESUME__", "counter_poll_resume"}
+        ],
+        source,
+        fn {placeholder, name}, source ->
+          String.replace(source, placeholder, Map.fetch!(names, name))
+        end
+      )
+    end
+
+    framed =
+      File.read!(Path.join(@fixture, "NativeFramedResourceCalls.lean"))
+      |> String.replace(
+        "public import Shared.Properties",
+        "public import Shared.Properties\npublic import Shared.Future"
+      )
+      |> String.replace("rw [__ADD__]", "rw [Shared.Future.add_contract]")
+      |> fill.()
+
+    File.write!(Path.join(project, "Shared/FramedCalls.lean"), framed)
+
+    adapter =
+      File.read!(Path.join(@fixture, "FramedResourceTermAdapter.lean"))
+      |> String.replace("counter_add", "counter_poll_add")
+      |> fill.()
+
+    adapter_path = Path.join(tmp, "framed-term-adapter.lean")
+    File.write!(adapter_path, adapter)
+
+    future_adapter =
+      File.read!(Path.join(@fixture, "FramedResourceFutureAdapter.lean"))
+      |> String.replace("public import Shared.FramedTermAdapter\n", "")
+      |> fill.()
+
+    future_adapter_path = Path.join(tmp, "framed-future-adapter.lean")
+    File.write!(future_adapter_path, future_adapter)
+
+    options =
+      options
+      |> Keyword.update!(:proof_modules, &(&1 ++ ["Shared.FramedCalls"]))
+      |> Keyword.update!(
+        :required_properties,
+        &(&1 ++
+            ~w(
+        Shared.FramedCalls.clone_prefix Shared.FramedCalls.add_call_prefix Shared.FramedCalls.read_call_prefix))
+      )
+
+    resumed =
+      File.read!(Path.join(@fixture, "coowned_resource_laws.ex"))
+      |> String.replace("CoownedResourceLaws", "FramedResumedResourceLaws")
+      |> String.replace("counter_add", "counter_poll_resume")
+
+    [{_, resumed_beam}] = Code.compile_string(resumed, Path.join(tmp, "resumed.ex"))
+    [{_, cancel_beam}] = Code.compile_file(Path.join(@fixture, "framed_future_resource_laws.ex"))
+    beams = [resumed_beam, cancel_beam]
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      preludes: [Lynx.Lean.from_file!(adapter_path), Lynx.Lean.from_file!(future_adapter_path)],
+      initial_environment: "Shared.FramedTermAdapter.initial",
+      options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192],
+      debug_dir: Path.join(tmp, "framed-debug")
+    ]
+
+    export = Path.join(tmp, "framed-future.export")
+    reports = Lynx.Laws.verify(beams, Keyword.put(law_options, :export, export))
+
+    diagnostics =
+      for report <- reports,
+          diagnostic <- Map.get(report, :diagnostics, []),
+          diagnostic.severity == :error,
+          do: {report.module, diagnostic}
+
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(diagnostics, limit: :infinity)
+
+    for kind <- [:rust_implementation, :cross_crate_contract, :nif_adapter, :elixir_law] do
+      assert Enum.any?(Enum.flat_map(reports, &Map.get(&1, :guarantees, [])), &(&1.kind == kind))
+    end
+
+    assert Enum.all?(Lynx.Laws.verify(beams, law_options), &(&1.status == :ok and &1.cached))
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    wrong = String.replace(resumed, "== 7 + left + right", "== 8 + left + right")
+    refute wrong == resumed
+    [{_, wrong_beam}] = Code.compile_string(wrong, Path.join(tmp, "wrong-resumed.ex"))
+    rejected = Lynx.Laws.verify([wrong_beam], law_options)
+    assert Enum.any?(rejected, &(&1.status == :error)), inspect(rejected)
+
+    assert Enum.any?(
+             Enum.flat_map(rejected, &Map.get(&1, :diagnostics, [])),
+             &match?(%{severity: :error, declaration: "bounded_adds_are_observed/2"}, &1)
+           )
+
+    refute Enum.any?(
+             Enum.flat_map(rejected, &Map.get(&1, :diagnostics, [])),
+             &String.contains?(&1.message, "Unknown identifier")
+           )
+
+    File.write!(
+      future_adapter_path,
+      future_adapter <> "\nprivate axiom futureAdapterTrust : False\n"
+    )
+
+    untrusted =
+      Keyword.put(law_options, :preludes, [
+        Lynx.Lean.from_file!(adapter_path),
+        Lynx.Lean.from_file!(future_adapter_path)
+      ])
+
+    rejected = Lynx.Laws.verify(beams, untrusted)
+
+    assert Enum.any?(
+             Enum.flat_map(rejected, &Map.get(&1, :diagnostics, [])),
+             &(&1.severity == :error and String.contains?(&1.message, "futureAdapterTrust"))
+           )
+
+    File.write!(future_adapter_path, future_adapter)
+  end
+
+  defp prepare_fixture(tmp, overrides \\ []) do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -223,6 +363,7 @@ defmodule Lynx.Rustler.FutureResourceTest do
       ]
     ]
 
+    options = Keyword.merge(options, overrides)
     prepared = Lynx.Rustler.prepare!(options)
     assert prepared.resource_registration.status == :validated_configuration
     assert Enum.any?(prepared.extraction.native_unwind, &(&1.kind == :constant_cleanup_branch))
