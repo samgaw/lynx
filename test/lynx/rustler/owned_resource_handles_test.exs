@@ -110,6 +110,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
           required_properties:
             [
               "Shared.Critical.increment_spec",
+              "Shared.Critical.critical_prefix",
               "Shared.Critical.critical_state_handled_next",
               "Shared.Critical.locked_read_handled_next",
               "Shared.FramedCalls.add_call_next",
@@ -117,7 +118,7 @@ defmodule Lynx.Rustler.OwnedResourceHandlesTest do
               "Shared.FramedCalls.clone_prefix"
             ] ++
               Enum.map(
-                ~w(payload_cleanup create_next update_native_handled_next read_native_handled_next add_call_next read_call_next add_safe_call_at add_overflow_call_at update_framed_handled_next read_framed_handled_next Framed.coowned_update),
+                ~w(payload_cleanup create_next update_native_handled_next read_native_handled_next add_call_next read_call_next add_safe_call_at add_overflow_call_at update_framed_handled_next read_framed_handled_next Framed.coowned_update update_framed_prefix),
                 &("Shared.Properties." <> &1)
               )
         ]

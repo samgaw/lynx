@@ -665,6 +665,26 @@ execution context and is not implemented by this operation. -/
     | .ok value => .ok value
     | .error error => .error error
 
+/-- A ready owned release commits the reconstructed payload in an actual native
+prefix. The residual and every unrelated environment field are preserved. -/
+theorem release_owned_prefix {α : Type} [NativeCodec α] (guard : NativeGuard α)
+    (original : α) (poisoned : Bool) (env : Environment)
+    (owner : guard.ownerContext = env.currentPid)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == guard.mutex.id) =
+      [(guard.mutex.id, NativeMutex.typeName α,
+        NativeMutex.lockedContents guard.ownerContext guard.token poisoned original)]) :
+    Result.ReadyPrefix (release guard) env (.ok ()) {env with
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
+        (guard.mutex.id,NativeMutex.typeName α,.tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode guard.value]) else cell} := by
+  have ready : pollRelease guard env = some (.ok (), {env with
+      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
+        (guard.mutex.id,NativeMutex.typeName α,.tuple #[.atom "unlocked",
+          .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode guard.value]) else cell}) := by
+    cases poisoned <;> simp [pollRelease,NativeMutex.lockedContents,stored,owner,NativeCodec.roundtrip]
+  unfold release
+  exact .wait _ _ _ _ _ _ _ ready (.refl _ _)
+
 /-- Release stores the latest reconstructed borrow, preserving unrelated cells. -/
 theorem release_owned {α : Type} [NativeCodec α] (guard : NativeGuard α)
     (original : α) (poisoned : Bool) (env : Environment)
@@ -677,17 +697,7 @@ theorem release_owned {α : Type} [NativeCodec α] (guard : NativeGuard α)
         (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
           .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
       else cell }) := by
-  have ready : pollRelease guard env = some (.ok (), { env with
-      nativeHeap := env.nativeHeap.map fun cell => if cell.1 == guard.mutex.id then
-        (guard.mutex.id, NativeMutex.typeName α, .tuple #[.atom "unlocked",
-          .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode guard.value])
-        else cell }) := by
-    cases poisoned <;> simp [pollRelease, NativeMutex.lockedContents, stored, owner,
-      NativeCodec.roundtrip]
-  unfold release
-  try dsimp only
-  rw [Result.wait_ready_run _ _ _ _ _ ready]
-  simp
+  simpa only [Result.ok_apply] using (release_owned_prefix guard original poisoned env owner stored).apply
 
 end Lynx.NativeGuard
 
