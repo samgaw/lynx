@@ -52,3 +52,40 @@ fn overlapping_repairs_keep_records_and_release_after_errors() -> io::Result<()>
     assert_eq!(fs::read(&path.0)?, prefix);
     Ok(())
 }
+
+#[test]
+fn repairing_writers_keep_both_acknowledgements_and_respect_the_limit() -> io::Result<()> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_nanos();
+    let path = Scratch(std::env::temp_dir().join(format!(
+        "lynx-repair-writers-{}-{nonce}",
+        std::process::id()
+    )));
+    let original = [13u16, 0xffff, 0x1234];
+    let mut bytes = original
+        .into_iter()
+        .flat_map(io_core::encode_record)
+        .collect::<Vec<_>>();
+    bytes.extend_from_slice(&[7]);
+    fs::write(&path.0, bytes)?;
+    let shared = Mutex::new(OpenOptions::new().read(true).write(true).open(&path.0)?);
+    std::thread::scope(|scope| -> io::Result<()> {
+        let first = scope.spawn(|| io_protocol::locked_repair_and_append(&shared, 5, 19));
+        let second = scope.spawn(|| io_protocol::locked_repair_and_append(&shared, 5, 23));
+        assert!(first.join().expect("writer thread panicked")?);
+        assert!(second.join().expect("writer thread panicked")?);
+        Ok(())
+    })?;
+    let mut guard = shared.lock().expect("writer poisoned file mutex");
+    let recovered = io_protocol::repair_log(&mut guard, 6)?.expect("recovery limit too small");
+    assert_eq!(&recovered[..3], original);
+    assert!(recovered[3..] == [19, 23] || recovered[3..] == [23, 19]);
+    let complete = fs::read(&path.0)?;
+    drop(guard);
+    assert!(!io_protocol::locked_repair_and_append(&shared, 0, 29)?);
+    assert_eq!(fs::read(&path.0)?, complete);
+    assert!(shared.try_lock().is_ok());
+    Ok(())
+}
