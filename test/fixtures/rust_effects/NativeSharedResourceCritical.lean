@@ -87,6 +87,51 @@ private theorem replacement_overwrite (cells : List (Nat × String × Term)) (id
   funext cell
   by_cases key : cell.1 = id <;> simp [key]
 
+/-- The extracted cross-crate critical section has a complete ready execution
+prefix. Both poison branches and checked overflow retain their actual effects. -/
+theorem critical_prefix (mutex : NativeMutex effects_core.Counter) (value : effects_core.Counter)
+    (amount : U64) (poisoned : Bool) (env : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode value])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    ∃ changed updated,
+      Result.ReadyPrefix (effects_core.locked_increment mutex amount) env (.ok changed) {env with
+        nativeRefCounter := env.nativeRefCounter + 1
+        nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+          (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+            .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode updated]) else cell} ∧
+      (if changed then updated.value.val = value.value.val + amount.val
+       else updated = value ∧ U64.max < value.value.val + amount.val) := by
+  obtain ⟨changed,updated,returned,arithmetic⟩ := increment_spec value amount
+  refine ⟨changed,updated,?_,arithmetic⟩
+  let acquired : Environment := {env with
+    nativeRefCounter := env.nativeRefCounter + 1
+    nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
+      (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value)}
+  have held := replacement_filter env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter) _
+    (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value) stored
+  have released := (NativeGuard.release_owned_prefix
+    (⟨mutex,env.nativeRefCounter + 1,env.currentPid,updated⟩ : NativeGuard effects_core.Counter)
+    value poisoned acquired rfl held).bind (fun _ => Result.ok changed)
+  simp only [Result.ok_bind] at released
+  change Result.ReadyPrefix _ acquired (.ok changed) {acquired with
+    nativeHeap := replaceCell acquired.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
+      (.tuple #[.atom "unlocked",.atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode updated])} at released
+  have completed : Result.ReadyPrefix (do
+      NativeGuard.release (⟨mutex,env.nativeRefCounter + 1,env.currentPid,updated⟩ : NativeGuard effects_core.Counter)
+      Result.ok changed) acquired (.ok changed) {env with
+        nativeRefCounter := env.nativeRefCounter + 1
+        nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
+          (.tuple #[.atom "unlocked",.atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode updated])} := by
+    simpa only [acquired,replacement_overwrite] using released
+  rw [critical_contract]
+  unfold NativeMutex.lock
+  simp only [Result.wait_bind]
+  refine .wait _ _ _ env acquired _ _ (NativeMutex.pollLock_unlocked mutex value poisoned env stored fresh) ?_
+  cases poisoned <;> simpa [effects_core.recover_guard,NativePoisonError.into_inner,
+    NativeM.ok,returned,acquired,replaceCell] using completed
+
 /-- Complete acquisition/update/release preserves unrelated cells, commits the
 latest value on success, and leaves the payload unchanged on overflow. Recovery
 of a poisoned acquisition does not clear the existing poison status. -/
@@ -107,38 +152,9 @@ theorem critical_state_handled_next {α β : Type} (finish : Bool → NativeM α
           else cell } ∧
       (if changed then updated.value.val = value.value.val + amount.val
        else updated = value ∧ U64.max < value.value.val + amount.val) := by
-  obtain ⟨changed, updated, returned, property⟩ := increment_spec value amount
-  refine ⟨changed, updated, ?_, property⟩
-  let acquiredEnv : Environment := { env with
-    nativeRefCounter := env.nativeRefCounter + 1
-    nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-      (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value) }
-  have held := replacement_filter env.nativeHeap mutex.id
-    (NativeMutex.typeName effects_core.Counter) _
-    (NativeMutex.lockedContents env.currentPid (env.nativeRefCounter + 1) poisoned value) stored
-  have released := NativeGuard.release_owned_handled_next
-    (⟨mutex, env.nativeRefCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
-    value poisoned (finish changed) handler next acquiredEnv rfl held
-  have finalState : ((Result.handle (do
-      NativeGuard.release (⟨mutex, env.nativeRefCounter + 1, env.currentPid, updated⟩ : NativeGuard effects_core.Counter)
-      finish changed) handler) >>= next) acquiredEnv =
-        ((Result.handle (finish changed) handler) >>= next) { env with
-        nativeRefCounter := env.nativeRefCounter + 1
-        nativeHeap := replaceCell env.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-          (.tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode updated]) } := by
-    change _ = ((Result.handle (finish changed) handler) >>= next) { acquiredEnv with
-      nativeHeap := replaceCell acquiredEnv.nativeHeap mutex.id (NativeMutex.typeName effects_core.Counter)
-        (.tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode updated]) } at released
-    simpa only [acquiredEnv, replacement_overwrite] using released
-  rw [critical_contract]
-  simp only [bind_assoc]
-  unfold NativeMutex.lock
-  simp only [Result.wait_bind, Result.handle]
-  rw [Result.wait_ready_run _ _ _ _ _
-    (NativeMutex.pollLock_unlocked mutex value poisoned env stored fresh)]
-  cases poisoned <;>
-    simpa [effects_core.recover_guard, NativePoisonError.into_inner, NativeM.ok, returned,
-      acquiredEnv, replaceCell, Result.handle] using finalState
+  obtain ⟨changed,updated,trace,arithmetic⟩ := critical_prefix mutex value amount poisoned env stored fresh
+  refine ⟨changed,updated,?_,arithmetic⟩
+  simpa only [Result.ok_bind] using (((trace.bind finish).handle handler).bind next).apply
 
 theorem locked_read_handled_next {α β : Type} (finish : U64 → NativeM α)
     (handler : Exception → NativeM α) (next : α → NativeM β)

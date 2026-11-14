@@ -344,6 +344,41 @@ theorem decoder_badarg_cleanup_at {α β : Type} (env : Environment) (value : U6
 /-- The actual cross-crate Rust borrow/update accepts arbitrary unrelated heap
 cells and any validated owner count. Only the mutex cell changes; overflow
 preserves its value, and poisoned acquisition preserves the poison status. -/
+theorem update_framed_prefix
+    (resource : NativeResourceArc CounterResource) (mutex : NativeMutex effects_core.Counter)
+    (value amount : U64) (count : Nat) (poisoned : Bool) (env : Environment)
+    (positive : 0 < count) (bounded : count ≤ NativeResourceArc.referenceLimit)
+    (token : env.nativeHeap.filter (fun cell => cell.1 == resource.token) =
+      [(resource.token,NativeResourceArc.handleType CounterResource,.nativeReference resource.id)])
+    (allocation : env.nativeHeap.filter (fun cell => cell.1 == resource.id) =
+      [(resource.id,NativeResourceArc.typeName CounterResource,
+        .tuple #[.integer count,NativeCodec.encode ({state := mutex} : CounterResource)])])
+    (owners : (env.nativeHeap.filter fun cell =>
+      cell.2.1 == NativeResourceArc.handleType CounterResource && cell.2.2 == .nativeReference resource.id).length = count)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value} : effects_core.Counter)])])
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    ∃ changed updated,
+      Result.ReadyPrefix (resource_locked_increment resource amount) env (.ok changed) {env with
+        nativeRefCounter := env.nativeRefCounter + 1,
+        nativeHeap := env.nativeHeap.map fun cell => if cell.1 == mutex.id then
+          (mutex.id,NativeMutex.typeName effects_core.Counter,.tuple #[.atom "unlocked",
+            .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode ({value := updated} : effects_core.Counter)])
+          else cell} ∧
+      (if changed then updated.val = value.val + amount.val
+       else updated = value ∧ U64.max < value.val + amount.val) := by
+  obtain ⟨changed,updated,computed,arithmetic⟩ := Shared.Critical.critical_prefix
+    mutex ({value} : effects_core.Counter) amount poisoned env stored fresh
+  have head := (NativeResourceArc.deref_live_prefix resource ({state := mutex} : CounterResource)
+    count env positive bounded token allocation owners).bind
+      (fun payload => effects_core.locked_increment payload.state amount)
+  simp only [Result.ok_bind] at head
+  rcases updated with ⟨updated⟩
+  refine ⟨changed,updated,?_,?_⟩
+  · simpa only [resource_locked_increment,monadLift_self] using head.trans computed
+  · cases changed <;> simpa using arithmetic
+
 theorem update_framed_handled_next {α β : Type}
     (resource : NativeResourceArc CounterResource) (mutex : NativeMutex effects_core.Counter)
     (value amount : U64) (count : Nat) (poisoned : Bool) (env : Environment)
@@ -370,14 +405,10 @@ theorem update_framed_handled_next {α β : Type}
           else cell} ∧
       (if changed then updated.val = value.val + amount.val
        else updated = value ∧ U64.max < value.val + amount.val) := by
-  simp only [resource_locked_increment,monadLift_self,bind_assoc]
-  simp only [NativeResourceArc.deref_live_handled_next resource ({state := mutex} : CounterResource)
-    count _ handler next env positive bounded token allocation owners]
-  obtain ⟨changed,updated,computed,arithmetic⟩ := Shared.Critical.critical_state_handled_next
-    finish handler next mutex ({value} : effects_core.Counter) amount poisoned env stored fresh
-  cases updated
-  refine ⟨changed,_,computed,?_⟩
-  cases changed <;> simpa using arithmetic
+  obtain ⟨changed,updated,trace,arithmetic⟩ := update_framed_prefix resource mutex value amount count
+    poisoned env positive bounded token allocation owners stored fresh
+  refine ⟨changed,updated,?_,arithmetic⟩
+  simpa only [Result.ok_bind] using (((trace.bind finish).handle handler).bind next).apply
 
 /-- Reading through the actual resource and cross-crate guard leaves unrelated
 heap cells in place, independently of the number of other validated owners. -/
