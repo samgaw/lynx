@@ -15,7 +15,8 @@ defmodule Lynx.Rust.RepairImageInvariantTest do
         "RecoveryScanInvariant",
         "RepairReturnProperties",
         "RepairImageInvariant",
-        "RepairImageCrash"
+        "RepairImageCrash",
+        "RepairAcknowledgement"
       ])
 
     properties =
@@ -23,10 +24,17 @@ defmodule Lynx.Rust.RepairImageInvariantTest do
       Record.RepairImageInvariant.resize_then_sync_invariant
       Record.RepairImageInvariant.repair_log_invariant
       Record.RepairImageInvariant.repair_prefix_invariant
-      Record.RepairImageCrash.recover_after_repair_crash)
+      Record.RepairImageCrash.recover_after_repair_crash
+      Record.RepairAcknowledgement.resize_then_sync_returns
+      Record.RepairAcknowledgement.repair_returns
+      Record.RepairAcknowledgement.repair_run_acknowledges
+      Record.RepairAcknowledgement.acknowledged_crash_image
+      Record.RepairAcknowledgement.repair_twice
+      Record.ResizeProperties.repair_default
+      Record.ResizeProperties.resize_sync_failure)
 
     modules =
-      ~w(Record.RepairReturnProperties Record.RepairImageInvariant Record.RepairImageCrash)
+      ~w(Record.ResizeProperties Record.RepairReturnProperties Record.RepairImageInvariant Record.RepairImageCrash Record.RepairAcknowledgement)
 
     options =
       base
@@ -60,6 +68,23 @@ defmodule Lynx.Rust.RepairImageInvariantTest do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
+
+    acknowledgement = Path.join(project, "Record/RepairAcknowledgement.lean")
+    acknowledgement_source = File.read!(acknowledgement)
+
+    false_image =
+      String.replace(
+        acknowledgement_source,
+        "image.bytes = disk (logBytes values)",
+        "image.bytes = disk (logBytes values.reverse)"
+      )
+
+    refute false_image == acknowledgement_source
+    File.write!(acknowledgement, false_image)
+    error = assert_raise RuntimeError, fn -> Project.build!(project, modules) end
+    assert error.message =~ "RepairAcknowledgement.lean:"
+    refute error.message =~ "Unknown identifier"
+    File.write!(acknowledgement, acknowledgement_source)
 
     return_property = Path.join(project, "Record/RepairReturnProperties.lean")
     return_source = File.read!(return_property)
@@ -101,7 +126,10 @@ defmodule Lynx.Rust.RepairImageInvariantTest do
 
     for {correct, wrong} <- [
           {"Ok(Some(value)) => values.push(value)", "Ok(Some(value)) => values.push(0)"},
-          {"checked_mul(4)", "checked_mul(3)"}
+          {"checked_mul(4)", "checked_mul(3)"},
+          {"Ok(()) => io_core::synchronize(file)", "Ok(()) => Ok(())"},
+          {"Err(error) => Err(error),\n                Ok(()) => Ok(Some(values))",
+           "Err(_error) => Ok(Some(values)),\n                Ok(()) => Ok(Some(values))"}
         ] do
       broken = String.replace(original, correct, wrong)
       refute broken == original
