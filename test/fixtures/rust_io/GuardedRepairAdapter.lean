@@ -323,4 +323,97 @@ theorem adapter_safe (base : Environment) (poisoned : Bool) (before : State) (va
   obtain ⟨rfl,rfl⟩ := decode_returns base poisoned before registered owner world decodedTrace
   exact Rustler.executeNative_invariant (facade_safe base poisoned before values maximum value valid stable visible) _
 
+/-- Rejected later arguments release the decoded owner before the mutex has
+allocated a lease. The independent VM owner and file bytes are retained. -/
+theorem argument_release_safe (base : Environment) (poisoned : Bool) (state : State) (values : List U16)
+    (valid : Admitted state) (visible : Prefix (disk (logBytes values)) state.visible)
+    (durable : Prefix (disk (logBytes values)) state.durable) :
+    Result.NativeInvariant (Safe values)
+      (NativeOwnedDrop.drop (⟨3,7⟩ : NativeResourceArc shared_log.LogResource))
+      (decoded base poisoned state) := by
+  have released : NativeResourceArc.ownedState (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
+      (decoded base poisoned state) = (.ok none,
+        Record.LockedPrefixInvariant.view base 7 pinnedFrame (Record.LockedPrefixInvariant.free poisoned) state) := by
+    simp only [NativeResourceArc.ownedState,NativeResourceArc.ownerState,decoded]
+    rw [ownership_decoded]
+    simp [Record.LockedPrefixInvariant.view,fileEnv,decodedFrame,pinnedFrame,
+      NativeResourceArc.vmCells,errorCell,List.filter]
+  simp only [NativeOwnedDrop.drop,NativeResourceArc.releaseOwned,Result.nativeModify_bind]
+  apply Result.NativeInvariant.nativeModify _ _ _
+    (safe_view _ _ _ _ _ _ (by simp [Separate,decodedFrame,pinnedFrame,NativeResourceArc.vmCells,errorCell])
+      decoded_pins valid visible durable)
+  simp only [decoded] at released
+  rw [released]
+  exact .ok _ _ _ (safe_view _ _ _ _ _ _
+    (by simp [Separate,pinnedFrame,NativeResourceArc.vmCells,errorCell]) pinned_pins valid visible durable)
+
+/-- All scalar conversion outcomes compose with the actual owner cleanup.
+Verification exhaustion bypasses the exception handler. -/
+private theorem scalar_continuation_safe (base : Environment) (poisoned : Bool) (state : State) (values : List U16)
+    (valid : Admitted state) (visible : Prefix (disk (logBytes values)) state.visible)
+    (durable : Prefix (disk (logBytes values)) state.durable)
+    (reply : Except Exception α) (next : α → Result β)
+    (accepted : ∀ value, Result.NativeInvariant (Safe values) (next value) (decoded base poisoned state)) :
+    Result.NativeInvariant (Safe values) (do
+      let value ← Result.handle (Result.ofExcept reply) (fun error => do
+        NativeOwnedDrop.drop (⟨3,7⟩ : NativeResourceArc shared_log.LogResource)
+        Result.error error)
+      next value) (decoded base poisoned state) := by
+  have safe := argument_release_safe base poisoned state values valid visible durable
+  cases reply with
+  | ok value => simpa only [Result.ofExcept,Result.handle,Result.ok_bind] using accepted value
+  | error exception =>
+      cases exception <;> simp only [Result.ofExcept,Result.handle,Result.error_bind,bind_assoc]
+      all_goals first
+        | exact .error _ _ _ safe.initial
+        | apply Result.NativeInvariant.bind safe
+          intro _ world trace
+          exact .error _ _ _ (safe _ _ trace).1
+
+/-- The complete generated adapter body, for arbitrary scalar terms. -/
+@[expose] def termBody (maximum value : Term) : Result Term := do
+  let owner ← NativeResourceArc.decode (.nativeReference 6)
+  let maximum ← Result.handle (Result.ofExcept (Rustler.decodeUnsigned .U32 32 maximum)) (fun error => do
+    NativeOwnedDrop.drop owner
+    Result.error error)
+  let value ← Result.handle (Result.ofExcept (Rustler.decodeUnsigned .U16 32 value)) (fun error => do
+    NativeOwnedDrop.drop owner
+    Result.error error)
+  Rustler.executeNative (__REPAIR_APPEND__ owner maximum value) Rustler.encodeBool
+
+/-- Every scalar term is covered, including range/narrowing behavior and cleanup
+when either conversion fails after resource decoding. -/
+theorem term_body_safe (base : Environment) (poisoned : Bool) (before : State) (values : List U16)
+    (maximum value : Term) (valid : Admitted before) (stable : before.durable = before.visible)
+    (visible : Prefix (disk (logBytes values)) before.visible)
+    (registered : NativeResourceArc.typeName shared_log.LogResource ∈ base.nativeResourceTypes) :
+    Result.NativeInvariant (Safe values) (termBody maximum value) (pinned base poisoned before) := by
+  have durable : Prefix (disk (logBytes values)) before.durable := stable ▸ visible
+  unfold termBody
+  apply Result.NativeInvariant.bind (computation := NativeResourceArc.decode (.nativeReference 6))
+    (decode_safe base poisoned before values valid visible durable registered)
+  intro owner world trace
+  obtain ⟨rfl,rfl⟩ := decode_returns base poisoned before registered owner world trace
+  apply scalar_continuation_safe base poisoned before values valid visible durable
+  intro decodedMaximum
+  apply scalar_continuation_safe base poisoned before values valid visible durable
+  intro decodedValue
+  exact Rustler.executeNative_invariant
+    (facade_safe base poisoned before values decodedMaximum decodedValue valid stable visible) _
+
+/-- Atomic registration followed by the full generated decoding/execution body
+retains the known bytes and VM pin; initial registration need not be assumed. -/
+theorem term_adapter_safe (base : Environment) (poisoned : Bool) (before : State) (values : List U16)
+    (maximum value : Term) (valid : Admitted before) (stable : before.durable = before.visible)
+    (visible : Prefix (disk (logBytes values)) before.visible) :
+    Result.NativeInvariant (Safe values)
+      (Rustler.withResourceTypes [NativeResourceArc.typeName shared_log.LogResource] (termBody maximum value))
+      (pinned base poisoned before) := by
+  unfold Rustler.withResourceTypes
+  apply Result.NativeInvariant.nativeModify _ _ _ (pinned_safe base poisoned before values valid visible (stable ▸ visible))
+  let registered := {base with nativeResourceTypes :=
+    (base.nativeResourceTypes ++ [NativeResourceArc.typeName shared_log.LogResource]).eraseDups}
+  change Result.NativeInvariant (Safe values) (termBody maximum value) (pinned registered poisoned before)
+  exact term_body_safe registered poisoned before values maximum value valid stable visible (by simp [registered])
+
 end Record.GuardedRepairAdapter

@@ -108,6 +108,9 @@ defmodule Lynx.Rustler.RepairingLogTest do
              )
     end
 
+    term_adapter_path = Path.join(tmp, "guarded-repair-term-adapter.lean")
+    File.cp!(Path.join(@fixture, "GuardedRepairTermAdapter.lean"), term_adapter_path)
+
     calibrate(prepared.library, tmp)
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
     laws = Code.compile_file(Path.join(@fixture, "RepairingLogLaws.exs"))
@@ -122,6 +125,7 @@ defmodule Lynx.Rustler.RepairingLogTest do
 
       law_options = [
         native: {Lynx.Rustler, options},
+        preludes: [Lynx.Lean.from_file!(term_adapter_path)],
         initial_environment: "Record.RepairingLogProperties." <> initial,
         options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192]
       ]
@@ -141,6 +145,7 @@ defmodule Lynx.Rustler.RepairingLogTest do
         Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
 
       assert status == 0, output
+      assert Enum.any?(File.stream!(export), &String.contains?(&1, "generated_adapter_safe"))
     end
 
     # An incorrect Elixir expectation must fail after the native proofs succeed.
@@ -191,9 +196,13 @@ defmodule Lynx.Rustler.RepairingLogTest do
     for {correct, wrong} <- [
           {"owner = ⟨3,7⟩ ∧ world = decoded", "owner = ⟨3,8⟩ ∧ world = decoded"},
           {"Result.NativeInvariant (Safe values) (do",
-           "Result.NativeInvariant (Safe (values ++ [value])) (do"}
+           "Result.NativeInvariant (Safe (values ++ [value])) (do"},
+          {"Result.NativeInvariant (Safe values)\n      (Rustler.withResourceTypes",
+           "Result.NativeInvariant (Safe (values ++ [0#u16]))\n      (Rustler.withResourceTypes"},
+          {"Record.LockedPrefixInvariant.view base 7 pinnedFrame",
+           "Record.LockedPrefixInvariant.view base 8 pinnedFrame"}
         ] do
-      broken = String.replace(adapter_source, correct, wrong)
+      broken = String.replace(adapter_source, correct, wrong, global: false)
       refute broken == adapter_source
       File.write!(adapter_property, broken)
       error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
