@@ -1,5 +1,6 @@
 module
 public import Record.RepairAppendPrefixInvariant
+public import Record.RepairVisibleInvariant
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.FileReturnIdentity
@@ -226,6 +227,65 @@ theorem repair_append_returns (file : NativeFile) (env : Environment)
             · intro i inside; simp [disk,logBytes,← ByteArray.size_data] at inside
           have safe := Record.RepairPrefixInvariant.repair_log_invariant env file frame [] before maximum
             separate admitted stable emptyPrefix
+          obtain ⟨after,rfl,valid1,_,_⟩ := (safe _ _ repairedTrace).1
+          exact append_returns file env frame after value reply returnedFile world separate valid1 continuation
+
+/-- Repair returns the original borrowed file on every Rust result branch,
+including failed truncation/sync and capped None. The proof follows the actual
+recovery return and actual wrapper, not an assumed borrow contract. -/
+theorem repair_returns_general (file : NativeFile) (env : Environment)
+    (frame : List (Nat × String × Term)) (before : State) (maximum : Usize)
+    (reply : core.result.Result (Option (alloc.vec.Vec U16)) NativeIoError) (returnedFile : NativeFile) (world : Environment)
+    (separate : Separate file frame) (valid : Admitted before)
+    (trace : Result.ReadyPrefix (repair_log file maximum) (fileEnv env file before frame)
+      (.ok (reply,returnedFile)) world) : returnedFile = file := by
+  simp only [repair_log,monadLift_self] at trace
+  obtain ⟨⟨recovered,recoveredFile⟩,middle,recoveryTrace,continuation⟩ := trace.bind_returns
+  obtain ⟨identity,_,_,_,_⟩ := Record.RecoveryVisibleFrame.recover_returns file env frame before maximum recovered recoveredFile middle separate valid recoveryTrace
+  subst recoveredFile
+  cases recovered with
+  | Err error => simp only [NativeM.ok] at continuation; cases continuation; rfl
+  | Ok values =>
+      dsimp only at continuation
+      split at continuation
+      · simp only [NativeM.ok] at continuation; cases continuation; rfl
+      · simp only [NativeM.lift,Result.ok_bind] at continuation
+        cases multiplied : U64.checked_mul (UScalar.cast .U64 values.len) 4#u64 with
+        | none =>
+            simp only [multiplied,NativeM.ok] at continuation
+            cases continuation
+            rfl
+        | some length =>
+            simp only [multiplied] at continuation
+            change Result.ReadyPrefix (resize_then_sync file length >>= _) middle (.ok (reply,returnedFile)) world at continuation
+            obtain ⟨result,middle,_,continuation⟩ := continuation.bind_returns
+            cases result <;> simp only [NativeM.ok] at continuation <;> cases continuation <;> rfl
+
+
+/-- The composed caller retains the borrowed file on every Rust return.
+In particular an I/O error cannot supply a different file to guard release. -/
+theorem repair_append_returns_general (file : NativeFile) (env : Environment)
+    (frame : List (Nat × String × Term)) (before : State) (maximum : Usize) (value : U16)
+    (reply : core.result.Result Bool NativeIoError) (returnedFile : NativeFile) (world : Environment)
+    (separate : Separate file frame) (admitted : Admitted before)
+    (trace : Result.ReadyPrefix (repair_and_append file maximum value) (fileEnv env file before frame)
+      (.ok (reply,returnedFile)) world) : returnedFile = file := by
+  rw [Record.RepairWriterProperties.repair_append_contract] at trace
+  obtain ⟨⟨repaired,repairedFile⟩,middle,repairedTrace,continuation⟩ := trace.bind_returns
+  have identity := repair_returns_general file env frame before maximum repaired repairedFile middle separate admitted repairedTrace
+  subst repairedFile
+  cases repaired with
+  | Err error => simp only [NativeM.ok] at continuation; cases continuation; rfl
+  | Ok option =>
+      cases option with
+      | none => simp only [NativeM.ok] at continuation; cases continuation; rfl
+      | some records =>
+          have emptyPrefix (data : ByteArray) : Prefix (disk (logBytes [])) data := by
+            constructor
+            · simp [disk,logBytes,← ByteArray.size_data]
+            · intro i inside; simp [disk,logBytes,← ByteArray.size_data] at inside
+          have safe := Record.RepairVisibleInvariant.repair_log_invariant env file frame [] before maximum
+            separate admitted (emptyPrefix before.durable) (emptyPrefix before.visible)
           obtain ⟨after,rfl,valid1,_,_⟩ := (safe _ _ repairedTrace).1
           exact append_returns file env frame after value reply returnedFile world separate valid1 continuation
 
