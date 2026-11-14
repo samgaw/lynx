@@ -4,9 +4,11 @@ public import Record.RepeatedRepairProperties
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RepairReturnProperties
+variable [heapLayout : Record.Properties.HeapLayout]
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.IntegrityProperties Record.CrashProperties Record.LogProperties Record.TailProperties Record.ResizeProperties Record.RepairCrashProperties
 
+omit heapLayout in
 private theorem read_choice (before : State) (count : Usize) (after : State) (updated : Slice U8)
     (step : readStep before (one 0#u8) = some (.Ok count, after, updated)) :
     ∃ value mask rest, action "read" before.script = some (true, value, mask, rest) ∧
@@ -438,6 +440,7 @@ private theorem loop_returns (file : NativeFile) (env : Environment)
         cases trace
         exact ⟨rfl, before, rfl, rfl, stable, valid, .inl equal⟩
 
+omit heapLayout in
 private theorem seek_zero_step (before : State) (offset : U64) (after : State)
     (stable : before.durable = before.visible)
     (step : seekStep before (.start 0#u64) = some (.Ok offset, after)) :

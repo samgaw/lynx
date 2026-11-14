@@ -8,7 +8,7 @@ open NativeFile Record.Properties Record.ReadProperties Record.RecoveryPropertie
   Record.RepairCrashProperties Record.RecoveryScanInvariant
 
 /-- Every actual end seek return retains the borrowed file and exposes its model step. -/
-theorem seek_end_returns (file : NativeFile) (env : Environment)
+theorem seek_end_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result U64 NativeIoError) (returnedFile : NativeFile) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)
@@ -65,7 +65,7 @@ theorem seek_end_shape (before : State) (offset : U64) (after : State)
                 vb, by dsimp; omega, by simpa [seekTarget] using vb⟩
 
 /-- Every actual write return retains the borrowed file and exposes its model step. -/
-theorem write_returns (file : NativeFile) (value : U16) (env : Environment)
+theorem write_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result Usize NativeIoError) (returnedFile : NativeFile) (world : Environment)
     (separate : Separate file frame) (valid : Admitted before)

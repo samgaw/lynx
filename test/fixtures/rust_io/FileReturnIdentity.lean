@@ -3,9 +3,11 @@ public import Record.RepairAppendPrefixInvariant
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.FileReturnIdentity
+variable [heapLayout : Record.Properties.HeapLayout]
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.ResizeProperties Record.CrashProperties Record.LogProperties Record.RepairCrashProperties
 
+omit heapLayout in
 private theorem seek_frame (before : State) (reply : core.result.Result U64 NativeIoError) (after : State)
     (valid : Valid before) (stable : before.durable = before.visible)
     (step : seekStep before (.start 0#u64) = some (reply,after)) :

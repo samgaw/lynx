@@ -4,11 +4,13 @@ public import Record.EncodedPrefixRecovery
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.AppendPrefixInvariant
+variable [heapLayout : Record.Properties.HeapLayout]
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.IntegrityProperties Record.CrashProperties Record.AppendProperties Record.LogProperties
   Record.ResizeProperties Record.RepairCrashProperties Record.RecoveryScanInvariant
   Record.EncodedPrefixRecovery
 
+omit heapLayout in
 /-- Overwriting at or after an acknowledged prefix cannot change its bytes. -/
 theorem overwrite_prefix (head old data : ByteArray) (position count : Nat)
     (present : Prefix head old) (afterHead : head.size ≤ position) (bounded : count ≤ data.size) :
@@ -29,6 +31,7 @@ theorem overwrite_prefix (head old data : ByteArray) (position count : Nat)
         takeBound]
     exact same.trans (present.2 i inside)
 
+omit heapLayout in
 /-- Resizing beyond the acknowledged prefix preserves it, including extension. -/
 theorem resize_preserves_prefix (head data : ByteArray) (length : Nat)
     (present : Prefix head data) (afterHead : head.size ≤ length) :
@@ -53,6 +56,7 @@ theorem resize_preserves_prefix (head data : ByteArray) (length : Nat)
   ∃ state, world = fileEnv env file state frame ∧ Admitted state ∧
     Prefix head state.visible ∧ Prefix head state.durable
 
+omit heapLayout in
 private theorem seek_preserves (before : State) (origin : SeekFrom)
     (reply : core.result.Result U64 NativeIoError) (after : State)
     (head : ByteArray) (valid : Admitted before)
@@ -84,6 +88,7 @@ private theorem seek_preserves (before : State) (origin : SeekFrom)
               exact ⟨⟨valid.1, by dsimp; have := valid.1; have := valid.2.1; omega,
                 by dsimp; omega⟩, visible, image⟩
 
+omit heapLayout in
 private theorem write_preserves (before : State) (value : U16)
     (reply : core.result.Result Usize NativeIoError) (after : State) (head : ByteArray)
     (valid : Admitted before) (visible : Prefix head before.visible) (durable : Prefix head before.durable)
@@ -125,6 +130,7 @@ private theorem write_preserves (before : State) (value : U16)
                 exact ⟨nextValid, nextVisible, persist_prefix _ _ _ _ _ durable nextVisible accepted⟩
         · contradiction
 
+omit heapLayout in
 private theorem resize_preserves (before : State) (length : U64)
     (reply : core.result.Result Unit NativeIoError) (after : State) (head : ByteArray)
     (valid : Admitted before) (visible : Prefix head before.visible) (durable : Prefix head before.durable)
@@ -167,6 +173,7 @@ private theorem resize_preserves (before : State) (length : U64)
                   by dsimp; have := valid.2.1; omega, valid.2.2⟩,
                   resizedPrefix, persist_prefix _ _ _ _ _ durable resizedPrefix accepted⟩
 
+omit heapLayout in
 private theorem sync_preserves (before : State)
     (reply : core.result.Result Unit NativeIoError) (after : State) (head : ByteArray)
     (valid : Admitted before) (visible : Prefix head before.visible)
@@ -442,7 +449,9 @@ theorem recover_prefix_image (env : Environment) (file : NativeFile)
     have headBound := kept.1
     simp only [disk,← ByteArray.size_data,List.size_toArray,List.length_map,logBytes_length,limit] at headBound bounded
     omega
-  exact ⟨capacity,restart_prefix values _ rest kept bounded capacity⟩
+  refine ⟨capacity,?_⟩
+  simpa only [fileEnv_empty_layout] using restart_prefix values
+    (⟨bytes,(fileEnv env file state frame).nativeRefCounter⟩ : Image) rest kept bounded capacity
 
 /-- At every crash point, actual bounded Rust recovery can read every old
 acknowledged record, without assuming a new acknowledgement or discarding the

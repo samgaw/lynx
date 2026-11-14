@@ -3,9 +3,11 @@ public import Record.AppendPrefixInvariant
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RecoveryPrefixInvariant
+variable [heapLayout : Record.Properties.HeapLayout]
 open NativeFile Record.Properties Record.ReadProperties Record.ResizeProperties
   Record.RepairCrashProperties Record.AppendPrefixInvariant Record.EncodedPrefixRecovery
 
+omit heapLayout in
 private theorem read_step_preserves (before : State) (buffer : Slice U8)
     (reply : core.result.Result Usize NativeIoError) (after : State) (updated : Slice U8)
     (head : ByteArray) (valid : Admitted before)
@@ -45,6 +47,7 @@ private theorem read_step_preserves (before : State) (buffer : Slice U8)
 
 
 
+omit heapLayout in
 private theorem seek_step_preserves (before : State) (origin : SeekFrom)
     (reply : core.result.Result U64 NativeIoError) (after : State)
     (head : ByteArray) (valid : Admitted before)
@@ -149,6 +152,7 @@ private theorem read_next_invariant (env : Environment) (file : NativeFile)
         have kept := read_step_preserves before buffer reply after updated head valid visible durable step
         exact continuation reply updated after kept.1 kept.2.1 kept.2.2
 
+omit heapLayout in
 private theorem from_rust_invariant (holds : Environment → Prop) (before : Environment)
     (valid : holds before) (computation : RustM α) (next : α → NativeM β)
     (continuation : ∀ value, Result.NativeInvariant holds (next value) before) :
