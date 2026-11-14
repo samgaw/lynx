@@ -98,6 +98,7 @@ private theorem publicWaitTraces : True := by
   have _ := @Lynx.Result.ReadyPrefix.apply
   have _ := @Lynx.Result.ReadyPrefix.exists_wait
   have _ := @Lynx.Result.ReadyPrefix.bind
+  have _ := @Lynx.Result.ReadyPrefix.bind_returns
   have _ := @Lynx.Result.ReadyPrefix.handle
   have _ := @Lynx.Result.ReadyPrefix.tryWith
   have _ := @Lynx.Result.SharedSteps
