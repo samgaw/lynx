@@ -10,7 +10,7 @@ defmodule Lynx.Rust.AtomicsTest do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
-    for file <- ~w(Cargo.toml Cargo.lock core analysis),
+    for file <- ~w(Cargo.toml Cargo.lock core analysis nif),
         do: File.cp_r!(Path.join(@fixture, file), Path.join(workspace, file))
 
     project = Path.join(tmp, "proofs")
