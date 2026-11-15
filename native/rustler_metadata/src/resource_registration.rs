@@ -299,12 +299,14 @@ pub(super) fn discover(file: &syn::File, crate_name: &str, module: &str) -> Resu
     // to registration discovery. Never exclude the validated loader or functions
     // nested inside the inventory constants whose actual bodies are audited.
     let loader = format!("{crate_name}_nif_init");
-    let excluded_functions: Vec<_> = visitor
+    let mut excluded_functions: Vec<_> = visitor
         .functions
         .into_iter()
         .filter(|path| path.as_slice() != [loader.as_str()])
         .map(|path| format!("{crate_name}::{}", path.join("::")))
         .collect();
+    // Exclusion is a set: generated atom accessors can change declaration order.
+    excluded_functions.sort_unstable();
     Ok(json!({"registrations": visitor.entries, "loader": loader,
         "excluded_functions": excluded_functions}))
 }
@@ -326,6 +328,42 @@ mod tests {
         static __CTOR: unsafe extern "C" fn() = __ctor;
       };
     "#;
+
+    #[test]
+    fn accessor_order_does_not_change_resource_discovery() {
+        let discover_with = |accessors: &str| {
+            let mut file = syn::parse_file(&format!("{INVENTORY} mod cache {{ {accessors} }}"))
+                .expect("inventory and accessor fixture must parse");
+            file.items.push(Item::Fn(
+                loader("fixture", "Elixir.Native").expect("generated loader"),
+            ));
+            file.items.push(syn::parse_str(
+                "#[no_mangle] fn nif_init() -> *const ::rustler::codegen_runtime::ErlNifEntry { fixture_nif_init() }"
+            ).expect("initialization shim"));
+            discover(&file, "fixture", "Elixir.Native").expect("valid resource configuration")
+        };
+        let first = discover_with("fn atom_compare() {} fn atom_read() {}");
+        let reversed = discover_with("fn atom_read() {} fn atom_compare() {}");
+        assert_eq!(
+            first, reversed,
+            "accessor order changed the validated configuration"
+        );
+        assert_eq!(
+            first["excluded_functions"],
+            json!([
+                "fixture::cache::atom_compare",
+                "fixture::cache::atom_read",
+                "fixture::nif_init"
+            ])
+        );
+        assert_eq!(
+            first["registrations"]
+                .as_array()
+                .expect("registration array")
+                .len(),
+            1
+        );
+    }
 
     #[test]
     fn requires_linked_constructor_and_exact_inventory_submission() {

@@ -508,8 +508,10 @@ defmodule Lynx.Rustler do
         fingerprint:
           Lynx.Rust.Fingerprint.digest(
             :erlang.term_to_binary(
-              {extraction.fingerprint, compiled, Lynx.Rust.Fingerprint.file!(expanded),
-               registrations.fingerprint},
+              # Bindings are validated against both expansion and compiled exports.
+              # Unselected generated accessor order can vary between expansions;
+              # actual selected bodies/types remain in the extraction fingerprint.
+              {extraction.fingerprint, compiled, bindings, registrations.fingerprint},
               [:deterministic]
             )
           )

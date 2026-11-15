@@ -16,6 +16,14 @@ defmodule Lynx.Rustler.ErrorConstructors do
     end
   end
 
+  # The complete lowering witness already contains the validated Error layout,
+  # constructor identities and affected calls. The diagnostic file hash includes
+  # unrelated macro expansions, whose atom-cache field order is nondeterministic.
+  # Every preparation revalidates that layout before consulting proof caches;
+  # compiler, source, dependency and primary extraction hashes remain required.
+  def cache_inputs(nil), do: nil
+  def cache_inputs(proof), do: Map.delete(proof, :layout_fingerprint)
+
   # Model validated foreign constructor operations, not Rust function bodies.
   # Keep Error opaque: no dummy fields or erasure of its unsupported variants.
   def lower!(document, layout, first_party, prefix \\ "Rust") do

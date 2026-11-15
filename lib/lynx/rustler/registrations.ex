@@ -48,9 +48,13 @@ defmodule Lynx.Rustler.Registrations do
         compiler_file: raw.llbc,
         metadata: metadata,
         status: :validated_configuration,
+        # Hash the validated configuration, not unrelated macro bodies retained
+        # by discovery. The original document is checked again on every prepare;
+        # compiled library, expanded source and implementation hashes also feed
+        # the enclosing adapter cache key.
         fingerprint:
           Fingerprint.digest(
-            :erlang.term_to_binary({metadata, Fingerprint.file!(raw.llbc), selected}, [
+            :erlang.term_to_binary({metadata, entries, selected}, [
               :deterministic
             ])
           ),

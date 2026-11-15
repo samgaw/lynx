@@ -631,8 +631,9 @@ defmodule Lynx.Rust.Extraction do
           Lynx.Rust.Fingerprint.digest(
             :erlang.term_to_binary(
               {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
-               rustler_constructors, Lynx.Rust.Fingerprint.file!(backend_llbc), unwind,
-               native_unwind, models, requested_calls,
+               Lynx.Rustler.ErrorConstructors.cache_inputs(rustler_constructors),
+               Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
+               requested_calls,
                audit.external_calls
                |> Map.values()
                |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
