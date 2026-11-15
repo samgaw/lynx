@@ -241,6 +241,23 @@ defmodule Lynx.Rust.NativeDropLowering do
               )
           end
 
+        %{"Global" => %{"id" => id, "generics" => args}} when borrowed ->
+          global = Enum.find(ctx.translated["global_decls"], &(&1 && &1["def_id"] == id))
+          type = if global, do: CallModels.expand(global["ty"], ctx.refs)
+
+          unless global && global["global_kind"] in ["NamedConst", "AnonConst"] &&
+                   Lynx.Rust.Constants.empty_arguments?(args) &&
+                   (Lynx.Rust.DropModels.primitive_scalar?(type) ||
+                      Lynx.Rustler.ErrorLiterals.static_string?(type, ctx.refs)),
+                 do:
+                   LLBC.failure!(
+                     ctx.function,
+                     ctx.translated,
+                     "native lifetime analysis requires a read-only scalar or static string constant"
+                   )
+
+          type
+
         %{"Local" => local} ->
           CallModels.expand(Map.fetch!(ctx.locals, local), ctx.refs)
 

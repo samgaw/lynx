@@ -115,4 +115,41 @@ defmodule Lynx.Rust.NativeDropLoweringTest do
       end
     end
   end
+
+  test "read-only scalar globals have declared types but cannot be consumed or hide owners" do
+    args = %{"regions" => [], "types" => [], "const_generics" => [], "trait_refs" => []}
+    scalar = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
+    global = %{"def_id" => 7, "global_kind" => "NamedConst", "ty" => scalar}
+    place = %{"kind" => %{"Global" => %{"id" => 7, "generics" => args}}, "ty" => scalar}
+
+    ctx = %{
+      locals: %{},
+      refs: %{},
+      translated: %{"files" => [], "global_decls" => [global]},
+      function: %{"item_meta" => %{"name" => [%{"Ident" => ["constant_reader", 0]}]}}
+    }
+
+    assert NativeDropLowering.place_type!(place, ctx, true) == scalar
+
+    assert_raise CompileError, ~r/cannot consume through a borrowed/, fn ->
+      NativeDropLowering.place_type!(place, ctx)
+    end
+
+    assert_raise CompileError, ~r/inconsistent field type/, fn ->
+      NativeDropLowering.place_type!(Map.put(place, "ty", %{"Scalar" => "Bool"}), ctx, true)
+    end
+
+    for changed <- [
+          Map.put(global, "global_kind", "Static"),
+          Map.put(global, "ty", %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args}})
+        ] do
+      assert_raise CompileError, ~r/read-only scalar or static string constant/, fn ->
+        NativeDropLowering.place_type!(
+          place,
+          put_in(ctx, [:translated, "global_decls"], [changed]),
+          true
+        )
+      end
+    end
+  end
 end
