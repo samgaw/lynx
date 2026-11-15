@@ -52,6 +52,23 @@ theorem checkedAddI64_spec (x y : Aeneas.Std.I64) :
     simp only [result] at spec ⊢
     exact ⟨spec.1, spec.2.1, spec.2.2.1⟩
 
+/-- A kernel-proved evaluation rule for upstream's private checked-add alias.
+The bounded signed result is retained; overflow returns none rather than wrapping. -/
+@[cbv_eval] theorem checkedAddI64_eq (x y : I64) :
+    I64.checked_add x y =
+      if (-9223372036854775808 : Int) ≤ x.val + y.val ∧ x.val + y.val ≤ 9223372036854775807 then
+        some (⟨BitVec.ofInt IScalarTy.I64.numBits (x.val + y.val)⟩ : I64)
+      else none := by
+  have spec := checkedAddI64_spec x y
+  cases result : I64.checked_add x y with
+  | none =>
+    simp only [result, I64.min_eq, I64.max_eq] at spec
+    simp [spec]
+  | some value =>
+    simp only [result, I64.min_eq, I64.max_eq] at spec
+    rw [ite_eq_left ⟨spec.1, spec.2.1⟩, ← spec.2.2]
+    simp only [IScalar.BitVec_ofInt_val]
+
 /-- Integer-value specification of upstream's private checked-mul alias. -/
 theorem checkedMulI64_spec (x y : Aeneas.Std.I64) :
     match Aeneas.Std.I64.checked_mul x y with

@@ -3,12 +3,22 @@ defmodule Lynx.Rust.ResourceLifetimesTest do
   alias Lynx.Rust.{ResourceLifetimes, ResourceModels}
 
   test "derives retirement for primitive lock cells without a Rust destructor" do
-    {payload, audit} = fixture(%{"Scalar" => "Bool"})
-    assert [{"state", "NativeRwLock.dispose"}] = ResourceLifetimes.cleanup_fields!(payload, audit)
-    assert ResourceLifetimes.enabled?(audit.translated)
-    owned = put_in(audit.translated, ["options", "owned_drops"], true)
-    refute ResourceLifetimes.enabled?(owned)
-    assert ResourceLifetimes.logical_payload?(payload, owned, audit.references)
+    for contents <- [
+          %{"Scalar" => "Bool"}
+          | Enum.map(~w(I8 I16 I32 I64 I128 Isize), fn width ->
+              %{"Scalar" => %{"Integer" => %{"Signed" => width}}}
+            end)
+        ] do
+      {payload, audit} = fixture(contents)
+
+      assert [{"state", "NativeRwLock.dispose"}] =
+               ResourceLifetimes.cleanup_fields!(payload, audit)
+
+      assert ResourceLifetimes.enabled?(audit.translated)
+      owned = put_in(audit.translated, ["options", "owned_drops"], true)
+      refute ResourceLifetimes.enabled?(owned)
+      assert ResourceLifetimes.logical_payload?(payload, owned, audit.references)
+    end
   end
 
   test "rejects missing and observable destructor certificates" do
@@ -27,7 +37,11 @@ defmodule Lynx.Rust.ResourceLifetimesTest do
   end
 
   test "does not retire unsupported lock contents or counterfeit standard types" do
-    for contents <- [%{"Ref" => []}, %{"Scalar" => %{"Integer" => %{"Signed" => "I64"}}}] do
+    for contents <- [
+          %{"Ref" => []},
+          %{"Scalar" => %{"Integer" => %{"Signed" => "I7"}}},
+          %{"Scalar" => %{"Float" => "F64"}}
+        ] do
       {payload, audit} = fixture(contents)
 
       assert_raise ArgumentError, ~r/primitive payload/, fn ->

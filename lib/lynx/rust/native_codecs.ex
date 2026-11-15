@@ -115,6 +115,10 @@ defmodule Lynx.Rust.NativeCodecs do
       when width in ~w(U8 U16 U32 U64 U128 Usize) ->
         found
 
+      %{"Scalar" => %{"Integer" => %{"Signed" => width}}}
+      when width in ~w(I8 I16 I32 I64 I128 Isize) ->
+        found
+
       %{"Adt" => %{"generics" => %{"types" => [_, _]}}} = atomic ->
         unless Lynx.Rust.AtomicModels.supported?(atomic, audit.translated, audit.references),
           do: raise(ArgumentError, "unsupported atomic heap handle identity")
@@ -324,6 +328,10 @@ defmodule Lynx.Rust.NativeCodecs do
         "bool"
 
       %{"Scalar" => %{"Integer" => %{"Unsigned" => width}}} ->
+        String.downcase(width)
+
+      %{"Scalar" => %{"Integer" => %{"Signed" => width}}}
+      when width in ~w(I8 I16 I32 I64 I128 Isize) ->
         String.downcase(width)
 
       %{"Adt" => %{"generics" => %{"types" => [_, _]}}} = atomic ->

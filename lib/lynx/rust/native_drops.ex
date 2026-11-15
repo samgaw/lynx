@@ -462,6 +462,9 @@ defmodule Lynx.Rust.NativeDrops do
   defp scalar?(%{"Scalar" => %{"Integer" => %{"Unsigned" => width}}})
        when width in ~w(U8 U16 U32 U64 U128 Usize), do: true
 
+  defp scalar?(%{"Scalar" => %{"Integer" => %{"Signed" => width}}})
+       when width in ~w(I8 I16 I32 I64 I128 Isize), do: true
+
   defp scalar?(_), do: false
 
   defp parameters?(params),

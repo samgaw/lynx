@@ -259,6 +259,35 @@ instance {ty : UScalarTy} : NativeCodec (UScalar ty) where
     simp only [Int.natCast_nonneg, Int.toNat_natCast, true_and, value.hmax, ↓reduceDIte]
     congr 1
 
+/-- Signed heap values retain their width and reject values outside its range.
+This is an internal state codec, independent of Rustler's argument narrowing. -/
+instance {ty : IScalarTy} : NativeCodec (IScalar ty) where
+  typeName := match ty with
+    | .I8 => "i8" | .I16 => "i16" | .I32 => "i32"
+    | .I64 => "i64" | .I128 => "i128" | .Isize => "isize"
+  encode value := .integer value.val
+  decode value := match value with
+    | .integer value =>
+      if -(2 ^ (ty.numBits - 1) : Int) ≤ value ∧ value < (2 ^ (ty.numBits - 1) : Int) then
+        some (⟨BitVec.ofInt ty.numBits value⟩ : IScalar ty) else none
+    | _ => none
+  decode_encode value := by
+    have lower := value.bv.le_toInt
+    have upper := value.bv.toInt_lt
+    cases value
+    simp [IScalar.val, lower, upper]
+
+theorem encode_signed {ty : IScalarTy} (value : IScalar ty) :
+    encode value = .integer value.val := rfl
+
+theorem decode_signed_outOfRange (ty : IScalarTy) (value : Int)
+    (outside : value < -(2 ^ (ty.numBits - 1) : Int) ∨ (2 ^ (ty.numBits - 1) : Int) ≤ value) :
+    decode (α := IScalar ty) (.integer value) = none := by
+  simp only [decode]
+  split
+  · omega
+  · rfl
+
 theorem encode_unsigned {ty : UScalarTy} (value : UScalar ty) :
     encode value = .integer value.val := rfl
 

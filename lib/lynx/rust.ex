@@ -437,8 +437,11 @@ defmodule Lynx.Rust do
   using `Lynx.Result`, permitting composition with runtime effects. It requires
   the pinned result-monad backend. Native panic uses the internal `rust_panicked`
   marker; undefined behavior and divergence are verification exhaustion. This
-  mode admits `std::sync::Mutex::new` with typed shared cells for bool/unsigned
-  scalar payloads and monomorphic first-party structs of those scalars. Internal
+  mode admits `std::sync::Mutex::new` with typed shared cells for booleans and
+  signed/unsigned fixed-width integers (8–128 bits and pointer widths), and
+  monomorphic first-party structs
+  of those scalars. Signed heap decoding enforces its exact range; it does not
+  apply Rustler's argument narrowing. Internal
   codecs are generated with kernel-checked roundtrips; they are not Rustler
   encoders or native memory layouts. Recursive, borrowed, generic and other
   payloads are rejected. Runtime extraction also admits blocking `Mutex::lock`
@@ -462,8 +465,8 @@ defmodule Lynx.Rust do
   compiler cleanup behind certified nonpanicking calls is recorded and omitted;
   guard destruction during unwind remains unsupported.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
-  supported for owned Mutex<bool/unsigned scalar> values and monomorphic
-  first-party structs with supported native codecs when Charon's compiler query
+  supported for owned mutexes containing booleans, signed/unsigned scalars, or
+  monomorphic first-party structs with supported native codecs when Charon's compiler query
   certifies `needs_drop = false`. Missing, unknown or true queries reject struct
   cleanup; fields alone never establish the absence of a user destructor. Install
   the pinned `needs-drop-v1` Charon patch for this metadata. These operations remove
