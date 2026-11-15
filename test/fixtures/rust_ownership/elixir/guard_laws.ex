@@ -5,19 +5,31 @@ defmodule LynxGuardUnwindFixture.Laws do
   law preserves_true,
     expects: LynxGuardUnwindFixture.Native.guarded_value(true, true) == true,
     proof: ~LEAN"""
-    simp [Lynx.concurrentFrom_eq_run, Lynx.Result.ofExcept, «preserves_true:ensures/0», Elixir.LynxGuardUnwindFixture.Native.«guarded_value/2»,
-      Elixir.LynxGuardUnwindFixture.Native.«guarded_value:execution/2»,
-      Guard.Properties.adapter_continuation, Lynx.Rustler.decodeBool, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 8000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 256)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law accepts_false,
     expects: LynxGuardUnwindFixture.Native.guarded_value(false, true) == true,
     proof: ~LEAN"""
-    simp [Lynx.concurrentFrom_eq_run, Lynx.Result.ofExcept, «accepts_false:ensures/0», Elixir.LynxGuardUnwindFixture.Native.«guarded_value/2»,
-      Elixir.LynxGuardUnwindFixture.Native.«guarded_value:execution/2»,
-      Guard.Properties.adapter_continuation, Lynx.Rustler.decodeBool, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 8000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 256)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law panic_after_cleanup,
@@ -28,10 +40,16 @@ defmodule LynxGuardUnwindFixture.Laws do
          :error, :nif_panicked -> true
        end),
     proof: ~LEAN"""
-    simp [Lynx.concurrentFrom_eq_run, Lynx.Result.ofExcept, «panic_after_cleanup:ensures/0», Elixir.LynxGuardUnwindFixture.Native.«guarded_value/2»,
-      Elixir.LynxGuardUnwindFixture.Native.«guarded_value:execution/2»,
-      Guard.Properties.handler_prefix, Lynx.Rustler.decodeBool, Lynx.Exception.classTerm,
-      Lynx.Exception.reason]
+    set_option maxHeartbeats 8000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 256)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law rejects_first_argument,
@@ -42,8 +60,16 @@ defmodule LynxGuardUnwindFixture.Laws do
          :error, :badarg -> true
        end),
     proof: ~LEAN"""
-    simp [Lynx.concurrentFrom_eq_run, Lynx.Result.ofExcept, «rejects_first_argument:ensures/0», Elixir.LynxGuardUnwindFixture.Native.«guarded_value/2»,
-      Lynx.Rustler.decodeBool, Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason]
+    set_option maxHeartbeats 8000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 256)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law rejects_second_argument,
@@ -54,7 +80,15 @@ defmodule LynxGuardUnwindFixture.Laws do
          :error, :badarg -> true
        end),
     proof: ~LEAN"""
-    simp [Lynx.concurrentFrom_eq_run, Lynx.Result.ofExcept, «rejects_second_argument:ensures/0», Elixir.LynxGuardUnwindFixture.Native.«guarded_value/2»,
-      Lynx.Rustler.decodeBool, Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason]
+    set_option maxHeartbeats 8000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 256)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 end
