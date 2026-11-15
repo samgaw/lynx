@@ -173,16 +173,25 @@ defmodule Lynx.Rustler.EnumStateTest do
 
     source = Path.join(workspace, "core/src/lib.rs")
     original = File.read!(source)
-    altered = String.replace(original, "*used = total;", "*used = amount;")
-    assert altered != original
-    File.write!(source, altered)
 
-    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Rustler.prepare!(options)
+    for altered <- [
+          String.replace(original, "*used = total;", "*used = amount;"),
+          String.replace(
+            original,
+            "u64::from_le_bytes(completion.bytes)",
+            "u64::from_be_bytes(completion.bytes)"
+          )
+        ] do
+      assert altered != original
+      File.write!(source, altered)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+      File.write!(source, original)
+      assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
     end
-
-    File.write!(source, original)
-    assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
 
     for type <- ~w(Phase Completion) do
       File.write!(

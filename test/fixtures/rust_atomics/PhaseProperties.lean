@@ -23,7 +23,7 @@ theorem terminal_stable (phase : atomic_core.Phase) (amount : U64)
   | Receiving limit used => exact (terminal limit used rfl).elim
 
 theorem completion_total (completion : atomic_core.Completion) :
-    atomic_core.phase_total (.Complete completion) = NativeM.ok completion.total := rfl
+    atomic_core.phase_total (.Complete completion) = NativeM.ok (core.num.U64.from_le_bytes completion.bytes) := rfl
 
 theorem receiving_bounded (limit used amount : U64) :
     ∃ accepted updated,
@@ -49,9 +49,10 @@ theorem receiving_bounded (limit used amount : U64) :
         · simp [atomic_core.phase_total, NativeM.ok]
         · scalar_tac
     · by_cases equal : total = limit
-      · refine ⟨true, .Complete ⟨total, .Exact⟩, ?_, ?_⟩
+      · refine ⟨true, .Complete ⟨core.num.U64.to_le_bytes total, .Exact⟩, ?_, ?_⟩
         · simp [atomic_core.consume_phase, checked, less, equal, NativeM.lift, NativeM.ok]
-        · exact ⟨total, rfl, arithmetic.2.1, by scalar_tac⟩
+        · refine ⟨total, ?_, arithmetic.2.1, by scalar_tac⟩
+          simp [atomic_core.phase_total, NativeM.lift, NativeM.ok]
       · refine ⟨false, .Rejected 1#u8, ?_, ?_⟩
         · simp [atomic_core.consume_phase, checked, less, equal, NativeM.lift, NativeM.ok]
         · simp only [Bool.false_eq_true, ↓reduceIte, true_and]
@@ -104,7 +105,15 @@ theorem facade_run (budget first second : U64)
 theorem invalid_nested_kind :
     NativeCodec.decode (α := atomic_core.Completion)
       (.cons (.atom (NativeCodec.typeName (α := atomic_core.Completion)))
-        (Term.list [.integer 1, .atom "Exact"])) = none := by cbv
+        (Term.list [NativeCodec.encode (core.num.U64.to_le_bytes 1#u64), .atom "Exact"])) = none := by cbv
+
+theorem invalid_array_length :
+    NativeCodec.decode (α := Aeneas.Std.Array U8 8#usize)
+      (Term.list (List.replicate 7 (.integer 0))) = none := by cbv
+
+theorem invalid_array_byte :
+    NativeCodec.decode (α := Aeneas.Std.Array U8 8#usize)
+      (Term.list (.integer 256 :: List.replicate 7 (.integer 0))) = none := by cbv
 
 /-- Invalid logical variants never become a Rust value. -/
 theorem invalid_variant :

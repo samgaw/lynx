@@ -42,7 +42,7 @@ pub enum CompletionKind {
 /// Keeps the completed byte count and its protocol state together.
 #[derive(Debug)]
 pub struct Completion {
-    pub total: u64,
+    pub bytes: [u8; 8],
     pub kind: CompletionKind,
 }
 
@@ -77,7 +77,7 @@ pub fn consume_phase(phase: &mut Phase, amount: u64) -> bool {
             }
             Some(total) if total == *limit => {
                 *phase = Phase::Complete(Completion {
-                    total,
+                    bytes: total.to_le_bytes(),
                     kind: CompletionKind::Exact,
                 });
                 true
@@ -94,7 +94,7 @@ pub fn consume_phase(phase: &mut Phase, amount: u64) -> bool {
 pub fn phase_total(phase: &Phase) -> u64 {
     match phase {
         Phase::Receiving { used, .. } => *used,
-        Phase::Complete(completion) => completion.total,
+        Phase::Complete(completion) => u64::from_le_bytes(completion.bytes),
         _ => 0,
     }
 }
