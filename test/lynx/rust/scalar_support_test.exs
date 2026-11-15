@@ -30,6 +30,12 @@ defmodule Lynx.Rust.ScalarSupportTest do
           result.val = min U64.max (value.val + 1) := by
       refine ⟨core.num.U64.saturating_add value 1#u64, rfl, ?_⟩
       simp
+    attribute [local cbv_opaque] RustM.ok RustM.fail
+    private theorem addition_evaluation :
+        UScalar.add 3#u16 2#u16 = RustM.ok 5#u16 ∧
+          UScalar.add 255#u8 1#u8 = RustM.fail .panic := by
+      cbv
+      all_goals simp
     end Scalar.Properties
     """)
 

@@ -3,6 +3,7 @@ module
 public import Aeneas
 -- Intentional implementation dependency: upstream keeps the arithmetic body private.
 -- Clients use the public theorem below through ordinary generated-module imports.
+import all Aeneas.Std.Scalar.Ops.Add
 import all Aeneas.Std.Scalar.SaturatingOps
 import all Aeneas.Std.Scalar.CheckedOps.Add
 import all Aeneas.Std.Scalar.CheckedOps.Mul
@@ -12,6 +13,14 @@ public section
 open Aeneas Aeneas.Std Aeneas.Std.ScalarElab
 
 namespace Lynx.Rust.Scalar
+
+/-- Expose the upstream checked addition body through a kernel-checked equation.
+The existing constructor retains its precise bounds check and panic result. -/
+private theorem unsignedAdd_body {ty : UScalarTy} (left right : UScalar ty) :
+    UScalar.add left right = UScalar.tryMk ty (left.val + right.val) := rfl
+
+@[cbv_eval] theorem unsignedAdd_eq {ty : UScalarTy} (left right : UScalar ty) :
+    UScalar.add left right = UScalar.tryMk ty (left.val + right.val) := unsignedAdd_body left right
 
 /-- Mathematical value of upstream unsigned saturating addition. This downstream
 proof adds no arithmetic model and needs no modification of the Aeneas library. -/
