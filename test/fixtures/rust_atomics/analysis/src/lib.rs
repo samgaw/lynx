@@ -60,3 +60,48 @@ pub fn copy_bytes(input: &[u8]) -> Vec<u8> {
     atomic_core::append_bytes(&mut output, input);
     output
 }
+
+/// Appends through the actual shared guard, including poison recovery.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside this fixture.
+pub fn locked_append(bytes: &std::sync::Mutex<Vec<u8>>, input: &[u8]) -> usize {
+    let mut guard = match bytes.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    atomic_core::append_bytes(&mut guard, input);
+    let length = guard.len();
+    drop(guard);
+    length
+}
+
+/// Hands the fully updated buffer back to its owner after releasing the guard.
+///
+/// # Panics
+/// Shares the acquisition restrictions of [`locked_append`].
+pub fn copy_locked(input: &[u8]) -> Vec<u8> {
+    let bytes = std::sync::Mutex::new(Vec::new());
+    locked_append(&bytes, input);
+    atomic_core::take_bytes(bytes)
+}
+
+#[cfg(test)]
+mod locked_buffer_tests {
+    use super::{copy_locked, locked_append};
+    use std::sync::Mutex;
+
+    #[test]
+    fn reuses_the_current_contents_after_unlock() {
+        let bytes = Mutex::new(vec![1, 2]);
+        assert_eq!(locked_append(&bytes, &[3, 4]), 4);
+        assert_eq!(locked_append(&bytes, &[5]), 5);
+        assert_eq!(atomic_core::take_bytes(bytes), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn preserves_raw_binary_values() {
+        assert_eq!(copy_locked(&[0, 255, 128]), vec![0, 255, 128]);
+        assert!(copy_locked(&[]).is_empty());
+    }
+}

@@ -120,3 +120,35 @@ pub fn buffer_head(bytes: &[u8]) -> u8 {
 pub fn append_bytes(output: &mut Vec<u8>, input: &[u8]) {
     output.extend_from_slice(input);
 }
+
+/// Consumes the mutex and retains the owned bytes even if a prior owner panicked.
+pub fn take_bytes(bytes: std::sync::Mutex<Vec<u8>>) -> Vec<u8> {
+    match bytes.into_inner() {
+        Ok(value) => value,
+        Err(error) => error.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod byte_handoff_tests {
+    use super::take_bytes;
+    use std::sync::Mutex;
+
+    #[test]
+    fn takes_unpoisoned_contents() {
+        assert_eq!(take_bytes(Mutex::new(vec![1, 2, 255])), vec![1, 2, 255]);
+    }
+
+    #[test]
+    fn poison_recovery_keeps_mutations_before_panic() {
+        let bytes = Mutex::new(vec![1, 2]);
+        assert!(std::panic::catch_unwind(|| {
+            let mut guard = bytes.lock().unwrap();
+            guard.push(9);
+            panic!("poison the mutex after mutation");
+        })
+        .is_err());
+        assert!(bytes.is_poisoned());
+        assert_eq!(take_bytes(bytes), vec![1, 2, 9]);
+    }
+}

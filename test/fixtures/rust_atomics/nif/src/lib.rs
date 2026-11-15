@@ -202,6 +202,7 @@ fn buffer_new(first: u8, second: u8) -> rustler::ResourceArc<ByteBuffer> {
 #[rustler::nif(name = "buffer_length", schedule = "DirtyCpu")]
 #[lynx::buffer]
 #[lynx::buffer_copy]
+#[lynx::locked_copy]
 fn buffer_length(buffer: rustler::ResourceArc<ByteBuffer>) -> u64 {
     atomic_analysis::buffer_length(buffer.bytes.as_slice()) as u64
 }
@@ -210,6 +211,7 @@ fn buffer_length(buffer: rustler::ResourceArc<ByteBuffer>) -> u64 {
 #[rustler::nif(name = "buffer_head", schedule = "DirtyCpu")]
 #[lynx::buffer]
 #[lynx::buffer_copy]
+#[lynx::locked_copy]
 fn buffer_head(buffer: rustler::ResourceArc<ByteBuffer>) -> u8 {
     atomic_analysis::buffer_head(buffer.bytes.as_slice())
 }
@@ -228,5 +230,17 @@ pub fn buffer_dispose(buffer: rustler::ResourceArc<ByteBuffer>) {
 fn buffer_copy(input: rustler::Binary<'_>) -> rustler::ResourceArc<ByteBuffer> {
     rustler::ResourceArc::new(ByteBuffer {
         bytes: atomic_analysis::copy_bytes(input.as_slice()),
+    })
+}
+
+/// Copies borrowed bytes under a native guard, then transfers the owned buffer.
+///
+/// # Panics
+/// Panics if the resource type has not been registered.
+#[rustler::nif(name = "buffer_copy_locked", schedule = "DirtyCpu")]
+#[lynx::locked_copy]
+fn buffer_copy_locked(input: rustler::Binary<'_>) -> rustler::ResourceArc<ByteBuffer> {
+    rustler::ResourceArc::new(ByteBuffer {
+        bytes: atomic_analysis::copy_locked(input.as_slice()),
     })
 }
