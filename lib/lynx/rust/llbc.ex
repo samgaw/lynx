@@ -786,9 +786,12 @@ defmodule Lynx.Rust.LLBC do
     # Array lengths belong to the constant family even inside shared types.
     # Hydrate them before saving types for recursive model expansion.
     document
-    |> references(%{})
+    |> raw_type_references!()
     |> Lynx.Rust.LLBCJson.restore_constant_references!(document)
   end
+
+  @doc false
+  def raw_type_references!(document), do: references(document, %{})
 
   defp references(%{"Value" => [id, value]}, refs)
        when is_integer(id) and

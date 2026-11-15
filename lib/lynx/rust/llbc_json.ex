@@ -61,10 +61,9 @@ defmodule Lynx.Rust.LLBCJson do
     original = restore_constant_references!(original, original)
 
     refs =
-      merge_references!(
+      merge_type_references!(
         Lynx.Rust.LLBC.type_references!(original),
-        Lynx.Rust.LLBC.type_references!(document),
-        "type"
+        Lynx.Rust.LLBC.type_references!(document)
       )
 
     restore_types(document, refs)
@@ -78,11 +77,32 @@ defmodule Lynx.Rust.LLBCJson do
     original = restore_trait_references!(original, original)
     document = restore_trait_references!(document, original)
 
+    original_constants = constant_values(original, %{})
+    document_constants = constant_values(document, %{})
+
+    # Array dimensions may already be hydrated in one document. Normalize
+    # their own constant family before comparing shared types; each side keeps
+    # its own values, so changed dimensions still fail identity validation.
+    types =
+      merge_type_references!(
+        restore_constants(
+          Lynx.Rust.LLBC.raw_type_references!(original),
+          Map.merge(document_constants, original_constants)
+        ),
+        restore_constants(
+          Lynx.Rust.LLBC.raw_type_references!(document),
+          Map.merge(original_constants, document_constants)
+        )
+      )
+
     constants =
       merge_references!(
-        constant_values(original, %{}),
-        constant_values(document, %{}),
-        "constant"
+        original_constants,
+        document_constants,
+        "constant",
+        fn id, previous, value ->
+          constant_identity(id, previous, types) == constant_identity(id, value, types)
+        end
       )
 
     restore_constants(document, constants)
@@ -103,12 +123,39 @@ defmodule Lynx.Rust.LLBCJson do
     )
   end
 
-  defp merge_references!(left, right, kind) do
+  defp merge_references!(left, right, kind, equal? \\ fn _, a, b -> a == b end) do
     Map.merge(left, right, fn id, previous, value ->
-      if previous != value, do: raise(ArgumentError, "inconsistent LLBC #{kind} reference #{id}")
+      unless previous == value or equal?.(id, previous, value),
+        do: raise(ArgumentError, "inconsistent LLBC #{kind} reference #{id}")
+
       value
     end)
   end
+
+  defp merge_type_references!(left, right) do
+    left_refs = Map.merge(right, left)
+    right_refs = Map.merge(left, right)
+
+    merge_references!(left, right, "type", fn id, previous, value ->
+      type_identity(id, previous, left_refs) == type_identity(id, value, right_refs)
+    end)
+  end
+
+  # Rehydration changes sharing wrappers and diagnostic spans, not Rust types
+  # or constant values. Compare normalized typed positions and retain all IDs,
+  # binders, signatures and call targets. Never expand span or constant IDs
+  # through the independently numbered type-reference table.
+  defp type_identity(id, value, refs),
+    do: restore_type(%{"Value" => [id, value]}, refs, []) |> without_spans()
+
+  defp constant_identity(id, value, refs),
+    do: restore_types(%{"Value" => [id, value]}, refs) |> without_spans()
+
+  defp without_spans(value) when is_map(value),
+    do: Map.new(value, fn {key, item} -> {key, without_spans(item)} end) |> Map.delete("span")
+
+  defp without_spans(value) when is_list(value), do: Enum.map(value, &without_spans/1)
+  defp without_spans(value), do: value
 
   defp constant_values(%{"Value" => [id, [kind, _type] = value]} = node, refs)
        when is_map(kind) do

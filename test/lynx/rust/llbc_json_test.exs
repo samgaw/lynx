@@ -24,6 +24,64 @@ defmodule Lynx.Rust.LLBCJsonTest do
     assert ^document = LLBCJson.restore_type_references!(document, original)
   end
 
+  test "constant and function-type identity survive type and diagnostic span rehydration" do
+    span = %{
+      "data" => %{
+        "file_id" => 0,
+        "beg" => %{"line" => 1, "col" => 0},
+        "end" => %{"line" => 1, "col" => 1}
+      },
+      "generated_from_span" => nil
+    }
+
+    pointer = %{
+      "FnPtr" => %{
+        "regions" => [],
+        "outlives" => [],
+        "skip_binder" => %{
+          "is_unsafe" => false,
+          "abi" => "Rust",
+          "is_variadic" => false,
+          "inputs" => [],
+          "output" => %{"Value" => [8, %{"Scalar" => "Bool"}]},
+          "trait_clauses" => [%{"span" => %{"Deduplicated" => 7}}]
+        }
+      }
+    }
+
+    constant = [
+      %{"FnPtr" => %{"kind" => %{"Fun" => 57}, "generics" => %{}}},
+      %{"Deduplicated" => 7}
+    ]
+
+    original = %{
+      "ty" => %{"Value" => [7, pointer]},
+      "Const" => %{"Value" => [82, constant]},
+      "removed" => %{"span" => %{"Value" => [7, span]}}
+    }
+
+    document =
+      original
+      |> LLBCJson.restore_type_references!(original)
+      |> LLBCJson.restore_spans!(original)
+
+    assert ^document = LLBCJson.restore_type_references!(document, original)
+
+    altered =
+      put_in(document, ["Const", "Value", Access.at(1), Access.at(0), "FnPtr", "kind", "Fun"], 58)
+
+    assert_raise ArgumentError, ~r/inconsistent LLBC constant reference/, fn ->
+      LLBCJson.restore_type_references!(altered, original)
+    end
+
+    altered =
+      put_in(document, ["ty", "Value", Access.at(1), "FnPtr", "skip_binder", "is_unsafe"], true)
+
+    assert_raise ArgumentError, ~r/inconsistent LLBC (shared )?type (reference|identity)/, fn ->
+      LLBCJson.restore_type_references!(altered, original)
+    end
+  end
+
   test "restores types and switch constants removed with cleanup in their own families" do
     scalar = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U32"}}}
     constant = [%{"Integer" => %{"Unsigned" => ["U32", "3"]}}, %{"Deduplicated" => 7}]
@@ -146,6 +204,18 @@ defmodule Lynx.Rust.LLBCJsonTest do
              Lynx.Rust.CallModels.expand(%{"Deduplicated" => 12}, refs)
 
     assert %{"TypeVar" => %{"Bound" => [0, 0]}} = refs[7]
+
+    hydrated = LLBCJson.restore_type_references!(document, document)
+    assert ^hydrated = LLBCJson.restore_type_references!(hydrated, document)
+
+    changed =
+      put_in(document, ["constant", "Const", "Value", Access.at(1), Access.at(0), "Integer"], %{
+        "Unsigned" => ["Usize", "2"]
+      })
+
+    assert_raise ArgumentError, ~r/inconsistent LLBC (shared )?(type|constant)/, fn ->
+      LLBCJson.restore_type_references!(changed, document)
+    end
 
     missing = Map.delete(document, "constant")
 
