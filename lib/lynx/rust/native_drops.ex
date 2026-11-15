@@ -436,17 +436,18 @@ defmodule Lynx.Rust.NativeDrops do
             %{
               "def_id" => ^id,
               "needs_drop" => false,
-              "kind" => %{"Struct" => _},
+              "kind" => kind,
               "generics" => params
             } ->
-              params == %{
-                "regions" => [],
-                "types" => [],
-                "const_generics" => [],
-                "trait_clauses" => [],
-                "trait_type_constraints" => [],
-                "outlives" => []
-              }
+              plain_kind?(kind, refs) and
+                params == %{
+                  "regions" => [],
+                  "types" => [],
+                  "const_generics" => [],
+                  "trait_clauses" => [],
+                  "trait_type_constraints" => [],
+                  "outlives" => []
+                }
 
             _ ->
               false
@@ -456,6 +457,22 @@ defmodule Lynx.Rust.NativeDrops do
         scalar?(other)
     end
   end
+
+  defp plain_kind?(%{"Struct" => _}, _refs), do: true
+
+  # Enum cleanup currently covers only scalar payloads. No owned logical handle
+  # or user destructor can be hidden inside an erased variant.
+  defp plain_kind?(%{"Enum" => variants}, refs) when is_list(variants) do
+    Enum.all?(variants, fn
+      %{"fields" => fields} when is_list(fields) ->
+        Enum.all?(fields, fn field -> scalar?(CallModels.expand(field["ty"], refs)) end)
+
+      _ ->
+        false
+    end)
+  end
+
+  defp plain_kind?(_, _), do: false
 
   defp scalar?(%{"Scalar" => "Bool"}), do: true
 

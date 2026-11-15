@@ -91,10 +91,17 @@ defmodule Lynx.Rust.ResourceLifetimes do
            do:
              raise(
                ArgumentError,
-               "logical resource retirement requires a compiler-certified no-drop struct"
+               "logical resource retirement requires a compiler-certified no-drop struct or scalar enum"
              )
 
-    for field <- type["kind"]["Struct"],
+    fields =
+      case type["kind"] do
+        %{"Struct" => fields} -> fields
+        # The destructor-free predicate above admits enums only with scalar fields.
+        %{"Enum" => _} -> []
+      end
+
+    for field <- fields,
         operation = field_cleanup!(CallModels.expand(field["ty"], audit.references), audit),
         operation != nil,
         do: {field["name"], operation}
@@ -129,6 +136,14 @@ defmodule Lynx.Rust.ResourceLifetimes do
             raise ArgumentError,
                   "logical resource RwLock retirement currently requires a primitive payload"
         end
+
+      args == ResourceModels.args([]) and match?(%{"kind" => %{"Enum" => _}}, type) and
+          NativeDrops.destructor_free?(
+            %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}},
+            audit.translated,
+            audit.references
+          ) ->
+        nil
 
       args == ResourceModels.args([]) and match?(%{"kind" => %{"Struct" => _}}, type) ->
         "NativeResourceCleanup.cleanup"

@@ -32,6 +32,111 @@ defmodule Lynx.Rust.NativeCodecsTest do
     end
   end
 
+  test "scalar enum schemas preserve unit, named and positional variant identities" do
+    audit = enum_audit()
+    assert [%{native_tag: tag, native_cleanup: :trivial}] = NativeCodecs.plan!(audit)
+
+    assert JSON.decode!(tag) == [
+             "fixture::Balance",
+             [
+               "enum",
+               [
+                 ["Idle", %{"Signed" => ["Isize", "0"]}, []],
+                 ["Named", %{"Signed" => ["Isize", "1"]}, [["value", false, "i64"]]],
+                 ["Tuple", %{"Signed" => ["Isize", "2"]}, [["_0", true, "i64"]]]
+               ]
+             ]
+           ]
+
+    type = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => ResourceModels.args([])}}
+    assert NativeDrops.destructor_free?(type, audit.translated, audit.references)
+  end
+
+  test "enum cleanup requires compiler evidence and primitive fields" do
+    for needs_drop <- [nil, true] do
+      changed =
+        put_in(enum_audit(), [:translated, "type_decls", Access.at(0), "needs_drop"], needs_drop)
+
+      assert_raise ArgumentError, ~r/unsupported scalar enum/, fn ->
+        NativeCodecs.plan!(changed)
+      end
+
+      type = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => ResourceModels.args([])}}
+      refute NativeDrops.destructor_free?(type, changed.translated, changed.references)
+    end
+
+    for field <- [
+          %{"Ref" => []},
+          %{"Scalar" => %{"Float" => "F64"}},
+          %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => ResourceModels.args([])}}
+        ] do
+      changed =
+        update_in(
+          enum_audit(),
+          [
+            :translated,
+            "type_decls",
+            Access.at(0),
+            "kind",
+            "Enum",
+            Access.at(1),
+            "fields",
+            Access.at(0),
+            "ty"
+          ],
+          fn _ -> field end
+        )
+
+      assert_raise ArgumentError, ~r/unsupported scalar enum/, fn ->
+        NativeCodecs.plan!(changed)
+      end
+
+      type = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => ResourceModels.args([])}}
+      refute NativeDrops.destructor_free?(type, changed.translated, changed.references)
+    end
+  end
+
+  test "enum admission rejects ambiguous variant names, IDs and tuple labels" do
+    audit = enum_audit()
+
+    for {path, value} <- [
+          {[Access.at(1), "name"], "Idle"},
+          {[Access.at(1), "id"], 9},
+          {[Access.at(2), "fields", Access.at(0), "name"], "wrong"},
+          {[Access.at(1), "attr_info", "rename"], "Other"}
+        ] do
+      changed =
+        put_in(audit, [:translated, "type_decls", Access.at(0), "kind", "Enum"] ++ path, value)
+
+      assert_raise ArgumentError, ~r/unsupported scalar enum/, fn ->
+        NativeCodecs.plan!(changed)
+      end
+    end
+  end
+
+  defp enum_audit do
+    audit = audit(%{"Scalar" => %{"Integer" => %{"Signed" => "I64"}}})
+    [type] = audit.translated["type_decls"]
+    [field] = type["kind"]["Struct"]
+
+    variants =
+      for {name, fields, index} <- [
+            {"Idle", [], 0},
+            {"Named", [field], 1},
+            {"Tuple", [%{field | "name" => "_0", "is_positional" => true}], 2}
+          ] do
+        %{
+          "id" => index,
+          "name" => name,
+          "fields" => fields,
+          "attr_info" => %{"rename" => nil},
+          "discriminant" => %{"Signed" => ["Isize", "#{index}"]}
+        }
+      end
+
+    put_in(audit, [:translated, "type_decls"], [%{type | "kind" => %{"Enum" => variants}}])
+  end
+
   defp audit(scalar) do
     args = ResourceModels.args([])
     type = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args}}

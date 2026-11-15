@@ -78,6 +78,36 @@ defmodule Lynx.Rust.ResourceLifetimesTest do
     refute ResourceLifetimes.enabled?(changed)
   end
 
+  test "scalar enum fields own no logical cells but still require a no-drop certificate" do
+    {payload, audit} = fixture(%{"Scalar" => "Bool"})
+
+    enum = %{
+      "def_id" => 3,
+      "needs_drop" => false,
+      "generics" => payload["generics"],
+      "item_meta" => %{"name" => path(~w(application Phase))},
+      "kind" => %{"Enum" => [%{"fields" => [%{"ty" => %{"Scalar" => "Bool"}}]}]}
+    }
+
+    payload = put_in(payload, ["kind", "Struct", Access.at(0), "ty"], adt(3, []))
+
+    audit =
+      update_in(audit, [:translated, "type_decls"], fn [_ | rest] -> [payload, enum | rest] end)
+
+    assert ResourceLifetimes.cleanup_fields!(enum, audit) == []
+    assert ResourceLifetimes.cleanup_fields!(payload, audit) == []
+    refute ResourceLifetimes.logical_payload?(payload, audit.translated, audit.references)
+
+    for certificate <- [nil, true] do
+      changed = Map.put(enum, "needs_drop", certificate)
+      audit = put_in(audit, [:translated, "type_decls", Access.at(1)], changed)
+
+      assert_raise ArgumentError, ~r/compiler-certified no-drop/, fn ->
+        ResourceLifetimes.cleanup_fields!(changed, audit)
+      end
+    end
+  end
+
   defp fixture(contents) do
     parameters = %{
       "regions" => [],

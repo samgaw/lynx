@@ -69,6 +69,23 @@ The bounded signed result is retained; overflow returns none rather than wrappin
     rw [ite_eq_left ⟨spec.1, spec.2.1⟩, ← spec.2.2]
     simp only [IScalar.BitVec_ofInt_val]
 
+/-- Exact reduction of upstream unsigned checked addition, without exposing its
+private implementation to client proofs. Overflow is None, never wrapped success. -/
+@[cbv_eval] theorem checkedAddU64_eq (x y : U64) :
+    U64.checked_add x y =
+      if x.val + y.val ≤ 18446744073709551615 then
+        some (⟨BitVec.ofNat 64 (x.val + y.val)⟩ : U64)
+      else none := by
+  have spec := U64.checked_add_bv_spec x y
+  cases result : U64.checked_add x y with
+  | none =>
+    simp only [result, U64.max_eq] at spec
+    simp [Nat.not_le.mpr spec]
+  | some value =>
+    simp only [result, U64.max_eq] at spec
+    rw [ite_eq_left spec.1, ← spec.2.1]
+    simp only [U64.BitVec_ofNat_val]
+
 /-- Integer-value specification of upstream's private checked-mul alias. -/
 theorem checkedMulI64_spec (x y : Aeneas.Std.I64) :
     match Aeneas.Std.I64.checked_mul x y with

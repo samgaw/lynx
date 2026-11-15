@@ -439,8 +439,12 @@ defmodule Lynx.Rust do
   marker; undefined behavior and divergence are verification exhaustion. This
   mode admits `std::sync::Mutex::new` with typed shared cells for booleans and
   signed/unsigned fixed-width integers (8–128 bits and pointer widths), and
-  monomorphic first-party structs
-  of those scalars. Signed heap decoding enforces its exact range; it does not
+  monomorphic first-party structs of those scalars. Monomorphic first-party enums
+  also support unit, named-record and positional variants containing primitive
+  scalar fields when the compiler certifies `needs_drop = false`. Their internal
+  codecs retain variant identity, field arity and ranges; this does not enable
+  Rustler wire codecs for those enums. Owned fields, generics and observable enum
+  destructors remain rejected. Signed heap decoding enforces its exact range; it does not
   apply Rustler's argument narrowing. Internal
   codecs are generated with kernel-checked roundtrips; they are not Rustler
   encoders or native memory layouts. Recursive, borrowed, generic and other
@@ -466,8 +470,8 @@ defmodule Lynx.Rust do
   guard destruction during unwind remains unsupported.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned mutexes containing booleans, signed/unsigned scalars, or
-  monomorphic first-party structs with supported native codecs when Charon's compiler query
-  certifies `needs_drop = false`. Missing, unknown or true queries reject struct
+  monomorphic first-party structs or scalar-field enums with supported native
+  codecs when Charon's compiler query certifies `needs_drop = false`. Missing, unknown or true queries reject struct
   cleanup; fields alone never establish the absence of a user destructor. Install
   the pinned `needs-drop-v1` Charon patch for this metadata. These operations remove
   their cells without invoking a payload destructor. Projected, user-defined
