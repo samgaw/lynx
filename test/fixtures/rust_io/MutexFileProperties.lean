@@ -37,18 +37,15 @@ theorem consuming (file : NativeFile) (before after : NativeFile.State)
     simp [NativeFile.pollClose, NativeFile.lookup, live, distinct, Ne.symm distinct,
       NativeFile.decode, NativeFile.encode, not_lt.mpr visible, not_lt.mpr durable,
       not_lt.mpr position, nonnegative, ready, step, NativeFile.retire]
-  cases poisoned <;>
-    simp [consume_file_mutex, io_core.consume_file_mutex, NativeOwnedDrop.drop, NativeMutex.disposeFile,
-      NativeM.readCell, live, distinct, Ne.symm distinct, NativeCodec.decode,
-      NativeCodec.encode, NativeMutex.typeName, NativeFile.close, Result.wait_bind]
-  all_goals
-    have expanded := poll
-    simp [live, NativeMutex.typeName, NativeCodec.encode] at expanded
-    have eta : (⟨file.id⟩ : NativeFile) = file := by cases file; rfl
-    simp only [eta]
-    rw [Result.wait_ready_apply _ _ _ _ _ expanded]
-    simp [Result.ok_bind, NativeM.removeCell, live, closed, distinct, Ne.symm distinct,
-      NativeMutex.typeName, NativeFile.closedTypeName]
+  have consumed := NativeMutex.disposeFile_next (⟨file.id + 1⟩ : NativeMutex NativeFile)
+    file poisoned (live file before poisoned) _
+    (by simp [live, distinct, Ne.symm distinct]) poll
+    (by simp [live, distinct, Ne.symm distinct]) NativeM.ok
+  have identity : (NativeMutex.disposeFile (⟨file.id + 1⟩ : NativeMutex NativeFile) >>= NativeM.ok) =
+      NativeMutex.disposeFile ⟨file.id + 1⟩ := Result.bind_ok _
+  rw [identity] at consumed
+  simpa [consume_file_mutex, io_core.consume_file_mutex, NativeOwnedDrop.drop,
+    NativeM.ok, live, closed, distinct, Ne.symm distinct, NativeMutex.typeName] using consumed
 
 theorem implicit_consuming (mutex : NativeMutex NativeFile) :
     implicit_file_mutex mutex = consume_file_mutex mutex := by rfl
@@ -99,11 +96,8 @@ theorem locked_rejected (state : NativeFile.State) :
         .tuple #[.atom "locked", .atom "unpoisoned", .nativeReference 1]),
       (1, NativeFile.typeName, NativeFile.encode state)]}
     consume_file_mutex ⟨2⟩ env = (.error .exhausted, env) := by
-  have different : (Term.atom "locked").compare (.atom "unlocked") ≠ .eq := by
-    rw [Term.compare_atoms]
-    intro equal
-    have names := Std.LawfulEqCmp.eq_of_compare equal
-    contradiction
+  have different : ((Term.atom "locked") == Term.atom "unlocked") = false := by decide
+
   simp [consume_file_mutex, io_core.consume_file_mutex, NativeOwnedDrop.drop,
     NativeMutex.disposeFile, NativeM.readCell, different]
 
@@ -121,7 +115,7 @@ theorem missing_close_choice :
     NativeCodec.decode, NativeCodec.encode, NativeFile.close, Result.wait_bind]
   have expanded := poll
   simp [live, NativeMutex.typeName, NativeCodec.encode] at expanded
-  rw [Result.wait_ready_apply _ _ _ _ _ expanded]
+  rw [Result.wait_ready_run _ _ _ _ _ expanded]
   simp
 
 end MutexFile.Properties
