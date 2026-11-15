@@ -28,6 +28,13 @@ defmodule Lynx.Rustler.PayloadErrorsTest do
             String.replace(s, "fn #{name}(", "#[verify::start_from]\nfn #{name}(")
           end)
 
+      source =
+        String.replace(
+          source,
+          "pub fn discard_boxed_error(",
+          "#[verify::start_from]\npub fn discard_boxed_error("
+        )
+
       File.write!(native, source)
 
       {output, status} =
@@ -68,7 +75,9 @@ defmodule Lynx.Rustler.PayloadErrorsTest do
           &String.ends_with?(&1["rust_name"], "::encode")
         )["lean_name"]
 
-      assert %{values: %{entries: entries}} = prepared.extraction.rustler_constructors
+      assert %{constructors: %{values: %{entries: entries}}, drops: %{sites: [_ | _]}} =
+               prepared.extraction.rustler_constructors
+
       assert Enum.sort(Enum.map(entries, & &1.variant)) == ["RaiseTerm", "Term"]
 
       properties =
@@ -86,7 +95,7 @@ defmodule Lynx.Rustler.PayloadErrorsTest do
             proof_modules: ["Payloads.Properties"],
             required_properties:
               Enum.map(
-                ~w(invert_spec restore_spec encoder_spec raised_constructed returned_constructed raised_spec returned_spec raised_panic returned_panic),
+                ~w(invert_spec restore_spec encoder_spec raised_constructed returned_constructed raised_spec returned_spec raised_panic returned_panic discarded_no_encode),
                 &("Payloads.Properties." <> &1)
               )
           ]
@@ -192,6 +201,38 @@ defmodule Lynx.Rustler.PayloadErrorsTest do
 
       File.write!(native, source)
       assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
+
+      wrong_discard =
+        String.replace(
+          source,
+          "    true\n}\n\n/// Constructs an error without invoking its payload Encoder.",
+          "    false\n}\n\n/// Constructs an error without invoking its payload Encoder."
+        )
+
+      assert wrong_discard != source
+      File.write!(native, wrong_discard)
+
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+      observable_drop =
+        source <>
+          """
+
+          #[cfg(feature = "boxed-errors")]
+          impl Drop for BoxedErrorPayload {
+              fn drop(&mut self) { panic!("observable payload drop"); }
+          }
+          """
+
+      File.write!(native, observable_drop)
+
+      assert_raise ArgumentError, ~r/compiler vtable metadata/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+
+      File.write!(native, source)
     end
   end
 

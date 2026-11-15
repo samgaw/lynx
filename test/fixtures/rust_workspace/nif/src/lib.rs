@@ -623,6 +623,18 @@ impl rustler::Encoder for BoxedErrorPayload {
     }
 }
 
+/// Discards an owned error without invoking its deliberately panicking Encoder.
+#[cfg(feature = "boxed-errors")]
+pub fn discard_boxed_error(value: u64) -> bool {
+    {
+        let _error = rustler::Error::RaiseTerm(Box::new(BoxedErrorPayload {
+            value,
+            should_panic: true,
+        }));
+    }
+    true
+}
+
 /// Constructs an error without invoking its payload Encoder.
 #[cfg(feature = "boxed-errors")]
 #[rustler::nif]

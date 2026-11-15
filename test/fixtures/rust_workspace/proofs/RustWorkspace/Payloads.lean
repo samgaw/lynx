@@ -47,4 +47,11 @@ theorem returned_panic (value : U64) (continuation : Bool → Except Lynx.Except
   simp [__RETURNED__, Lynx.Rustler.Decoding.withDecoded_error,
     Lynx.Rustler.termErrorOutcome, Lynx.Rustler.DecoderError.convert, encoder_spec]
 
+/-- The actual first-party Encoder panics for this value, so successful discard
+also demonstrates that destruction did not call encode. -/
+theorem discarded_no_encode (value : U64) :
+    experiment_nif.discard_boxed_error value = RustM.ok true := by
+  simp [experiment_nif.discard_boxed_error, Lynx.Rustler.raiseTermErrorOutcome,
+    Lynx.Rustler.Decoding.dropDecoderError]
+
 end Payloads.Properties
