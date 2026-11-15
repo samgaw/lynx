@@ -120,6 +120,15 @@ defmodule Lynx.Rust.NativeLifetimes do
           refs: refs,
           locals:
             Map.new(body["locals"]["locals"], &{&1["index"], CallModels.expand(&1["ty"], refs)}),
+          stable_booleans:
+            MapSet.difference(
+              MapSet.new(
+                for local <- body["locals"]["locals"],
+                    CallModels.expand(local["ty"], refs) == %{"Scalar" => "Bool"},
+                    do: local["index"]
+              ),
+              addressed_locals(body["body"])
+            ),
           booleans: boolean_constants(translated, %{}),
           discriminants: discriminant_constants(translated, %{})
         }
@@ -431,35 +440,40 @@ defmodule Lynx.Rust.NativeLifetimes do
     end
   end
 
-  defp block_state!(%{"statements" => statements}, state, ctx) do
-    Enum.reduce_while(statements, state, fn statement, state ->
-      result =
-        case statement["kind"] do
-          %{"Loop" => body} ->
-            loop!(body, state, ctx)
+  defp block_state!(%{"statements" => []}, state, _ctx), do: state
 
-          %{"Switch" => switch} ->
-            switch!(switch, state, ctx)
+  defp block_state!(%{"statements" => [statement | following]}, state, ctx) do
+    case statement["kind"] do
+      %{"Switch" => switch} ->
+        switch!(switch, state, ctx, following)
 
-          %{"Break" => target} ->
-            loop_edge!(:break, target, state, ctx)
+      kind ->
+        result =
+          case kind do
+            %{"Loop" => body} ->
+              loop!(body, state, ctx)
 
-          %{"Continue" => target} ->
-            loop_edge!(:continue, target, state, ctx)
+            %{"Break" => target} ->
+              loop_edge!(:break, target, state, ctx)
 
-          kind ->
-            case statement!(kind, state.live, Map.put(ctx, :known, state.known)) do
-              :terminal -> {:terminal, state.exits}
-              live -> %{state | live: live, known: known_after(kind, state.known, ctx)}
-            end
-        end
+            %{"Continue" => target} ->
+              loop_edge!(:continue, target, state, ctx)
 
-      case result do
-        {:terminal, _} -> {:halt, result}
-        state -> {:cont, state}
-      end
-    end)
+            _ ->
+              case statement!(kind, state.live, Map.put(ctx, :known, state.known)) do
+                :terminal -> {:terminal, state.exits}
+                live -> %{state | live: live, known: known_after(kind, state.known, ctx)}
+              end
+          end
+
+        continue_block(result, following, ctx)
+    end
   end
+
+  defp continue_block({:terminal, _} = terminal, _following, _ctx), do: terminal
+
+  defp continue_block(state, following, ctx),
+    do: block_state!(%{"statements" => following}, state, ctx)
 
   defp loop!(body, state, ctx) do
     borrowed_only!(state.live, ctx)
@@ -510,7 +524,7 @@ defmodule Lynx.Rust.NativeLifetimes do
         )
   end
 
-  defp switch!(%{"data" => data, "branches" => branches}, state, ctx) do
+  defp switch!(%{"data" => data, "branches" => branches}, state, ctx, following) do
     value =
       case data["scrutinee"] do
         %{"Value" => operand} -> boolean(operand, state.known, ctx)
@@ -524,6 +538,7 @@ defmodule Lynx.Rust.NativeLifetimes do
         end)
 
       block_state!(Enum.fetch!(branches, index), state, ctx)
+      |> continue_block(following, ctx)
     else
       results =
         Enum.with_index(branches)
@@ -538,15 +553,45 @@ defmodule Lynx.Rust.NativeLifetimes do
 
       states = for result <- results, is_map(result), do: result
 
-      exits =
-        Enum.flat_map(results, fn
-          {:terminal, exits} -> exits
-          state -> state.exits
-        end)
+      # A compiler drop flag can correlate a later cleanup with a conditional
+      # move. Keep those paths separate until their continuation has consumed
+      # the owners. No owner obligation is discarded or guessed at the join.
+      if same_join_ownership?(states, ctx) do
+        join_results(results, state.exits, ctx)
+        |> continue_block(following, ctx)
+      else
+        # Borrowed compiler frames have a caller-visible ownership protocol.
+        # Retain its existing join invariant; only owned local obligations may
+        # be discharged by checking the common continuation path by path.
+        unless MapSet.size(ctx.borrowed) == 0, do: reject!(ctx)
 
-      join_states(states, state.exits ++ exits, ctx)
+        results
+        |> Enum.map(&continue_block(&1, following, ctx))
+        |> join_results(state.exits, ctx)
+      end
     end
   end
+
+  defp join_results(results, previous_exits, ctx) do
+    states = for result <- results, is_map(result), do: result
+
+    exits =
+      Enum.flat_map(results, fn
+        {:terminal, exits} -> exits
+        state -> state.exits
+      end)
+
+    join_states(states, previous_exits ++ exits, ctx)
+  end
+
+  defp same_join_ownership?([], _ctx), do: true
+
+  defp same_join_ownership?([first | rest], ctx),
+    do:
+      Enum.all?(
+        rest,
+        &MapSet.equal?(join_obligations(&1.live, ctx), join_obligations(first.live, ctx))
+      )
 
   defp join_states([], exits, _ctx), do: {:terminal, exits}
 
@@ -933,7 +978,8 @@ defmodule Lynx.Rust.NativeLifetimes do
              "call" => %{
                "func" => %{"Regular" => %{"kind" => %{"Fun" => callee}}},
                "args" => [%{"Move" => %{"kind" => %{"Local" => pin}}}, _]
-             }
+             },
+             "dest" => dest
            }
          },
          known,
@@ -944,21 +990,53 @@ defmodule Lynx.Rust.NativeLifetimes do
     case {ctx.preserving_polls[callee], frame} do
       {id, {_root, id, _path}} when is_integer(id) ->
         Map.filter(known, fn {key, value} ->
-          match?({:alias, _}, key) or (match?({:frame_borrow, _}, key) and value == frame)
+          stable_boolean?(key, value, dest, ctx) or match?({:alias, _}, key) or
+            (match?({:frame_borrow, _}, key) and value == frame)
         end)
 
       _ ->
-        Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
+        retain_stable(known, dest, ctx)
     end
   end
 
-  defp known_after(%{"Call" => _}, known, _),
-    do: Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
+  defp known_after(%{"Call" => %{"dest" => dest}}, known, ctx),
+    do: retain_stable(known, dest, ctx)
 
-  defp known_after(%{"Assign" => _}, known, _),
-    do: Map.filter(known, fn {key, _} -> match?({:alias, _}, key) end)
+  defp known_after(%{"Assign" => [dest, _]}, known, ctx),
+    do: retain_stable(known, dest, ctx)
 
   defp known_after(_, known, _), do: known
+
+  # Safe calls cannot modify a scalar local whose address was never taken.
+  # Retain only those boolean facts, excluding the call's destination. Facts
+  # about borrowed memory, enums and coroutine state still expire at calls.
+  defp retain_stable(known, dest, ctx),
+    do:
+      Map.filter(known, fn {key, value} ->
+        match?({:alias, _}, key) or stable_boolean?(key, value, dest, ctx)
+      end)
+
+  defp stable_boolean?(local, value, dest, ctx) do
+    is_integer(local) and is_boolean(value) and
+      MapSet.member?(ctx.stable_booleans, local) and
+      not match?(%{"kind" => %{"Local" => ^local}}, dest)
+  end
+
+  defp addressed_locals(map) when is_map(map) do
+    own =
+      for key <- ["Ref", "RawPtr"],
+          %{"place" => place} <- [map[key]],
+          {local, _} = resolve_place(place, %{}),
+          is_integer(local),
+          do: local
+
+    Enum.reduce(Map.values(map), MapSet.new(own), &MapSet.union(addressed_locals(&1), &2))
+  end
+
+  defp addressed_locals(list) when is_list(list),
+    do: Enum.reduce(list, MapSet.new(), &MapSet.union(addressed_locals(&1), &2))
+
+  defp addressed_locals(_), do: MapSet.new()
 
   defp clear_projection_domains(known, local),
     do: Map.reject(known, fn {key, _} -> match?({:enum_projection, ^local, _}, key) end)

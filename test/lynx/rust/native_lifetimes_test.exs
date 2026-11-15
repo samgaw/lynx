@@ -122,6 +122,96 @@ defmodule Lynx.Rust.NativeLifetimesTest do
     )
   end
 
+  test "conditional moves retain every cleanup path and reject corrupted drop flags" do
+    boolean = %{"Scalar" => "Bool"}
+    flag = %{"kind" => %{"Local" => 4}, "ty" => boolean}
+    condition = %{"kind" => %{"Local" => 2}, "ty" => boolean}
+
+    set_flag = fn value ->
+      %{
+        "kind" => %{
+          "Assign" => [
+            flag,
+            %{
+              "Use" => [
+                %{
+                  "Const" => %{
+                    "Value" => [if(value, do: 401, else: 402), [%{"Bool" => value}, boolean]]
+                  }
+                },
+                nil
+              ]
+            }
+          ]
+        }
+      }
+    end
+
+    switch = fn input, first, second ->
+      %{
+        "kind" => %{
+          "Switch" => %{
+            "data" => %{
+              "scrutinee" => %{"Value" => %{"Copy" => input}},
+              "branches" => [[%{"Value" => [402, [%{"Bool" => false}, boolean]]}, 0]],
+              "fallback" => 1
+            },
+            "branches" => [%{"statements" => first}, %{"statements" => second}]
+          }
+        }
+      }
+    end
+
+    selected = switch.(condition, [dispose(1), set_flag.(false)], [])
+    cleanup = switch.(flag, [], [dispose(1)])
+    program = [create(1), set_flag.(true), selected, cleanup, create(0), returned()]
+    types = %{2 => boolean, 4 => boolean}
+    audit(program, true, nil, %{}, types)
+    audit([create(1), set_flag.(true), selected, create(0), returned()], false, nil, %{}, types)
+    wrong = switch.(condition, [dispose(1), set_flag.(true)], [set_flag.(false)])
+
+    audit(
+      [create(1), set_flag.(true), wrong, cleanup, create(0), returned()],
+      false,
+      nil,
+      %{},
+      types
+    )
+
+    overwritten = put_in(call(102, [], 4), ["kind", "Call", "dest"], flag)
+
+    audit(
+      [create(1), set_flag.(true), overwritten, cleanup, create(0), returned()],
+      false,
+      nil,
+      %{102 => %{can_fail: false}},
+      types
+    )
+
+    for kind <- ["Ref", "RawPtr"] do
+      reference =
+        if kind == "Ref",
+          do: %{"Ref" => ["Erased", boolean, "Mut"]},
+          else: %{"RawPtr" => [boolean, "Mut"]}
+
+      address = %{"kind" => %{"Local" => 2}, "ty" => reference}
+
+      borrowed = %{
+        "kind" => %{"Assign" => [address, %{kind => %{"place" => flag, "kind" => "Mut"}}]}
+      }
+
+      # A call may change an address-exposed boolean. Its old value cannot
+      # justify skipping cleanup, even if that call has no modeled panic.
+      audit(
+        [set_flag.(true), borrowed, create(1), call(102, [], 3), cleanup, create(0), returned()],
+        false,
+        nil,
+        %{102 => %{can_fail: false}},
+        Map.put(types, 2, reference)
+      )
+    end
+  end
+
   test "a boolean known before the loop cannot hide an unsafe later iteration" do
     initial = %{
       "kind" => %{
