@@ -86,6 +86,43 @@ pub fn copy_locked(input: &[u8]) -> Vec<u8> {
     atomic_core::take_bytes(bytes)
 }
 
+/// Appends through the shared current state and returns its committed length.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside this fixture.
+pub fn append_state(state: &std::sync::Mutex<atomic_core::BufferState>, input: &[u8]) -> u64 {
+    let mut guard = match state.lock() {
+        Ok(value) => value,
+        Err(error) => error.into_inner(),
+    };
+    atomic_core::append_bytes(&mut guard.bytes, input);
+    let length = guard.bytes.len() as u64;
+    drop(guard);
+    length
+}
+
+/// Reads shared state under the same mutex without clearing poison.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside this fixture.
+pub fn read_state(state: &std::sync::Mutex<atomic_core::BufferState>) -> (u64, u8) {
+    let guard = match state.lock() {
+        Ok(value) => value,
+        Err(error) => error.into_inner(),
+    };
+    let result = (
+        guard.bytes.len() as u64,
+        atomic_core::buffer_head(&guard.bytes),
+    );
+    drop(guard);
+    result
+}
+
+/// Consumes the mutex and its first-party owning payload without Rustler.
+pub fn dispose_state(state: std::sync::Mutex<atomic_core::BufferState>) {
+    drop(state);
+}
+
 #[cfg(test)]
 mod locked_buffer_tests {
     use super::{copy_locked, locked_append};

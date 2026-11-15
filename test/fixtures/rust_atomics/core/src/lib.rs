@@ -129,6 +129,11 @@ pub fn take_bytes(bytes: std::sync::Mutex<Vec<u8>>) -> Vec<u8> {
     }
 }
 
+/// First-party protocol state with owning buffer cleanup captured by the compiler.
+pub struct BufferState {
+    pub bytes: Vec<u8>,
+}
+
 #[cfg(test)]
 mod byte_handoff_tests {
     use super::take_bytes;

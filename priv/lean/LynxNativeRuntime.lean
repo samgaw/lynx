@@ -25,6 +25,12 @@ abbrev NativeM (α : Type) := Result α
 
 namespace NativeM
 
+-- Keep the foreign computation representation intact until a checked lift
+-- equation applies. The evaluator otherwise expands coinductive constructors
+-- while evaluating the argument, before it can use the fromRust equations.
+attribute [cbv_opaque] RustM.ok RustM.fail RustM.div Aeneas.Std.bind
+attribute [cbv_eval] Aeneas.Std.bind_ok Aeneas.Std.bind_fail Aeneas.Std.bind_div
+
 attribute [cbv_eval] U64.max_eq
 
 @[cbv_eval] theorem u64Bv_eq (value : U64) : U64.bv value = UScalar.bv value := rfl
@@ -185,22 +191,22 @@ This is a verification bound, not a Rust runtime limit or a liveness claim. -/
 instance : MonadLift RustM NativeM where
   monadLift := fromRust
 
-@[simp] theorem monadLift_eq {α : Type} (computation : RustM α) :
+@[simp, cbv_eval] theorem monadLift_eq {α : Type} (computation : RustM α) :
     (monadLift computation : NativeM α) = fromRust computation := rfl
 
-@[simp] theorem fromRust_ok {α : Type} (value : α) :
+@[simp, cbv_eval] theorem fromRust_ok {α : Type} (value : α) :
     fromRust (RustM.ok value) = Result.ok value := by
   simp [fromRust]
 
-@[simp] theorem fromRust_panic {α : Type} :
+@[simp, cbv_eval] theorem fromRust_panic {α : Type} :
     fromRust (RustM.fail .panic : RustM α) = fail .panic := by
   simp [fromRust]
 
-@[simp] theorem fromRust_undef {α : Type} :
+@[simp, cbv_eval] theorem fromRust_undef {α : Type} :
     fromRust (RustM.fail .undef : RustM α) = Result.error .exhausted := by
   simp [fromRust]
 
-@[simp] theorem fromRust_div {α : Type} :
+@[simp, cbv_eval] theorem fromRust_div {α : Type} :
     fromRust (RustM.div : RustM α) = Result.error .exhausted := by
   simp [fromRust]
 

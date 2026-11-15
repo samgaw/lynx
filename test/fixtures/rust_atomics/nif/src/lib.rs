@@ -244,3 +244,41 @@ fn buffer_copy_locked(input: rustler::Binary<'_>) -> rustler::ResourceArc<ByteBu
         bytes: atomic_analysis::copy_locked(input.as_slice()),
     })
 }
+
+/// A persistent shared resource; its mutex owns first-party protocol state.
+pub struct SharedBuffer {
+    pub state: std::sync::Mutex<atomic_core::BufferState>,
+}
+
+#[rustler::resource_impl]
+impl rustler::Resource for SharedBuffer {}
+
+/// Creates registered shared state.
+///
+/// # Panics
+/// Panics if the resource type has not been registered.
+#[rustler::nif(name = "shared_new", schedule = "DirtyCpu")]
+#[lynx::shared_buffer]
+fn shared_new() -> rustler::ResourceArc<SharedBuffer> {
+    rustler::ResourceArc::new(SharedBuffer {
+        state: std::sync::Mutex::new(atomic_core::BufferState { bytes: Vec::new() }),
+    })
+}
+
+#[rustler::nif(name = "shared_append", schedule = "DirtyCpu")]
+#[lynx::shared_buffer]
+fn shared_append(buffer: rustler::ResourceArc<SharedBuffer>, input: rustler::Binary<'_>) -> u64 {
+    atomic_analysis::append_state(&buffer.state, input.as_slice())
+}
+
+#[rustler::nif(name = "shared_read", schedule = "DirtyCpu")]
+#[lynx::shared_buffer]
+fn shared_read(buffer: rustler::ResourceArc<SharedBuffer>) -> (u64, u8) {
+    atomic_analysis::read_state(&buffer.state)
+}
+
+/// Internal root checking final owner cleanup independently of NIF exposure.
+#[lynx::shared_buffer]
+pub fn shared_release(buffer: rustler::ResourceArc<SharedBuffer>) {
+    drop(buffer);
+}
