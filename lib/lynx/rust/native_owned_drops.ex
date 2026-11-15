@@ -1,10 +1,13 @@
 defmodule Lynx.Rust.NativeOwnedDrops do
   @moduledoc false
 
-  def function_for(payload, translated, refs) do
+  def function_for(payload, translated, refs), do: function_for(payload, translated, refs, [])
+
+  defp function_for(payload, translated, refs, seen) do
     with true <- get_in(translated, ["options", "owned_drops"]) == true,
          payload = Lynx.Rust.CallModels.expand(payload, refs),
          %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <- payload,
+         true <- id not in seen,
          true <- args == Lynx.Rust.ResourceModels.args([]),
          type when not is_nil(type) <-
            Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
@@ -24,30 +27,38 @@ defmodule Lynx.Rust.NativeOwnedDrops do
            Lynx.Rust.CallModels.expand(sig["output"], refs),
          true <- output == Lynx.Rust.ResourceModels.args([]),
          true <-
-           structural_nonpanicking?(function, translated, refs) do
+           structural_nonpanicking?(function, translated, refs, [id | seen]) do
       function
     else
       _ -> nil
     end
   end
 
-  # A mutex may own this payload only when its actual first-party destructor is
-  # available. The Vec/Global drop checks in function_for remain mandatory.
-  # Restrict this composition to scalar vectors and plain data, so a nested
-  # resource cannot recursively re-enter destructor admission.
-  def vector_cleanup_for(payload, translated, refs) do
+  # Keep nested owning structs within the same finite structural fragment. Each
+  # level requires its captured consuming helper; the actual nested DropGlue is
+  # separately audited before its logical-heap erasure is accepted.
+  def vector_cleanup_for(payload, translated, refs),
+    do: vector_cleanup_for(payload, translated, refs, [])
+
+  defp vector_cleanup_for(payload, translated, refs, seen) do
     with %{"Adt" => %{"id" => id}} <- Lynx.Rust.CallModels.expand(payload, refs),
+         true <- id not in seen,
          %{"kind" => %{"Struct" => fields}} <-
            Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
-         true <- Enum.any?(fields, &vector?(&1["ty"], translated, refs)),
-         true <-
-           Enum.all?(fields, fn field ->
-             vector?(field["ty"], translated, refs) or
-               Lynx.Rust.NativeDrops.plain_data?(field["ty"], translated, refs)
-           end) do
-      function_for(payload, translated, refs)
+         kinds = Enum.map(fields, &field_kind(&1["ty"], translated, refs, [id | seen])),
+         true <- :owning in kinds and :unsupported not in kinds do
+      function_for(payload, translated, refs, seen)
     else
       _ -> nil
+    end
+  end
+
+  defp field_kind(type, translated, refs, seen) do
+    cond do
+      vector?(type, translated, refs) -> :owning
+      Lynx.Rust.NativeDrops.plain_data?(type, translated, refs) -> :plain
+      vector_cleanup_for(type, translated, refs, seen) != nil -> :owning
+      true -> :unsupported
     end
   end
 
@@ -57,8 +68,9 @@ defmodule Lynx.Rust.NativeOwnedDrops do
   # Resource drop dispatch is classified as cutoff-only by the lifetime audit.
   # Admit structural cleanup of validated nonpanicking mutex/File primitives or
   # exact scalar Vec/Global drops checked by the existing structural audit;
-  # custom or first-party destructor calls need a separate unwind composition.
-  defp structural_nonpanicking?(function, translated, refs) do
+  # nested scalar-vector glue must pass the same audit and captured-helper check.
+  # Observable custom destructor calls still need separate unwind composition.
+  defp structural_nonpanicking?(function, translated, refs, seen) do
     statements = function["body"]["Structured"]["body"]["statements"]
 
     Enum.all?(statements, fn statement ->
@@ -88,11 +100,18 @@ defmodule Lynx.Rust.NativeOwnedDrops do
              ) do
             Lynx.Rust.DropModels.nonpanicking_site?(drop, function, translated, refs)
           else
-            primitive_type?(drop["place"]["ty"], translated, refs) and
-              case Lynx.Rust.NativeDrops.site(drop, translated, refs) do
-                {:ok, %{native_kind: kind}} when kind in [:mutex, :file] -> true
-                _ -> false
-              end
+            case vector_cleanup_for(drop["place"]["ty"], translated, refs, seen) do
+              nil ->
+                primitive_type?(drop["place"]["ty"], translated, refs) and
+                  case Lynx.Rust.NativeDrops.site(drop, translated, refs) do
+                    {:ok, %{native_kind: kind}} when kind in [:mutex, :file] -> true
+                    _ -> false
+                  end
+
+              _helper ->
+                crates = cleanup_crates(drop["place"]["ty"], translated, refs, [])
+                Lynx.Rust.DropModels.nonpanicking_site?(drop, function, translated, refs, crates)
+            end
           end
 
         %{
@@ -135,6 +154,37 @@ defmodule Lynx.Rust.NativeOwnedDrops do
           false
       end
     end)
+  end
+
+  # This is called only after the complete field tree has passed admission.
+  # Include its crates so the existing audit follows actual nested DropGlue
+  # across crate boundaries rather than treating it as an external model.
+  defp cleanup_crates(type, translated, refs, seen) do
+    case Lynx.Rust.CallModels.expand(type, refs) do
+      %{"Adt" => %{"id" => id}} ->
+        if id in seen do
+          []
+        else
+          case Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)) do
+            %{
+              "kind" => %{"Struct" => fields},
+              "src" => "Normal",
+              "item_meta" => %{"name" => [%{"Ident" => [crate, _]} | _]}
+            } ->
+              [
+                crate
+                | Enum.flat_map(fields, &cleanup_crates(&1["ty"], translated, refs, [id | seen]))
+              ]
+              |> Enum.uniq()
+
+            _ ->
+              []
+          end
+        end
+
+      _ ->
+        []
+    end
   end
 
   defp primitive_type?(type, translated, refs) do
