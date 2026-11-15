@@ -3,6 +3,7 @@
 #![register_tool(lynx)]
 
 pub mod decoding;
+pub mod derived;
 use std::sync::atomic::AtomicU64;
 
 pub struct Counter {
@@ -51,6 +52,7 @@ pub fn counter_checked(value: u64, accepted: bool) -> (u64, u64) {
 #[lynx::compare]
 #[lynx::returned]
 #[lynx::decoded]
+#[lynx::tuple_decode]
 fn create(value: u64) -> rustler::ResourceArc<Counter> {
     counter_new(value)
 }
@@ -72,6 +74,7 @@ fn pair(resource: rustler::ResourceArc<Counter>) -> (u64, u64) {
 #[lynx::compare]
 #[lynx::returned]
 #[lynx::decoded]
+#[lynx::tuple_decode]
 fn read(resource: rustler::ResourceArc<Counter>) -> u64 {
     counter_read(resource)
 }
