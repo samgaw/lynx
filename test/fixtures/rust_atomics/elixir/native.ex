@@ -51,4 +51,5 @@ defmodule LynxAtomicFixture.Native do
   def buffer_new(_, _), do: :erlang.nif_error(:not_loaded)
   def buffer_length(_), do: :erlang.nif_error(:not_loaded)
   def buffer_head(_), do: :erlang.nif_error(:not_loaded)
+  def buffer_copy(_), do: :erlang.nif_error(:not_loaded)
 end

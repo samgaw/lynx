@@ -53,3 +53,10 @@ pub fn buffer_length(bytes: &[u8]) -> usize {
 pub fn buffer_head(bytes: &[u8]) -> u8 {
     atomic_core::buffer_head(bytes)
 }
+
+/// Copies borrowed protocol bytes into an independently owned buffer.
+pub fn copy_bytes(input: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    atomic_core::append_bytes(&mut output, input);
+    output
+}

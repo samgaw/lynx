@@ -187,6 +187,7 @@ impl rustler::Resource for ByteBuffer {}
 /// Panics if the resource type has not been registered.
 #[rustler::nif(name = "buffer_new", schedule = "DirtyCpu")]
 #[lynx::buffer]
+#[lynx::buffer_copy]
 #[expect(
     clippy::vec_init_then_push,
     reason = "Exercise audited vector growth before resource ownership transfer"
@@ -200,6 +201,7 @@ fn buffer_new(first: u8, second: u8) -> rustler::ResourceArc<ByteBuffer> {
 /// Observes the same shared byte buffer through a first-party callee.
 #[rustler::nif(name = "buffer_length", schedule = "DirtyCpu")]
 #[lynx::buffer]
+#[lynx::buffer_copy]
 fn buffer_length(buffer: rustler::ResourceArc<ByteBuffer>) -> u64 {
     atomic_analysis::buffer_length(buffer.bytes.as_slice()) as u64
 }
@@ -207,11 +209,24 @@ fn buffer_length(buffer: rustler::ResourceArc<ByteBuffer>) -> u64 {
 /// Reads the leading stored byte through the same shared resource.
 #[rustler::nif(name = "buffer_head", schedule = "DirtyCpu")]
 #[lynx::buffer]
+#[lynx::buffer_copy]
 fn buffer_head(buffer: rustler::ResourceArc<ByteBuffer>) -> u8 {
     atomic_analysis::buffer_head(buffer.bytes.as_slice())
 }
 /// Consumes an internal Rust owner without exposing a new NIF.
 #[lynx::buffer]
+#[lynx::buffer_copy]
 pub fn buffer_dispose(buffer: rustler::ResourceArc<ByteBuffer>) {
     drop(buffer);
+}
+
+/// Retains an owned copy after the binary argument's borrow has ended.
+/// # Panics
+/// Panics if the resource type has not been registered.
+#[rustler::nif(name = "buffer_copy", schedule = "DirtyCpu")]
+#[lynx::buffer_copy]
+fn buffer_copy(input: rustler::Binary<'_>) -> rustler::ResourceArc<ByteBuffer> {
+    rustler::ResourceArc::new(ByteBuffer {
+        bytes: atomic_analysis::copy_bytes(input.as_slice()),
+    })
 }

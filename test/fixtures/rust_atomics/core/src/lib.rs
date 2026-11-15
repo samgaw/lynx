@@ -115,3 +115,8 @@ pub fn buffer_head(bytes: &[u8]) -> u8 {
         None => 0,
     }
 }
+
+/// Appends borrowed protocol bytes while retaining the existing prefix.
+pub fn append_bytes(output: &mut Vec<u8>, input: &[u8]) {
+    output.extend_from_slice(input);
+}

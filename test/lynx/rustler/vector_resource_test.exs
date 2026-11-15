@@ -37,11 +37,11 @@ defmodule Lynx.Rustler.VectorResourceTest do
       execution: :runtime,
       owned_drops: true,
       branching: :duplicate,
-      root_attribute: "lynx::buffer",
+      root_attribute: "lynx::buffer_copy",
       lean_project: project,
       build_dir: Path.join(tmp, "build"),
       module_prefix: "Buffer.Extraction",
-      only: [buffer_new: 2, buffer_length: 1, buffer_head: 1]
+      only: [buffer_new: 2, buffer_copy: 1, buffer_length: 1, buffer_head: 1]
     ]
 
     prepared = Lynx.Rustler.prepare!(common)
@@ -59,15 +59,27 @@ defmodule Lynx.Rustler.VectorResourceTest do
     property = Path.join(project, "Buffer/Properties.lean")
     File.write!(property, properties)
 
+    [copy_binding] = Enum.filter(prepared.bindings.bindings, &(&1["name"] == "buffer_copy"))
+
+    copy_properties =
+      File.read!(Path.join(@fixture, "BufferCopyProperties.lean"))
+      |> String.replace("__COPY__", copy_binding["lean_name"])
+
+    File.write!(Path.join(project, "Buffer/CopyProperties.lean"), copy_properties)
+
     options =
       common ++
         [
-          proof_modules: ["Buffer.Properties"],
+          proof_modules: ["Buffer.Properties", "Buffer.CopyProperties"],
           required_properties:
             Enum.map(
               ~w(core_length length_composition core_head head_composition cleanup dispose create read_length read_head final_release),
               &("Buffer.Properties." <> &1)
-            )
+            ) ++
+              Enum.map(
+                ~w(append_eq append_preserves_prefix copy_bytes_eq facade_view facade_bytes),
+                &("Buffer.CopyProperties." <> &1)
+              )
         ]
 
     prepared = Lynx.Rustler.prepare!(options)
@@ -158,6 +170,12 @@ defmodule Lynx.Rustler.VectorResourceTest do
     for value <- [0, false, apply(native, :atomic_new, [1])],
         do: assert_raise(ArgumentError, fn -> apply(native, :buffer_length, [value]) end)
 
+    # Runtime calibration supplements the universal Rust/facade proofs; a closed
+    # Elixir proof for this size still has prohibitive reduction cost.
+    large = apply(native, :buffer_copy, [:binary.copy(<<17>>, 4097)])
+    assert apply(native, :buffer_length, [large]) == 4097
+    assert apply(native, :buffer_head, [large]) == 17
+
     [{law_module, beam}] = Code.compile_file(Path.join(workspace, "elixir/buffer_laws.ex"))
 
     for law <-
@@ -166,19 +184,25 @@ defmodule Lynx.Rustler.VectorResourceTest do
 
     law_options = [
       native: {Lynx.Rustler, options},
-      options: [maxRecDepth: 8192, maxHeartbeats: 16_000_000]
+      options: [maxRecDepth: 32768, maxHeartbeats: 24_000_000]
     ]
 
+    [{copy_law_module, copy_beam}] =
+      Code.compile_file(Path.join(workspace, "elixir/buffer_copy_laws.ex"))
+
+    for law <- ~w(copies empty raw_bytes independent_buffers rejects_list rejects_bits)a,
+        do: assert(apply(copy_law_module, law, []))
+
     export = Path.join(tmp, "buffer-laws.export")
-    reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
+    reports = Lynx.Laws.verify([beam, copy_beam], Keyword.put(law_options, :export, export))
     assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
-    assert length(Enum.flat_map(reports, & &1.theorems)) == 8
+    assert length(Enum.flat_map(reports, & &1.theorems)) == 14
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
 
     file =
-      Lynx.Rust.Proofs.file!(prepared.extraction, ["Buffer.Properties"],
+      Lynx.Rust.Proofs.file!(prepared.extraction, ["Buffer.Properties", "Buffer.CopyProperties"],
         module: "Buffer.ExportAudit"
       )
 
@@ -189,7 +213,12 @@ defmodule Lynx.Rustler.VectorResourceTest do
       Lynx.Commands.lake(project, ["check", "--from-export", native_export] ++ sandbox)
 
     assert status == 0, output
-    assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
+
+    assert Enum.all?(
+             Lynx.Laws.verify([beam, copy_beam], law_options),
+             &(&1.status == :ok and &1.cached)
+           )
+
     laws = File.read!(Path.join(workspace, "elixir/buffer_laws.ex"))
 
     [{_, incorrect}] =
@@ -219,6 +248,26 @@ defmodule Lynx.Rustler.VectorResourceTest do
     end
 
     File.write!(source, original)
+    assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
+
+    core_source = Path.join(workspace, "core/src/lib.rs")
+    core_original = File.read!(core_source)
+
+    core_changed =
+      String.replace(
+        core_original,
+        "output.extend_from_slice(input);",
+        "output.extend_from_slice(input);\n    output.extend_from_slice(input);"
+      )
+
+    assert core_changed != core_original
+    File.write!(core_source, core_changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rustler.prepare!(options)
+    end
+
+    File.write!(core_source, core_original)
     assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
 
     File.write!(
