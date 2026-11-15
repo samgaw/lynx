@@ -10,12 +10,12 @@ defmodule Lynx.Rustler do
   first-party structs/enums whose actual `Encoder` implementations can be
   extracted. Derived `NifTuple` return Encoders also use their actual expanded
   Rust implementations, with an explicit tuple-construction FFI model. This does
-  not by itself enable derived argument Decoders. Pure custom argument Decoders
+  not by itself enable derived argument Decoders. Custom argument Decoders
   use their actual extracted bodies with the supported primitive decoder models.
   The compiler resolves their types, encoder roots and generated atom
   caches automatically; no per-export Lean adapter or name mapping is required.
   Supported stateless runtime encoders include atoms, u64, strings, borrowed str,
-  shared references, pairs and Vec. Pure custom arguments and `NifResult<T>` use
+  shared references, pairs and Vec. Custom arguments and `NifResult<T>` use
   extracted implementations and modelled return conversion; unsupported signatures
   fail explicitly. Immutable `rustler::Binary<'_>` values can be passed and returned
   using an explicit FFI type model. The immutable `as_slice` accessor and standard
@@ -106,8 +106,14 @@ defmodule Lynx.Rustler do
   allocation, native reclamation and FFI correctness remain trusted boundaries.
   Runtime `NifResult` retains native effects before success, returned errors and
   caught computation panics. Captured unwind admits scalar/unit-tuple successful
-  payloads. Runtime custom Decoders and custom payload Encoders remain rejected.
-  Error inspection and other unqualified payload layouts are rejected.
+  payloads. Runtime custom argument Decoders use their actual extracted methods
+  and native trait dictionaries. Decoded payloads require compiler-validated
+  no-drop evidence and scalar fields, tuples or nested monomorphic first-party
+  structs/enums, within a 32-level admission bound. Native owners, opaque fields
+  and other layouts need explicit cleanup and are rejected. Preceding ResourceArc
+  arguments are released when a later decoder returns an error or panics.
+  Runtime custom payload Encoders, Error inspection and other unqualified payload
+  layouts remain rejected.
 
   Options:
 
@@ -152,9 +158,10 @@ defmodule Lynx.Rustler do
       and deferred conversion. Consuming `Result::ok` and `Option::ok_or` calls
       are supported when their error type is Rustler Error: transferring the error
       retains its payload; discarding it requires the partial SDK cleanup model
-      to complete. Discarded boxed errors exhaust verification. Error inspection,
-      unadmitted payload layouts and
-      runtime custom Decoders are rejected.
+      to complete. Discarded boxed errors exhaust verification. Error inspection
+      and unadmitted payload layouts are rejected. Runtime custom Decoders
+      additionally require compiler-validated no-drop
+      value payloads; native-owner fields and unqualified layouts are rejected.
     * `:required_properties` — theorem names that must mention actual extracted
       implementations in their statements. Missing or unrelated properties fail.
     * `:branching` — `:join` by default, or `:duplicate` to retain separate symbolic
@@ -350,9 +357,6 @@ defmodule Lynx.Rustler do
     term? = Enum.any?(discovered.bindings, &contains_term?/1)
     codecs? = custom? or decoders? or returns? or term?
     mir = opts[:mir] || if(execution == :pure and (decoders? or returns?), do: :elaborated)
-
-    if execution == :runtime and decoders?,
-      do: raise(ArgumentError, "runtime Rustler custom decoders are unsupported")
 
     models =
       if binary? do

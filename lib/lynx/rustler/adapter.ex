@@ -176,10 +176,22 @@ defmodule Lynx.Rustler.Adapter do
 
     {body, direct_body} =
       if Enum.any?(types, & &1[:decode_m]) do
-        if runtime?, do: raise(ArgumentError, "runtime Rustler custom decoders are unsupported")
-
-        {decode_body(args, decoded, types, execute(invocation, result, execution_model, release)),
-         decode_body(args, decoded, types, execute(direct, result, execution_model, release))}
+        {decode_body(
+           args,
+           decoded,
+           types,
+           execute(invocation, result, execution_model, release),
+           execution_model,
+           release
+         ),
+         decode_body(
+           args,
+           decoded,
+           types,
+           execute(direct, result, execution_model, release),
+           execution_model,
+           release
+         )}
       else
         {"do\n#{decode}\n  #{execute(invocation, result, execution_model, release)}",
          "do\n#{decode}\n  #{execute(direct, result, execution_model, release)}"}
@@ -206,7 +218,7 @@ defmodule Lynx.Rustler.Adapter do
 
   defp captured_call(call, _, _), do: call
 
-  defp decode_body(args, decoded, types, continuation) do
+  defp decode_body(args, decoded, types, continuation, :pure, _release) do
     Enum.zip([args, decoded, types])
     |> Enum.reverse()
     |> Enum.reduce(continuation, fn {arg, value, type}, rest ->
@@ -214,6 +226,49 @@ defmodule Lynx.Rustler.Adapter do
         "Lynx.Rustler.Decoding.withDecoded (#{decoder} #{arg}) (fun #{value} => (#{rest}))"
       else
         "do\n  let #{value} ← #{type.decode} #{arg}\n  #{rest}"
+      end
+    end)
+  end
+
+  defp decode_body(args, decoded, types, continuation, :runtime, release) do
+    entries = Enum.zip([args, decoded, types])
+
+    entries
+    |> Enum.with_index()
+    |> Enum.reverse()
+    |> Enum.reduce(continuation, fn {{arg, value, type}, index}, rest ->
+      cleanup =
+        entries
+        |> Enum.take(index)
+        |> Enum.reverse()
+        |> Enum.filter(fn {_, _, previous} -> previous[:resource] end)
+        |> Enum.map_join("; ", fn {_, owner, _} -> "#{release} #{owner}" end)
+
+      if decoder = type[:decode_m] do
+        call = "#{decoder} #{arg}"
+
+        call =
+          if cleanup == "" do
+            call
+          else
+            "do let returned ← Lynx.Result.handle (#{call}) (fun error => do #{cleanup}; Lynx.Result.error error); " <>
+              "match returned with | .Ok value => Lynx.Result.ok (.Ok value) | .Err error => do #{cleanup}; Lynx.Result.ok (.Err error)"
+          end
+
+        "Lynx.Rustler.withNativeResult (#{call}) (fun #{value} => (#{rest}))"
+      else
+        call =
+          if type[:resource],
+            do: "#{type.decode} #{arg}",
+            else: "Lynx.Result.ofExcept (#{type.decode} #{arg})"
+
+        call =
+          if cleanup == "",
+            do: call,
+            else:
+              "Lynx.Result.handle (#{call}) (fun error => do #{cleanup}; Lynx.Result.error error)"
+
+        "do\n  let #{value} ← #{call}\n  #{rest}"
       end
     end)
   end

@@ -496,7 +496,10 @@ defmodule Lynx.Rust.Extraction do
               },
               [
                 Lynx.Rustler.EncoderModels.external_names(audit.external_calls),
-                Lynx.Rustler.DecoderModels.external_names(audit),
+                Lynx.Rustler.DecoderModels.external_names(
+                  audit,
+                  Keyword.get(opts, :execution, :pure)
+                ),
                 Lynx.Rust.ResourceModels.external_names(audit.external_calls),
                 Lynx.Rust.FormatModels.external_names(audit.external_calls)
               ]

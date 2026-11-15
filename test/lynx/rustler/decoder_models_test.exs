@@ -15,6 +15,41 @@ defmodule Lynx.Rustler.DecoderModelsTest do
              DecoderModels.resolve(ctx.function, ctx.translated, %{})
   end
 
+  test "runtime dictionaries retain primitive identity through the runtime interpreter", ctx do
+    pure = DecoderModels.resolve(ctx.function, ctx.translated, %{})
+
+    assert %{
+             lean: "Lynx.Rustler.NativeDecoding.u64",
+             native_cutoff_only: true,
+             can_fail: true,
+             lift: false
+           } = native = DecoderModels.for_execution(pure, :runtime)
+
+    assert Map.drop(native, [:lean, :native_cutoff_only]) == Map.drop(pure, [:lean])
+    audit = %{external_calls: %{0 => pure}, decoder_dispatch: %{calls: %{}}}
+
+    assert %{
+             "trait_decls" => [
+               %{
+                 "extract_name" => "Lynx.Rustler.NativeDecoder",
+                 "constructor" => "Lynx.Rustler.NativeDecoder.mk"
+               }
+             ]
+           } =
+             DecoderModels.external_names(audit, :runtime)
+
+    assert %{"trait_decls" => [%{"extract_name" => "Lynx.Rustler.Decoder"}]} =
+             DecoderModels.external_names(audit)
+  end
+
+  test "runtime lifts reject uncatalogued decoder operations" do
+    assert DecoderModels.for_execution(nil, :runtime) == nil
+
+    assert_raise ArgumentError, ~r/unsupported runtime Rustler decoder primitive/, fn ->
+      DecoderModels.for_execution(%{lean: "Lynx.Rustler.Decoding.unqualified"}, :runtime)
+    end
+  end
+
   test "rejects altered method identity, ABI, result type and generic bounds", ctx do
     for function <- [
           put_in(ctx.function, ["signature", "abi"], "C"),

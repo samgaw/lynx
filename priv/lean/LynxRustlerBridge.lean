@@ -569,6 +569,11 @@ only catalogued native primitives use reported FFI models. -/
 structure Decoder (Self : Type) where
   decode : NativeTerm → RustM (core.result.Result Self DecoderError)
 
+/-- Runtime dictionaries retain actual first-party decoding effects. SDK primitive
+methods lift their existing pure models through the selected runtime interpreter. -/
+structure NativeDecoder (Self : Type) where
+  decode : NativeTerm → Result (core.result.Result Self DecoderError)
+
 /-- Error payload encoders execute during Rustler return conversion. Panics here
 escape the computation's catch_unwind boundary, so they exhaust verification
 rather than becoming a catchable nif_panicked result. -/
@@ -901,5 +906,21 @@ theorem execute_of_spec {α : Type} {computation : RustM α} {post : α → Prop
   | ret value => exact ⟨value, WP.spec_ok value |>.mp verified, execute_ok value encode⟩
   | vis effect continuation => simp at verified
   | div => simp at verified
+
+namespace NativeDecoding
+
+variable [MonadLift RustM (@Lynx.Result)]
+
+@[expose] def u64 (term : NativeTerm) : Result (core.result.Result U64 DecoderError) :=
+  monadLift (Decoding.u64 term)
+
+@[expose] def atom (term : NativeTerm) : Result (core.result.Result Atom DecoderError) :=
+  monadLift (Decoding.atom term)
+
+@[expose] def getTuple (term : NativeTerm) :
+    Result (core.result.Result (alloc.vec.Vec NativeTerm) DecoderError) :=
+  monadLift (Decoding.getTuple term)
+
+end NativeDecoding
 
 end Lynx.Rustler

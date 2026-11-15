@@ -66,7 +66,8 @@ defmodule Lynx.Rust.CallModels do
             if(:rustler_decoders in enabled,
               do:
                 Lynx.Rustler.ResultConversions.resolve(function, translated, refs) ||
-                  Lynx.Rustler.DecoderModels.resolve(function, translated, refs) ||
+                  Lynx.Rustler.DecoderModels.resolve(function, translated, refs)
+                  |> Lynx.Rustler.DecoderModels.for_execution(execution) ||
                   Lynx.Rustler.AtomModels.resolve(function, translated, refs)
             ) ||
             match_function(function, translated, refs, enabled),

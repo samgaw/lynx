@@ -135,7 +135,27 @@ defmodule Lynx.Rustler.DecoderModels do
 
   def resolve(_, _, _), do: nil
 
+  def for_execution(nil, _), do: nil
+
+  def for_execution(%{lean: "Lynx.Rustler.Decoding." <> operation} = model, :runtime)
+      when operation in ~w(u64 atom getTuple) do
+    model
+    |> Map.put(
+      :lean,
+      String.replace(model.lean, "Lynx.Rustler.Decoding.", "Lynx.Rustler.NativeDecoding.")
+    )
+    |> Map.put(:native_cutoff_only, true)
+  end
+
+  def for_execution(model, :pure), do: model
+
+  def for_execution(_, :runtime),
+    do: raise(ArgumentError, "unsupported runtime Rustler decoder primitive")
+
   def binding!(id, audit, translation) do
+    if translation["result_monad"] == "Lynx.NativeM",
+      do: Lynx.Rustler.DecoderValues.validate!(id, audit)
+
     ctx = %{translated: audit.translated, refs: audit.references, traits: %{}}
     self = adt(id)
     candidates = Enum.filter(audit.functions, &method?(&1, self, ctx))
@@ -179,15 +199,18 @@ defmodule Lynx.Rustler.DecoderModels do
   def decoder_method?(function, self, translated, refs),
     do: method?(function, self, %{translated: translated, refs: refs, traits: %{}})
 
-  def external_names(audit) do
+  def external_names(audit, execution \\ :pure) do
+    dictionary =
+      if execution == :runtime, do: "Lynx.Rustler.NativeDecoder", else: "Lynx.Rustler.Decoder"
+
     if Enum.any?(Map.values(audit.external_calls), &Map.has_key?(&1, :decoder_trait)) or
          Enum.any?(Map.values(audit.decoder_dispatch.calls), &(&1 != [])) do
       %{
         "trait_decls" => [
           %{
             "rust_pattern" => "rustler::types::Decoder",
-            "extract_name" => "Lynx.Rustler.Decoder",
-            "constructor" => "Lynx.Rustler.Decoder.mk"
+            "extract_name" => dictionary,
+            "constructor" => dictionary <> ".mk"
           }
         ],
         "trait_items" => [
