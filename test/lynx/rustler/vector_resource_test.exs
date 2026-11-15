@@ -170,8 +170,8 @@ defmodule Lynx.Rustler.VectorResourceTest do
     for value <- [0, false, apply(native, :atomic_new, [1])],
         do: assert_raise(ArgumentError, fn -> apply(native, :buffer_length, [value]) end)
 
-    # Runtime calibration supplements the universal Rust/facade proofs; a closed
-    # Elixir proof for this size still has prohibitive reduction cost.
+    # Runtime calibration supplements the implementation-linked Rust contracts
+    # and the closed beyond_4k Elixir law below.
     large = apply(native, :buffer_copy, [:binary.copy(<<17>>, 4097)])
     assert apply(native, :buffer_length, [large]) == 4097
     assert apply(native, :buffer_head, [large]) == 17
@@ -190,13 +190,13 @@ defmodule Lynx.Rustler.VectorResourceTest do
     [{copy_law_module, copy_beam}] =
       Code.compile_file(Path.join(workspace, "elixir/buffer_copy_laws.ex"))
 
-    for law <- ~w(copies empty raw_bytes independent_buffers rejects_list rejects_bits)a,
+    for law <- ~w(copies empty raw_bytes independent_buffers rejects_list rejects_bits beyond_4k)a,
         do: assert(apply(copy_law_module, law, []))
 
     export = Path.join(tmp, "buffer-laws.export")
     reports = Lynx.Laws.verify([beam, copy_beam], Keyword.put(law_options, :export, export))
     assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
-    assert length(Enum.flat_map(reports, & &1.theorems)) == 14
+    assert length(Enum.flat_map(reports, & &1.theorems)) == 15
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output

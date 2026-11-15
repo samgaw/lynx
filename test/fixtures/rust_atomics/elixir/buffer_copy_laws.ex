@@ -129,4 +129,24 @@ defmodule LynxVectorBufferFixture.CopyLaws do
     clear enough events last outcome run terminal
     cbv
     """
+
+  @large :binary.copy(<<17>>, 4097)
+  law beyond_4k,
+    expects:
+      LynxVectorBufferFixture.Native.buffer_length(
+        LynxVectorBufferFixture.Native.buffer_copy(@large)
+      ) == 4097,
+    proof: ~LEAN"""
+    set_option maxHeartbeats 24000000 in
+    set_option maxRecDepth 32768 in
+    set_option cbv.maxSteps 1000000 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 768)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
+    """
 end
