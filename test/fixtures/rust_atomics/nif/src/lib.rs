@@ -46,6 +46,7 @@ pub fn counter_checked(value: u64, accepted: bool) -> (u64, u64) {
 
 #[rustler::nif(name = "atomic_new")]
 #[lynx::atomic]
+#[lynx::compare]
 fn create(value: u64) -> rustler::ResourceArc<Counter> {
     counter_new(value)
 }
@@ -64,6 +65,7 @@ fn pair(resource: rustler::ResourceArc<Counter>) -> (u64, u64) {
 
 #[rustler::nif(name = "atomic_read")]
 #[lynx::atomic]
+#[lynx::compare]
 fn read(resource: rustler::ResourceArc<Counter>) -> u64 {
     counter_read(resource)
 }
@@ -72,6 +74,24 @@ fn read(resource: rustler::ResourceArc<Counter>) -> u64 {
 #[lynx::atomic]
 fn checked(value: u64, accepted: bool) -> (u64, u64) {
     counter_checked(value, accepted)
+}
+
+pub fn counter_replace(
+    resource: rustler::ResourceArc<Counter>,
+    expected: u64,
+    replacement: u64,
+) -> (bool, u64) {
+    atomic_analysis::try_set(&resource.state, expected, replacement)
+}
+
+#[rustler::nif(name = "atomic_replace", schedule = "DirtyCpu")]
+#[lynx::compare]
+fn compare(
+    resource: rustler::ResourceArc<Counter>,
+    expected: u64,
+    replacement: u64,
+) -> (bool, u64) {
+    counter_replace(resource, expected, replacement)
 }
 
 rustler::init!("Elixir.LynxAtomicFixture.Native");
