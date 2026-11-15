@@ -22,6 +22,26 @@ defmodule Lynx.Rust.IndexModels do
     end)
   end
 
+  # The generic wrapper can dispatch to arbitrary user code. Certify only its
+  # audited standard usize implementation, whose model always returns Option.
+  def nonpanicking_get?(call, models, %{translated: translated, references: refs}) do
+    with %{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => args}} <- call["func"],
+         %{lean: "Aeneas.Std.core.slice.Slice.get", builtin: true, slice_index_method: 0} <-
+           models[id],
+         traits = Lynx.Rust.ResourceModels.trait_references(translated),
+         method <- index_method!(args, 0, models, translated, refs, traits),
+         %{lean: "Aeneas.Std.core.slice.index.Usize.get", builtin: true, can_fail: false} <-
+           models[method] do
+      true
+    else
+      _ -> false
+    end
+  rescue
+    ArgumentError -> false
+  end
+
+  def nonpanicking_get?(_, _, _), do: false
+
   defp dispatches(
          %{
            "Call" => %{

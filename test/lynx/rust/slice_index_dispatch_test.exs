@@ -70,4 +70,83 @@ defmodule Lynx.Rust.SliceIndexDispatchTest do
 
     assert message =~ "missing or unsupported SliceIndex"
   end
+
+  test "only the exact standard usize get dictionary is nonpanicking" do
+    args = fn types ->
+      %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
+    end
+
+    byte = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+    usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+    variable = %{"TypeVar" => %{"Free" => 0}}
+    slice = fn element -> %{"Slice" => [element, nil]} end
+
+    dictionary = %{
+      "regions" => [],
+      "outlives" => [],
+      "skip_binder" => %{
+        "Value" => [
+          40,
+          %{
+            "kind" => %{"TraitImpl" => %{"id" => 4, "generics" => args.([byte])}},
+            "trait_decl_ref" => %{"id" => 3, "generics" => args.([usize, slice.(byte), byte])}
+          }
+        ]
+      }
+    }
+
+    call = %{
+      "func" => %{
+        "Regular" => %{
+          "kind" => %{"Fun" => 1},
+          "generics" => %{
+            args.([byte, usize, byte])
+            | "regions" => ["Erased"],
+              "trait_refs" => [dictionary]
+          }
+        }
+      }
+    }
+
+    impl = %{
+      "def_id" => 4,
+      "impl_trait" => %{"id" => 3, "generics" => args.([usize, slice.(variable), variable])},
+      "methods" => [%{"kind" => %{"TraitMethod" => [3, 0]}, "skip_binder" => %{"id" => 7}}]
+    }
+
+    context = %{translated: %{"trait_impls" => [impl]}, references: %{}}
+
+    wrapper = %{
+      lean: "Aeneas.Std.core.slice.Slice.get",
+      builtin: true,
+      slice_index_method: 0,
+      can_fail: true
+    }
+
+    leaf = %{lean: "Aeneas.Std.core.slice.index.Usize.get", builtin: true, can_fail: false}
+    models = %{1 => wrapper, 7 => leaf}
+    assert IndexModels.nonpanicking_get?(call, models, context)
+
+    for changed <- [
+          Map.delete(models, 7),
+          put_in(models, [7, :can_fail], true),
+          put_in(models, [7, :lean], "unproved.get"),
+          put_in(models, [1, :slice_index_method], 4),
+          put_in(models, [7, :builtin], false)
+        ] do
+      refute IndexModels.nonpanicking_get?(call, changed, context)
+    end
+
+    refute IndexModels.nonpanicking_get?(
+             call,
+             models,
+             put_in(context, [:translated, "trait_impls"], [])
+           )
+
+    refute IndexModels.nonpanicking_get?(
+             put_in(call, ["func", "Regular", "generics", "trait_refs"], []),
+             models,
+             context
+           )
+  end
 end

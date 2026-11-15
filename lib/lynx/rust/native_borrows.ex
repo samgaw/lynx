@@ -415,7 +415,8 @@ defmodule Lynx.Rust.NativeBorrows do
     case get_in(call, ["func", "Regular", "kind"]) do
       %{"Fun" => id} ->
         nonpanicking?(id, functions, models, seen) or
-          Lynx.Rust.NativeIndexBounds.safe?(call, models[id], functions[:context])
+          Lynx.Rust.NativeIndexBounds.safe?(call, models[id], functions[:context]) or
+          Lynx.Rust.IndexModels.nonpanicking_get?(call, models, functions[:context])
 
       _ ->
         false

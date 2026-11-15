@@ -38,6 +38,7 @@ defmodule Lynx.Rust.SliceModels do
             "core::slice::index::{core::slice::index::SliceIndex<usize, [@T], @T>}::get",
             "Aeneas.Std.core.slice.index.Usize.get"
           )
+          |> Map.put(:can_fail, false)
 
         inputs == [usize, shared] and
           output == %{"Ref" => [%{"Var" => %{"Free" => 0}}, t, "Shared"]} and
