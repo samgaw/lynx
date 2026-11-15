@@ -3,7 +3,8 @@ defmodule Lynx.Rust.CollectionModels do
   alias Lynx.Rust.CallModels
 
   def resolve(function, translated, refs) do
-    owned(function, translated, refs) || views(function, translated, refs) ||
+    Lynx.Rust.VectorExtensions.resolve(function, translated, refs) ||
+      owned(function, translated, refs) || views(function, translated, refs) ||
       trait_view(function, translated, refs)
   end
 
@@ -94,15 +95,22 @@ defmodule Lynx.Rust.CollectionModels do
       audit
       | external_calls:
           Map.new(audit.external_calls, fn {id, model} ->
-            if model[:vec_owned_method] == "push",
-              do: {id, %{model | lean: prefix <> ".VectorModel.push"}},
+            if model[:vec_owned_method] in ~w(push extend_from_slice),
+              do: {id, %{model | lean: prefix <> ".VectorModel." <> model.vec_owned_method}},
               else: {id, model}
           end)
     }
   end
 
   def install!(audit, translation, output, prefix) do
-    if Enum.any?(audit.external_calls, fn {_, model} -> model[:vec_owned_method] == "push" end) do
+    methods =
+      for {_, model} <- audit.external_calls,
+          model[:vec_owned_method] in ~w(push extend_from_slice),
+          do: model.vec_owned_method
+
+    methods = Enum.uniq(methods)
+
+    if methods != [] do
       module = prefix <> ".VectorModel"
       path = Path.join(output, String.replace(module, ".", "/") <> ".lean")
 
@@ -156,35 +164,47 @@ defmodule Lynx.Rust.CollectionModels do
         calc
           elements * bytes ≤ (2 * 262144) * 4095 := Nat.mul_le_mul countBound sizeBound
           _ < 2147483647 := by decide
+      #{if "extend_from_slice" in methods, do: Lynx.Rust.VectorExtensions.lean(), else: ""}
       end #{module}
       """)
 
       functions = Path.join(output, String.replace(prefix, ".", "/") <> "/Funs.lean")
       source = File.read!(functions)
 
-      if Enum.any?(
-           Enum.flat_map(~w(functions globals types), &Map.get(translation, &1, [])),
-           fn function ->
-             name = function["lean_name"]
+      source =
+        Enum.reduce(methods, source, fn method, source ->
+          if Enum.any?(
+               Enum.flat_map(~w(functions globals types), &Map.get(translation, &1, [])),
+               fn entry ->
+                 name = entry["lean_name"]
 
-             is_binary(name) and
-               (name == "alloc.vec.Vec.push" or String.ends_with?(name, ".alloc.vec.Vec.push"))
-           end
-         ),
-         do: raise(ArgumentError, "ambiguous application Vec::push name for bounded model")
+                 is_binary(name) and
+                   (name == "alloc.vec.Vec." <> method or
+                      String.ends_with?(name, ".alloc.vec.Vec." <> method))
+               end
+             ),
+             do:
+               raise(ArgumentError, "ambiguous application Vec::#{method} name for bounded model")
 
-      {source, count} =
-        Lynx.Rust.LeanIdentifiers.replace(
-          source,
-          [
-            "_root_.Aeneas.Std.alloc.vec.Vec.push",
-            "Aeneas.Std.alloc.vec.Vec.push",
-            "alloc.vec.Vec.push"
-          ],
-          "_root_." <> module <> ".push"
-        )
+          {source, count} =
+            Lynx.Rust.LeanIdentifiers.replace(
+              source,
+              Enum.map(
+                [
+                  "_root_.Aeneas.Std.alloc.vec.Vec.",
+                  "Aeneas.Std.alloc.vec.Vec.",
+                  "alloc.vec.Vec."
+                ],
+                &(&1 <> method)
+              ),
+              "_root_." <> module <> "." <> method
+            )
 
-      if count == 0, do: raise(ArgumentError, "missing Aeneas Vec::push call for bounded model")
+          if count == 0,
+            do: raise(ArgumentError, "missing Aeneas Vec::#{method} call for bounded model")
+
+          source
+        end)
 
       source =
         String.replace(
@@ -343,6 +363,10 @@ defmodule Lynx.Rust.CollectionModels do
           {"new", [_element]} ->
             true
 
+          {"extend_from_slice", [_element, allocator]} ->
+            global_allocator?(allocator, translated) and
+              Lynx.Rust.VectorExtensions.valid_call?(args, translated, refs)
+
           {"index", [_element, _index, allocator, _output]} ->
             global_allocator?(allocator, translated)
 
@@ -358,11 +382,16 @@ defmodule Lynx.Rust.CollectionModels do
         do:
           raise(
             ArgumentError,
-            if(method in ~w(len index),
-              do: "unsupported Vec::#{method}: only the standard Global allocator is admitted",
-              else:
+            cond do
+              method == "extend_from_slice" ->
+                "unsupported Vec::extend_from_slice: requires concrete u8 elements, the audited standard Clone<u8> dictionary and the standard Global allocator"
+
+              method in ~w(len index) ->
+                "unsupported Vec::#{method}: only the standard Global allocator is admitted"
+
+              true ->
                 "unsupported Vec::#{method}: requires scalar elements or concrete composite compiler layouts of at most 4095 bytes on every selected 32/64-bit target, and the standard Global allocator"
-            )
+            end
           )
     end
 

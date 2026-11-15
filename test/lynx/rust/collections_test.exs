@@ -9,6 +9,101 @@ defmodule Lynx.Rust.CollectionsTest do
   if is_nil(@tools), do: @moduletag(skip: "set LYNX_AENEAS_DIR for Rust collection proofs")
 
   @tag tmp_dir: "process-#{System.pid()}"
+  test "proves cross-crate byte copies without Rustler or push models", %{tmp_dir: tmp} do
+    workspace = workspace(tmp)
+    core = Path.join(workspace, "core/src/lib.rs")
+    analysis = Path.join(workspace, "analysis/src/lib.rs")
+
+    File.write!(
+      core,
+      File.read!(core) <>
+        """
+
+        pub fn append_bytes(output: &mut Vec<u8>, input: &[u8]) {
+            output.extend_from_slice(input);
+        }
+        """
+    )
+
+    File.write!(
+      analysis,
+      File.read!(analysis) <>
+        """
+
+        pub fn copy_bytes(input: &[u8]) -> Vec<u8> {
+            let mut output = Vec::new();
+            experiment_core::append_bytes(&mut output, input);
+            output
+        }
+        """
+    )
+
+    project = Path.join(tmp, "proofs")
+    File.mkdir_p!(Path.join(project, "Copy"))
+    File.mkdir_p!(Path.join(project, ".lake"))
+
+    File.ln_s!(
+      Path.join(@workspace, "proofs/.lake/packages"),
+      Path.join(project, ".lake/packages")
+    )
+
+    File.write!(Path.join(project, "Copy/Properties.lean"), """
+    module
+    public import Copy.Extraction.Funs
+    public section
+    open Aeneas Aeneas.Std
+    namespace Copy.Properties
+    theorem append (output : alloc.vec.Vec U8) (input : Slice U8)
+        (bound : output.val.length + input.val.length ≤ 262144) :
+        experiment_analysis.experiment_core.append_bytes output input =
+          RustM.ok (alloc.vec.Vec.from (output.val ++ input.val) (by scalar_tac)) := by
+      rw [experiment_analysis.experiment_core.append_bytes, Copy.Extraction.VectorModel.extend_bytes_eq,
+        dite_eq_left bound]
+    theorem copy (input : Slice U8) (bound : input.val.length ≤ 262144) :
+        experiment_analysis.copy_bytes input =
+          RustM.ok (alloc.vec.Vec.from input.val (by scalar_tac)) := by
+      simp only [experiment_analysis.copy_bytes]
+      rw [append _ input (by simpa [alloc.vec.Vec.new] using bound)]
+      rfl
+    end Copy.Properties
+    """)
+
+    options = [
+      roots: ["experiment_analysis::copy_bytes"],
+      mir: :elaborated,
+      lean_project: project,
+      module_prefix: "Copy.Extraction",
+      build_dir: Path.join(tmp, "build"),
+      proof_modules: ["Copy.Properties"],
+      required_properties: ["Copy.Properties.append", "Copy.Properties.copy"]
+    ]
+
+    result = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    assert [%{status: :ok}] = result.reports
+
+    assert Enum.any?(
+             result.verification.external_models,
+             &String.contains?(&1, "Bounded upstream Vec::extend_from_slice")
+           )
+
+    assert [%{status: :ok, cached: true}] =
+             Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports
+
+    File.write!(
+      core,
+      String.replace(
+        File.read!(core),
+        "output.extend_from_slice(input);",
+        "output.extend_from_slice(input); output.extend_from_slice(input);"
+      )
+    )
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    end
+  end
+
+  @tag tmp_dir: "process-#{System.pid()}"
   test "proves actual Vec view mutation, cross-crate contracts and bounds panics", %{tmp_dir: tmp} do
     workspace = workspace(tmp)
     project = Path.join(tmp, "proofs")

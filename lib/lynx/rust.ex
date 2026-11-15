@@ -94,6 +94,12 @@ defmodule Lynx.Rust do
   layout. Bounded `push` supports primitive scalars and concrete struct/enum
   layouts of at most 4095 bytes on every selected 32/64-bit target, using the
   standard Global allocator. Generic or symbolic composite layouts are rejected.
+  `Vec<u8>::extend_from_slice` additionally copies borrowed bytes while preserving
+  the existing prefix. It requires the exact standard primitive byte Clone
+  dictionary and Global allocator, with a total length at most 262144. Generic,
+  custom or effectful Clone callbacks are rejected. This reuses Aeneas's existing
+  vector model; capacity, physical allocation and allocation failure remain
+  reported external boundaries. Larger operations exhaust verification.
   Unwind cleanup behind these validated nonpanicking calls is unreachable;
   ordinary drops and cleanup behind other calls are still audited separately.
   Scalar vectors support logical deallocation including compiler-emitted cleanup
