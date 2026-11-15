@@ -430,6 +430,9 @@ defmodule Lynx.Rust.NativeDrops do
   # Missing or unknown compiler evidence is deliberately not interpreted as false.
   def destructor_free?(type, translated, refs) do
     case CallModels.expand(type, refs) do
+      %{"Array" => _} = array ->
+        plain_data?(array, translated, refs)
+
       %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
         args == arguments([]) and
           Enum.any?(translated["type_decls"], fn
@@ -472,6 +475,9 @@ defmodule Lynx.Rust.NativeDrops do
 
   defp plain_data?(type, translated, refs, seen) do
     case CallModels.expand(type, refs) do
+      %{"Array" => [element, _, _]} = array ->
+        match?({:ok, _}, array_length(array)) and plain_data?(element, translated, refs, seen)
+
       %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
         args == arguments([]) and id not in seen and
           Enum.any?(translated["type_decls"], fn
@@ -503,6 +509,30 @@ defmodule Lynx.Rust.NativeDrops do
         scalar?(other)
     end
   end
+
+  # Literal usize lengths only. This is an admission limit, not array truncation:
+  # a larger or unresolved array rejects extraction before any proof can succeed.
+  def array_length(%{
+        "Array" => [
+          _,
+          [
+            %{"Integer" => %{"Unsigned" => ["Usize", text]}},
+            %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+          ],
+          nil
+        ]
+      })
+      when is_binary(text) do
+    case Integer.parse(text) do
+      {size, ""} when size >= 0 and size <= 262_144 ->
+        if Integer.to_string(size) == text, do: {:ok, size}, else: :error
+
+      _ ->
+        :error
+    end
+  end
+
+  def array_length(_), do: :error
 
   defp plain_fields?(variants, translated, refs, seen) do
     Enum.all?(variants, fn

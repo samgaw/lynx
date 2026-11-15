@@ -114,6 +114,13 @@ defmodule Lynx.Rust.ResourceLifetimes do
     nil
   end
 
+  defp field_cleanup!(%{"Array" => _} = array, audit) do
+    unless NativeDrops.plain_data?(array, audit.translated, audit.references),
+      do: raise(ArgumentError, "unsupported logical resource array ownership")
+
+    nil
+  end
+
   defp field_cleanup!(%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}, audit) do
     type = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 

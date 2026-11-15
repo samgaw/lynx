@@ -474,7 +474,10 @@ defmodule Lynx.Rust do
   codecs when Charon's compiler query certifies `needs_drop = false`. Missing, unknown or true queries reject struct
   cleanup; fields alone never establish the absence of a user destructor. Enum
   variants may recursively contain certified no-drop records and enums with scalar
-  leaves; owned handles, generics, references and recursive data remain rejected.
+  leaves and fixed-size arrays with canonical literal lengths up to 262144 elements.
+  Array decoding checks exact length and element ranges; larger or unresolved
+  lengths reject extraction rather than truncate state. Owned handles, generics,
+  references and recursive enum data remain rejected.
   Install
   the pinned `needs-drop-v1` Charon patch for this metadata. These operations remove
   their cells without invoking a payload destructor. Projected, user-defined

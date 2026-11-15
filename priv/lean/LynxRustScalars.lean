@@ -104,4 +104,25 @@ theorem checkedMulI64_spec (x y : Aeneas.Std.I64) :
     simp only [result] at spec ⊢
     exact ⟨spec.1, spec.2.1, spec.2.2.1⟩
 
+/-- The upstream fixed-width endian models reconstruct every u64 bit pattern. -/
+@[simp] theorem u64_le_bytes_roundtrip (value : U64) :
+    core.num.U64.from_le_bytes (core.num.U64.to_le_bytes value) = value := by
+  have bytes : ((core.num.U64.to_le_bytes value : Aeneas.Std.Array U8 8#usize) : List U8) =
+      value.bv.toLEBytes.map (@UScalar.mk .U8) := by
+    exact Aeneas.Std.Array.from_val _ _
+  have mapped : List.map U8.bv ((core.num.U64.to_le_bytes value : Aeneas.Std.Array U8 8#usize) : List U8) =
+      value.bv.toLEBytes := by
+    rw [bytes, List.map_map]
+    change List.map id _ = _
+    exact List.map_id _
+  have read := core.num.U64.from_le_bytes.step_spec (core.num.U64.to_le_bytes value)
+  simp only [Aeneas.Std.WP.spec_ok, Aeneas.Std.lift] at read
+  have natural := congrArg BitVec.toNat read
+  simp only [BitVec.toNat_cast] at natural
+  have mappedNat := congrArg (fun bytes : List Byte => (BitVec.fromLEBytes bytes).toNat) mapped
+  have restored := congrArg BitVec.toNat (BitVec.fromLEBytes_toLEBytes (by decide) value.bv)
+  simp only [BitVec.toNat_cast] at restored
+  apply UScalar.eq_of_val_eq
+  exact natural.trans (mappedNat.trans restored)
+
 end Lynx.Rust.Scalar

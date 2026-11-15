@@ -322,6 +322,40 @@ theorem decode_unsigned_invalid {ty : UScalarTy} (value : Int)
     decode (α := UScalar ty) (.integer value) = none := by
   rw [decode_unsigned, dite_eq_right invalid]
 
+/-- Decode an exact proper sequence of independently typed native values. -/
+@[expose] def decodeElements {α : Type} [NativeCodec α] : Term → Option (List α)
+  | .nil => some []
+  | .cons head tail => do
+    let value ← NativeCodec.decode head
+    let rest ← decodeElements tail
+    return value :: rest
+  | _ => none
+
+private theorem decodeElements_encode {α : Type} [NativeCodec α] (values : List α) :
+    decodeElements (Term.list (values.map NativeCodec.encode)) = some values := by
+  induction values with
+  | nil => rfl
+  | cons head tail ih => simp [Term.list, decodeElements, NativeCodec.roundtrip, ih]
+
+instance {α : Type} {n : Usize} [NativeCodec α] : NativeCodec (Aeneas.Std.Array α n) where
+  typeName := "array[" ++ toString n.val ++ "]<" ++ NativeCodec.typeName (α := α) ++ ">"
+  encode value := Term.list (value.val.map NativeCodec.encode)
+  decode term := do
+    let values ← decodeElements term
+    if length : values.length = n.val then
+      return Aeneas.Std.Array.from values length
+    else none
+  decode_encode value := by
+    simp [decodeElements_encode, Aeneas.Std.Array.property, Aeneas.Std.Array.val_from]
+
+theorem decode_array_wrongLength {α : Type} {n : Usize} [NativeCodec α]
+    (values : List α) (wrong : values.length ≠ n.val) :
+    decode (α := Aeneas.Std.Array α n) (Term.list (values.map encode)) = none := by
+  change (decodeElements (Term.list (values.map encode)) >>= fun values =>
+    if length : values.length = n.val then some (Aeneas.Std.Array.from values length) else none) = none
+  rw [decodeElements_encode]
+  simp [wrong]
+
 end NativeCodec
 
 namespace NativeM

@@ -108,6 +108,12 @@ defmodule Lynx.Rust.NativeCodecs do
 
   defp visit!(type, audit, found, visiting) do
     case CallModels.expand(type, audit.references) do
+      %{"Array" => [element, _, _]} = array ->
+        unless Lynx.Rust.NativeDrops.plain_data?(array, audit.translated, audit.references),
+          do: raise(ArgumentError, "unsupported native array length or element ownership")
+
+        visit!(element, audit, found, visiting)
+
       %{"Scalar" => "Bool"} ->
         found
 
@@ -442,6 +448,10 @@ defmodule Lynx.Rust.NativeCodecs do
 
   defp schema_type!(type, audit, types) do
     case CallModels.expand(type, audit.references) do
+      %{"Array" => [element, _, _]} = array ->
+        {:ok, length} = Lynx.Rust.NativeDrops.array_length(array)
+        ["array", length, schema_type!(element, audit, types)]
+
       %{"Scalar" => "Bool"} ->
         "bool"
 

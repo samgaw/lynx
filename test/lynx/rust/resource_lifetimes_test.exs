@@ -132,6 +132,41 @@ defmodule Lynx.Rust.ResourceLifetimesTest do
     end
   end
 
+  test "plain fixed arrays retire without hiding logical owners" do
+    {payload, audit} = fixture(%{"Scalar" => "Bool"})
+
+    array = fn element ->
+      %{
+        "Array" => [
+          element,
+          [
+            %{"Integer" => %{"Unsigned" => ["Usize", "8"]}},
+            %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+          ],
+          nil
+        ]
+      }
+    end
+
+    payload =
+      put_in(payload, ["kind", "Struct", Access.at(0), "ty"], array.(%{"Scalar" => "Bool"}))
+
+    audit = put_in(audit, [:translated, "type_decls", Access.at(0)], payload)
+    assert ResourceLifetimes.cleanup_fields!(payload, audit) == []
+    refute ResourceLifetimes.logical_payload?(payload, audit.translated, %{})
+
+    payload =
+      put_in(
+        payload,
+        ["kind", "Struct", Access.at(0), "ty"],
+        array.(adt(1, [%{"Scalar" => "Bool"}]))
+      )
+
+    assert_raise ArgumentError, ~r/array ownership/, fn ->
+      ResourceLifetimes.cleanup_fields!(payload, audit)
+    end
+  end
+
   defp fixture(contents) do
     parameters = %{
       "regions" => [],

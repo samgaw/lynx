@@ -194,6 +194,70 @@ defmodule Lynx.Rust.NativeCodecsTest do
     end
   end
 
+  test "fixed arrays preserve rank, length and element identity without truncation" do
+    byte = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+    signed = %{"Scalar" => %{"Integer" => %{"Signed" => "I8"}}}
+
+    array = fn element, length ->
+      %{
+        "Array" => [
+          element,
+          [
+            %{"Integer" => %{"Unsigned" => ["Usize", length]}},
+            %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
+          ],
+          nil
+        ]
+      }
+    end
+
+    for length <- ["0", "8", "262144"] do
+      type = array.(byte, length)
+      audit = audit(type)
+      assert [%{native_tag: tag}] = NativeCodecs.plan!(audit)
+
+      assert JSON.decode!(tag) == [
+               "fixture::Balance",
+               [["value", ["array", String.to_integer(length), "u8"]]]
+             ]
+
+      assert NativeDrops.destructor_free?(type, audit.translated, %{})
+    end
+
+    nested = array.(array.(signed, "4"), "2")
+    assert [%{native_tag: tag}] = NativeCodecs.plan!(audit(nested))
+
+    assert JSON.decode!(tag) == [
+             "fixture::Balance",
+             [["value", ["array", 2, ["array", 4, "i8"]]]]
+           ]
+
+    for type <- [
+          array.(byte, "262145"),
+          array.(byte, "-1"),
+          array.(byte, "08"),
+          array.(byte, "8x"),
+          array.(byte, "+8"),
+          %{"Array" => [byte, [%{"Var" => %{"Free" => 0}}, %{"Scalar" => "Bool"}], nil]},
+          array.(%{"Ref" => []}, "8"),
+          array.(%{"Scalar" => %{"Float" => "F64"}}, "8"),
+          %{
+            "Array" => [
+              byte,
+              [%{"Integer" => %{"Unsigned" => ["U32", "8"]}}, %{"Scalar" => "Bool"}],
+              nil
+            ]
+          }
+        ] do
+      audit = audit(type)
+      refute NativeDrops.destructor_free?(type, audit.translated, %{})
+
+      assert_raise ArgumentError, ~r/unsupported native array/, fn ->
+        NativeCodecs.plan!(audit)
+      end
+    end
+  end
+
   defp enum_audit do
     audit = audit(%{"Scalar" => %{"Integer" => %{"Signed" => "I64"}}})
     [type] = audit.translated["type_decls"]
