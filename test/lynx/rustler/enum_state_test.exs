@@ -6,7 +6,9 @@ defmodule Lynx.Rustler.EnumStateTest do
   unless @tools, do: @moduletag(skip: "set LYNX_NATIVE_ENUM_DIR for enum native state proofs")
 
   @tag :tmp_dir
-  test "composes enum receive transitions across a real mutex and compiled NIF", %{tmp_dir: tmp} do
+  test "composes nested enum receive transitions across a real mutex and compiled NIF", %{
+    tmp_dir: tmp
+  } do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -54,7 +56,7 @@ defmodule Lynx.Rustler.EnumStateTest do
           proof_modules: ["Phase.Properties"],
           required_properties:
             Enum.map(
-              ~w(start_contract terminal_stable receiving_bounded locked_contract facade_contract facade_run),
+              ~w(start_contract terminal_stable completion_total receiving_bounded locked_contract facade_contract facade_run),
               &("Phase.Properties." <> &1)
             )
         ]
@@ -63,18 +65,20 @@ defmodule Lynx.Rustler.EnumStateTest do
     assert Enum.any?(prepared.verification.guarantees, &(&1.kind == :cross_crate_contract))
     assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok and &1.cached))
 
-    phase =
-      Enum.find(prepared.extraction.audit.translated["type_decls"], fn type ->
-        type &&
-          type["item_meta"]["name"] == [
-            %{"Ident" => ["atomic_core", 0]},
-            %{"Ident" => ["Phase", 0]}
-          ]
-      end)
+    for name <- ~w(Phase Completion CompletionKind) do
+      type =
+        Enum.find(prepared.extraction.audit.translated["type_decls"], fn type ->
+          type &&
+            type["item_meta"]["name"] == [
+              %{"Ident" => ["atomic_core", 0]},
+              %{"Ident" => [name, 0]}
+            ]
+        end)
 
-    assert %{"kind" => %{"Enum" => [_ | _]}, "needs_drop" => false} = phase
+      assert %{"needs_drop" => false} = type
 
-    assert %{type_id: phase["def_id"], needs_drop: false} in prepared.verification.compiler_drop_queries
+      assert %{type_id: type["def_id"], needs_drop: false} in prepared.verification.compiler_drop_queries
+    end
 
     File.mkdir_p!(Path.join(workspace, "priv"))
     File.cp!(prepared.library, Path.join(workspace, "priv/libatomic_nif.so"))
@@ -180,13 +184,16 @@ defmodule Lynx.Rustler.EnumStateTest do
     File.write!(source, original)
     assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
 
-    File.write!(
-      source,
-      original <>
-        "\nimpl Drop for Phase { fn drop(&mut self) { panic!(\"observable phase drop\"); } }\n"
-    )
+    for type <- ~w(Phase Completion) do
+      File.write!(
+        source,
+        original <>
+          "\nimpl Drop for #{type} { fn drop(&mut self) { panic!(\"observable state drop\"); } }\n"
+      )
 
-    assert_raise CompileError, ~r/drop|destruct/, fn -> Lynx.Rustler.prepare!(options) end
+      assert_raise CompileError, ~r/drop|destruct/, fn -> Lynx.Rustler.prepare!(options) end
+    end
+
     File.write!(source, original)
     assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
   end

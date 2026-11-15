@@ -22,6 +22,9 @@ theorem terminal_stable (phase : atomic_core.Phase) (amount : U64)
   | Rejected code => rfl
   | Receiving limit used => exact (terminal limit used rfl).elim
 
+theorem completion_total (completion : atomic_core.Completion) :
+    atomic_core.phase_total (.Complete completion) = NativeM.ok completion.total := rfl
+
 theorem receiving_bounded (limit used amount : U64) :
     ∃ accepted updated,
       atomic_core.consume_phase (.Receiving limit used) amount = NativeM.ok (accepted, updated) ∧
@@ -46,7 +49,7 @@ theorem receiving_bounded (limit used amount : U64) :
         · simp [atomic_core.phase_total, NativeM.ok]
         · scalar_tac
     · by_cases equal : total = limit
-      · refine ⟨true, .Complete total, ?_, ?_⟩
+      · refine ⟨true, .Complete ⟨total, .Exact⟩, ?_, ?_⟩
         · simp [atomic_core.consume_phase, checked, less, equal, NativeM.lift, NativeM.ok]
         · exact ⟨total, rfl, arithmetic.2.1, by scalar_tac⟩
       · refine ⟨false, .Rejected 1#u8, ?_, ?_⟩
@@ -97,6 +100,11 @@ theorem facade_run (budget first second : U64)
     NativeOwnedDrop.drop, NativeGuard.release, NativeGuard.pollRelease,
     NativeMutex.dispose, NativeM.readCell, NativeM.removeCell,
     NativeM.ok, Result.wait_run, Result.wait_bind, Nat.add_assoc]
+
+theorem invalid_nested_kind :
+    NativeCodec.decode (α := atomic_core.Completion)
+      (.cons (.atom (NativeCodec.typeName (α := atomic_core.Completion)))
+        (Term.list [.integer 1, .atom "Exact"])) = none := by cbv
 
 /-- Invalid logical variants never become a Rust value. -/
 theorem invalid_variant :

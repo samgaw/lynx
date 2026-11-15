@@ -32,11 +32,25 @@ pub fn adjust(balance: &mut Balance, delta: i64) -> bool {
     }
 }
 
+/// Records how a receive operation completed.
+#[derive(Debug)]
+pub enum CompletionKind {
+    Exact,
+    Resumed { checkpoint: u64 },
+}
+
+/// Keeps the completed byte count and its protocol state together.
+#[derive(Debug)]
+pub struct Completion {
+    pub total: u64,
+    pub kind: CompletionKind,
+}
+
 /// Native receive state; completion and rejection are terminal.
 pub enum Phase {
     Ready,
     Receiving { limit: u64, used: u64 },
-    Complete(u64),
+    Complete(Completion),
     Rejected(u8),
 }
 
@@ -62,7 +76,10 @@ pub fn consume_phase(phase: &mut Phase, amount: u64) -> bool {
                 true
             }
             Some(total) if total == *limit => {
-                *phase = Phase::Complete(total);
+                *phase = Phase::Complete(Completion {
+                    total,
+                    kind: CompletionKind::Exact,
+                });
                 true
             }
             _ => {
@@ -77,7 +94,7 @@ pub fn consume_phase(phase: &mut Phase, amount: u64) -> bool {
 pub fn phase_total(phase: &Phase) -> u64 {
     match phase {
         Phase::Receiving { used, .. } => *used,
-        Phase::Complete(total) => *total,
+        Phase::Complete(completion) => completion.total,
         _ => 0,
     }
 }
