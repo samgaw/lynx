@@ -316,7 +316,7 @@ theorem request_signed_encoded (enabled : Bool) (bad unsigned : Term)
     scalars.Request.Insts.RustlerTypesDecoder.decode
       (.tuple #[Rustler.encodeBool enabled, bad, unsigned]) =
       NativeM.ok (.Err (.encoded true (fun _ => RustM.ok
-        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 115, 105, 103, 110, 101, 100, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0)))) := by
+        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 115, 105, 103, 110, 101, 100, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0)) (RustM.ok ()))) := by
   have size : "Could not decode field signed on Request".utf8ByteSize ≤ 4294967295 := by decide +kernel
   have encoded (env : Rustler.Env) : Rustler.Encoding.string "Could not decode field signed on Request" env =
       RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 115, 105, 103, 110, 101, 100, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0) := by

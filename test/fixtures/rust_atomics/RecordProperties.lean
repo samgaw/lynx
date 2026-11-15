@@ -433,7 +433,7 @@ theorem map_expected_encoded (entries : List (Term × Term)) (bad : Term)
     (rejected : Rustler.NativeDecoding.u64 bad = NativeM.ok (.Err Rustler.badArgOutcome)) :
     records.MapRequest.Insts.RustlerTypesDecoder.decode (.map entries) =
       NativeM.ok (.Err (.encoded true (fun _ => RustM.ok
-        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 37, 123, 125]⟩ 0)))) := by
+        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 37, 123, 125]⟩ 0)) (RustM.ok ()))) := by
   have size : "Could not decode field :expected on %{}".utf8ByteSize ≤ 4294967295 := by decide +kernel
   have encoded (env : Rustler.Env) : Rustler.Encoding.string "Could not decode field :expected on %{}" env =
       RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 37, 123, 125]⟩ 0) := by
@@ -449,7 +449,7 @@ theorem map_replacement_encoded (entries : List (Term × Term)) (bad : Term)
     (rejected : Rustler.NativeDecoding.u64 bad = NativeM.ok (.Err Rustler.badArgOutcome)) :
     records.MapRequest.Insts.RustlerTypesDecoder.decode (.map entries) =
       NativeM.ok (.Err (.encoded true (fun _ => RustM.ok
-        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 114, 101, 112, 108, 97, 99, 101, 109, 101, 110, 116, 32, 111, 110, 32, 37, 123, 125]⟩ 0)))) := by
+        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 114, 101, 112, 108, 97, 99, 101, 109, 101, 110, 116, 32, 111, 110, 32, 37, 123, 125]⟩ 0)) (RustM.ok ()))) := by
   have size : "Could not decode field :replacement on %{}".utf8ByteSize ≤ 4294967295 := by decide +kernel
   have encoded (env : Rustler.Env) : Rustler.Encoding.string "Could not decode field :replacement on %{}" env =
       RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 114, 101, 112, 108, 97, 99, 101, 109, 101, 110, 116, 32, 111, 110, 32, 37, 123, 125]⟩ 0) := by
@@ -465,7 +465,7 @@ theorem struct_expected_encoded (entries : List (Term × Term)) (bad : Term)
     (rejected : Rustler.NativeDecoding.u64 bad = NativeM.ok (.Err Rustler.badArgOutcome)) :
     records.StructRequest.Insts.RustlerTypesDecoder.decode (.map entries) =
       NativeM.ok (.Err (.encoded true (fun _ => RustM.ok
-        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 37, 83, 116, 114, 117, 99, 116, 82, 101, 113, 117, 101, 115, 116, 123, 125]⟩ 0)))) := by
+        (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 37, 83, 116, 114, 117, 99, 116, 82, 101, 113, 117, 101, 115, 116, 123, 125]⟩ 0)) (RustM.ok ()))) := by
   have size : "Could not decode field :expected on %StructRequest{}".utf8ByteSize ≤ 4294967295 := by decide +kernel
   have encoded (env : Rustler.Env) : Rustler.Encoding.string "Could not decode field :expected on %StructRequest{}" env =
       RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 58, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 37, 83, 116, 114, 117, 99, 116, 82, 101, 113, 117, 101, 115, 116, 123, 125]⟩ 0) := by

@@ -191,7 +191,7 @@ defmodule Lynx.Rustler.ErrorDrops do
                true ->
                  "unknown Ok payloads exhaust verification; "
              end <>
-             "boxed errors exhaust verification; compiler glue, SDK, allocator and native FFI unverified"
+             "unknown boxed cleanup exhausts verification; compiler glue, SDK, allocator and native FFI unverified"
        }}
     end)
   end

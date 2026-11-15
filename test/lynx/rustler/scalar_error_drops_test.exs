@@ -31,7 +31,7 @@ defmodule Lynx.Rustler.ScalarErrorDropsTest do
     assert %{"Adt" => %{"generics" => %{"types" => [scalar, _]}}} = CallModels.expand(input, refs)
     assert scalar == %{"Scalar" => "Bool"}
     assert model.label =~ "scalar Ok payloads"
-    assert model.label =~ "boxed errors exhaust"
+    assert model.label =~ "unknown boxed cleanup exhausts"
   end
 
   test "an unvalidated payload retains the partial generic cleanup", ctx do

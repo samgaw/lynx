@@ -19,7 +19,7 @@ defmodule Lynx.Rustler.ErrorDropsTest do
 
     for {_, model} <- models do
       assert %{implementation_verified: false, can_fail: true, status: :modelled} = model
-      assert model.label =~ "boxed errors exhaust"
+      assert model.label =~ "unknown boxed cleanup exhausts"
     end
 
     assert Enum.any?(Map.values(models), &(&1.lean == "Lynx.Rustler.Decoding.dropDecoderError"))

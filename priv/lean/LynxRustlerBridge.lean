@@ -25,6 +25,8 @@ allocation and term-handle correctness remain unverified FFI assumptions. -/
 extracted functions; only catalogued runtime methods are modelled. -/
 structure Encoder (Self : Type) where
   encode : Self → Env → RustM NativeTerm
+  /-- A separately validated virtual destructor. Unknown payloads exhaust. -/
+  dispose : Self → RustM Unit := fun _ => .fail .undef
 
 namespace Encoding
 
@@ -572,13 +574,14 @@ cutoff and cannot establish a successful return. -/
   | .vis (.fail .panic) _ => .error (.error (.atom "nif_panicked"))
   | _ => .error .exhausted
 
-/-- Staged conversion outcome for supported Rustler errors. Captured encoders
-remain unevaluated until return conversion. Rust-side variant inspection and
+/-- Conversion outcome for supported Rustler errors. Captured encoders and
+disposal capabilities remain unevaluated until their respective consuming uses. Rust-side variant inspection and
 payload access remain unsupported; this is not the native Error enum layout. -/
 inductive DecoderError where
   | ok : Term → DecoderError
   | error : Exception → DecoderError
-  | encoded : Bool → (Env → RustM NativeTerm) → DecoderError
+  | encoded (raises : Bool) (encode : Env → RustM NativeTerm)
+      (dispose : RustM Unit := .fail .undef) : DecoderError
 
 /-- Static Rustler Decoder dictionary. First-party methods are extracted bodies;
 only catalogued native primitives use reported FFI models. -/
@@ -596,9 +599,12 @@ rather than becoming a catchable nif_panicked result. -/
 @[expose] def DecoderError.convert : DecoderError → Except Exception Term
   | .ok value => .ok value
   | .error exception => .error exception
-  | .encoded raised encode =>
+  | .encoded raised encode dispose =>
       match (encode ()).match with
-      | .ok value => if raised then .error (.error value) else .ok (.tuple #[.atom "error", value])
+      | .ok value =>
+        match dispose.match with
+        | .ok () => if raised then .error (.error value) else .ok (.tuple #[.atom "error", value])
+        | _ => .error .exhausted
       | _ => .error .exhausted
 
 /-- Execute an effectful NifResult body before converting its returned Error.
@@ -623,20 +629,22 @@ encoding, so an explicitly raised rust_panicked atom is not a caught Rust panic.
     DecoderError.convert (.error error) = .error error := rfl
 
 @[expose] def raiseTermErrorOutcome (boxed : Dyn Encoder) : DecoderError :=
-  .encoded true (fun env => boxed.inst.encode boxed.value env)
+  .encoded true (fun env => boxed.inst.encode boxed.value env) (boxed.inst.dispose boxed.value)
 
 @[expose] def termErrorOutcome (boxed : Dyn Encoder) : DecoderError :=
-  .encoded false (fun env => boxed.inst.encode boxed.value env)
+  .encoded false (fun env => boxed.inst.encode boxed.value env) (boxed.inst.dispose boxed.value)
 
 theorem raiseTermErrorOutcome_converts {α : Type} (encoder : Encoder α) (value : α)
-    (term : Term) (encoded : encoder.encode value () = RustM.ok term) :
+    (term : Term) (encoded : encoder.encode value () = RustM.ok term)
+    (disposed : encoder.dispose value = RustM.ok ()) :
     DecoderError.convert (raiseTermErrorOutcome ⟨α, encoder, value⟩) = .error (.error term) := by
-  simp [raiseTermErrorOutcome, DecoderError.convert, encoded]
+  simp [raiseTermErrorOutcome, DecoderError.convert, encoded, disposed]
 
 theorem termErrorOutcome_converts {α : Type} (encoder : Encoder α) (value : α)
-    (term : Term) (encoded : encoder.encode value () = RustM.ok term) :
+    (term : Term) (encoded : encoder.encode value () = RustM.ok term)
+    (disposed : encoder.dispose value = RustM.ok ()) :
     DecoderError.convert (termErrorOutcome ⟨α, encoder, value⟩) = .ok (.tuple #[.atom "error", term]) := by
-  simp [termErrorOutcome, DecoderError.convert, encoded]
+  simp [termErrorOutcome, DecoderError.convert, encoded, disposed]
 
 theorem raiseTermErrorOutcome_panics {α : Type} (encoder : Encoder α) (value : α)
     (panicked : encoder.encode value () = RustM.fail .panic) :
@@ -729,11 +737,11 @@ theorem atomDefaultNe_eq (inst : core.cmp.PartialEq Lynx.Rustler.Atom Lynx.Rustl
 
 namespace Decoding
 
-/-- Only static-borrow/scalar SDK errors have supported destruction.
-Boxed errors may own first-party values with effectful destructors. -/
+/-- Destruction uses the capability captured with the original payload and
+Encoder dictionary. Unknown payload cleanup remains a verification cutoff. -/
 @[expose] def dropDecoderError : DecoderError → RustM Unit
   | .ok _ | .error _ => .ok ()
-  | .encoded _ _ => .fail .undef
+  | .encoded _ _ dispose => dispose
 
 /-- The eager fallback is discarded on Some, so its cleanup must complete. -/
 @[expose] def optionOkOr {T : Type} (input : Option T) (error : DecoderError) :
@@ -765,7 +773,7 @@ Boxed errors may own first-party values with effectful destructors. -/
 
 /-- Call-site validation restricts T to a primitive scalar or an unconditional
 compiler-certified Copy type with no destructor.
-Opaque boxed errors still exhaust; they may own effectful first-party values. -/
+Boxed errors require the disposal capability of their actual payload. -/
 @[expose] def dropScalarResult {T : Type} : core.result.Result T DecoderError → RustM Unit
   | .Ok _ => .ok ()
   | .Err error => dropDecoderError error
@@ -793,11 +801,11 @@ Opaque boxed errors still exhaust; they may own effectful first-party values. -/
     dropScalarResult (T := T) (.Err (.encoded raises encode)) = .fail .undef := rfl
 
 /-- Partial model of consuming a Result containing a foreign Rustler Error.
-Only static-borrow/scalar error variants have no observable destruction. A
-successful payload or boxed error may run user code and remains unsupported. -/
+A boxed error invokes its validated disposal capability; unknown error cleanup
+and successful payload destruction remain unsupported. -/
 @[expose] def dropErrResult {T : Type} : core.result.Result T DecoderError → RustM Unit
-  | .Err (.ok _) | .Err (.error _) => .ok ()
-  | .Err (.encoded _ _) | .Ok _ => .fail .undef
+  | .Err error => dropDecoderError error
+  | .Ok _ => .fail .undef
 
 @[simp] theorem dropErrResult_static {T : Type} (value : Term) :
     dropErrResult (T := T) (.Err (.ok value)) = .ok () := rfl

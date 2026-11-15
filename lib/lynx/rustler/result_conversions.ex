@@ -75,7 +75,7 @@ defmodule Lynx.Rustler.ResultConversions do
         rustler_result_conversion: method,
         rustler_error_type: error,
         label:
-          "Consuming #{family}::#{method} specialized to validated Rustler Error: discarded static/scalar SDK errors use partial cleanup; boxed errors exhaust verification; Rust core, SDK, allocator and native FFI unverified"
+          "Consuming #{family}::#{method} specialized to validated Rustler Error: discarded SDK errors use validated payload cleanup; unknown boxed cleanup exhausts verification; Rust core, SDK, allocator and native FFI unverified"
       }
     else
       _ -> nil

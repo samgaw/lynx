@@ -57,7 +57,7 @@ defmodule Lynx.Rustler.RuntimeCommandsTest do
     File.write!(property, properties)
 
     roots =
-      ~w(read_decoded replacement_decoded compare_decoded unknown_atom replacement_shape_rejected field_error_callback compare_rejected contract composed current_contract updated read_preserved mismatched nested_rejected_encoded facade_spec facade_new facade_read)
+      ~w(read_decoded replacement_decoded compare_decoded unknown_atom replacement_shape_rejected field_error_callback compare_rejected contract composed current_contract updated read_preserved mismatched nested_rejected_encoded facade_spec facade_new facade_read nested_error_encoded expected_field_error replacement_field_error replacement_expected_error replacement_second_error)
 
     options =
       common ++
@@ -68,6 +68,7 @@ defmodule Lynx.Rustler.RuntimeCommandsTest do
 
     prepared = Lynx.Rustler.prepare!(options)
     assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok and &1.cached))
+    assert Enum.any?(prepared.extraction.encoder_disposals, &(&1.kind == :sdk_string))
     assert Enum.any?(prepared.verification.guarantees, &(&1.kind == :cross_crate_contract))
 
     assert Enum.any?(prepared.extraction.audit.external_calls, fn {_, model} ->
@@ -97,7 +98,11 @@ defmodule Lynx.Rustler.RuntimeCommandsTest do
 
     assert catch_error(apply(native, :atomic_command, [resource, :unknown])) == :invalid_variant
     [{law_module, beam}] = Code.compile_file(Path.join(workspace, "elixir/command_laws.ex"))
-    for law <- ~w(read compare mismatch nested_rejection)a, do: assert(apply(law_module, law, []))
+
+    for law <-
+          ~w(read compare mismatch nested_rejection nested_first_field_rejection nested_second_field_rejection nested_range_rejection)a,
+        do: assert(apply(law_module, law, []))
+
     export = Path.join(tmp, "command-laws.export")
 
     reports =
@@ -108,7 +113,7 @@ defmodule Lynx.Rustler.RuntimeCommandsTest do
       )
 
     assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
-    assert length(Enum.flat_map(reports, & &1.theorems)) == 4
+    assert length(Enum.flat_map(reports, & &1.theorems)) == 7
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
@@ -137,6 +142,25 @@ defmodule Lynx.Rustler.RuntimeCommandsTest do
       Lynx.Commands.lake(project, ["check", "--from-export", boundary_export] ++ sandbox)
 
     assert status == 0, output
+
+    generated = Path.join(project, "Commands/Extraction/Funs.lean")
+    original_generated = File.read!(generated)
+
+    without_disposal =
+      String.replace(
+        original_generated,
+        "dispose := fun _ => RustM.ok ()",
+        "dispose := fun _ => RustM.fail .undef"
+      )
+
+    assert without_disposal != original_generated
+    File.write!(generated, without_disposal)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.Project.build!(project, ["Commands.Properties"])
+    end
+
+    File.write!(generated, original_generated)
 
     for invalid <- [
           "private axiom uncheckedCommand : False",

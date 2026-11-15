@@ -16,8 +16,11 @@ defmodule Lynx.Rustler do
   caches automatically; no per-export Lean adapter or name mapping is required.
   Runtime tagged-enum Decoders can contain destructor-free first-party records;
   their compiler-generated `Option::and_then` and `Result::map_err` callbacks use
-  the actual extracted bodies in the native monad. Discarding arbitrary boxed
-  nested errors still exhausts verification because their cleanup is unsupported.
+  the actual extracted bodies in the native monad. Boxed nested errors retain a
+  separately audited disposal capability: SDK String reclamation uses its explicit
+  standard-library model, and admitted first-party scalar-field payloads require
+  a compiler-checked empty virtual destructor. Unknown cleanup still exhausts
+  verification; discarding an error never invokes its Encoder.
   Supported stateless runtime encoders include atoms, u64, strings, borrowed str,
   shared references, pairs and Vec. Custom arguments and `NifResult<T>` use
   extracted implementations and modelled return conversion; unsupported signatures
@@ -168,8 +171,8 @@ defmodule Lynx.Rustler do
       Admitted boxed Term/RaiseTerm payloads retain their actual Encoder dictionary
       and deferred conversion. Consuming `Result::ok` and `Option::ok_or` calls
       are supported when their error type is Rustler Error: transferring the error
-      retains its payload; discarding it requires the partial SDK cleanup model
-      to complete. Discarded boxed errors exhaust verification. Error inspection
+      retains its payload; discarding it requires its validated disposal capability
+      to complete. Unknown boxed cleanup exhausts verification. Error inspection
       and unadmitted payload layouts are rejected. Runtime custom Decoders
       additionally require compiler-validated no-drop
       value payloads; native-owner fields and unqualified layouts are rejected.

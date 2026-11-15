@@ -52,7 +52,7 @@ defmodule Lynx.Rustler.DirectErrorDropsTest do
     assert Enum.any?(ErrorDrops.models!(lowered, proof), fn {_, model} ->
              model.lean == "Lynx.Rustler.Decoding.dropDecoderError" and
                not model.implementation_verified and
-               String.contains?(model.label, "boxed errors exhaust")
+               String.contains?(model.label, "unknown boxed cleanup exhausts")
            end)
 
     changed =

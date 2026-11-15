@@ -577,6 +577,8 @@ defmodule Lynx.Rust.Extraction do
 
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
 
+    encoder_disposals = Lynx.Rustler.EncoderDisposal.install!(audit, translation, output)
+
     codec_hashes =
       Enum.map(
         [
@@ -599,6 +601,7 @@ defmodule Lynx.Rust.Extraction do
 
     %{
       audit: audit,
+      encoder_disposals: encoder_disposals,
       explicit_ownership: audit.explicit_ownership,
       captured_unwind: audit.captured_unwind,
       reference_copies: audit.reference_copies,
