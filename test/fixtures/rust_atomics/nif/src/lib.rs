@@ -260,6 +260,7 @@ impl rustler::Resource for SharedBuffer {}
 /// Panics if the resource type has not been registered.
 #[rustler::nif(name = "shared_new", schedule = "DirtyCpu")]
 #[lynx::shared_buffer]
+#[lynx::shared_frames]
 fn shared_new() -> rustler::ResourceArc<SharedBuffer> {
     rustler::ResourceArc::new(SharedBuffer {
         state: std::sync::Mutex::new(atomic_analysis::ReceiveState {
@@ -270,12 +271,14 @@ fn shared_new() -> rustler::ResourceArc<SharedBuffer> {
 
 #[rustler::nif(name = "shared_append", schedule = "DirtyCpu")]
 #[lynx::shared_buffer]
+#[lynx::shared_frames]
 fn shared_append(buffer: rustler::ResourceArc<SharedBuffer>, input: rustler::Binary<'_>) -> u64 {
     atomic_analysis::append_state(&buffer.state, input.as_slice())
 }
 
 #[rustler::nif(name = "shared_read", schedule = "DirtyCpu")]
 #[lynx::shared_buffer]
+#[lynx::shared_frames]
 fn shared_read(buffer: rustler::ResourceArc<SharedBuffer>) -> (u64, u8) {
     atomic_analysis::read_state(&buffer.state)
 }
@@ -284,4 +287,11 @@ fn shared_read(buffer: rustler::ResourceArc<SharedBuffer>) -> (u64, u8) {
 #[lynx::shared_buffer]
 pub fn shared_release(buffer: rustler::ResourceArc<SharedBuffer>) {
     drop(buffer);
+}
+
+/// Consumes one protocol frame from the resource's current shared buffer.
+#[rustler::nif(name = "shared_frame", schedule = "DirtyCpu")]
+#[lynx::shared_frames]
+fn shared_frame(buffer: rustler::ResourceArc<SharedBuffer>) -> (u8, u64, u64) {
+    atomic_analysis::parse_frame(&buffer.state)
 }

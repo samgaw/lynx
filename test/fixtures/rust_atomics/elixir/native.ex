@@ -58,4 +58,5 @@ defmodule LynxAtomicFixture.Native do
   def shared_new(), do: :erlang.nif_error(:not_loaded)
   def shared_append(_, _), do: :erlang.nif_error(:not_loaded)
   def shared_read(_), do: :erlang.nif_error(:not_loaded)
+  def shared_frame(_buffer), do: :erlang.nif_error(:nif_not_loaded)
 end

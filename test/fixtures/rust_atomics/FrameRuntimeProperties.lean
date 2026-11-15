@@ -50,6 +50,34 @@ private theorem add_exact (x y z : Usize) (equal : x.val + y.val = z.val) :
   apply UScalar.eq_of_val_eq
   omega
 
+-- Values fitting u32 fit both supported Rust machine-word widths. Preserve
+-- the upstream checked failure test for larger values.
+@[cbv_eval] theorem try_usize_eq (value : Nat) :
+    UScalar.tryMk .Usize value =
+      if small : value < 4294967296 then
+        RustM.ok (UScalar.ofNatCore (ty := .Usize) value (by
+          cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits] <;> omega))
+      else RustM.ofOption
+        (if bounded : value < 2 ^ UScalarTy.Usize.numBits then
+          some (UScalar.ofNatCore (ty := .Usize) value bounded) else none) .panic := by
+  split
+  · have bounded : value < 2 ^ UScalarTy.Usize.numBits := by
+      cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits] <;> omega
+    simp only [UScalarTy.numBits] at bounded
+    simp [UScalar.tryMk, UScalar.tryMkOpt, UScalar.check_bounds, UScalarTy.numBits, bounded]
+  · simp [UScalar.tryMk, UScalar.tryMkOpt, UScalar.check_bounds, UScalarTy.numBits]
+
+@[cbv_eval] theorem widen16 (value : U16) : UScalar.cast .Usize value =
+    Usize.ofNatCore value.val (by
+      cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits] <;> scalar_tac) := by
+  apply UScalar.eq_of_val_eq
+  cases System.Platform.numBits_eq <;> simp_all [UScalar.cast_val_eq, UScalarTy.numBits]
+  all_goals scalar_tac
+
+private theorem header_add_evaluation :
+    UScalar.add (3#usize) (65535#usize) = RustM.ok (65538#usize) := by
+  cbv
+
 theorem truncated (input : alloc.vec.Vec U8) (high low : U8) (rest : List U8)
     (shape : input.val = [1#u8, high, low] ++ rest)
     (incomplete : rest.length < (core.num.U16.from_be_bytes (Array.make 2#usize [high, low])).val) :

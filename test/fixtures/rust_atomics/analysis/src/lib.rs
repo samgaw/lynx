@@ -152,6 +152,26 @@ pub fn frame_summary(input: &[u8]) -> (u8, u64, u64) {
     (status, consumed, bytes.len() as u64)
 }
 
+/// Consumes one complete frame while holding the persistent receive-state guard.
+/// Incomplete or malformed input leaves every buffered byte unchanged.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside this fixture.
+pub fn parse_frame(state: &std::sync::Mutex<ReceiveState>) -> (u8, u64, u64) {
+    let mut guard = match state.lock() {
+        Ok(value) => value,
+        Err(error) => error.into_inner(),
+    };
+    let (status, consumed) = match atomic_core::frames::take_frame(&mut guard.buffer.bytes) {
+        Ok(Some(frame)) => (2, frame.len() as u64),
+        Ok(None) => (0, 0),
+        Err(error) => (error, 0),
+    };
+    let remaining = guard.buffer.bytes.len() as u64;
+    drop(guard);
+    (status, consumed, remaining)
+}
+
 #[cfg(test)]
 mod locked_buffer_tests {
     use super::{copy_locked, locked_append};
@@ -169,5 +189,53 @@ mod locked_buffer_tests {
     fn preserves_raw_binary_values() {
         assert_eq!(copy_locked(&[0, 255, 128]), vec![0, 255, 128]);
         assert!(copy_locked(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::{append_state, parse_frame, read_state, ReceiveState};
+    use std::sync::Mutex;
+
+    fn empty() -> Mutex<ReceiveState> {
+        Mutex::new(ReceiveState {
+            buffer: atomic_core::BufferState { bytes: Vec::new() },
+        })
+    }
+
+    #[test]
+    fn consumes_successive_frames_and_releases_the_guard() {
+        let state = empty();
+        assert_eq!(append_state(&state, &[1, 0, 1, 7, 1, 0, 0]), 7);
+        assert_eq!(parse_frame(&state), (2, 4, 3));
+        assert_eq!(parse_frame(&state), (2, 3, 0));
+        assert_eq!(read_state(&state), (0, 0));
+    }
+
+    #[test]
+    fn retains_incomplete_and_malformed_bytes() {
+        let state = empty();
+        append_state(&state, &[1, 0, 2, 8]);
+        assert_eq!(parse_frame(&state), (0, 0, 4));
+        assert_eq!(read_state(&state), (4, 1));
+        append_state(&state, &[9]);
+        assert_eq!(parse_frame(&state), (2, 5, 0));
+        append_state(&state, &[2, 0, 0]);
+        assert_eq!(parse_frame(&state), (1, 0, 3));
+        assert_eq!(read_state(&state), (3, 2));
+    }
+
+    #[test]
+    fn poison_recovery_keeps_the_current_buffer() {
+        let state = empty();
+        append_state(&state, &[1, 0, 0]);
+        let panic = std::panic::catch_unwind(|| {
+            let _guard = state.lock().expect("fresh fixture mutex");
+            panic!("poison the fixture mutex");
+        });
+        assert!(panic.is_err());
+        assert_eq!(parse_frame(&state), (2, 3, 0));
+        assert_eq!(read_state(&state), (0, 0));
+        assert!(state.is_poisoned());
     }
 }
