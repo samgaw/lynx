@@ -6,6 +6,7 @@ pub mod commands;
 pub mod decoding;
 pub mod derived;
 pub mod encoding;
+pub mod frames;
 pub mod records;
 pub mod scalars;
 use std::sync::atomic::AtomicU64;

@@ -133,6 +133,25 @@ pub fn dispose_receive_state(state: std::sync::Mutex<ReceiveState>) {
     drop(state);
 }
 
+/// Composes the actual first-party frame parser, including its input mutation.
+pub fn take_frame(input: &mut Vec<u8>) -> Result<Option<Vec<u8>>, u8> {
+    atomic_core::frames::take_frame(input)
+}
+
+/// Observes one extracted parse without exposing owned vectors as NIF arguments.
+///
+/// # Panics
+/// Follows the standard allocator's failure policy.
+pub fn frame_summary(input: &[u8]) -> (u8, u64, u64) {
+    let mut bytes = copy_bytes(input);
+    let (status, consumed) = match take_frame(&mut bytes) {
+        Ok(Some(frame)) => (2, frame.len() as u64),
+        Ok(None) => (0, 0),
+        Err(error) => (error, 0),
+    };
+    (status, consumed, bytes.len() as u64)
+}
+
 #[cfg(test)]
 mod locked_buffer_tests {
     use super::{copy_locked, locked_append};
