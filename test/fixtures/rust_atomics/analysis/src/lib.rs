@@ -90,13 +90,13 @@ pub fn copy_locked(input: &[u8]) -> Vec<u8> {
 ///
 /// # Panics
 /// Recursive acquisition may panic or block and is outside this fixture.
-pub fn append_state(state: &std::sync::Mutex<atomic_core::BufferState>, input: &[u8]) -> u64 {
+pub fn append_state(state: &std::sync::Mutex<ReceiveState>, input: &[u8]) -> u64 {
     let mut guard = match state.lock() {
         Ok(value) => value,
         Err(error) => error.into_inner(),
     };
-    atomic_core::append_bytes(&mut guard.bytes, input);
-    let length = guard.bytes.len() as u64;
+    atomic_core::append_bytes(&mut guard.buffer.bytes, input);
+    let length = guard.buffer.bytes.len() as u64;
     drop(guard);
     length
 }
@@ -105,14 +105,14 @@ pub fn append_state(state: &std::sync::Mutex<atomic_core::BufferState>, input: &
 ///
 /// # Panics
 /// Recursive acquisition may panic or block and is outside this fixture.
-pub fn read_state(state: &std::sync::Mutex<atomic_core::BufferState>) -> (u64, u8) {
+pub fn read_state(state: &std::sync::Mutex<ReceiveState>) -> (u64, u8) {
     let guard = match state.lock() {
         Ok(value) => value,
         Err(error) => error.into_inner(),
     };
     let result = (
-        guard.bytes.len() as u64,
-        atomic_core::buffer_head(&guard.bytes),
+        guard.buffer.bytes.len() as u64,
+        atomic_core::buffer_head(&guard.buffer.bytes),
     );
     drop(guard);
     result
@@ -120,6 +120,16 @@ pub fn read_state(state: &std::sync::Mutex<atomic_core::BufferState>) -> (u64, u
 
 /// Consumes the mutex and its first-party owning payload without Rustler.
 pub fn dispose_state(state: std::sync::Mutex<atomic_core::BufferState>) {
+    drop(state);
+}
+
+/// Nested cross-crate owning state used by the shared Rustler resource.
+pub struct ReceiveState {
+    pub buffer: atomic_core::BufferState,
+}
+
+/// Consumes nested shared state independently of any NIF export.
+pub fn dispose_receive_state(state: std::sync::Mutex<ReceiveState>) {
     drop(state);
 }
 

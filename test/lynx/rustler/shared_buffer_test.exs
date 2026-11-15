@@ -100,7 +100,7 @@ defmodule Lynx.Rustler.SharedBufferTest do
 
     missing =
       Regex.replace(
-        ~r/instance : Lynx.NativeMutexDrop atomic_nif\.atomic_core\.BufferState where\n  drop :=[^\n]+\n/,
+        ~r/instance : Lynx.NativeMutexDrop atomic_nif\.atomic_analysis\.ReceiveState where\n  drop :=[^\n]+\n/,
         original,
         ""
       )
@@ -196,24 +196,24 @@ defmodule Lynx.Rustler.SharedBufferTest do
     public section
     open Aeneas Aeneas.Std Lynx atomic_analysis
     namespace OwnedBuffer.Properties
-    theorem disposed (mutex : NativeMutex atomic_core.BufferState)
-        (value : atomic_core.BufferState) (poisoned : Bool) (env : Environment)
+    theorem disposed (mutex : NativeMutex ReceiveState)
+        (value : ReceiveState) (poisoned : Bool) (env : Environment)
         (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
-          [(mutex.id, NativeMutex.typeName atomic_core.BufferState, .tuple #[.atom "unlocked",
+          [(mutex.id, NativeMutex.typeName ReceiveState, .tuple #[.atom "unlocked",
             .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])])
         (schedule : List ScheduleChoice) :
-        (atomic_analysis.dispose_state mutex).run env schedule =
+        (atomic_analysis.dispose_receive_state mutex).run env schedule =
           (.ok (), {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != mutex.id)}) := by
       cases poisoned <;>
-        simp [atomic_analysis.dispose_state, NativeOwnedDrop.drop, NativeMutexDrop.drop,
-          NativeMutex.disposeWith, atomic_core.BufferState.drop_owned,
+        simp [atomic_analysis.dispose_receive_state, NativeOwnedDrop.drop, NativeMutexDrop.drop,
+          NativeMutex.disposeWith, ReceiveState.drop_owned,
           NativeMutex.into_inner, NativeMutex.intoInnerStep, stored, NativeCodec.roundtrip,
           NativeM.ok, Result.wait_run, Result.wait_bind]
     end OwnedBuffer.Properties
     """)
 
     options = [
-      roots: ["atomic_analysis::dispose_state"],
+      roots: ["atomic_analysis::dispose_receive_state"],
       tools: @tools,
       execution: :runtime,
       owned_drops: true,

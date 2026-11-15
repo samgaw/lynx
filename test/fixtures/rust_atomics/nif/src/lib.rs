@@ -247,7 +247,7 @@ fn buffer_copy_locked(input: rustler::Binary<'_>) -> rustler::ResourceArc<ByteBu
 
 /// A persistent shared resource; its mutex owns first-party protocol state.
 pub struct SharedBuffer {
-    pub state: std::sync::Mutex<atomic_core::BufferState>,
+    pub state: std::sync::Mutex<atomic_analysis::ReceiveState>,
 }
 
 #[rustler::resource_impl]
@@ -261,7 +261,9 @@ impl rustler::Resource for SharedBuffer {}
 #[lynx::shared_buffer]
 fn shared_new() -> rustler::ResourceArc<SharedBuffer> {
     rustler::ResourceArc::new(SharedBuffer {
-        state: std::sync::Mutex::new(atomic_core::BufferState { bytes: Vec::new() }),
+        state: std::sync::Mutex::new(atomic_analysis::ReceiveState {
+            buffer: atomic_core::BufferState { bytes: Vec::new() },
+        }),
     })
 }
 

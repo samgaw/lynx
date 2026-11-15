@@ -13,17 +13,17 @@ theorem append_eq (output : alloc.vec.Vec U8) (input : Slice U8)
   rw [atomic_core.append_bytes, SharedBytes.Extraction.VectorModel.extend_bytes_eq, dite_eq_left bound]
   rfl
 
-theorem payload_cleanup (value : atomic_core.BufferState) :
-    atomic_core.BufferState.drop_owned value = NativeM.ok () := rfl
+theorem payload_cleanup (value : atomic_analysis.ReceiveState) :
+    atomic_analysis.ReceiveState.drop_owned value = NativeM.ok () := rfl
 
 theorem cleanup_contract (value : SharedBuffer) :
     SharedBuffer.drop_owned value =
-      NativeMutex.disposeWith atomic_core.BufferState.drop_owned value.state := rfl
+      NativeMutex.disposeWith atomic_analysis.ReceiveState.drop_owned value.state := rfl
 
-theorem cleanup_run (mutex : NativeMutex atomic_core.BufferState)
-    (value : atomic_core.BufferState) (poisoned : Bool) (env : Environment)
+theorem cleanup_run (mutex : NativeMutex atomic_analysis.ReceiveState)
+    (value : atomic_analysis.ReceiveState) (poisoned : Bool) (env : Environment)
     (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
-      [(mutex.id, NativeMutex.typeName atomic_core.BufferState, .tuple #[.atom "unlocked",
+      [(mutex.id, NativeMutex.typeName atomic_analysis.ReceiveState, .tuple #[.atom "unlocked",
         .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])])
     (schedule : List ScheduleChoice) :
     (SharedBuffer.drop_owned ⟨mutex⟩).run env schedule =
@@ -32,13 +32,13 @@ theorem cleanup_run (mutex : NativeMutex atomic_core.BufferState)
     simp [cleanup_contract, NativeMutex.disposeWith, NativeMutex.into_inner, NativeMutex.intoInnerStep,
       stored, NativeCodec.roundtrip, payload_cleanup, NativeM.ok, Result.wait_run, Result.wait_bind]
 
-theorem append_contract (mutex : NativeMutex atomic_core.BufferState) (input : Slice U8) :
+theorem append_contract (mutex : NativeMutex atomic_analysis.ReceiveState) (input : Slice U8) :
     atomic_analysis.append_state mutex input = (do
       let acquired ← NativeMutex.lock mutex
       let guard := match acquired with | .Ok guard => guard | .Err error => error.value
-      let bytes ← atomic_core.append_bytes guard.value.bytes input
+      let bytes ← atomic_core.append_bytes guard.value.buffer.bytes input
       let length ← NativeM.lift (UScalar.cast .U64 (alloc.vec.Vec.len bytes))
-      NativeGuard.release {guard with value := ⟨bytes⟩}
+      NativeGuard.release {guard with value := ⟨⟨bytes⟩⟩}
       .ok length) := by
   simp [atomic_analysis.append_state, NativeGuard.deref_mut, NativeGuard.deref,
     NativeOwnedDrop.drop, NativeM.lift, NativeM.ok]
@@ -46,18 +46,18 @@ theorem append_contract (mutex : NativeMutex atomic_core.BufferState) (input : S
   funext acquired
   cases acquired <;> simp [NativePoisonError.into_inner]
 
-@[expose] def state (value : atomic_core.BufferState) (poisoned : Bool) (env : Environment) : Environment :=
-  {env with nativeRefCounter := 1, nativeHeap := [(1, NativeMutex.typeName atomic_core.BufferState,
+@[expose] def state (value : atomic_analysis.ReceiveState) (poisoned : Bool) (env : Environment) : Environment :=
+  {env with nativeRefCounter := 1, nativeHeap := [(1, NativeMutex.typeName atomic_analysis.ReceiveState,
     .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])]}
 
-theorem append_run (value : atomic_core.BufferState) (input : Slice U8) (poisoned : Bool)
-    (bound : value.bytes.val.length + input.val.length ≤ 262144) (env : Environment)
+theorem append_run (value : atomic_analysis.ReceiveState) (input : Slice U8) (poisoned : Bool)
+    (bound : value.buffer.bytes.val.length + input.val.length ≤ 262144) (env : Environment)
     (schedule : List ScheduleChoice) :
     (atomic_analysis.append_state ⟨1⟩ input).run (state value poisoned env) schedule =
-      (.ok (U64.ofNatCore (value.bytes.val.length + input.val.length) (by scalar_tac)),
-        {state ⟨alloc.vec.Vec.from (value.bytes.val ++ input.val) (by scalar_tac)⟩ poisoned env
+      (.ok (U64.ofNatCore (value.buffer.bytes.val.length + input.val.length) (by scalar_tac)),
+        {state ⟨⟨alloc.vec.Vec.from (value.buffer.bytes.val ++ input.val) (by scalar_tac)⟩⟩ poisoned env
           with nativeRefCounter := 2}) := by
-  have appended := append_eq value.bytes input bound
+  have appended := append_eq value.buffer.bytes input bound
   cases poisoned <;>
     simp [append_contract, state, NativeMutex.lock, NativeMutex.pollLock,
       NativeCodec.roundtrip, appended, NativeGuard.release, NativeGuard.pollRelease,
@@ -70,12 +70,12 @@ theorem head_eq (bytes : Slice U8) :
     simp [atomic_core.buffer_head, core.slice.Slice.get, core.slice.index.SliceIndexUsizeSlice,
       core.slice.index.Usize.get, NativeM.lift, NativeM.ok, contents]
 
-theorem read_contract (mutex : NativeMutex atomic_core.BufferState) :
+theorem read_contract (mutex : NativeMutex atomic_analysis.ReceiveState) :
     atomic_analysis.read_state mutex = (do
       let acquired ← NativeMutex.lock mutex
       let guard := match acquired with | .Ok guard => guard | .Err error => error.value
-      let length ← NativeM.lift (UScalar.cast .U64 (alloc.vec.Vec.len guard.value.bytes))
-      let head ← atomic_core.buffer_head (alloc.vec.Vec.deref guard.value.bytes)
+      let length ← NativeM.lift (UScalar.cast .U64 (alloc.vec.Vec.len guard.value.buffer.bytes))
+      let head ← atomic_core.buffer_head (alloc.vec.Vec.deref guard.value.buffer.bytes)
       NativeGuard.release guard
       .ok (length, head)) := by
   simp [atomic_analysis.read_state, NativeGuard.deref, NativeOwnedDrop.drop,
@@ -84,11 +84,11 @@ theorem read_contract (mutex : NativeMutex atomic_core.BufferState) :
   funext acquired
   cases acquired <;> simp [NativePoisonError.into_inner]
 
-theorem read_run (value : atomic_core.BufferState) (poisoned : Bool)
-    (bound : value.bytes.val.length ≤ 262144) (env : Environment)
+theorem read_run (value : atomic_analysis.ReceiveState) (poisoned : Bool)
+    (bound : value.buffer.bytes.val.length ≤ 262144) (env : Environment)
     (schedule : List ScheduleChoice) :
     (atomic_analysis.read_state ⟨1⟩).run (state value poisoned env) schedule =
-      (.ok (U64.ofNatCore value.bytes.val.length (by scalar_tac), value.bytes.val.headD 0#u8),
+      (.ok (U64.ofNatCore value.buffer.bytes.val.length (by scalar_tac), value.buffer.bytes.val.headD 0#u8),
         {(state value poisoned env) with nativeRefCounter := 2}) := by
   cases poisoned <;>
     simp [read_contract, state, NativeMutex.lock, NativeMutex.pollLock,
@@ -96,14 +96,14 @@ theorem read_run (value : atomic_core.BufferState) (poisoned : Bool)
       NativePoisonError.into_inner, NativeM.ok, NativeM.lift, NativeM.castUsizeU64_eq,
       alloc.vec.Vec.len, alloc.vec.Vec.deref, Result.wait_run, Result.wait_bind]
 
-@[expose] def live (value : atomic_core.BufferState) (poisoned : Bool) (env : Environment) : Environment :=
+@[expose] def live (value : atomic_analysis.ReceiveState) (poisoned : Bool) (env : Environment) : Environment :=
   {env with nativeRefCounter := 3, nativeHeap := [
     (3, NativeResourceArc.handleType SharedBuffer, .nativeReference 2),
     (2, NativeResourceArc.typeName SharedBuffer, .tuple #[.integer 1, NativeCodec.encode (SharedBuffer.mk ⟨1⟩)]),
-    (1, NativeMutex.typeName atomic_core.BufferState,
+    (1, NativeMutex.typeName atomic_analysis.ReceiveState,
       .tuple #[.atom "unlocked", .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])]}
 
-theorem final_release (value : atomic_core.BufferState) (poisoned : Bool) (env : Environment)
+theorem final_release (value : atomic_analysis.ReceiveState) (poisoned : Bool) (env : Environment)
     (policy : env.nativeFinalizerMode = .synchronous) :
     shared_release ⟨2, 3⟩ (live value poisoned env) =
       (.ok (), {env with nativeRefCounter := 3, nativeHeap := []}) := by

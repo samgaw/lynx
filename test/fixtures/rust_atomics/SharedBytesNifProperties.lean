@@ -6,7 +6,7 @@ namespace SharedBytes.NifProperties
 
 theorem create_contract :
     __NEW__ = (do
-      let mutex ← NativeMutex.new (atomic_core.BufferState.mk (alloc.vec.Vec.new U8))
+      let mutex ← NativeMutex.new (atomic_analysis.ReceiveState.mk (atomic_core.BufferState.mk (alloc.vec.Vec.new U8)))
       NativeResourceArc.newOwned (SharedBuffer.mk mutex)) := rfl
 
 theorem append_contract (owner : NativeResourceArc SharedBuffer) (input : Rustler.Binary) :
