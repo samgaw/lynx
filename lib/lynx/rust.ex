@@ -486,6 +486,13 @@ defmodule Lynx.Rust do
   Rustler 0.39 `ResourceArc` allocation, clone, immutable dereference, explicit
   release and local scope cleanup are supported for monomorphic first-party
   payloads with native codecs and compiler-certified `needs_drop = false`.
+  Owned resource structs may contain scalar-element `Vec` fields when the actual
+  compiler-generated owning destructor passes the exact `Vec`/`Global` drop audit.
+  Their lossless heap codec preserves element order and uses the upstream vector
+  length bound; it does not model capacity or physical allocator execution. This
+  requires `owned_drops: true`. Observable user destructors and substituted
+  allocators remain rejected. VM pins and finalizer timing retain their existing
+  ownership semantics; final callback completion requires its explicit policy.
   Runtime `Mutex::try_lock` performs an atomic nonblocking attempt. A held lock
   returns `WouldBlock` without changing the logical heap or allocating a guard
   token, including recursive attempts. An available poisoned lock returns the

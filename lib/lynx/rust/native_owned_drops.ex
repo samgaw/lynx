@@ -24,7 +24,7 @@ defmodule Lynx.Rust.NativeOwnedDrops do
            Lynx.Rust.CallModels.expand(sig["output"], refs),
          true <- output == Lynx.Rust.ResourceModels.args([]),
          true <-
-           structural_nonpanicking?(function["body"]["Structured"]["body"], translated, refs) do
+           structural_nonpanicking?(function, translated, refs) do
       function
     else
       _ -> nil
@@ -32,9 +32,12 @@ defmodule Lynx.Rust.NativeOwnedDrops do
   end
 
   # Resource drop dispatch is classified as cutoff-only by the lifetime audit.
-  # Admit only structural cleanup of validated nonpanicking mutex/File primitives;
+  # Admit structural cleanup of validated nonpanicking mutex/File primitives or
+  # exact scalar Vec/Global drops checked by the existing structural audit;
   # custom or first-party destructor calls need a separate unwind composition.
-  defp structural_nonpanicking?(%{"statements" => statements}, translated, refs) do
+  defp structural_nonpanicking?(function, translated, refs) do
+    statements = function["body"]["Structured"]["body"]["statements"]
+
     Enum.all?(statements, fn statement ->
       case statement["kind"] do
         kind when kind == "Return" ->
@@ -52,11 +55,22 @@ defmodule Lynx.Rust.NativeOwnedDrops do
         %{"Drop" => drop} ->
           # Check the primitive kind before consulting drop dictionaries. A
           # recursive ResourceArc field must not re-enter resource admission.
-          primitive_type?(drop["place"]["ty"], translated, refs) and
-            case Lynx.Rust.NativeDrops.site(drop, translated, refs) do
-              {:ok, %{native_kind: kind}} when kind in [:mutex, :file] -> true
-              _ -> false
-            end
+          if match?(
+               {:ok, _},
+               Lynx.Rust.CollectionModels.scalar_vector_element(
+                 drop["place"]["ty"],
+                 translated,
+                 refs
+               )
+             ) do
+            Lynx.Rust.DropModels.nonpanicking_site?(drop, function, translated, refs)
+          else
+            primitive_type?(drop["place"]["ty"], translated, refs) and
+              case Lynx.Rust.NativeDrops.site(drop, translated, refs) do
+                {:ok, %{native_kind: kind}} when kind in [:mutex, :file] -> true
+                _ -> false
+              end
+          end
 
         %{
           "Call" => %{

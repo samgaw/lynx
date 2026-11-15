@@ -7,6 +7,23 @@ defmodule Lynx.Rust.CollectionModels do
       trait_view(function, translated, refs)
   end
 
+  # Representation admission only. Consuming owners must separately validate the
+  # actual Vec/Global drop site; the erased allocator cannot be inferred here.
+  def scalar_vector_element(type, translated, refs) do
+    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
+           CallModels.expand(type, refs),
+         %{"types" => [element]} <- args,
+         true <- args == arguments([element]),
+         true <- Lynx.Rust.DropModels.primitive_scalar?(element),
+         %{"kind" => "Opaque", "generics" => params, "item_meta" => %{"name" => name}} <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
+         true <- name == path(~w(alloc vec Vec)) and type_parameters?(params) do
+      {:ok, element}
+    else
+      _ -> :error
+    end
+  end
+
   defp owned(function, translated, refs) do
     with %{
            "body" => "Opaque",

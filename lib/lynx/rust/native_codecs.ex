@@ -131,11 +131,24 @@ defmodule Lynx.Rust.NativeCodecs do
 
         found
 
-      %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => [payload]} = args}} ->
+      %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => [payload]} = args}} =
+          self ->
         type = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
-        unless (Lynx.Rust.MutexModels.type?(type) or Lynx.Rust.RwLockModels.type?(type)) and
-                 args == Lynx.Rust.ResourceModels.args([payload]),
+        vector =
+          get_in(audit.translated, ["options", "owned_drops"]) == true and
+            match?(
+              {:ok, _},
+              Lynx.Rust.CollectionModels.scalar_vector_element(
+                self,
+                audit.translated,
+                audit.references
+              )
+            )
+
+        unless vector or
+                 ((Lynx.Rust.MutexModels.type?(type) or Lynx.Rust.RwLockModels.type?(type)) and
+                    args == Lynx.Rust.ResourceModels.args([payload])),
                do: raise(ArgumentError, "unsupported native heap handle identity")
 
         visit!(payload, audit, found, visiting)
@@ -468,20 +481,31 @@ defmodule Lynx.Rust.NativeCodecs do
 
         "core::sync::atomic::AtomicU64:seqcst-v1"
 
-      %{"Adt" => %{"id" => id, "generics" => %{"types" => [payload]}}} ->
+      %{"Adt" => %{"id" => id, "generics" => %{"types" => [payload]}}} = self ->
         declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
-        unless Lynx.Rust.MutexModels.type?(declaration) or
+        vector =
+          match?(
+            {:ok, _},
+            Lynx.Rust.CollectionModels.scalar_vector_element(
+              self,
+              audit.translated,
+              audit.references
+            )
+          )
+
+        unless vector or Lynx.Rust.MutexModels.type?(declaration) or
                  Lynx.Rust.RwLockModels.type?(declaration),
                do: raise(ArgumentError, "unsupported heap handle schema")
 
-        [
-          if(Lynx.Rust.MutexModels.type?(declaration),
-            do: "std::sync::Mutex",
-            else: "std::sync::RwLock"
-          ),
-          schema_type!(payload, audit, types)
-        ]
+        name =
+          cond do
+            vector -> "alloc::vec::Vec"
+            Lynx.Rust.MutexModels.type?(declaration) -> "std::sync::Mutex"
+            true -> "std::sync::RwLock"
+          end
+
+        [name, schema_type!(payload, audit, types)]
 
       %{"Adt" => %{"id" => id}} ->
         cond do

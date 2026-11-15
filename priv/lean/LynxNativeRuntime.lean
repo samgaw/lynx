@@ -356,6 +356,23 @@ theorem decode_array_wrongLength {α : Type} {n : Usize} [NativeCodec α]
   rw [decodeElements_encode]
   simp [wrong]
 
+/-- Lossless logical vector contents. Capacity and allocator execution are outside
+this representation; growth and destruction have their own audited models. -/
+instance {α : Type} [NativeCodec α] : NativeCodec (alloc.vec.Vec α) where
+  typeName := "alloc::vec::Vec<" ++ NativeCodec.typeName (α := α) ++ ">"
+  encode value := Term.list (value.val.map NativeCodec.encode)
+  decode term := do
+    let values ← decodeElements term
+    -- Both supported target widths admit this fast path. Larger vectors retain
+    -- the exact upstream usize bound; this does not impose a 32-bit cutoff.
+    if small : values.length ≤ 4294967295 then
+      return alloc.vec.Vec.from values (by scalar_tac)
+    else if size : values.length ≤ Usize.max then
+      return alloc.vec.Vec.from values size
+    else none
+  decode_encode value := by
+    simp [decodeElements_encode, alloc.vec.Vec.property, alloc.vec.Vec.val_from]
+
 end NativeCodec
 
 namespace NativeM

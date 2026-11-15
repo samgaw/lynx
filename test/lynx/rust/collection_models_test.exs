@@ -497,4 +497,39 @@ defmodule Lynx.Rust.CollectionModelsTest do
       )
     end
   end
+
+  test "native scalar vector representation does not imply destructor-free ownership" do
+    alias Lynx.Rust.{CollectionModels, NativeDrops, ResourceModels}
+    byte = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+    type = %{"Adt" => %{"id" => 5, "builtin" => nil, "generics" => ResourceModels.args([byte])}}
+
+    declaration = %{
+      "def_id" => 5,
+      "kind" => "Opaque",
+      "generics" => params(1, [], []),
+      "item_meta" => %{"name" => Enum.map(~w(alloc vec Vec), &%{"Ident" => [&1, 0]})}
+    }
+
+    translated = %{"type_decls" => [declaration]}
+    assert CollectionModels.scalar_vector_element(type, translated, %{}) == {:ok, byte}
+    refute NativeDrops.destructor_free?(type, translated, %{})
+
+    for changed <- [
+          Map.put(declaration, "kind", %{"Struct" => []}),
+          put_in(declaration, ["item_meta", "name"], [%{"Ident" => ["Vec", 0]}]),
+          put_in(declaration, ["generics", "const_generics"], [%{"index" => 0}])
+        ] do
+      assert :error =
+               CollectionModels.scalar_vector_element(type, %{"type_decls" => [changed]}, %{})
+    end
+
+    for element <- [
+          %{"Scalar" => %{"Float" => "F64"}},
+          %{"Ref" => []},
+          %{"TypeVar" => %{"Free" => 0}}
+        ] do
+      changed = put_in(type, ["Adt", "generics", "types"], [element])
+      assert :error = CollectionModels.scalar_vector_element(changed, translated, %{})
+    end
+  end
 end
