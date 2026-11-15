@@ -151,6 +151,24 @@ under Rust's from_raw_parts safety contract, hence a verification cutoff. -/
     .ok (Slice.from values bounds.1)
   else .fail .undef
 
+/-- A reduction rule for ordinary-size binaries on either supported pointer
+width. The fallback retains the original bounds, including larger 64-bit inputs. -/
+@[cbv_eval] theorem binaryAsSlice_eq (bytes : Binary) :
+    binaryAsSlice bytes =
+      let values := bytes.data.toList.map fun byte => (⟨byte.toBitVec⟩ : U8)
+      if small : bytes.size ≤ 2147483647 then
+        RustM.ok (Slice.from values (by
+          have size : bytes.size ≤ Usize.max := by scalar_tac
+          simpa [values] using size))
+      else if bounds : values.length ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat then
+        RustM.ok (Slice.from values bounds.1)
+      else RustM.fail .undef := by
+  by_cases small : bytes.size ≤ 2147483647
+  · have unsignedBound : bytes.size ≤ Usize.max := by scalar_tac
+    have signedBound : bytes.size ≤ Isize.max.toNat := by scalar_tac
+    simp [binaryAsSlice, small, unsignedBound, signedBound]
+  · simp [binaryAsSlice, small]
+
 theorem binaryAsSlice_spec (bytes : Binary)
     (unsignedBound : bytes.size ≤ Usize.max) (signedBound : bytes.size ≤ Isize.max.toNat) :
     ∃ slice, binaryAsSlice bytes = RustM.ok slice ∧ slice.val.length = bytes.size := by
