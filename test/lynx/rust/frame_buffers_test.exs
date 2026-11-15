@@ -117,7 +117,8 @@ defmodule Lynx.Rust.FrameBuffersTest do
       required_properties: [
         "FrameRuntime.Properties.no_panic",
         "FrameRuntime.Properties.split_panic"
-      ]
+      ],
+      nonpanicking: [{"atomic_core::frames::take_frame", "FrameRuntime.Properties.no_panic"}]
     ]
 
     result = Lynx.Rust.verify!(workspace, "atomic-analysis", options)
@@ -135,6 +136,16 @@ defmodule Lynx.Rust.FrameBuffersTest do
       Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
 
     assert status == 0, output
+
+    for certificate <- ["FrameRuntime.Properties.short", "FrameRuntime.Properties.missing"] do
+      assert_raise RuntimeError, ~r/proof audit failed/, fn ->
+        Lynx.Rust.verify!(
+          workspace,
+          "atomic-analysis",
+          Keyword.put(options, :nonpanicking, [{"atomic_core::frames::take_frame", certificate}])
+        )
+      end
+    end
 
     source = Path.join(workspace, "core/src/frames.rs")
     rust = File.read!(source)

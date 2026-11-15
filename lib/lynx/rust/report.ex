@@ -202,9 +202,16 @@ defmodule Lynx.Rust.Report do
         |> Enum.sort_by(& &1["rust_name"]),
       guarantees: verified ++ composed,
       properties: properties,
+      nonpanicking: Map.get(extraction, :nonpanicking, []),
       fingerprint: extraction.fingerprint,
       trusted_boundary:
         @trusted ++
+          if(Map.get(extraction, :nonpanicking, []) != [],
+            do: [
+              "Lynx dependency protection and unreachable-unwind translation; the helper outcome is kernel-checked, while compiler and native binary correspondence remain trusted"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :sysroot),
             do: [
               "Full-MIR Miri standard-library configuration; native standard-library equivalence is not verified"

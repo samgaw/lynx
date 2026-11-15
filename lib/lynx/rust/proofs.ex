@@ -20,12 +20,16 @@ defmodule Lynx.Rust.Proofs do
       |> Enum.map(& &1["lean_name"])
       |> Enum.sort()
 
-    required = Keyword.get(opts, :required_properties, [])
+    contracts = Map.get(extraction, :nonpanicking, [])
+
+    required =
+      Enum.uniq(Keyword.get(opts, :required_properties, []) ++ Enum.map(contracts, & &1.theorem))
 
     source = """
     module
     #{Enum.map_join(imports, "\n", &("public import " <> identifier!(&1)))}
     open Lean Elab Command
+    #{Lynx.Rust.NoPanic.checks_source(contracts)}
     private meta def inspectRustProperties : CommandElabM Unit := do
       let proofModules : Array Name := #{names(proof_modules)}
       let imports := proofModules.map fun moduleName =>

@@ -4,6 +4,7 @@ defmodule Lynx.Rust.Extraction do
   # Extraction is independent of Rustler. This result is not a proof report;
   # clients must kernel-check their properties and audit the generated modules.
   def run!(context, tools, roots, output, module, opts \\ []) do
+    Lynx.Rust.NoPanic.validate!(opts)
     Lynx.Rust.Mir.validate!(opts)
     Lynx.Rust.Branching.validate!(opts)
 
@@ -26,7 +27,8 @@ defmodule Lynx.Rust.Extraction do
           :futures,
           :branching,
           :files,
-          :owned_drops
+          :owned_drops,
+          :nonpanicking
         ],
         do: raise(ArgumentError, "unknown Rust extraction option: #{key}")
 
@@ -220,13 +222,17 @@ defmodule Lynx.Rust.Extraction do
           do: [:native_wakers],
           else: []
 
+    {document, no_panic} =
+      Lynx.Rust.NoPanic.prepare!(document, Keyword.get(opts, :nonpanicking, []), first_party)
+
     {document, nonpanicking_borrows} =
       if Keyword.get(opts, :execution, :pure) == :runtime and unwind != :captured,
         do:
           Lynx.Rust.NativeBorrows.prune_owned_calls!(
             document,
             first_party,
-            runtime_call_models
+            runtime_call_models,
+            no_panic
           ),
         else: {document, []}
 
@@ -281,7 +287,8 @@ defmodule Lynx.Rust.Extraction do
            Lynx.Rust.NativeBorrows.prune_owned_calls!(
              document,
              first_party,
-             runtime_call_models
+             runtime_call_models,
+             no_panic
            ),
          else: {document, []}
 
@@ -359,9 +366,11 @@ defmodule Lynx.Rust.Extraction do
         execution: Keyword.get(opts, :execution, :pure),
         rustler_atom_caches: {caches, module},
         rustler_constructors: rustler_constructors,
+        nonpanicking: Enum.map(no_panic.contracts, & &1.id),
         explicit_ownership: Keyword.get(opts, :owned_drops, false) == :explicit
       )
 
+    Lynx.Rust.NoPanic.audit!(no_panic, audit)
     document = audit.document
 
     backend_llbc =
@@ -601,6 +610,7 @@ defmodule Lynx.Rust.Extraction do
 
     %{
       audit: audit,
+      nonpanicking: Lynx.Rust.NoPanic.link!(no_panic, implementations),
       encoder_disposals: encoder_disposals,
       explicit_ownership: audit.explicit_ownership,
       captured_unwind: audit.captured_unwind,
@@ -640,7 +650,7 @@ defmodule Lynx.Rust.Extraction do
               {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
                Lynx.Rustler.ErrorConstructors.cache_inputs(rustler_constructors),
                Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
-               requested_calls,
+               requested_calls, no_panic.contracts,
                audit.external_calls
                |> Map.values()
                |> Enum.map(&Map.drop(&1, [:function, :definition_id]))

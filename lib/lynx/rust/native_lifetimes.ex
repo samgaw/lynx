@@ -5,7 +5,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   # Track consuming ownership on every branch. Potential failure with a live
   # owner requires supported cleanup; borrowed calls need checked nonpanicking
   # bodies. Whole single-field enum payloads may transfer their ownership.
-  def audit!(functions, models, translated, refs, drop_audit \\ nil) do
+  def audit!(functions, models, translated, refs, drop_audit \\ nil, nonpanicking_proofs \\ []) do
     native_types =
       for type <- translated["type_decls"],
           type &&
@@ -62,13 +62,22 @@ defmodule Lynx.Rust.NativeLifetimes do
 
     # Compiler poll entries are checked below by state-sensitive ownership
     # analysis. Their completed-state panic cannot lose a live saved guard.
-    Lynx.Rust.NativeBorrows.audit!(functions, models, translated, refs, frame_inputs)
+    Lynx.Rust.NativeBorrows.audit!(
+      functions,
+      models,
+      translated,
+      refs,
+      frame_inputs,
+      nonpanicking_proofs
+    )
+
     implementations = MapSet.new(functions, & &1["def_id"])
 
     nonpanicking =
       Lynx.Rust.NativeBorrows.nonpanicking_calls(functions, models, %{
         translated: translated,
-        references: refs
+        references: refs,
+        nonpanicking: nonpanicking_proofs
       })
 
     for function <- functions,

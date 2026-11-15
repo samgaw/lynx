@@ -149,6 +149,12 @@ defmodule Lynx.Rustler do
       `[calculate: 1]`. Defaults to every export. Unselected NIF calls are rejected
       by Lynx; unsupported signatures outside this selection need no adapter.
     * `:proof_modules` — additional Lean property modules to build and audit.
+    * `:nonpanicking` — `{Rust function, Lean theorem}` pairs for runtime helpers.
+      The theorem must prove for every input that the same extracted helper
+      returns normally or exhausts verification, without other effects or failure.
+      It must belong to `proof_modules`; conditional or unfinished evidence is
+      rejected. Helper implementations and their dependencies are protected from
+      certificate-driven cleanup removal. Currently requires `unwind: :reject`.
     * `:proof_roots` — additional qualified first-party Rust function paths to extract
       alongside selected NIFs. These internal functions need not be NIF exports;
       their actual implementations and dependencies undergo the same checks.
@@ -265,6 +271,7 @@ defmodule Lynx.Rustler do
       :branching,
       :unwind,
       :owned_drops,
+      :nonpanicking,
       :files
     ]
 
@@ -272,6 +279,7 @@ defmodule Lynx.Rustler do
         key not in allowed,
         do: raise(ArgumentError, "unknown Rustler verification option: #{key}")
 
+    Lynx.Rust.NoPanic.validate!(opts)
     Lynx.Rust.Sysroot.validate!(opts)
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     Lynx.Rust.Mir.validate!(opts)
@@ -465,6 +473,7 @@ defmodule Lynx.Rustler do
         futures: Keyword.get(opts, :futures, :reject),
         branching: Keyword.get(opts, :branching, :join),
         files: Keyword.get(opts, :files, :reject),
+        nonpanicking: Keyword.get(opts, :nonpanicking, []),
         owned_drops: Keyword.get(opts, :owned_drops, false),
         unwind: Keyword.get(opts, :unwind, :reject),
         external_types: models,

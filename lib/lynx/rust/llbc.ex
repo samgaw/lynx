@@ -416,7 +416,15 @@ defmodule Lynx.Rust.LLBC do
     drops = Lynx.Rust.VTables.merge_drops(vtables, drops)
 
     if Keyword.get(opts, :execution, :pure) == :runtime,
-      do: Lynx.Rust.NativeLifetimes.audit!(functions, modelled, translated, refs, drops)
+      do:
+        Lynx.Rust.NativeLifetimes.audit!(
+          functions,
+          modelled,
+          translated,
+          refs,
+          drops,
+          Keyword.get(opts, :nonpanicking, [])
+        )
 
     for type <- translated["type_decls"], type != nil, first_party?(type, first_party) do
       unless is_map(type["kind"]) &&

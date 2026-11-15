@@ -577,6 +577,15 @@ defmodule Lynx.Rust do
   implemented. Disabling fallible-operation resugaring can expose arithmetic
   forms the backend rejects; this mode does not imply general overflow cleanup.
   Unsupported recursive/trait combinations fail elaboration.
+  `nonpanicking: [{"crate::helper", "Proofs.helper_no_panic"}]` selects an
+  all-input theorem from `proof_modules` for a runtime helper. The kernel must
+  check that its actual extracted body returns normally or exhausts verification,
+  with no other failures or effects. This can justify omitted unreachable panic
+  cleanup in guarded callers. The helper and its original dependencies are
+  protected from this reduction; unsupported hidden dependencies fail closed.
+  Certificates are checked against the same extraction, not an assumed contract
+  or cached implementation. Missing, conditional, incorrect and unfinished
+  certificates fail verification. Currently requires `unwind: :reject`.
   """
   def verify!(workspace, package, opts) do
     validate_options!(opts)
@@ -604,13 +613,15 @@ defmodule Lynx.Rust do
       :futures,
       :branching,
       :files,
-      :owned_drops
+      :owned_drops,
+      :nonpanicking
     ]
 
     for key <- Keyword.keys(opts),
         key not in allowed,
         do: raise(ArgumentError, "unknown Rust verification option: #{key}")
 
+    Lynx.Rust.NoPanic.validate!(opts)
     Lynx.Rust.Sysroot.validate!(opts)
     Lynx.Rust.RootSelection.attribute!(opts[:root_attribute])
     Lynx.Rust.Mir.validate!(opts)
@@ -652,6 +663,7 @@ defmodule Lynx.Rust do
         futures: Keyword.get(opts, :futures, :reject),
         branching: Keyword.get(opts, :branching, :join),
         files: Keyword.get(opts, :files, :reject),
+        nonpanicking: Keyword.get(opts, :nonpanicking, []),
         owned_drops: Keyword.get(opts, :owned_drops, false)
       )
 

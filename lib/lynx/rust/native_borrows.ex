@@ -4,8 +4,9 @@ defmodule Lynx.Rust.NativeBorrows do
 
   # The backend returns reconstructed mutable borrows only on success. Until
   # failure outputs are supported, a borrowed guard must not be lost on panic.
-  # Check actual callee bodies transitively, rather than trusting a contract.
-  def audit!(functions, models, translated, refs, frame_inputs \\ %{}) do
+  # Check actual callee bodies transitively. Optional proof obligations protect
+  # their implementations from pruning and must pass exact kernel checks later.
+  def audit!(functions, models, translated, refs, frame_inputs \\ %{}, nonpanicking \\ []) do
     guards =
       for type <- translated["type_decls"], LockModels.guard?(type, refs), do: type["def_id"]
 
@@ -16,7 +17,13 @@ defmodule Lynx.Rust.NativeBorrows do
           do: {type["def_id"], CallModels.expand(type["kind"], refs)}
 
     context = %{guards: guards, types: types}
-    implementations = implementations(functions, %{translated: translated, references: refs})
+
+    implementations =
+      implementations(functions, %{
+        translated: translated,
+        references: refs,
+        nonpanicking: nonpanicking
+      })
 
     for function <- functions,
         {input, index} <- Enum.with_index(function["signature"]["inputs"], 1),
@@ -68,7 +75,7 @@ defmodule Lynx.Rust.NativeBorrows do
 
   # Compiler cleanup after a certified nonpanicking call is unreachable. Keep
   # the original LLBC and a call-site record; never erase a potentially panicking call's drops.
-  def prune_owned_calls!(document, first_party, enabled_models \\ []) do
+  def prune_owned_calls!(document, first_party, enabled_models \\ [], certificates \\ %{}) do
     translated = document["translated"]
     refs = LLBC.type_references!(document)
     all = Enum.reject(translated["fun_decls"], &is_nil/1)
@@ -92,7 +99,11 @@ defmodule Lynx.Rust.NativeBorrows do
     end
 
     safe =
-      nonpanicking_calls(functions ++ helpers, models, %{translated: translated, references: refs})
+      nonpanicking_calls(functions ++ helpers, models, %{
+        translated: translated,
+        references: refs,
+        nonpanicking: Enum.map(Map.get(certificates, :contracts, []), & &1.id)
+      })
 
     owners =
       for type <- translated["type_decls"],
@@ -120,7 +131,8 @@ defmodule Lynx.Rust.NativeBorrows do
               false
           end
 
-        if owned and Enum.any?(functions, &(&1["def_id"] == function["def_id"])) do
+        if owned and function["def_id"] not in Map.get(certificates, :protected, MapSet.new()) and
+             Enum.any?(functions, &(&1["def_id"] == function["def_id"])) do
           models = Map.put(models, :drop_context, {function, translated, refs})
           {body, records} = prune(function["body"], safe, function["def_id"], models, records)
           {Map.put(function, "body", body), records}
@@ -274,6 +286,7 @@ defmodule Lynx.Rust.NativeBorrows do
 
     functions
     |> Map.new(&{&1["def_id"], Map.get(available, &1["def_id"], &1)})
+    |> Map.put(:no_panic, MapSet.new(context[:nonpanicking] || []))
     |> Map.put(:context, context)
     |> Map.put(
       :erased_drop_bodies,
@@ -297,6 +310,9 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp nonpanicking?(id, functions, models, seen) do
     cond do
+      MapSet.member?(functions[:no_panic] || MapSet.new(), id) and is_map(functions[id]) ->
+        true
+
       id in seen ->
         false
 

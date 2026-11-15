@@ -72,5 +72,17 @@ defmodule Lynx.Rust.ReportTest do
 
     assert [%{definition_id: 3, implementation_verified: false}] =
              result.unverified_external_calls
+
+    contract = %{id: 2, rust: "algorithm::update", lean: "Extracted.f2", theorem: "Proof.update"}
+
+    assert %{nonpanicking: [^contract], trusted_boundary: boundaries} =
+             Lynx.Rust.Report.build!(Map.put(extraction, :nonpanicking, [contract]), reports,
+               source_dir: __DIR__
+             )
+
+    assert Enum.any?(
+             boundaries,
+             &String.contains?(&1, "dependency protection and unreachable-unwind translation")
+           )
   end
 end
