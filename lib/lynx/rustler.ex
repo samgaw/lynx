@@ -35,7 +35,9 @@ defmodule Lynx.Rustler do
   Native environment/term handles, allocation and atom-cache initialization are
   explicitly reported FFI models. Strings longer than 4,294,967,295 bytes and
   lists longer than 2,147,483,647 elements exhaust verification. Generated atom
-  caches currently must be in the facade crate's expanded source.
+  caches are discovered for custom argument/result codecs and NifResult
+  conversions, even when successful results are plain scalars or tuples. They
+  currently must be in the facade crate's expanded source.
   Rustler 0.38.0 or 0.39.0 and the pinned
   Charon/Aeneas toolchain are required; install with `tools/setup-rust-verification.sh`.
   By default, `tools/setup-rust-verification.sh NEW_DIRECTORY`
@@ -462,7 +464,7 @@ defmodule Lynx.Rustler do
           if(binary?, do: [:rustler_binary_as_slice], else: []) ++
             if(custom? or decoders? or returns?, do: [:rustler_encoders], else: []) ++
             if(decoders? or returns?, do: [:rustler_decoders], else: []),
-        rustler_atoms: if(custom?, do: :discover, else: [])
+        rustler_atoms: if(custom? or decoders? or returns?, do: :discover, else: [])
       )
 
     if rustler_version != "0.39.0" and
