@@ -91,13 +91,13 @@ defmodule Lynx.Rust.ResourceLifetimes do
            do:
              raise(
                ArgumentError,
-               "logical resource retirement requires a compiler-certified no-drop struct or scalar enum"
+               "logical resource retirement requires a compiler-certified no-drop struct or plain-data enum"
              )
 
     fields =
       case type["kind"] do
         %{"Struct" => fields} -> fields
-        # The destructor-free predicate above admits enums only with scalar fields.
+        # The destructor-free predicate above admits enums only with recursively plain data.
         %{"Enum" => _} -> []
       end
 

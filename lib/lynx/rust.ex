@@ -470,9 +470,12 @@ defmodule Lynx.Rust do
   guard destruction during unwind remains unsupported.
   Explicit `core::mem::drop` and compiler-generated local normal drops are also
   supported for owned mutexes containing booleans, signed/unsigned scalars, or
-  monomorphic first-party structs or scalar-field enums with supported native
+  monomorphic first-party structs or plain-data enums with supported native
   codecs when Charon's compiler query certifies `needs_drop = false`. Missing, unknown or true queries reject struct
-  cleanup; fields alone never establish the absence of a user destructor. Install
+  cleanup; fields alone never establish the absence of a user destructor. Enum
+  variants may recursively contain certified no-drop records and enums with scalar
+  leaves; owned handles, generics, references and recursive data remain rejected.
+  Install
   the pinned `needs-drop-v1` Charon patch for this metadata. These operations remove
   their cells without invoking a payload destructor. Projected, user-defined
   and general unwind drops remain rejected. General native unwind cleanup

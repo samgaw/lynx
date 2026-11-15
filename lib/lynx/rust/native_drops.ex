@@ -439,7 +439,7 @@ defmodule Lynx.Rust.NativeDrops do
               "kind" => kind,
               "generics" => params
             } ->
-              plain_kind?(kind, refs) and
+              plain_kind?(kind, translated, refs) and
                 params == %{
                   "regions" => [],
                   "types" => [],
@@ -458,21 +458,61 @@ defmodule Lynx.Rust.NativeDrops do
     end
   end
 
-  defp plain_kind?(%{"Struct" => _}, _refs), do: true
+  defp plain_kind?(%{"Struct" => _}, _translated, _refs), do: true
 
-  # Enum cleanup currently covers only scalar payloads. No owned logical handle
-  # or user destructor can be hidden inside an erased variant.
-  defp plain_kind?(%{"Enum" => variants}, refs) when is_list(variants) do
+  # Unlike structs with explicitly generated logical cleanup, enum variants may
+  # contain only data: Rust's no-drop query alone does not exclude heap handles.
+  defp plain_kind?(%{"Enum" => variants}, translated, refs) when is_list(variants) do
+    plain_fields?(variants, translated, refs, [])
+  end
+
+  defp plain_kind?(_, _, _), do: false
+
+  def plain_data?(type, translated, refs), do: plain_data?(type, translated, refs, [])
+
+  defp plain_data?(type, translated, refs, seen) do
+    case CallModels.expand(type, refs) do
+      %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
+        args == arguments([]) and id not in seen and
+          Enum.any?(translated["type_decls"], fn
+            %{"def_id" => ^id, "needs_drop" => false, "generics" => params, "kind" => kind} ->
+              params == %{
+                "regions" => [],
+                "types" => [],
+                "const_generics" => [],
+                "trait_clauses" => [],
+                "trait_type_constraints" => [],
+                "outlives" => []
+              } and
+                case kind do
+                  %{"Struct" => fields} when is_list(fields) ->
+                    plain_fields?([%{"fields" => fields}], translated, refs, [id | seen])
+
+                  %{"Enum" => variants} when is_list(variants) ->
+                    plain_fields?(variants, translated, refs, [id | seen])
+
+                  _ ->
+                    false
+                end
+
+            _ ->
+              false
+          end)
+
+      other ->
+        scalar?(other)
+    end
+  end
+
+  defp plain_fields?(variants, translated, refs, seen) do
     Enum.all?(variants, fn
       %{"fields" => fields} when is_list(fields) ->
-        Enum.all?(fields, fn field -> scalar?(CallModels.expand(field["ty"], refs)) end)
+        Enum.all?(fields, &plain_data?(&1["ty"], translated, refs, seen))
 
       _ ->
         false
     end)
   end
-
-  defp plain_kind?(_, _), do: false
 
   defp scalar?(%{"Scalar" => "Bool"}), do: true
 

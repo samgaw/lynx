@@ -108,6 +108,30 @@ defmodule Lynx.Rust.ResourceLifetimesTest do
     end
   end
 
+  test "nested enum cleanup cannot hide logical lock ownership in a no-drop record" do
+    {owned, audit} = fixture(%{"Scalar" => "Bool"})
+    record = put_in(owned, ["kind", "Struct", Access.at(0), "ty"], %{"Scalar" => "Bool"})
+
+    enum = %{
+      "def_id" => 3,
+      "needs_drop" => false,
+      "generics" => record["generics"],
+      "kind" => %{"Enum" => [%{"fields" => [%{"ty" => adt(0, [])}]}]}
+    }
+
+    audit =
+      update_in(audit, [:translated, "type_decls"], fn [_ | rest] -> [record, enum | rest] end)
+
+    assert ResourceLifetimes.cleanup_fields!(enum, audit) == []
+    refute ResourceLifetimes.logical_payload?(enum, audit.translated, audit.references)
+
+    changed = put_in(audit, [:translated, "type_decls", Access.at(0)], owned)
+
+    assert_raise ArgumentError, ~r/compiler-certified no-drop/, fn ->
+      ResourceLifetimes.cleanup_fields!(enum, changed)
+    end
+  end
+
   defp fixture(contents) do
     parameters = %{
       "regions" => [],

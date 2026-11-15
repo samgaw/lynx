@@ -57,7 +57,7 @@ defmodule Lynx.Rust.NativeCodecsTest do
       changed =
         put_in(enum_audit(), [:translated, "type_decls", Access.at(0), "needs_drop"], needs_drop)
 
-      assert_raise ArgumentError, ~r/unsupported scalar enum/, fn ->
+      assert_raise ArgumentError, ~r/unsupported plain-data enum/, fn ->
         NativeCodecs.plan!(changed)
       end
 
@@ -87,7 +87,7 @@ defmodule Lynx.Rust.NativeCodecsTest do
           fn _ -> field end
         )
 
-      assert_raise ArgumentError, ~r/unsupported scalar enum/, fn ->
+      assert_raise ArgumentError, ~r/unsupported plain-data enum/, fn ->
         NativeCodecs.plan!(changed)
       end
 
@@ -108,7 +108,87 @@ defmodule Lynx.Rust.NativeCodecsTest do
       changed =
         put_in(audit, [:translated, "type_decls", Access.at(0), "kind", "Enum"] ++ path, value)
 
-      assert_raise ArgumentError, ~r/unsupported scalar enum/, fn ->
+      assert_raise ArgumentError, ~r/unsupported plain-data enum/, fn ->
+        NativeCodecs.plan!(changed)
+      end
+    end
+  end
+
+  test "nested enum data is ordered before users and rejects hidden ownership" do
+    audit = enum_audit()
+    [outer] = audit.translated["type_decls"]
+    [record] = audit(%{"Scalar" => "Bool"}).translated["type_decls"]
+
+    record = %{
+      record
+      | "def_id" => 3,
+        "item_meta" =>
+          put_in(record["item_meta"], ["name", Access.at(1)], %{"Ident" => ["Record", 0]})
+    }
+
+    inner = %{
+      outer
+      | "def_id" => 2,
+        "item_meta" =>
+          put_in(outer["item_meta"], ["name", Access.at(1)], %{"Ident" => ["Inner", 0]})
+    }
+
+    adt = fn id ->
+      %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => ResourceModels.args([])}}
+    end
+
+    field = ["kind", "Enum", Access.at(1), "fields", Access.at(0), "ty"]
+    inner = put_in(inner, field, adt.(3))
+    outer = put_in(outer, field, adt.(2))
+    audit = put_in(audit, [:translated, "type_decls"], [outer, inner, record])
+
+    assert [%{"def_id" => 3}, %{"def_id" => 2}, %{"def_id" => 1, native_tag: tag}] =
+             NativeCodecs.plan!(audit)
+
+    assert String.contains?(tag, "fixture::Record")
+    assert NativeDrops.plain_data?(adt.(1), audit.translated, %{})
+
+    changed_width =
+      put_in(
+        audit,
+        [:translated, "type_decls", Access.at(2), "kind", "Struct", Access.at(0), "ty"],
+        %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+      )
+
+    assert [_, _, %{native_tag: changed_tag}] = NativeCodecs.plan!(changed_width)
+    refute changed_tag == tag
+
+    foreign =
+      put_in(
+        audit,
+        [:translated, "type_decls", Access.at(2), "item_meta", "name", Access.at(0)],
+        %{"Ident" => ["external", 0]}
+      )
+
+    assert_raise ArgumentError, ~r/unsupported native heap struct identity/, fn ->
+      NativeCodecs.plan!(foreign)
+    end
+
+    for replacement <- [
+          Map.put(record, "needs_drop", true),
+          Map.delete(record, "needs_drop"),
+          put_in(record, ["kind", "Struct", Access.at(0), "ty"], adt.(1)),
+          put_in(record, ["kind", "Struct", Access.at(0), "ty"], %{"Ref" => []}),
+          put_in(record, ["kind", "Struct", Access.at(0), "ty"], %{
+            "Adt" => %{
+              "id" => 4,
+              "builtin" => nil,
+              "generics" => ResourceModels.args([%{"Scalar" => "Bool"}])
+            }
+          }),
+          Map.put(record, "kind", "Opaque"),
+          put_in(record, ["generics", "types"], [%{"index" => 0}])
+        ] do
+      changed = put_in(audit, [:translated, "type_decls", Access.at(2)], replacement)
+      refute NativeDrops.plain_data?(adt.(1), changed.translated, %{})
+      refute NativeDrops.destructor_free?(adt.(1), changed.translated, %{})
+
+      assert_raise ArgumentError, ~r/unsupported plain-data enum/, fn ->
         NativeCodecs.plan!(changed)
       end
     end

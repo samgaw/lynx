@@ -2,7 +2,7 @@ defmodule Lynx.Rust.NativeCodecs do
   @moduledoc false
   alias Lynx.Rust.CallModels
 
-  # Only actual monomorphic first-party structs and scalar-field enums are derived.
+  # Only actual monomorphic first-party structs and plain-data enums are derived.
   # NativeCodec is an internal lossless heap representation, never a Rustler codec.
   def plan!(audit) do
     constructors =
@@ -159,11 +159,11 @@ defmodule Lynx.Rust.NativeCodecs do
           true ->
             declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
-            unless supported?(declaration, audit.first_party, audit.references),
+            unless supported?(declaration, audit),
               do:
                 raise(
                   ArgumentError,
-                  "unsupported native heap struct identity or unsupported scalar enum #{id}"
+                  "unsupported native heap struct identity or unsupported plain-data enum #{id}"
                 )
 
             found =
@@ -187,8 +187,7 @@ defmodule Lynx.Rust.NativeCodecs do
            "kind" => %{"Struct" => fields},
            "item_meta" => %{"name" => [%{"Ident" => [crate, 0]} | _], "attr_info" => attrs}
          },
-         first_party,
-         _refs
+         %{first_party: first_party}
        ) do
     crate in first_party and empty_parameters?(params) and
       attrs["rename"] == nil and
@@ -206,8 +205,7 @@ defmodule Lynx.Rust.NativeCodecs do
            "kind" => %{"Enum" => variants},
            "item_meta" => %{"name" => [%{"Ident" => [crate, 0]} | _], "attr_info" => attrs}
          },
-         first_party,
-         refs
+         %{first_party: first_party} = audit
        )
        when is_list(variants) and variants != [] do
     crate in first_party and empty_parameters?(params) and attrs["rename"] == nil and
@@ -215,30 +213,25 @@ defmodule Lynx.Rust.NativeCodecs do
       Enum.all?(Enum.with_index(variants), fn {variant, index} ->
         variant["id"] == index and identifier?(variant["name"]) and
           variant["attr_info"]["rename"] == nil and is_list(variant["fields"]) and
-          enum_fields?(variant["fields"], refs)
+          enum_fields?(variant["fields"], audit)
       end)
   end
 
-  defp supported?(_, _, _), do: false
+  defp supported?(_, _), do: false
 
-  defp enum_fields?(fields, refs) do
+  defp enum_fields?(fields, audit) do
     length(Enum.uniq_by(fields, & &1["name"])) == length(fields) and
       length(Enum.uniq(Enum.map(fields, & &1["is_positional"]))) <= 1 and
       Enum.all?(Enum.with_index(fields), fn {field, index} ->
         identifier?(field["name"]) and field["is_positional"] in [true, false] and
           (field["is_positional"] == false or field["name"] == "_#{index}") and
           field["attr_info"]["rename"] == nil and
-          scalar_field?(CallModels.expand(field["ty"], refs))
+          Lynx.Rust.NativeDrops.plain_data?(field["ty"], audit.translated, audit.references)
       end)
   end
 
   defp identifier?(name),
     do: is_binary(name) and Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_]*$/, name)
-
-  defp scalar_field?(%{"Scalar" => _} = scalar),
-    do: Lynx.Rust.NativeDrops.destructor_free?(scalar, %{}, %{})
-
-  defp scalar_field?(_), do: false
 
   defp fields!(%{"kind" => %{"Struct" => fields}}), do: fields
   defp fields!(%{"kind" => %{"Enum" => variants}}), do: Enum.flat_map(variants, & &1["fields"])
