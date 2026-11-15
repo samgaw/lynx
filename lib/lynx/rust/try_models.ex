@@ -7,6 +7,8 @@ defmodule Lynx.Rust.TryModels do
   # No user conversion body is erased or replaced by an assumed identity.
   # Option uses downstream total enum models over the exact Never residual.
   # Invalid enum representations and custom Try implementations are not admitted.
+  # Numeric From calls reuse upstream definitions only for checked, same-sign
+  # widening; they do not relax the FromResidual callback restriction.
   def resolve(f, t, refs) do
     with %{"body" => "Opaque", "src" => %{"TraitImpl" => src}, "signature" => sig} <- f,
          true <-
@@ -61,6 +63,42 @@ defmodule Lynx.Rust.TryModels do
         input == [var(0)] and output == var(0) and implemented == args([var(0), var(0)]) ->
         {"core::convert::{core::convert::From<@T, @T>}::from", "core.convert.FromSame.from",
          %{try_identity: trait["def_id"]}}
+
+      named?(f, impl, ~w(core convert num), "from") and
+        f["src"]["TraitImpl"]["item_id"] == 0 and length(impl["methods"]) == 1 and
+        trait["item_meta"]["name"] == name(~w(core convert From)) and
+        parameters?(trait["generics"], 2, 0) and
+        parameters?(f["generics"], 0, 0) and parameters?(impl["generics"], 0, 0) ->
+        with [%{"Scalar" => %{"Integer" => source}} = from] <- input,
+             %{"Scalar" => %{"Integer" => target}} = to <- output,
+             [{family, origin}] <- Map.to_list(source),
+             [{^family, destination}] <- Map.to_list(target),
+             true <- family in ["Signed", "Unsigned"],
+             prefix = if(family == "Signed", do: "I", else: "U"),
+             true <-
+               String.starts_with?(origin, prefix) and String.starts_with?(destination, prefix),
+             true <- origin in ~w(I8 I16 I32 I64 U8 U16 U32 U64),
+             true <- destination in ~w(I8 I16 I32 I64 U8 U16 U32 U64),
+             {lower, ""} <- Integer.parse(String.slice(origin, 1..-1//1)),
+             {upper, ""} <- Integer.parse(String.slice(destination, 1..-1//1)),
+             true <- lower < upper,
+             true <- implemented == args([to, from]),
+             true <- f["src"]["TraitImpl"]["impl_ref"]["generics"] == args([]),
+             true <-
+               expand_args(f["src"]["TraitImpl"]["trait_ref"]["generics"], refs) == implemented do
+          rust_to = String.downcase(destination)
+          rust_from = String.downcase(origin)
+
+          {"core::convert::num::{core::convert::From<#{rust_to}, #{rust_from}>}::from",
+           "core.convert.From#{destination}#{origin}.from",
+           %{
+             can_fail: false,
+             label:
+               "Aeneas standard lossless #{rust_from}-to-#{rust_to} From conversion; exact signature, trait and widening-width admission; Rust core implementation not verified"
+           }}
+        else
+          _ -> nil
+        end
 
       named?(f, impl, ~w(core result), "branch") and
         f["src"]["TraitImpl"]["item_id"] == 1 and length(impl["methods"]) == 2 and
