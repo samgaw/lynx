@@ -128,7 +128,11 @@ defmodule Lynx.Rustler.AtomCaches do
              do: fail!("cache uses unresolved or unsupported runtime calls")
 
       literals =
-        for global <- Enum.reject(translated["global_decls"], &is_nil/1),
+        for global <-
+              Lynx.Rust.LLBCJson.restore_global_constant_values!(
+                Enum.reject(translated["global_decls"], &is_nil/1),
+                document
+              ),
             global["global_kind"] == "AnonConst",
             [%{"Str" => text}, _] <- [CallModels.expand(global["value"], refs)],
             into: %{},
