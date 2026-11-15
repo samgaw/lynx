@@ -47,6 +47,7 @@ pub fn counter_checked(value: u64, accepted: bool) -> (u64, u64) {
 #[rustler::nif(name = "atomic_new")]
 #[lynx::atomic]
 #[lynx::compare]
+#[lynx::returned]
 fn create(value: u64) -> rustler::ResourceArc<Counter> {
     counter_new(value)
 }
@@ -66,6 +67,7 @@ fn pair(resource: rustler::ResourceArc<Counter>) -> (u64, u64) {
 #[rustler::nif(name = "atomic_read")]
 #[lynx::atomic]
 #[lynx::compare]
+#[lynx::returned]
 fn read(resource: rustler::ResourceArc<Counter>) -> u64 {
     counter_read(resource)
 }
@@ -92,6 +94,33 @@ fn compare(
     replacement: u64,
 ) -> (bool, u64) {
     counter_replace(resource, expected, replacement)
+}
+
+/// Retains the completed atomic update on both return errors and panics.
+///
+/// # Panics
+/// Panics for mode four after the update.
+pub fn counter_result(
+    resource: rustler::ResourceArc<Counter>,
+    mode: u64,
+) -> rustler::NifResult<u64> {
+    let previous = atomic_core::claim(&resource.state);
+    match mode {
+        0 => Ok(previous),
+        1 => Err(rustler::Error::BadArg),
+        2 => Err(rustler::Error::Atom("rejected")),
+        3 => Err(rustler::Error::RaiseAtom("rust_panicked")),
+        _ => {
+            assert!(mode != 4);
+            Err(rustler::Error::RaiseAtom("denied"))
+        }
+    }
+}
+
+#[rustler::nif(name = "atomic_result", schedule = "DirtyCpu")]
+#[lynx::returned]
+fn returned(resource: rustler::ResourceArc<Counter>, mode: u64) -> rustler::NifResult<u64> {
+    counter_result(resource, mode)
 }
 
 rustler::init!("Elixir.LynxAtomicFixture.Native");
