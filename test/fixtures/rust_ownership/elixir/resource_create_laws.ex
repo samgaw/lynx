@@ -5,25 +5,31 @@ defmodule LynxResourceCreationFixture.Laws do
   law creates_true,
     expects: LynxResourceCreationFixture.Native.resource_created(true, true) == false,
     proof: ~LEAN"""
-    simp [Lynx.concurrent_eq_run, «creates_true:ensures/0»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created/2»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.NativeResourceArc.typeName, Erlang.erlang.«==/2»]
-    rw [Created.Properties.adapter_continuation]
-    all_goals simp [Lynx.NativeResourceArc.typeName, Lynx.Rustler.encodeBool]
+    set_option maxHeartbeats 16000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 384)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
     """
 
   law creates_false,
     expects: LynxResourceCreationFixture.Native.resource_created(false, true) == true,
     proof: ~LEAN"""
-    simp [Lynx.concurrent_eq_run, «creates_false:ensures/0»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created/2»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.NativeResourceArc.typeName, Erlang.erlang.«==/2»]
-    rw [Created.Properties.adapter_continuation]
-    all_goals simp [Lynx.NativeResourceArc.typeName, Lynx.Rustler.encodeBool]
+    set_option maxHeartbeats 16000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 384)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
     """
 
   law rejects_after_creation,
@@ -35,13 +41,16 @@ defmodule LynxResourceCreationFixture.Laws do
          :error, :nif_panicked -> true
        end),
     proof: ~LEAN"""
-    simp [Lynx.concurrent_eq_run, «rejects_after_creation:ensures/0»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created/2»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.NativeResourceArc.typeName, Lynx.Result.handle, Created.Properties.catch_modify]
-    rw [Created.Properties.adapter_handled]
-    all_goals simp [Lynx.NativeResourceArc.typeName, Lynx.Exception.classTerm, Lynx.Exception.reason]
+    set_option maxHeartbeats 16000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 384)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
     """
 
   law rejects_first_argument,
@@ -53,10 +62,16 @@ defmodule LynxResourceCreationFixture.Laws do
          :error, :badarg -> true
        end),
     proof: ~LEAN"""
-    simp [Lynx.concurrent_eq_run, «rejects_first_argument:ensures/0»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason]
+    set_option maxHeartbeats 16000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 384)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
     """
 
   law rejects_second_argument,
@@ -68,10 +83,16 @@ defmodule LynxResourceCreationFixture.Laws do
          :error, :badarg -> true
        end),
     proof: ~LEAN"""
-    simp [Lynx.concurrent_eq_run, «rejects_second_argument:ensures/0»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason]
+    set_option maxHeartbeats 16000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 384)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
     """
 
   law repeated_creation,
@@ -79,15 +100,15 @@ defmodule LynxResourceCreationFixture.Laws do
       LynxResourceCreationFixture.Native.resource_created(true, true) == false and
         LynxResourceCreationFixture.Native.resource_created(false, true) == true,
     proof: ~LEAN"""
-    simp [Lynx.concurrent_eq_run, «repeated_creation:ensures/0»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created/2»,
-      Elixir.LynxResourceCreationFixture.Native.«resource_created:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.NativeResourceArc.typeName, Erlang.erlang.«==/2»]
-    rw [Created.Properties.adapter_continuation]
-    all_goals simp [Lynx.NativeResourceArc.typeName, Lynx.Rustler.encodeBool,
-      List.eraseDups_cons, List.filter]
-    all_goals first | rw [Created.Properties.adapter_continuation] | skip
-    all_goals simp [Lynx.NativeResourceArc.typeName, Lynx.Rustler.encodeBool]
+    set_option maxHeartbeats 16000000 in
+    set_option maxRecDepth 8192 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 384)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
     """
 end
