@@ -44,4 +44,10 @@ theorem facade_bytes (input : Rustler.Binary) (bound : input.size ≤ 262144) :
     simp [Rustler.binaryAsSlice, unsignedBound, signedBound]
   rw [facade_view input _ viewReturned (by simpa using bound)]
   exact ⟨_, rfl, by simp⟩
+-- This symbolic observation must use the proved storage inverse rather than
+-- evaluate a dependent list conversion for every element.
+private theorem indexed_storage_inverse (values : List U8) (bound : values.length ≤ Usize.max) :
+    (Slice.from values bound).val = values := by
+  cbv
+
 end Buffer.CopyProperties

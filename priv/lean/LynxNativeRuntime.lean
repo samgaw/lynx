@@ -30,6 +30,10 @@ namespace NativeM
 -- while evaluating the argument, before it can use the fromRust equations.
 attribute [cbv_opaque] RustM.ok RustM.fail RustM.div Aeneas.Std.bind
 attribute [cbv_eval] Aeneas.Std.bind_ok Aeneas.Std.bind_fail Aeneas.Std.bind_div
+-- Retain slice construction until its proved value equation applies. Expanding
+-- the indexed storage causes costly dependent equality checks for large buffers.
+attribute [cbv_opaque] Slice.from
+attribute [cbv_eval] Slice.from_val
 
 attribute [cbv_eval] U64.max_eq
 
