@@ -112,8 +112,12 @@ defmodule Lynx.Rustler do
   structs/enums, within a 32-level admission bound. Native owners, opaque fields
   and other layouts need explicit cleanup and are rejected. Preceding ResourceArc
   arguments are released when a later decoder returns an error or panics.
-  Runtime custom payload Encoders, Error inspection and other unqualified payload
-  layouts remain rejected.
+  Runtime custom return Encoders likewise execute their actual extracted methods
+  in the native monad, including return-value encoding panics. Their payloads
+  require the same no-drop and recursive value-field evidence. Tuples, options,
+  Results and NifResult successes compose those encoders in order; only the
+  selected option/result branch is encoded. Error inspection and other
+  unqualified payload layouts remain rejected.
 
   Options:
 
@@ -172,8 +176,9 @@ defmodule Lynx.Rustler do
       state and blocking waits in Lynx's runtime. Runtime bindings use concurrent
       purity, preserve effects before panic and convert `rust_panicked` to
       `nif_panicked`. Top-level resource handles preserve shared identity through
-      modeled VM pins; native task identity and custom return encoders remain
-      unsupported in this mode. Ordinary scalar/tuple/result and
+      modeled VM pins. Validated custom return encoders preserve that same native
+      environment and panic boundary; native task identity remains unsupported.
+      Ordinary scalar/tuple/result and
       byte-vector codecs retain their existing decoding rules and cutoffs.
     * `:owned_drops` — `false` by default. `:explicit` with pure execution retains
       upstream destructor dictionaries and actual first-party Drop bodies,
@@ -438,9 +443,6 @@ defmodule Lynx.Rustler do
     custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
     returns? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.nif_result?(&1["result"]))
     mir = opts[:mir] || if(execution == :pure and (decoders? or returns?), do: :elaborated)
-
-    if execution == :runtime and custom?,
-      do: raise(ArgumentError, "runtime Rustler custom encoders are unsupported")
 
     extraction_context =
       Lynx.Rust.Sysroot.context!(context, workspace, package, build_dir, tools, opts)

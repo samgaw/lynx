@@ -2,22 +2,24 @@ defmodule Lynx.Rustler.DecoderValues do
   @moduledoc false
   alias Lynx.Rust.{CallModels, Constants, DropModels, LLBC, ResourceModels}
 
-  # A decoded argument can outlive a later decoding failure. Require compiler
-  # no-drop evidence and inspect every field: even a no-drop Rust type can own
+  # Decoded arguments can outlive later decoding failures; return values live
+  # until encoding completes. Require compiler no-drop evidence and inspect
+  # every field: even a no-drop Rust type can own
   # modeled mutex/atomic/resource cells, which need explicit lifetime handling.
-  def validate!(id, audit) do
+  def validate!(id, audit, codec \\ :decoder) do
+    name = if codec == :encoder, do: "Encoder", else: "Decoder"
     type = %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => ResourceModels.args([])}}
 
     unless value?(type, audit, [], 32) do
       declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
       unless declaration,
-        do: raise(ArgumentError, "missing runtime Rustler Decoder payload type #{id}")
+        do: raise(ArgumentError, "missing runtime Rustler #{name} payload type #{id}")
 
       LLBC.failure!(
         declaration,
         Map.put_new(audit.translated, "files", []),
-        "runtime Rustler Decoder payload requires compiler-validated destructor-free scalar structs/enums or tuples; native owners, opaque fields and unsupported layouts require explicit cleanup"
+        "runtime Rustler #{name} payload requires compiler-validated destructor-free scalar structs/enums or tuples; native owners, opaque fields and unsupported layouts require explicit cleanup"
       )
     end
   end

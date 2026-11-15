@@ -287,6 +287,10 @@ defmodule Lynx.Rustler.Adapter do
     "Lynx.Rustler.executeNative (do let value ← (#{call}); let term ← Lynx.NativeResourceArc.encode value; #{release} value; Lynx.Result.ok term) id"
   end
 
+  defp execute(call, %{encode_native_m: encoder}, :runtime, _release) do
+    "Lynx.Rustler.executeNative (do let value ← (#{call}); #{encoder} value) id"
+  end
+
   defp execute(call, %{encode_m: encoder}, :runtime, _release) do
     "Lynx.Rustler.executeNative (do let value ← (#{call}); Lynx.NativeM.fromRust (#{encoder} value)) id"
   end
@@ -300,8 +304,24 @@ defmodule Lynx.Rustler.Adapter do
 
   defp execute(call, type, :pure, _release), do: "Lynx.Rustler.execute (#{call}) #{type.encode}"
 
-  defp monadic_encoder(%{encode_m: encoder}), do: encoder
-  defp monadic_encoder(type), do: "(fun value => RustM.ok (#{type.encode} value))"
+  defp encoder_mode(types),
+    do: if(Enum.any?(types, &Map.has_key?(&1, :encode_native_m)), do: :native, else: :pure)
+
+  defp encoder_key(:native), do: :encode_native_m
+  defp encoder_key(:pure), do: :encode_m
+
+  defp monadic_encoder(%{encode_native_m: encoder}, :native), do: encoder
+
+  defp monadic_encoder(%{encode_m: encoder}, :native),
+    do: "(fun value => Lynx.NativeM.fromRust (#{encoder} value))"
+
+  defp monadic_encoder(type, :native),
+    do: "(fun value => Lynx.NativeM.ok (#{type.encode} value))"
+
+  defp monadic_encoder(%{encode_m: encoder}, :pure), do: encoder
+  defp monadic_encoder(type, :pure), do: "(fun value => RustM.ok (#{type.encode} value))"
+
+  defp monadic?(type), do: Map.has_key?(type, :encode_m) or Map.has_key?(type, :encode_native_m)
 
   defp type!(%{"resource" => _, "lean" => lean}) do
     payload = identifier!(lean)
@@ -318,15 +338,23 @@ defmodule Lynx.Rustler.Adapter do
     %{lean: identifier!(lean), decode: nil, decode_m: identifier!(decoder), encode: nil}
   end
 
-  defp type!(%{"native" => _, "lean" => lean, "encoder" => encoder}) do
+  defp type!(%{"native" => _, "lean" => lean, "encoder" => encoder} = binding) do
     type = identifier!(lean)
 
-    %{
-      lean: type,
-      decode: nil,
-      encode: nil,
-      encode_m: "(fun (value : #{type}) => #{identifier!(encoder)} value ())"
-    }
+    mode =
+      case Map.get(binding, "encoder_monad", "RustM") do
+        "RustM" ->
+          :pure
+
+        "Lynx.NativeM" ->
+          :native
+
+        other ->
+          raise ArgumentError, "unsupported Rustler Encoder result monad: #{inspect(other)}"
+      end
+
+    %{lean: type, decode: nil, encode: nil}
+    |> Map.put(encoder_key(mode), "(fun (value : #{type}) => #{identifier!(encoder)} value ())")
   end
 
   defp type!(%{"nif_result" => payload}) do
@@ -450,7 +478,8 @@ defmodule Lynx.Rustler.Adapter do
       encode: "(fun (#{value_var} : #{lean}) => Lynx.Term.tuple #[#{encoded}])"
     }
 
-    if Enum.any?(types, &Map.has_key?(&1, :encode_m)) do
+    if Enum.any?(types, &monadic?/1) do
+      mode = encoder_mode(types)
       values = for index <- indices(length(types)), do: "encoded#{index}"
 
       steps =
@@ -464,16 +493,17 @@ defmodule Lynx.Rustler.Adapter do
               true -> "value" <> String.duplicate(".2", index) <> ".1"
             end
 
-          "let #{name} ← #{monadic_encoder(type)} (#{projection})"
+          "let #{name} ← #{monadic_encoder(type, mode)} (#{projection})"
         end)
 
-      Map.merge(type, %{
-        encode: nil,
-        encode_m:
-          "(fun (value : #{lean}) => do " <>
-            Enum.join(steps ++ [".ok (Lynx.Term.tuple #[#{Enum.join(values, ", ")}])"], "; ") <>
-            ")"
-      })
+      type
+      |> Map.put(:encode, nil)
+      |> Map.put(
+        encoder_key(mode),
+        "(fun (value : #{lean}) => do " <>
+          Enum.join(steps ++ [".ok (Lynx.Term.tuple #[#{Enum.join(values, ", ")}])"], "; ") <>
+          ")"
+      )
     else
       type
     end
@@ -496,13 +526,19 @@ defmodule Lynx.Rustler.Adapter do
       encode: "(Lynx.Rustler.encodeOption (#{inner.encode}))"
     }
 
-    if Map.has_key?(inner, :encode_m),
-      do:
-        Map.merge(type, %{
-          encode: nil,
-          encode_m: "(Lynx.Rustler.encodeOptionM (#{monadic_encoder(inner)}))"
-        }),
-      else: type
+    if monadic?(inner) do
+      mode = encoder_mode([inner])
+      operation = if mode == :native, do: "encodeNativeOptionM", else: "encodeOptionM"
+
+      type
+      |> Map.put(:encode, nil)
+      |> Map.put(
+        encoder_key(mode),
+        "(Lynx.Rustler.#{operation} (#{monadic_encoder(inner, mode)}))"
+      )
+    else
+      type
+    end
   end
 
   defp type!(%{"result" => [ok, err]}) do
@@ -523,14 +559,19 @@ defmodule Lynx.Rustler.Adapter do
       encode: "(Lynx.Rustler.encodeResult (#{ok.encode}) (#{err.encode}))"
     }
 
-    if Map.has_key?(ok, :encode_m) or Map.has_key?(err, :encode_m),
-      do:
-        Map.merge(type, %{
-          encode: nil,
-          encode_m:
-            "(Lynx.Rustler.encodeResultM (#{monadic_encoder(ok)}) (#{monadic_encoder(err)}))"
-        }),
-      else: type
+    if monadic?(ok) or monadic?(err) do
+      mode = encoder_mode([ok, err])
+      operation = if mode == :native, do: "encodeNativeResultM", else: "encodeResultM"
+
+      type
+      |> Map.put(:encode, nil)
+      |> Map.put(
+        encoder_key(mode),
+        "(Lynx.Rustler.#{operation} (#{monadic_encoder(ok, mode)}) (#{monadic_encoder(err, mode)}))"
+      )
+    else
+      type
+    end
   end
 
   defp type!(type), do: raise(ArgumentError, "unsupported Rustler adapter type: #{inspect(type)}")

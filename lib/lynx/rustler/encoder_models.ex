@@ -306,6 +306,9 @@ defmodule Lynx.Rustler.EncoderModels do
   end
 
   def binding!(type_id, audit, translation) do
+    if translation["result_monad"] == "Lynx.NativeM",
+      do: Lynx.Rustler.DecoderValues.validate!(type_id, audit, :encoder)
+
     self = %{"Adt" => %{"id" => type_id, "builtin" => nil, "generics" => arguments([])}}
 
     candidates =
@@ -315,10 +318,16 @@ defmodule Lynx.Rustler.EncoderModels do
       )
 
     with [function] <- candidates,
+         true <- is_map(function["body"]),
          [%{"is_opaque" => false, "lean_name" => encoder}] <-
            Enum.filter(translation["functions"], &(&1["def_id"] == function["def_id"])),
          [%{"lean_name" => type}] <- Enum.filter(translation["types"], &(&1["def_id"] == type_id)) do
-      %{"lean" => type, "encoder" => encoder, "encoder_definition_id" => function["def_id"]}
+      %{
+        "lean" => type,
+        "encoder" => encoder,
+        "encoder_definition_id" => function["def_id"],
+        "encoder_monad" => translation["result_monad"]
+      }
     else
       _ ->
         raise ArgumentError,

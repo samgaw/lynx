@@ -227,6 +227,12 @@ therefore decode nil as some none, rather than outer none. -/
   | some value => encode value
   | none => .ok (.atom "nil")
 
+/-- Compose the actual extracted native Encoder without discarding its effects. -/
+@[expose] def encodeNativeOptionM {α : Type} (encode : α → Result Term) :
+    Option α → Result Term
+  | some value => encode value
+  | none => .ok (.atom "nil")
+
 @[simp] theorem decodeOption_some {α : Type} (decode : Term → Except Exception α)
     (input : Term) (value : α) (h : decode input = .ok value) :
     decodeOption decode input = .ok (some value) := by simp [decodeOption, h]
@@ -267,6 +273,16 @@ theorem decodeOption_encodeOption {α : Type} (decode : Term → Except Exceptio
 verification cutoff from the selected encoder propagates through execution. -/
 @[expose] def encodeResultM {α β : Type} (encodeOk : α → RustM Term)
     (encodeErr : β → RustM Term) : core.result.Result α β → RustM Term
+  | .Ok value => do
+    let encoded ← encodeOk value
+    .ok (.tuple #[.atom "ok", encoded])
+  | .Err value => do
+    let encoded ← encodeErr value
+    .ok (.tuple #[.atom "error", encoded])
+
+/-- Encode only the selected Result branch in the caller's native environment. -/
+@[expose] def encodeNativeResultM {α β : Type} (encodeOk : α → Result Term)
+    (encodeErr : β → Result Term) : core.result.Result α β → Result Term
   | .Ok value => do
     let encoded ← encodeOk value
     .ok (.tuple #[.atom "ok", encoded])

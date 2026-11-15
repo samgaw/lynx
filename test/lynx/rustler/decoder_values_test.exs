@@ -64,4 +64,20 @@ defmodule Lynx.Rustler.DecoderValuesTest do
     type = put_in(ctx.type, ["kind"], %{"Enum" => [%{"fields" => [Map.put(field, "ty", tuple)]}]})
     DecoderValues.validate!(ctx.id, put_in(ctx.audit, [:translated, "type_decls"], [type]))
   end
+
+  test "native return encoders require the same no-drop and recursive ownership evidence", ctx do
+    DecoderValues.validate!(ctx.id, ctx.audit, :encoder)
+
+    for value <- [true, nil] do
+      type = Map.put(ctx.type, "needs_drop", value)
+
+      assert_raise CompileError, ~r/runtime Rustler Encoder payload/, fn ->
+        DecoderValues.validate!(
+          ctx.id,
+          put_in(ctx.audit, [:translated, "type_decls"], [type]),
+          :encoder
+        )
+      end
+    end
+  end
 end

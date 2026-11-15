@@ -16,4 +16,16 @@ defmodule LynxAtomicFixture.Native do
   def atomic_result(_resource, _mode), do: :erlang.nif_error(:not_loaded)
   def atomic_replace(_resource, _expected, _replacement), do: :erlang.nif_error(:not_loaded)
   def atomic_checked(_value, _accepted), do: :erlang.nif_error(:not_loaded)
+  def atomic_reply(_resource, _expected, _replacement), do: :erlang.nif_error(:not_loaded)
+
+  def atomic_reply_option(_resource, _expected, _replacement), do: :erlang.nif_error(:not_loaded)
+
+  def atomic_reply_result(_resource, _expected, _replacement), do: :erlang.nif_error(:not_loaded)
+
+  def atomic_reply_tuple(_resource, _expected, _replacement), do: :erlang.nif_error(:not_loaded)
+
+  def atomic_reply_checked(_resource, _expected, _replacement), do: :erlang.nif_error(:not_loaded)
+
+  def atomic_reply_nif_result(_resource, _expected, _replacement),
+    do: :erlang.nif_error(:not_loaded)
 end
