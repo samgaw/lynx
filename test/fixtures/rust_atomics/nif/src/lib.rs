@@ -2,6 +2,7 @@
 #![feature(register_tool)]
 #![register_tool(lynx)]
 
+pub mod commands;
 pub mod decoding;
 pub mod derived;
 pub mod encoding;
@@ -59,6 +60,7 @@ pub fn counter_checked(value: u64, accepted: bool) -> (u64, u64) {
 #[lynx::encoded]
 #[lynx::records]
 #[lynx::scalars]
+#[lynx::commands]
 fn create(value: u64) -> rustler::ResourceArc<Counter> {
     counter_new(value)
 }
@@ -84,6 +86,7 @@ fn pair(resource: rustler::ResourceArc<Counter>) -> (u64, u64) {
 #[lynx::encoded]
 #[lynx::records]
 #[lynx::scalars]
+#[lynx::commands]
 fn read(resource: rustler::ResourceArc<Counter>) -> u64 {
     counter_read(resource)
 }

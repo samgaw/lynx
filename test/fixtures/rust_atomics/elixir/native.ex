@@ -10,6 +10,7 @@ defmodule LynxAtomicFixture.Native do
   def atomic_claim(_resource), do: :erlang.nif_error(:not_loaded)
   def atomic_pair(_resource), do: :erlang.nif_error(:not_loaded)
   def atomic_read(_resource), do: :erlang.nif_error(:not_loaded)
+  def atomic_command(_, _), do: :erlang.nif_error(:not_loaded)
   def atomic_scalar(_, _), do: :erlang.nif_error(:not_loaded)
   def scalar_bool(_), do: :erlang.nif_error(:not_loaded)
   def scalar_i8(_), do: :erlang.nif_error(:not_loaded)
