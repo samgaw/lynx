@@ -2,6 +2,58 @@ defmodule Lynx.Rust.ResultModels do
   @moduledoc false
   alias Lynx.Rust.{CallModels, LLBC, FileModels, FormatModels}
 
+  # Runtime callbacks must execute in NativeM: lifting a pure FnOnce dictionary
+  # would lose the state effects of the actual extracted callback body.
+  def for_execution(%{callback: :compiler_fn_once} = model, :runtime) do
+    operation =
+      cond do
+        model[:option_callback_type] -> "andThen"
+        model[:option_map] -> "map"
+        true -> "mapErr"
+      end
+
+    model
+    |> Map.merge(%{
+      lean: "Lynx.NativeCallbacks." <> operation,
+      backend_rust_name: "lynx_native::callback_" <> operation,
+      builtin: false,
+      lift: true,
+      keep_trait_clauses: [true],
+      native_callback: true,
+      label:
+        model.label <>
+          "; NativeM callback interpretation retains actual extracted bodies and runtime failures"
+    })
+  end
+
+  def for_execution(model, _), do: model
+
+  def external_names(audit, :runtime) do
+    if Enum.any?(audit.external_calls, fn {_, model} -> model[:native_callback] end) do
+      %{
+        "trait_decls" => [
+          %{
+            "rust_pattern" => "lynx_native::FnOnce",
+            "extract_name" => "Lynx.NativeCallbacks.FnOnce",
+            "constructor" => "Lynx.NativeCallbacks.FnOnce.mk"
+          }
+        ],
+        "trait_items" => [
+          %{
+            "trait" => "lynx_native::FnOnce",
+            "kind" => "method",
+            "rust" => "call_once",
+            "extract" => "call_once"
+          }
+        ]
+      }
+    else
+      %{}
+    end
+  end
+
+  def external_names(_, _), do: %{}
+
   # A shared variant observation does not decode, move or destroy its payloads.
   # Reuse upstream Aeneas's observer while checking the actual Rust interface.
   def resolve(
@@ -459,15 +511,16 @@ defmodule Lynx.Rust.ResultModels do
   defp region(index), do: %{"Var" => %{"Free" => index}}
   defp adt(id), do: %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([])}}
 
-  # Aeneas already reserves the standard expect pattern. Alias only the opaque
-  # declaration admitted above, after auditing the original compiler document.
+  # Aeneas reserves standard patterns, including callback and Clone names. Alias
+  # only validated opaque models after auditing the original compiler document.
   # Calls retain their definition IDs, signatures, arguments and source spans;
   # reports retain the original Rust name. No first-party body is replaced.
   def lower_native_names!(document, models) do
     selected =
       Map.filter(models, fn {_, model} ->
         model[:native_expect_ok] == true or model[:native_expect_some] == true or
-          model[:encoder_unwrap_ok] == true or model[:rustler_result_conversion] != nil
+          model[:encoder_unwrap_ok] == true or model[:rustler_result_conversion] != nil or
+          model[:native_callback] == true or model[:sdk_copy_alias] == true
       end)
 
     {functions, found} =
@@ -477,12 +530,15 @@ defmodule Lynx.Rust.ResultModels do
             {function, found}
 
           model ->
-            unless function["body"] == "Opaque" and function["src"] == "Normal" and
-                     function["item_meta"]["name"] == model.function["item_meta"]["name"],
+            unless function["body"] == "Opaque" and
+                     (function["src"] == "Normal" or model[:sdk_copy_alias] == true) and
+                     function["item_meta"]["name"] == model.function["item_meta"]["name"] and
+                     function["signature"] == model.function["signature"] and
+                     function["src"] == model.function["src"],
                    do:
                      raise(
                        ArgumentError,
-                       "native expect alias requires its original audited opaque declaration"
+                       "native model alias requires its original audited opaque declaration"
                      )
 
             parts = String.split(model.backend_rust_name, "::")
@@ -497,7 +553,7 @@ defmodule Lynx.Rust.ResultModels do
               end)
 
             if collision,
-              do: raise(ArgumentError, "native expect alias collides with another declaration")
+              do: raise(ArgumentError, "native model alias collides with another declaration")
 
             name = Enum.map(parts, &%{"Ident" => [&1, 0]})
             {put_in(function, ["item_meta", "name"], name), [function["def_id"] | found]}
@@ -505,9 +561,44 @@ defmodule Lynx.Rust.ResultModels do
       end)
 
     unless Enum.sort(found) == Enum.sort(Map.keys(selected)),
-      do: raise(ArgumentError, "missing audited native expect declaration")
+      do: raise(ArgumentError, "missing audited native model declaration")
 
-    {put_in(document, ["translated", "fun_decls"], functions), Enum.sort(found)}
+    document = put_in(document, ["translated", "fun_decls"], functions)
+    trait_ids = for {_, model} <- models, model[:native_callback], do: model.fn_once_trait
+    traits = Enum.uniq(trait_ids)
+
+    if traits != [] and
+         Enum.any?(document["translated"]["trait_decls"], fn declaration ->
+           declaration &&
+             declaration["item_meta"]["name"] ==
+               Enum.map(~w(lynx_native FnOnce), &%{"Ident" => [&1, 0]})
+         end),
+       do: raise(ArgumentError, "native callback trait alias collides with another declaration")
+
+    document =
+      update_in(document, ["translated", "trait_decls"], fn declarations ->
+        Enum.map(declarations, fn declaration ->
+          if declaration && declaration["def_id"] in traits do
+            unless declaration["item_meta"]["name"] ==
+                     Enum.map(~w(core ops function FnOnce), &%{"Ident" => [&1, 0]}),
+                   do:
+                     raise(
+                       ArgumentError,
+                       "native callback requires the original audited FnOnce trait"
+                     )
+
+            put_in(
+              declaration,
+              ["item_meta", "name"],
+              Enum.map(~w(lynx_native FnOnce), &%{"Ident" => [&1, 0]})
+            )
+          else
+            declaration
+          end
+        end)
+      end)
+
+    {document, Enum.sort(found)}
   end
 
   def audit(functions, models, translated, refs) do

@@ -14,6 +14,10 @@ defmodule Lynx.Rustler do
   use their actual extracted bodies with the supported primitive decoder models.
   The compiler resolves their types, encoder roots and generated atom
   caches automatically; no per-export Lean adapter or name mapping is required.
+  Runtime tagged-enum Decoders can contain destructor-free first-party records;
+  their compiler-generated `Option::and_then` and `Result::map_err` callbacks use
+  the actual extracted bodies in the native monad. Discarding arbitrary boxed
+  nested errors still exhausts verification because their cleanup is unsupported.
   Supported stateless runtime encoders include atoms, u64, strings, borrowed str,
   shared references, pairs and Vec. Custom arguments and `NifResult<T>` use
   extracted implementations and modelled return conversion; unsupported signatures

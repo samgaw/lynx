@@ -73,6 +73,17 @@ defmodule Lynx.Rustler.CopyModels do
     end
   end
 
+  # The runtime backend reserves Clone's standard name before custom models.
+  # Alias only a fully validated SDK handle copy, retaining its compiler ID.
+  def for_execution(%{lean: "Lynx.Rustler.copy" <> kind} = model, :runtime) do
+    Map.merge(model, %{
+      backend_rust_name: "lynx_rustler::copy" <> kind,
+      sdk_copy_alias: true
+    })
+  end
+
+  def for_execution(model, _), do: model
+
   # A real Copy dictionary supplies the no-destructor certificate for Term's
   # lifetime-parametric type, whose generic needs_drop query may be unknown.
   defp copy?(self, translated, refs) do

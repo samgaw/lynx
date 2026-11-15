@@ -4016,3 +4016,30 @@ instance (priority := 1100) : NativeOwnedDrop (NativeMutex NativeFile) where
   drop := NativeMutex.disposeFile
 
 end Lynx
+
+namespace Lynx.NativeCallbacks
+open Aeneas.Std
+
+/-- Actual extracted FnOnce bodies in the native state monad. Capture destruction
+is admitted separately by the compiler-dictionary audit. -/
+structure FnOnce (Self Args Output : Type) where
+  call_once : Self → Args → Lynx.NativeM Output
+
+@[expose] def andThen {T U F : Type} (callback : FnOnce F T (Option U))
+    (input : Option T) (capture : F) : Lynx.NativeM (Option U) :=
+  match input with
+  | none => .ok none
+  | some value => callback.call_once capture value
+
+@[expose] def map {T U F : Type} (callback : FnOnce F T U)
+    (input : Option T) (capture : F) : Lynx.NativeM (Option U) := do
+  match input with
+  | none => .ok none
+  | some value => return some (← callback.call_once capture value)
+
+@[expose] def mapErr {T E O F : Type} (callback : FnOnce F E O)
+    (input : core.result.Result T E) (capture : F) : Lynx.NativeM (core.result.Result T O) := do
+  match input with
+  | .Ok value => .ok (.Ok value)
+  | .Err error => return .Err (← callback.call_once capture error)
+end Lynx.NativeCallbacks

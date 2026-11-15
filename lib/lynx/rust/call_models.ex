@@ -46,7 +46,8 @@ defmodule Lynx.Rust.CallModels do
                 )
           ) ||
             Lynx.Rust.BoxModels.resolve(function, translated, refs) ||
-            Lynx.Rust.ResultModels.resolve(function, translated, refs) ||
+            Lynx.Rust.ResultModels.resolve(function, translated, refs)
+            |> Lynx.Rust.ResultModels.for_execution(execution) ||
             Lynx.Rust.TryModels.resolve(function, translated, refs) ||
             Lynx.Rust.SliceModels.resolve(function, translated, refs) ||
             Lynx.Rust.ArrayModels.resolve(function, translated, refs) ||
@@ -62,6 +63,7 @@ defmodule Lynx.Rust.CallModels do
               do:
                 Lynx.Rustler.EncoderModels.resolve(function, translated, refs) ||
                   Lynx.Rustler.CopyModels.resolve(function, translated, refs)
+                  |> Lynx.Rustler.CopyModels.for_execution(execution)
             ) ||
             if(:rustler_decoders in enabled,
               do:

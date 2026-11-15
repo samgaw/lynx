@@ -12,7 +12,7 @@ defmodule Lynx.Rust.OptionModels do
     calls =
       Map.new(audit.external_calls, fn {id, model} ->
         {id,
-         if(model[:option_callback_type],
+         if(model[:option_callback_type] && !model[:native_callback],
            do: %{model | lean: prefix <> ".Option.andThen"},
            else: model
          )}
@@ -22,7 +22,9 @@ defmodule Lynx.Rust.OptionModels do
   end
 
   def install!(audit, output, prefix) do
-    if Enum.any?(audit.external_calls, fn {_, model} -> model[:option_callback_type] end) do
+    if Enum.any?(audit.external_calls, fn {_, model} ->
+         model[:option_callback_type] && !model[:native_callback]
+       end) do
       module = prefix <> ".OptionModel"
       path = Path.join(output, String.replace(module, ".", "/") <> ".lean")
 

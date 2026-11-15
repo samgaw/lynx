@@ -428,7 +428,7 @@ defmodule Lynx.Rust.Extraction do
     # their scoped mappings take precedence over the unreferenced candidates.
     backend_calls = Map.merge(audit.available_external_calls, audit.external_calls)
 
-    {backend_document, native_expect_aliases} =
+    {backend_document, native_model_aliases} =
       Lynx.Rust.ResultModels.lower_native_names!(backend_document, backend_calls)
 
     {backend_document, formatting_aliases} =
@@ -436,7 +436,7 @@ defmodule Lynx.Rust.Extraction do
 
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
-           native_expect_aliases == [] do
+           native_model_aliases == [] do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -501,6 +501,10 @@ defmodule Lynx.Rust.Extraction do
                   Keyword.get(opts, :execution, :pure)
                 ),
                 Lynx.Rust.ResourceModels.external_names(audit.external_calls),
+                Lynx.Rust.ResultModels.external_names(
+                  audit,
+                  Keyword.get(opts, :execution, :pure)
+                ),
                 Lynx.Rust.FormatModels.external_names(audit.external_calls)
               ]
               |> Enum.reduce(%{}, fn names, combined ->
@@ -600,7 +604,7 @@ defmodule Lynx.Rust.Extraction do
       reference_copies: audit.reference_copies,
       compiler_drop_queries: compiler_drop_queries,
       rustler_constructors: rustler_constructors,
-      native_expect_aliases: native_expect_aliases,
+      native_model_aliases: native_model_aliases,
       formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
       owned_drops: Keyword.get(opts, :owned_drops, false),
