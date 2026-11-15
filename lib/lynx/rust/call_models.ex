@@ -248,6 +248,7 @@ defmodule Lynx.Rust.CallModels do
             %{
               rust_name: "rustler::types::binary::{rustler::types::binary::Binary<'a>}::as_slice",
               lean: "Lynx.Rustler.binaryAsSlice",
+              native_cutoff_only: true,
               builtin: false,
               can_fail: true,
               lift: true,

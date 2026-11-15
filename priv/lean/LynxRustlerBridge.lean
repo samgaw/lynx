@@ -182,6 +182,15 @@ theorem binaryAsSlice_outOfBounds (bytes : Binary)
   simp only [binaryAsSlice, List.length_map, Array.length_toList, ByteArray.size_data]
   exact dite_eq_right outside
 
+/-- The bounded view returns bytes or exhausts verification; it cannot raise a
+catchable Rust panic. Native pointer validity remains the explicit FFI boundary. -/
+theorem binaryAsSlice_outcome (bytes : Binary) :
+    (∃ view, binaryAsSlice bytes = RustM.ok view) ∨ binaryAsSlice bytes = RustM.fail .undef := by
+  by_cases bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat
+  · obtain ⟨view, returned, _⟩ := binaryAsSlice_spec bytes bounds.1 bounds.2
+    exact Or.inl ⟨view, returned⟩
+  · exact Or.inr (binaryAsSlice_outOfBounds bytes bounds)
+
 /-- Rustler's Term Decoder accepts its input unchanged. Native term validity
 and environment copies remain at the explicit FFI boundary. -/
 @[expose] def decodeTerm (input : Term) : Except Exception NativeTerm := .ok input
