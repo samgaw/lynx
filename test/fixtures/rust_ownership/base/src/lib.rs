@@ -105,3 +105,24 @@ pub fn try_rw_read(lock: &std::sync::RwLock<bool>) -> (bool, bool) {
     drop(guard);
     (true, value)
 }
+
+/// Mutates the borrowed flag before returning a typed reply or unwinding.
+///
+/// # Panics
+/// Panics after mutation when the request is not accepted.
+pub fn reply(
+    value: &mut bool,
+    accepted: bool,
+    present: bool,
+    rejected: bool,
+) -> Result<Option<bool>, u8> {
+    *value = !*value;
+    assert!(accepted);
+    if rejected {
+        Err(7)
+    } else if present {
+        Ok(Some(*value))
+    } else {
+        Ok(None)
+    }
+}

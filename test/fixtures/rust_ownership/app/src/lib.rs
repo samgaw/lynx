@@ -188,3 +188,99 @@ mod try_rw_tests {
         }
     }
 }
+
+/// Preserves both the domain reply and the borrowed mutation across crates.
+///
+/// # Panics
+/// Propagates rejection after the borrowed flag has changed.
+pub fn checked_reply(
+    value: &mut bool,
+    accepted: bool,
+    present: bool,
+    rejected: bool,
+) -> Result<Option<bool>, u8> {
+    ownership_base::reply(value, accepted, present, rejected)
+}
+
+/// Releases the current mutated guard on normal return and panic.
+///
+/// # Panics
+/// Propagates rejection after committing the mutation and poisoning the mutex.
+pub fn guard_reply(
+    mut guard: std::sync::MutexGuard<'_, bool>,
+    accepted: bool,
+    present: bool,
+    rejected: bool,
+) -> Result<Option<bool>, u8> {
+    ownership_base::reply(&mut guard, accepted, present, rejected)
+}
+
+/// Observes the committed value after the typed reply releases its guard.
+///
+/// # Panics
+/// Rejection propagates after guard cleanup and local mutex disposal.
+pub fn local_reply(
+    value: bool,
+    accepted: bool,
+    present: bool,
+    rejected: bool,
+) -> (bool, bool, bool, u8) {
+    let state = std::sync::Mutex::new(value);
+    let guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let reply = guard_reply(guard, accepted, present, rejected);
+    let observed = match state.lock() {
+        Ok(guard) => *guard,
+        Err(error) => *error.into_inner(),
+    };
+    match reply {
+        Ok(Some(result)) => (observed, true, result, 0),
+        Ok(None) => (observed, false, false, 0),
+        Err(code) => (observed, false, false, code),
+    }
+}
+
+#[cfg(test)]
+mod reply_tests {
+    use super::{guard_reply, local_reply};
+    use std::sync::Mutex;
+
+    #[test]
+    fn ordinary_error_commits_without_poisoning() {
+        let state = Mutex::new(false);
+        assert_eq!(
+            guard_reply(state.lock().expect("fresh mutex"), true, true, true),
+            Err(7)
+        );
+        assert!(!state.is_poisoned());
+        assert!(*state.lock().expect("ordinary errors do not poison"));
+    }
+
+    #[test]
+    fn panic_commits_and_poisons_before_release() {
+        let state = Mutex::new(true);
+        let panic = std::panic::catch_unwind(|| {
+            guard_reply(state.lock().expect("fresh mutex"), false, true, false)
+        });
+        assert!(panic.is_err());
+        assert!(!*state
+            .lock()
+            .expect_err("panic poisons the guard")
+            .into_inner());
+    }
+
+    #[test]
+    fn typed_replies_preserve_the_observed_transition() {
+        assert_eq!(local_reply(false, true, true, false), (true, true, true, 0));
+        assert_eq!(
+            local_reply(true, true, false, false),
+            (false, false, false, 0)
+        );
+        assert_eq!(
+            local_reply(false, true, true, true),
+            (true, false, false, 7)
+        );
+    }
+}

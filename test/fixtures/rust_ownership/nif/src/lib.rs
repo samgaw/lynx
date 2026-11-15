@@ -357,3 +357,19 @@ pub fn rw_resource_clone(
 fn try_rw_request(value: bool) -> (bool, bool, bool, bool) {
     ownership_app::try_rw_cycle(value)
 }
+
+/// Returns nested domain replies through a checked critical section.
+///
+/// # Panics
+/// Rejection propagates after the actual compiler-scoped mutex cleanup.
+#[cfg(feature = "captured-reply")]
+#[rustler::nif(name = "captured_reply", schedule = "DirtyCpu")]
+#[lynx::captured_reply]
+fn reply_request(
+    value: bool,
+    accepted: bool,
+    present: bool,
+    rejected: bool,
+) -> (bool, bool, bool, u8) {
+    ownership_app::local_reply(value, accepted, present, rejected)
+}
