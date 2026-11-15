@@ -171,8 +171,7 @@ defmodule Lynx.Rust.Extraction do
     discovery = %{discovery | document: document}
 
     {document, rustler_constructors} =
-      if Keyword.get(opts, :execution, :pure) == :pure and
-           :rustler_decoders in Keyword.get(opts, :external_calls, []) and
+      if :rustler_decoders in Keyword.get(opts, :external_calls, []) and
            Lynx.Rustler.ErrorConstructors.needed?(document, first_party) do
         unless Enum.any?(
                  models,

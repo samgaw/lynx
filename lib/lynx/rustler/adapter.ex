@@ -224,8 +224,9 @@ defmodule Lynx.Rustler.Adapter do
     "Lynx.Rustler.Decoding.withDecoded (#{call}) (fun returned => #{execute("RustM.ok returned", payload, :pure, release)})"
   end
 
-  defp execute(_call, %{nif_result: _}, :runtime, _release),
-    do: raise(ArgumentError, "runtime Rustler NifResult conversion is unsupported")
+  defp execute(call, %{nif_result: payload}, :runtime, release) do
+    "Lynx.Rustler.withNativeResult (#{call}) (fun returned => #{execute("Lynx.NativeM.ok returned", payload, :runtime, release)})"
+  end
 
   defp execute(call, %{resource: true}, :runtime, release) do
     "Lynx.Rustler.executeNative (do let value ← (#{call}); let term ← Lynx.NativeResourceArc.encode value; #{release} value; Lynx.Result.ok term) id"

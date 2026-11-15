@@ -46,12 +46,13 @@ defmodule Lynx.Rust.CapturedUnwind do
                  function["src"] == "Normal" and function["generics"]["types"] == [] and
                  function["generics"]["trait_clauses"] == [] and
                  (trivial_output?(output, refs, 16) or
+                    nif_result_output?(output, translated, refs, runtime) or
                     resource_output?(output, translated, refs, runtime)),
                do:
                  LLBC.failure!(
                    function,
                    translated,
-                   "captured unwind requires a monomorphic ordinary function with scalar/unit tuples or destructor-free ResourceArc output; fallible trait methods are unsupported"
+                   "captured unwind requires a monomorphic ordinary function with scalar/unit tuples, supported NifResult or destructor-free ResourceArc output; fallible trait methods are unsupported"
                  )
 
         adt = %{
@@ -167,6 +168,27 @@ defmodule Lynx.Rust.CapturedUnwind do
         DropModels.primitive_scalar?(value)
     end
   end
+
+  defp nif_result_output?(output, translated, refs, true) do
+    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
+           CallModels.expand(output, refs),
+         %{"types" => [ok, error]} <- args,
+         true <- args == Lynx.Rust.ResourceModels.args([ok, error]),
+         true <- LLBC.result_type?(id, %{translated: translated, references: refs}),
+         true <- trivial_output?(ok, refs, 16),
+         %{"Adt" => %{"id" => error_id, "builtin" => nil, "generics" => empty}} <-
+           CallModels.expand(error, refs),
+         true <- empty == Lynx.Rust.ResourceModels.args([]),
+         %{"kind" => "Opaque", "item_meta" => %{"name" => name}, "generics" => params} <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == error_id)) do
+      name == Enum.map(~w(rustler error Error), &%{"Ident" => [&1, 0]}) and
+        Enum.all?(Map.values(params), &(&1 == []))
+    else
+      _ -> false
+    end
+  end
+
+  defp nif_result_output?(_, _, _, _), do: false
 
   defp resource_output?(output, translated, refs, true) do
     with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-

@@ -217,10 +217,6 @@ defmodule Lynx.Rustler.NifResultTest do
 
       File.write!(native, source)
       assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
-
-      assert_raise ArgumentError, ~r/runtime Rustler NifResult/, fn ->
-        Lynx.Rustler.prepare!(Keyword.put(options, :execution, :runtime))
-      end
     end
   end
 

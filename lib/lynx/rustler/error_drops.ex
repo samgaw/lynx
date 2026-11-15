@@ -173,6 +173,7 @@ defmodule Lynx.Rustler.ErrorDrops do
          lean: "Lynx.Rustler.Decoding." <> suffix,
          builtin: false,
          can_fail: true,
+         native_cutoff_only: true,
          lift: false,
          function: declaration,
          definition_id: id,

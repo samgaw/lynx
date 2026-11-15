@@ -163,6 +163,12 @@ defmodule Lynx.Rust.LLBC do
             Keyword.get(opts, :execution, :pure)
           )
 
+        models =
+          Map.merge(
+            models,
+            Lynx.Rustler.ErrorConstructors.models!(document, opts[:rustler_constructors])
+          )
+
         Lynx.Rust.CapturedUnwind.lower!(document, functions, refs,
           models: models,
           runtime: Keyword.get(opts, :execution, :pure) == :runtime

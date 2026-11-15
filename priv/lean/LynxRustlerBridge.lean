@@ -17,6 +17,10 @@ allocation and term-handle correctness remain unverified FFI assumptions. -/
 @[expose] abbrev Env := Unit
 @[expose] abbrev NativeTerm := Term
 
+/-- Copying SDK term handles does not retain a Rust-owned ResourceArc token. -/
+@[expose] def copyTermHandle (term : NativeTerm) : RustM NativeTerm := .ok term
+@[expose] def copyAtomHandle (atom : Atom) : RustM Atom := .ok atom
+
 /-- The resolved Rustler Encoder dictionary. First-party methods remain actual
 extracted functions; only catalogued runtime methods are modelled. -/
 structure Encoder (Self : Type) where
@@ -575,6 +579,22 @@ rather than becoming a catchable nif_panicked result. -/
       match (encode ()).match with
       | .ok value => if raised then .error (.error value) else .ok (.tuple #[.atom "error", value])
       | _ => .error .exhausted
+
+/-- Execute an effectful NifResult body before converting its returned Error.
+The computation panic boundary excludes error conversion and successful payload
+encoding, so an explicitly raised rust_panicked atom is not a caught Rust panic. -/
+@[expose] def withNativeResult {α : Type}
+    (computation : Result (core.result.Result α DecoderError))
+    (continuation : α → Result Term) : Result Term := do
+  let outcome ← Result.handle
+    (do let returned ← computation; .ok (Except.ok returned))
+    (fun error => match error with
+      | .error (.atom "rust_panicked") => .ok (Except.error (.error (.atom "nif_panicked")))
+      | _ => .error .exhausted)
+  match outcome with
+  | .ok (.Ok value) => continuation value
+  | .ok (.Err error) => Result.ofExcept error.convert
+  | .error exception => .error exception
 
 @[simp] theorem DecoderError.convert_ok (value : Term) :
     DecoderError.convert (.ok value) = .ok value := rfl

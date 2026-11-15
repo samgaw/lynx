@@ -67,6 +67,9 @@ defmodule Lynx.Rustler.Bindings do
               {_id, path} = native!(hint, type, audit, :discover)
               %{"native" => path}
 
+            %{"resource" => _}, type ->
+              discover_resource!(type, audit)
+
             hint, type ->
               if custom?(hint),
                 do:
@@ -112,6 +115,7 @@ defmodule Lynx.Rustler.Bindings do
   # Join compiled exports, expanded Rustler signatures, extracted bodies and
   # Aeneas declaration identities. Names alone are never accepted as a model.
   def link!(manifest, audit, translation, opts \\ []) do
+    audit = Map.put(audit, :nif_resource_types, Keyword.get(opts, :resource_types, []))
     implementations = LLBC.link!(audit, translation, opts)
 
     bindings =
@@ -199,6 +203,23 @@ defmodule Lynx.Rustler.Bindings do
               "resource signature requires a validated registration and audited concrete Resource implementation"
     end
   end
+
+  defp discover_resource!(type, audit) do
+    case LLBC.nif_type!(type, audit) do
+      %{"resource" => _} = resource ->
+        resource
+
+      _ ->
+        raise ArgumentError,
+              "resource signature must resolve to the actual Rustler ResourceArc type"
+    end
+  end
+
+  defp result!(%{"resource" => _}, type, audit, :discover, _),
+    do: discover_resource!(type, audit)
+
+  defp result!(%{"resource" => _} = hint, type, audit, :link, _),
+    do: resource!(hint, type, audit, Map.get(audit, :nif_resource_types, []))
 
   defp result!(%{"native" => hint}, type, audit, mode, translation) do
     {id, path} = native!(hint, type, audit, mode)

@@ -59,7 +59,9 @@ defmodule Lynx.Rust.CallModels do
             Lynx.Rust.BytesModels.resolve(function, translated, refs) ||
             Lynx.Rust.FormatModels.resolve(function, translated, refs) ||
             if(:rustler_encoders in enabled,
-              do: Lynx.Rustler.EncoderModels.resolve(function, translated, refs)
+              do:
+                Lynx.Rustler.EncoderModels.resolve(function, translated, refs) ||
+                  Lynx.Rustler.CopyModels.resolve(function, translated, refs)
             ) ||
             if(:rustler_decoders in enabled,
               do:
