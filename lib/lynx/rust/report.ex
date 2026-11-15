@@ -247,7 +247,7 @@ defmodule Lynx.Rust.Report do
           ) ++
           if(Map.get(extraction, :captured_unwind, []) != [],
             do: [
-              "Lynx explicit exceptional-exit lowering: Result.Err Unit denotes supported static-string Rust panic after actual compiler cleanup; borrowed updates preserved; nonpanicking calls certified from implementation bodies",
+              "Lynx explicit exceptional-exit lowering: Result.Err Unit denotes supported static-string Rust panic after actual compiler cleanup; borrowed updates preserved; nonpanicking calls certified from implementation bodies; dead tails removed only after validated exhaustive returning control flow",
               "Captured panic tags omit payload text; native panic hooks, unwinder, allocation and FFI correctness remain unverified"
             ],
             else: []

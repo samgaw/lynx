@@ -45,14 +45,14 @@ defmodule Lynx.Rust.CapturedUnwind do
         unless match?(%{"Structured" => _}, function["body"]) and
                  function["src"] == "Normal" and function["generics"]["types"] == [] and
                  function["generics"]["trait_clauses"] == [] and
-                 (trivial_output?(output, refs, 16) or
+                 (plain_output?(output, translated, refs, 16) or
                     nif_result_output?(output, translated, refs, runtime) or
                     resource_output?(output, translated, refs, runtime)),
                do:
                  LLBC.failure!(
                    function,
                    translated,
-                   "captured unwind requires a monomorphic ordinary function with scalar/unit tuples, supported NifResult or destructor-free ResourceArc output; fallible trait methods are unsupported"
+                   "captured unwind requires a monomorphic ordinary function with plain data, scalar/unit tuples, supported NifResult or destructor-free ResourceArc output; fallible trait methods are unsupported"
                  )
 
         adt = %{
@@ -93,13 +93,15 @@ defmodule Lynx.Rust.CapturedUnwind do
           state = %{
             function: function,
             translated: translated,
+            refs: refs,
             safe: safe,
             models: models,
             runtime: runtime,
             plans: plans,
             plan: plan,
             unit: unit,
-            owners: Enum.any?(locals, &owner?(CallModels.expand(&1["ty"], refs))),
+            owners:
+              Enum.any?(locals, &owner?(CallModels.expand(&1["ty"], refs), translated, refs)),
             old: old,
             external_captures: [],
             locals: locals ++ [Map.put(hd(locals), "index", old)],
@@ -142,15 +144,26 @@ defmodule Lynx.Rust.CapturedUnwind do
         Enum.map(fs, fn f -> if f, do: Map.get(by_id, f["def_id"], f), else: nil end)
       end)
 
+    original = %{"translated" => translated}
+
     document =
-      document |> LLBCJson.restore_type_references!(document) |> LLBCJson.restore_spans!(document)
+      document |> LLBCJson.restore_type_references!(original) |> LLBCJson.restore_spans!(original)
 
     {document, Enum.reverse(records)}
   end
 
   defp block(%{"statements" => statements} = block, state, cleanup) do
-    {lists, state} = Enum.map_reduce(statements, state, &lower(&1, &2, cleanup))
-    {Map.put(block, "statements", List.flatten(lists)), state}
+    {lowered, state} =
+      Enum.reduce_while(statements, {[], state}, fn statement, {previous, state} ->
+        {emitted, state} = lower(statement, state, cleanup)
+        next = {previous ++ emitted, state}
+
+        if Lynx.Rust.ReturnFlow.returns?(emitted, state.translated, state.refs),
+          do: {:halt, next},
+          else: {:cont, next}
+      end)
+
+    {Map.put(block, "statements", lowered), state}
   end
 
   # Wrapping a destructor-free tuple in Result preserves its complete returned
@@ -166,6 +179,36 @@ defmodule Lynx.Rust.CapturedUnwind do
 
       value ->
         DropModels.primitive_scalar?(value)
+    end
+  end
+
+  # Standard Result/Option wrappers add neither ownership nor references when
+  # every contained value is plain data. Validate their actual canonical enum
+  # definitions, not just names, before admitting the instantiated arguments.
+  defp plain_output?(_, _, _, 0), do: false
+
+  defp plain_output?(output, translated, refs, depth) do
+    if trivial_output?(output, refs, depth) or
+         Lynx.Rust.NativeDrops.plain_data?(output, translated, refs) do
+      true
+    else
+      case CallModels.expand(output, refs) do
+        %{"Adt" => %{"builtin" => "Tuple", "generics" => args}} ->
+          args == arguments(args["types"]) and
+            Enum.all?(args["types"], &plain_output?(&1, translated, refs, depth - 1))
+
+        %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => types} = args}}
+        when is_list(types) ->
+          audit = %{translated: translated, references: refs}
+
+          args == arguments(types) and
+            ((length(types) == 1 and LLBC.option_type?(id, audit)) or
+               (length(types) == 2 and LLBC.result_type?(id, audit))) and
+            Enum.all?(types, &plain_output?(&1, translated, refs, depth - 1))
+
+        _ ->
+          false
+      end
     end
   end
 
@@ -452,9 +495,8 @@ defmodule Lynx.Rust.CapturedUnwind do
   defp arguments(types),
     do: %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
 
-  defp owner?(%{"Ref" => _}), do: false
-  defp owner?(%{"Adt" => %{"builtin" => "Tuple", "generics" => %{"types" => []}}}), do: false
-  defp owner?(type), do: not DropModels.primitive_scalar?(type)
+  defp owner?(%{"Ref" => _}, _, _), do: false
+  defp owner?(type, translated, refs), do: not plain_output?(type, translated, refs, 16)
 
   defp reject!(state, reason), do: LLBC.failure!(state.function, state.translated, reason)
 
