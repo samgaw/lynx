@@ -15,3 +15,19 @@ pub fn reset(counter: &AtomicU64, value: u64) {
 pub fn replace(counter: &AtomicU64, expected: u64, replacement: u64) -> Result<u64, u64> {
     counter.compare_exchange(expected, replacement, Ordering::SeqCst, Ordering::SeqCst)
 }
+
+/// Signed contents stored behind a mutex.
+pub struct Balance {
+    pub value: i64,
+}
+
+/// Applies a signed adjustment, preserving the balance on either overflow.
+pub fn adjust(balance: &mut Balance, delta: i64) -> bool {
+    match balance.value.checked_add(delta) {
+        Some(value) => {
+            balance.value = value;
+            true
+        }
+        None => false,
+    }
+}

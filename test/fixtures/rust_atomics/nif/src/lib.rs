@@ -154,3 +154,11 @@ pub fn unsupported_discard(value: u64) -> u64 {
     let counter = AtomicU64::new(value);
     atomic_core::claim(&counter)
 }
+
+/// Creates signed native state, updates it across crates, then destroys its owner.
+#[rustler::nif(name = "signed_adjust", schedule = "DirtyCpu")]
+#[lynx::signed]
+fn signed_adjust(value: i64, delta: i64) -> (bool, i64) {
+    let balance = std::sync::Mutex::new(atomic_core::Balance { value });
+    atomic_analysis::locked_adjust(&balance, delta)
+}

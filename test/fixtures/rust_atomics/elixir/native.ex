@@ -6,6 +6,8 @@ defmodule LynxAtomicFixture.Native do
     :erlang.load_nif(String.to_charlist(path), 0)
   end
 
+  def signed_adjust(_, _), do: :erlang.nif_error(:not_loaded)
+
   def atomic_new(_value), do: :erlang.nif_error(:not_loaded)
   def atomic_claim(_resource), do: :erlang.nif_error(:not_loaded)
   def atomic_pair(_resource), do: :erlang.nif_error(:not_loaded)

@@ -12,3 +12,19 @@ pub fn try_set(counter: &AtomicU64, expected: u64, replacement: u64) -> (bool, u
         Err(observed) => (false, observed),
     }
 }
+
+/// Updates signed state through its actual lock guard and checked callee.
+/// Poison recovery retains the acquired guard and its current contents.
+///
+/// # Panics
+/// A recursive acquisition may panic or block and is outside this fixture.
+pub fn locked_adjust(balance: &std::sync::Mutex<atomic_core::Balance>, delta: i64) -> (bool, i64) {
+    let mut guard = match balance.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let changed = atomic_core::adjust(&mut guard, delta);
+    let value = guard.value;
+    drop(guard);
+    (changed, value)
+}
