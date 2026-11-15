@@ -28,3 +28,18 @@ pub fn locked_adjust(balance: &std::sync::Mutex<atomic_core::Balance>, delta: i6
     drop(guard);
     (changed, value)
 }
+
+/// Applies a receive transition and observes its result under the same guard.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside this fixture.
+pub fn consume_locked(phase: &std::sync::Mutex<atomic_core::Phase>, amount: u64) -> (bool, u64) {
+    let mut guard = match phase.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let accepted = atomic_core::consume_phase(&mut guard, amount);
+    let total = atomic_core::phase_total(&guard);
+    drop(guard);
+    (accepted, total)
+}

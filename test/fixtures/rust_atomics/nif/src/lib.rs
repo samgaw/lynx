@@ -162,3 +162,13 @@ fn signed_adjust(value: i64, delta: i64) -> (bool, i64) {
     let balance = std::sync::Mutex::new(atomic_core::Balance { value });
     atomic_analysis::locked_adjust(&balance, delta)
 }
+
+/// Reacquires the same enum-backed state between two independent chunk updates.
+#[rustler::nif(name = "consume_chunks", schedule = "DirtyCpu")]
+#[lynx::phase]
+fn consume_chunks(budget: u64, first: u64, second: u64) -> (bool, bool, u64) {
+    let phase = std::sync::Mutex::new(atomic_core::start_phase(budget));
+    let (accepted_first, _) = atomic_analysis::consume_locked(&phase, first);
+    let (accepted_second, total) = atomic_analysis::consume_locked(&phase, second);
+    (accepted_first, accepted_second, total)
+}

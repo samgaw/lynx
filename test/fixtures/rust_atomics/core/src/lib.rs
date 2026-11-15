@@ -31,3 +31,53 @@ pub fn adjust(balance: &mut Balance, delta: i64) -> bool {
         None => false,
     }
 }
+
+/// Native receive state; completion and rejection are terminal.
+pub enum Phase {
+    Ready,
+    Receiving { limit: u64, used: u64 },
+    Complete(u64),
+    Rejected(u8),
+}
+
+/// Starts a bounded receive operation; an empty budget is already terminal.
+pub fn start_phase(budget: u64) -> Phase {
+    if budget == 0 {
+        Phase::Ready
+    } else {
+        Phase::Receiving {
+            limit: budget,
+            used: 0,
+        }
+    }
+}
+
+/// Accounts for one chunk without wrapping; excess input rejects the operation.
+pub fn consume_phase(phase: &mut Phase, amount: u64) -> bool {
+    match phase {
+        Phase::Ready | Phase::Complete(_) | Phase::Rejected(_) => false,
+        Phase::Receiving { limit, used } => match used.checked_add(amount) {
+            Some(total) if total < *limit => {
+                *used = total;
+                true
+            }
+            Some(total) if total == *limit => {
+                *phase = Phase::Complete(total);
+                true
+            }
+            _ => {
+                *phase = Phase::Rejected(1);
+                false
+            }
+        },
+    }
+}
+
+/// Returns successful progress; a rejected operation has no accepted result.
+pub fn phase_total(phase: &Phase) -> u64 {
+    match phase {
+        Phase::Receiving { used, .. } => *used,
+        Phase::Complete(total) => *total,
+        _ => 0,
+    }
+}
