@@ -635,6 +635,49 @@ in the shared cell unchanged. It does not release an owned guard. -/
 @[expose] def NativePoisonError.into_inner {α : Type} (error : NativePoisonError α) : α :=
   error.value
 
+namespace NativeMutex
+
+/-- Consume an unlocked mutex and transfer its contents, including on poison.
+Held cells exhaust verification: forgotten guards are outside this model, while
+Rust's operation itself does not acquire a lock or block. No payload is dropped. -/
+@[expose] def intoInnerStep {α : Type} [NativeCodec α] (mutex : NativeMutex α)
+    (env : Environment) :
+    Except Exception (core.result.Result α (NativePoisonError α)) × Environment :=
+  match env.nativeHeap.filter (fun cell => cell.1 == mutex.id) with
+  | [(_, tag, .tuple fields)] =>
+    if size : fields.size = 3 then
+      if tag == typeName α && fields[0] == .atom "unlocked" then
+        match NativeCodec.decode (α := α) fields[2] with
+        | some value =>
+          let after := {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != mutex.id)}
+          if fields[1] == .atom "unpoisoned" then (.ok (.Ok value), after)
+          else if fields[1] == .atom "poisoned" then (.ok (.Err ⟨value⟩), after)
+          else (.error .exhausted, env)
+        | none => (.error .exhausted, env)
+      else (.error .exhausted, env)
+    else (.error .exhausted, env)
+  | _ => (.error .exhausted, env)
+
+@[expose] def into_inner {α : Type} [NativeCodec α] (mutex : NativeMutex α) :
+    NativeM (core.result.Result α (NativePoisonError α)) :=
+  .wait (fun env => some (intoInnerStep mutex env)) Result.ofExcept
+
+theorem into_inner_run {α : Type} [NativeCodec α] (mutex : NativeMutex α)
+    (env : Environment) : into_inner mutex env =
+      Result.ofExcept (intoInnerStep mutex env).1 (intoInnerStep mutex env).2 := by
+  exact Result.wait_ready_apply _ _ _ _ _ rfl
+
+theorem intoInnerStep_stored {α : Type} [NativeCodec α] (mutex : NativeMutex α)
+    (value : α) (poisoned : Bool) (env : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id, typeName α, .tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"), NativeCodec.encode value])]) :
+    intoInnerStep mutex env = (.ok (if poisoned then .Err ⟨value⟩ else .Ok value),
+      {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != mutex.id)}) := by
+  cases poisoned <;> simp [intoInnerStep, stored, NativeCodec.roundtrip]
+
+end NativeMutex
+
 namespace NativeGuard
 
 /-- Shared borrowing observes the guard's payload view. -/

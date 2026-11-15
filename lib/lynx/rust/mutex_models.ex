@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.MutexModels do
   @moduledoc false
-  alias Lynx.Rust.CallModels
+  alias Lynx.Rust.{CallModels, LLBC, LockModels}
   @path ~w(std sync poison mutex Mutex)
 
   def resolve(function, translated, refs) do
@@ -26,8 +26,9 @@ defmodule Lynx.Rust.MutexModels do
                }
              }
            },
-           %{"Ident" => ["new", 0]}
+           %{"Ident" => [method, 0]}
          ] <- name,
+         true <- method in ~w(new into_inner),
          true <- parameters?(parent_params),
          %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
            CallModels.expand(parent, refs),
@@ -35,26 +36,72 @@ defmodule Lynx.Rust.MutexModels do
          type when not is_nil(type) <-
            Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
          true <- type?(type),
-         true <- CallModels.expand(sig["inputs"], refs) == [variable()],
+         self = %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([variable()])}},
          true <-
-           CallModels.expand(sig["output"], refs) == %{
-             "Adt" => %{"id" => id, "builtin" => nil, "generics" => arguments([variable()])}
-           } do
-      %{
-        rust_name: "std::sync::poison::mutex::{std::sync::poison::mutex::Mutex<@T>}::new",
-        lean: "Lynx.NativeMutex.new",
-        builtin: false,
-        can_fail: true,
-        native_cutoff_only: true,
-        lift: true,
-        native_mutex_type: id,
-        native_constructor: true,
-        native_transfer: true,
-        label:
-          "Logical Mutex::new model: atomic logical identity allocation, fresh shared identity, exact typed payload, unlocked and unpoisoned; std implementation and physical initialization/allocation unverified; guard unwind requires compiler-scoped captured cleanup; custom destructors and general unwind cleanup unsupported"
-      }
+           CallModels.expand(sig["inputs"], refs) == [
+             if(method == "new", do: variable(), else: self)
+           ],
+         {:ok, poison} <-
+           output_type(method, CallModels.expand(sig["output"], refs), self, translated, refs) do
+      if method == "into_inner" do
+        %{
+          rust_name:
+            "std::sync::poison::mutex::{std::sync::poison::mutex::Mutex<@T>}::into_inner",
+          lean: "Lynx.NativeMutex.into_inner",
+          builtin: false,
+          can_fail: true,
+          native_cutoff_only: true,
+          lift: true,
+          native_mutex_type: id,
+          native_poison_type: poison,
+          native_codec_owned_input: true,
+          native_transfer: true,
+          label:
+            "Consuming Mutex::into_inner model: atomically removes an unlocked typed cell and transfers its exact payload; poison returns the payload in PoisonError without dropping it; missing, ambiguous, malformed or held cells exhaust verification, not Rust failure or blocking; forgotten guard states unsupported; std, raw mutex teardown, allocation and FFI unverified"
+        }
+      else
+        %{
+          rust_name: "std::sync::poison::mutex::{std::sync::poison::mutex::Mutex<@T>}::new",
+          lean: "Lynx.NativeMutex.new",
+          builtin: false,
+          can_fail: true,
+          native_cutoff_only: true,
+          lift: true,
+          native_mutex_type: id,
+          native_constructor: true,
+          native_transfer: true,
+          label:
+            "Logical Mutex::new model: atomic logical identity allocation, fresh shared identity, exact typed payload, unlocked and unpoisoned; std implementation and physical initialization/allocation unverified; guard unwind requires compiler-scoped captured cleanup; custom destructors and general unwind cleanup unsupported"
+        }
+      end
     else
       _ -> nil
+    end
+  end
+
+  defp output_type("new", output, self, _, _),
+    do: if(output == self, do: {:ok, nil}, else: :error)
+
+  defp output_type("into_inner", output, _, translated, refs) do
+    with poison when not is_nil(poison) <-
+           Enum.find(translated["type_decls"], &LockModels.poison?/1),
+         %{"Adt" => %{"id" => result, "builtin" => nil, "generics" => args}} <- output,
+         true <- LLBC.result_type?(result, %{translated: translated, references: refs}),
+         true <-
+           args ==
+             arguments([
+               variable(),
+               %{
+                 "Adt" => %{
+                   "id" => poison["def_id"],
+                   "builtin" => nil,
+                   "generics" => arguments([variable()])
+                 }
+               }
+             ]) do
+      {:ok, poison["def_id"]}
+    else
+      _ -> :error
     end
   end
 

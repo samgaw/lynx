@@ -503,6 +503,13 @@ defmodule Lynx.Rust do
   returns `WouldBlock` without changing the logical heap or allocating a guard
   token, including recursive attempts. An available poisoned lock returns the
   acquired guard in `Poisoned`.
+  `Mutex::into_inner` consumes an unlocked typed mutex and transfers its current
+  contents, returning those contents in `PoisonError` when poisoned. It never
+  drops the payload or clears poison before transfer. Missing, malformed,
+  ambiguous or held logical cells exhaust verification. Rust itself does not
+  lock or block in `into_inner`; forgotten-guard states are outside this model.
+  This supports returning owned scalar byte vectors after a critical section;
+  it does not admit unlinked destructors for persistent `Mutex<Vec<_>>` resources.
   The actual standard error enum and method signatures are validated; supported
   consumers must account for the acquired guard. Rust std, native threading,
   allocation and FFI remain reported boundaries.

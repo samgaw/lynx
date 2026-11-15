@@ -242,7 +242,7 @@ defmodule Lynx.Rust.LockModels do
             lean: "Lynx.NativePoisonError",
             import: module,
             label:
-              "Poisoned acquisition retains the acquired guard; std/native layout and FFI unverified"
+              "PoisonError retains its owned payload, including an acquired guard or consumed mutex contents; std/native layout and FFI unverified"
           }
         ],
         else: []

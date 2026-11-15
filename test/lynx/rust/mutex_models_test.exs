@@ -145,4 +145,67 @@ defmodule Lynx.Rust.MutexModelsTest do
       NativeCodecs.plan!(audit(1, %{"TypeVar" => %{"Free" => 0}}))
     end
   end
+
+  test "consuming extraction requires the actual owned signature and poison result" do
+    %{"function" => function, "translated" => translated} =
+      File.read!(Path.expand("../../fixtures/rustler/mutex_into_inner.json", __DIR__))
+      |> JSON.decode!()
+
+    assert %{
+             native_codec_owned_input: true,
+             native_transfer: true,
+             native_cutoff_only: true,
+             lean: "Lynx.NativeMutex.into_inner",
+             native_poison_type: poison
+           } =
+             MutexModels.resolve(function, translated, %{})
+
+    for altered <- [
+          put_in(function, ["signature", "is_unsafe"], true),
+          put_in(function, ["signature", "is_variadic"], true),
+          put_in(function, ["signature", "inputs"], []),
+          put_in(function, ["signature", "inputs", Access.at(0)], %{
+            "Ref" => ["Erased", hd(function["signature"]["inputs"]), "Shared"]
+          }),
+          put_in(function, ["signature", "output", "Adt", "generics", "types", Access.at(0)], %{
+            "Scalar" => "Bool"
+          }),
+          put_in(
+            function,
+            ["signature", "output", "Adt", "generics", "types", Access.at(1), "Adt", "id"],
+            999
+          ),
+          put_in(function, ["generics", "outlives"], ["unknown"]),
+          put_in(function, ["item_meta", "name"], [%{"Ident" => ["user_mutex", 0]}])
+        ],
+        do: refute(MutexModels.resolve(altered, translated, %{}))
+
+    changed =
+      update_in(translated, ["type_decls"], fn types ->
+        Enum.map(types, fn type ->
+          if type["def_id"] == poison,
+            do: put_in(type, ["item_meta", "name"], [%{"Ident" => ["UserPoison", 0]}]),
+            else: type
+        end)
+      end)
+
+    refute MutexModels.resolve(function, changed, %{})
+  end
+
+  test "owned mutex input discovers payload codecs without a constructor call" do
+    input = audit(1, %{"Scalar" => "Bool"})
+    input = %{input | external_calls: %{20 => %{native_codec_owned_input: true}}}
+    assert [%{"def_id" => 1}] = NativeCodecs.plan!(input)
+
+    malformed =
+      update_in(
+        input,
+        [:functions, Access.at(0), "body", "Regular", "generics", "regions"],
+        fn _ -> ["Erased"] end
+      )
+
+    assert_raise ArgumentError, ~r/unsupported native mutex/, fn ->
+      NativeCodecs.plan!(malformed)
+    end
+  end
 end

@@ -8,12 +8,14 @@ defmodule Lynx.Rust.NativeCodecs do
     constructors =
       for {id, model} <- audit.external_calls,
           model[:native_constructor] == true or model[:native_codec_input] == true or
+            model[:native_codec_owned_input] == true or
             model[:native_codec_drop] == true or model[:resource_operation] != nil,
           into: %{},
           do:
             {id,
              cond do
                model[:resource_operation] -> :resource
+               model[:native_codec_owned_input] -> :owned
                model[:native_codec_drop] -> :drop
                true -> model[:native_codec_input] == true
              end}
@@ -63,6 +65,10 @@ defmodule Lynx.Rust.NativeCodecs do
 
   defp payloads(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => generics}}, ids, refs) do
     case {Map.fetch(ids, id), generics} do
+      {{:ok, :owned},
+       %{"types" => [type], "regions" => [], "const_generics" => [], "trait_refs" => []}} ->
+        [type]
+
       {{:ok, :resource},
        %{"types" => [type], "regions" => regions, "const_generics" => [], "trait_refs" => [_]}}
       when length(regions) <= 1 ->
