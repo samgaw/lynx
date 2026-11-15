@@ -31,6 +31,29 @@ defmodule Lynx.Rust.NativeOwnedDrops do
     end
   end
 
+  # A mutex may own this payload only when its actual first-party destructor is
+  # available. The Vec/Global drop checks in function_for remain mandatory.
+  # Restrict this composition to scalar vectors and plain data, so a nested
+  # resource cannot recursively re-enter destructor admission.
+  def vector_cleanup_for(payload, translated, refs) do
+    with %{"Adt" => %{"id" => id}} <- Lynx.Rust.CallModels.expand(payload, refs),
+         %{"kind" => %{"Struct" => fields}} <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)),
+         true <- Enum.any?(fields, &vector?(&1["ty"], translated, refs)),
+         true <-
+           Enum.all?(fields, fn field ->
+             vector?(field["ty"], translated, refs) or
+               Lynx.Rust.NativeDrops.plain_data?(field["ty"], translated, refs)
+           end) do
+      function_for(payload, translated, refs)
+    else
+      _ -> nil
+    end
+  end
+
+  defp vector?(type, translated, refs),
+    do: match?({:ok, _}, Lynx.Rust.CollectionModels.scalar_vector_element(type, translated, refs))
+
   # Resource drop dispatch is classified as cutoff-only by the lifetime audit.
   # Admit structural cleanup of validated nonpanicking mutex/File primitives or
   # exact scalar Vec/Global drops checked by the existing structural audit;
@@ -90,10 +113,11 @@ defmodule Lynx.Rust.NativeOwnedDrops do
                declaration <- Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == type)),
                true <- primitive_type?(self, translated, refs) do
             if Lynx.Rust.MutexModels.type?(declaration) do
-              match?(
-                %{native_dispose: true},
-                Lynx.Rust.NativeDrops.resolve(function, translated, refs)
-              )
+              Lynx.Rust.NativeDrops.supported_mutex_payload?(self, translated, refs) and
+                match?(
+                  %{native_dispose: true},
+                  Lynx.Rust.NativeDrops.resolve(function, translated, refs)
+                )
             else
               Lynx.Rust.FileDrops.resolve(function, translated, refs) != nil and
                 Lynx.Rust.FileDrops.call?(
@@ -150,7 +174,8 @@ defmodule Lynx.Rust.NativeOwnedDrops do
                 {definition, rest} = String.split_at(body, offset)
 
                 dictionary =
-                  "\ninstance : Lynx.NativeResourceCleanup #{typename["lean_name"]} where\n  cleanup := #{mapping["lean_name"]}\n"
+                  "\ninstance : Lynx.NativeResourceCleanup #{typename["lean_name"]} where\n  cleanup := #{mapping["lean_name"]}\n" <>
+                    "\ninstance : Lynx.NativeMutexDrop #{typename["lean_name"]} where\n  drop := Lynx.NativeMutex.disposeWith #{mapping["lean_name"]}\n"
 
                 before <> marker <> definition <> dictionary <> rest
 

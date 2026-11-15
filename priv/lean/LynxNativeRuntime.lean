@@ -1375,6 +1375,36 @@ fallback. Each concrete resource requires a validated payload cleanup instance. 
 class NativeOwnedDrop (α : Type) where
   drop : α → NativeM Unit
 
+/-- Consuming mutex dispatch. There is no generic payload fallback: concrete
+first-party dictionaries are linked to their extracted cleanup implementation. -/
+class NativeMutexDrop (α : Type) where
+  drop : NativeMutex α → NativeM Unit
+
+namespace NativeMutex
+
+/-- Retire the owned mutex, then execute its validated payload cleanup. The
+admission audit currently permits nonpanicking structural vector payloads only.
+Raw mutex teardown and native allocation remain external boundaries. -/
+@[expose] def disposeWith {α : Type} [NativeCodec α]
+    (cleanup : α → NativeM Unit) (mutex : NativeMutex α) : NativeM Unit := do
+  let result ← into_inner mutex
+  let value := match result with
+    | .Ok value => value
+    | .Err error => error.value
+  cleanup value
+
+end NativeMutex
+
+instance : NativeMutexDrop Bool where
+  drop := NativeMutex.dispose
+instance {ty : UScalarTy} : NativeMutexDrop (UScalar ty) where
+  drop := NativeMutex.dispose
+instance {ty : IScalarTy} : NativeMutexDrop (IScalar ty) where
+  drop := NativeMutex.dispose
+-- Array admission separately requires compiler-certified recursively plain data.
+instance {α : Type} {n : Usize} [NativeCodec α] : NativeMutexDrop (Aeneas.Std.Array α n) where
+  drop := NativeMutex.dispose
+
 /-- Unwind dispatch for no-drop resource payloads with owned logical cells. -/
 class NativeResourceUnwindDrop (α : Type) where
   drop : α → NativeM Unit
@@ -1395,8 +1425,8 @@ instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeRwReadGuard α) w
 instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeRwWriteGuard α) where
   drop guard := NativeRwLock.releaseWrite guard false
 
-instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeMutex α) where
-  drop := NativeMutex.dispose
+instance {α : Type} [NativeMutexDrop α] : NativeOwnedDrop (NativeMutex α) where
+  drop := NativeMutexDrop.drop
 
 instance {α : Type} [NativeCodec α] : NativeOwnedDrop (NativeGuard α) where
   drop := NativeGuard.release

@@ -420,7 +420,8 @@ defmodule Lynx.Rust.NativeCodecs do
 
   defp cleanup_definition(:trivial, lean),
     do:
-      "instance : NativeResourceCleanup #{lean} where\n  cleanup _ := .ok ()\n  observable := false"
+      "instance : NativeResourceCleanup #{lean} where\n  cleanup _ := .ok ()\n  observable := false\n" <>
+        "instance : Lynx.NativeMutexDrop #{lean} where\n  drop := Lynx.NativeMutex.dispose\n"
 
   defp cleanup_definition({:logical, []}, lean), do: cleanup_definition(:trivial, lean)
 
@@ -430,7 +431,9 @@ defmodule Lynx.Rust.NativeCodecs do
         "#{operation} value.#{quote!(field)}"
       end)
 
-    "instance : NativeResourceCleanup #{lean} where\n  cleanup value := do\n    #{calls}\n    return ()\n  observable := false"
+    "instance : NativeResourceCleanup #{lean} where\n  cleanup value := do\n    #{calls}\n    return ()\n  observable := false\n" <>
+      "instance : Lynx.NativeMutexDrop #{lean} where\n" <>
+      "  drop := Lynx.NativeMutex.disposeWith (NativeResourceCleanup.cleanup (α := #{lean}))\n"
   end
 
   defp cleanup_definition(_, _), do: ""

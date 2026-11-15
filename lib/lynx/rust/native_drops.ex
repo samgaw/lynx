@@ -139,7 +139,7 @@ defmodule Lynx.Rust.NativeDrops do
           type && (MutexModels.type?(type) or Lynx.Rust.RwLockModels.type?(type)) ->
             with true <-
                    (destructor_free?(payload, translated, refs) or
-                      (MutexModels.type?(type) and file_payload?(payload, translated, refs))) and
+                      (MutexModels.type?(type) and owned_payload?(payload, translated, refs))) and
                      args == arguments([payload]),
                  "Precise" <- drop["kind"],
                  %{"kind" => %{"Fun" => fid}, "generics" => call_args} <- drop["fn_ptr"],
@@ -174,7 +174,7 @@ defmodule Lynx.Rust.NativeDrops do
             else
               _ ->
                 {:error,
-                 "unsupported native drop payload or inconsistent compiler destructor; only compiler-certified destructor-free payloads or explicitly admitted owned File payloads are supported"}
+                 "unsupported native drop payload or inconsistent compiler destructor; only compiler-certified destructor-free payloads, owned File or linked first-party scalar-vector payload cleanup are supported"}
             end
 
           true ->
@@ -253,12 +253,14 @@ defmodule Lynx.Rust.NativeDrops do
                args,
              true <-
                destructor_free?(payload, translated, refs) or
-                 (translated[:native_file_drop] == true and
-                    Enum.any?(
-                      translated["type_decls"],
-                      &(&1 && &1["def_id"] == mutex && MutexModels.type?(&1))
-                    ) and
-                    file_payload?(payload, translated, refs)),
+                 (Enum.any?(
+                    translated["type_decls"],
+                    &(&1 && &1["def_id"] == mutex && MutexModels.type?(&1))
+                  ) and
+                    ((translated[:native_file_drop] == true and
+                        file_payload?(payload, translated, refs)) or
+                       Lynx.Rust.NativeOwnedDrops.vector_cleanup_for(payload, translated, refs) !=
+                         nil)),
              %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <- dictionary,
              %{
                "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => impl_args}},
@@ -274,7 +276,7 @@ defmodule Lynx.Rust.NativeDrops do
         else
           _ ->
             raise ArgumentError,
-                  "native destruction requires an explicitly admitted File or an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload or explicitly admitted owned Mutex<File>; other custom payload destructors are unsupported"
+                  "native destruction requires an explicitly admitted File or an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload, owned Mutex<File> or linked first-party scalar-vector cleanup; other custom payload destructors are unsupported"
         end
       end
     end
@@ -421,6 +423,26 @@ defmodule Lynx.Rust.NativeDrops do
          true <- args == arguments([]),
          %{"def_id" => ^id, "needs_drop" => true} <- Lynx.Rust.FileModels.declaration(translated) do
       true
+    else
+      _ -> false
+    end
+  end
+
+  defp owned_payload?(payload, translated, refs),
+    do:
+      file_payload?(payload, translated, refs) or
+        Lynx.Rust.NativeOwnedDrops.vector_cleanup_for(payload, translated, refs) != nil
+
+  def supported_mutex_payload?(self, translated, refs) do
+    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => [payload]} = args}} <-
+           CallModels.expand(self, refs),
+         true <- args == arguments([payload]),
+         true <-
+           Enum.any?(
+             translated["type_decls"],
+             &(&1 && &1["def_id"] == id && MutexModels.type?(&1))
+           ) do
+      destructor_free?(payload, translated, refs) or owned_payload?(payload, translated, refs)
     else
       _ -> false
     end
