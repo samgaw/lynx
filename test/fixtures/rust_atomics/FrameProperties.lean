@@ -117,4 +117,59 @@ theorem split_preserves_bytes (input : alloc.vec.Vec U8) (position : Usize)
   rw [split_exact input position inside bound]
   simp
 
+/-- Parsing either returns normally or reaches the explicit allocation bound; it never panics. -/
+theorem no_panic (input : alloc.vec.Vec U8) :
+    (∃ result, take_frame input = RustM.ok result) ∨
+      take_frame input = RustM.fail .undef := by
+  cases shape : input.val with
+  | nil =>
+    left
+    exact ⟨_, short input (by simp [shape])⟩
+  | cons version rest =>
+    cases rest with
+    | nil =>
+      left
+      exact ⟨_, short input (by simp [shape])⟩
+    | cons high rest =>
+      cases rest with
+      | nil =>
+        left
+        exact ⟨_, short input (by simp [shape])⟩
+      | cons low rest =>
+        have bytes : input.val = [version, high, low] ++ rest := shape
+        by_cases wrong : version ≠ 1#u8
+        · exact Or.inl ⟨_, wrong_version input version high low rest bytes wrong⟩
+        have version_eq : version = 1#u8 := Classical.not_not.mp wrong
+        subst version
+        let length := core.num.U16.from_be_bytes (Array.make 2#usize [high, low])
+        have count_val : (UScalar.cast .Usize length).val = length.val := by
+          rw [UScalar.cast_val_mod_pow_greater_numBits_eq]
+          cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits]
+        let finish := Usize.ofNatCore (3 + length.val) (by scalar_tac)
+        have added : 3#usize + UScalar.cast .Usize length = RustM.ok finish := by
+          apply add_exact
+          simp [finish, count_val]
+        dsimp [length] at added
+        by_cases incomplete : rest.length < length.val
+        · exact Or.inl ⟨_, truncated input high low rest bytes incomplete⟩
+        have inside : finish.val ≤ input.val.length := by
+          simp [finish, bytes]
+          omega
+        have not_short : ¬input.val.length < 3 := by simp [bytes]
+        have not_truncated : ¬input.val.length < finish.val := by omega
+        have slices : input.slice.val = [1#u8, high, low] ++ rest := bytes
+        by_cases bound : input.val.length ≤ 262144
+        · have split := split_exact input finish inside bound
+          left
+          simp [take_frame, atomic_core.frames.take_frame, alloc.vec.Vec.index,
+            core.slice.index.SliceIndexUsizeSlice, core.slice.index.Usize.index,
+            Slice.index_usize, not_short, slices, UScalar.lt_equiv, lift, added,
+            not_truncated, split, core.mem.replace]
+        · have split := split_cutoff input finish inside bound
+          right
+          simp [take_frame, atomic_core.frames.take_frame, alloc.vec.Vec.index,
+            core.slice.index.SliceIndexUsizeSlice, core.slice.index.Usize.index,
+            Slice.index_usize, not_short, slices, UScalar.lt_equiv, lift, added,
+            not_truncated, split]
+
 end SplitBuffer.Properties
