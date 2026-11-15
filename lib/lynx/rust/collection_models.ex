@@ -3,7 +3,8 @@ defmodule Lynx.Rust.CollectionModels do
   alias Lynx.Rust.CallModels
 
   def resolve(function, translated, refs) do
-    Lynx.Rust.VectorExtensions.resolve(function, translated, refs) ||
+    Lynx.Rust.VectorSplits.resolve(function, translated, refs) ||
+      Lynx.Rust.VectorExtensions.resolve(function, translated, refs) ||
       owned(function, translated, refs) || views(function, translated, refs) ||
       trait_view(function, translated, refs)
   end
@@ -95,7 +96,7 @@ defmodule Lynx.Rust.CollectionModels do
       audit
       | external_calls:
           Map.new(audit.external_calls, fn {id, model} ->
-            if model[:vec_owned_method] in ~w(push extend_from_slice),
+            if model[:vec_owned_method] in ~w(push extend_from_slice split_off),
               do: {id, %{model | lean: prefix <> ".VectorModel." <> model.vec_owned_method}},
               else: {id, model}
           end)
@@ -105,7 +106,7 @@ defmodule Lynx.Rust.CollectionModels do
   def install!(audit, translation, output, prefix) do
     methods =
       for {_, model} <- audit.external_calls,
-          model[:vec_owned_method] in ~w(push extend_from_slice),
+          model[:vec_owned_method] in ~w(push extend_from_slice split_off),
           do: model.vec_owned_method
 
     methods = Enum.uniq(methods)
@@ -165,6 +166,7 @@ defmodule Lynx.Rust.CollectionModels do
           elements * bytes ≤ (2 * 262144) * 4095 := Nat.mul_le_mul countBound sizeBound
           _ < 2147483647 := by decide
       #{if "extend_from_slice" in methods, do: Lynx.Rust.VectorExtensions.lean(), else: ""}
+      #{if "split_off" in methods, do: Lynx.Rust.VectorSplits.lean(), else: ""}
       end #{module}
       """)
 
@@ -193,7 +195,8 @@ defmodule Lynx.Rust.CollectionModels do
                 [
                   "_root_.Aeneas.Std.alloc.vec.Vec.",
                   "Aeneas.Std.alloc.vec.Vec.",
-                  "alloc.vec.Vec."
+                  "alloc.vec.Vec.",
+                  module <> "."
                 ],
                 &(&1 <> method)
               ),
@@ -245,7 +248,8 @@ defmodule Lynx.Rust.CollectionModels do
     models =
       for function <- functions,
           model = resolve(function, translated, refs),
-          model && model[:vec_owned_method],
+          model && model[:vec_owned_method] &&
+            (model.can_fail == false or model[:native_cutoff_only] == true),
           into: %{},
           do: {function["def_id"], model}
 
@@ -363,6 +367,10 @@ defmodule Lynx.Rust.CollectionModels do
           {"new", [_element]} ->
             true
 
+          {"split_off", [_element, allocator]} ->
+            global_allocator?(allocator, translated) and
+              Lynx.Rust.VectorSplits.valid_call?(args, translated, refs)
+
           {"extend_from_slice", [_element, allocator]} ->
             global_allocator?(allocator, translated) and
               Lynx.Rust.VectorExtensions.valid_call?(args, translated, refs)
@@ -383,6 +391,9 @@ defmodule Lynx.Rust.CollectionModels do
           raise(
             ArgumentError,
             cond do
+              method == "split_off" ->
+                "unsupported Vec::split_off: requires concrete u8 and the exact standard Global allocator Clone dictionary"
+
               method == "extend_from_slice" ->
                 "unsupported Vec::extend_from_slice: requires concrete u8 elements, the audited standard Clone<u8> dictionary and the standard Global allocator"
 

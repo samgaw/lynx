@@ -225,9 +225,9 @@ defmodule Lynx.Rust.VectorExtensions do
     """
   end
 
-  defp clone_trait?(nil, _), do: false
+  def clone_trait?(nil, _), do: false
 
-  defp clone_trait?(trait, refs) do
+  def clone_trait?(trait, refs) do
     trait = CallModels.expand(trait, refs)
     id = trait["def_id"]
 
