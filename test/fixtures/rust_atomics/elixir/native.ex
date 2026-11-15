@@ -47,4 +47,8 @@ defmodule LynxAtomicFixture.Native do
 
   def atomic_reply_nif_result(_resource, _expected, _replacement),
     do: :erlang.nif_error(:not_loaded)
+
+  def buffer_new(_, _), do: :erlang.nif_error(:not_loaded)
+  def buffer_length(_), do: :erlang.nif_error(:not_loaded)
+  def buffer_head(_), do: :erlang.nif_error(:not_loaded)
 end

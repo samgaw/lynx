@@ -43,3 +43,13 @@ pub fn consume_locked(phase: &std::sync::Mutex<atomic_core::Phase>, amount: u64)
     drop(guard);
     (accepted, total)
 }
+
+/// Observes the low-level protocol byte count across the crate boundary.
+pub fn buffer_length(bytes: &[u8]) -> usize {
+    atomic_core::buffer_length(bytes)
+}
+
+/// Delegates the checked byte observation to the low-level implementation.
+pub fn buffer_head(bytes: &[u8]) -> u8 {
+    atomic_core::buffer_head(bytes)
+}

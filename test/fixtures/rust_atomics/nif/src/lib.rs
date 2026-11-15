@@ -172,3 +172,46 @@ fn consume_chunks(budget: u64, first: u64, second: u64) -> (bool, bool, u64) {
     let (accepted_second, total) = atomic_analysis::consume_locked(&phase, second);
     (accepted_first, accepted_second, total)
 }
+
+/// An owned byte buffer retained by a shared resource.
+#[derive(Debug)]
+pub struct ByteBuffer {
+    pub bytes: Vec<u8>,
+}
+#[rustler::resource_impl]
+impl rustler::Resource for ByteBuffer {}
+
+/// Stores two bytes in a registered resource.
+///
+/// # Panics
+/// Panics if the resource type has not been registered.
+#[rustler::nif(name = "buffer_new", schedule = "DirtyCpu")]
+#[lynx::buffer]
+#[expect(
+    clippy::vec_init_then_push,
+    reason = "Exercise audited vector growth before resource ownership transfer"
+)]
+fn buffer_new(first: u8, second: u8) -> rustler::ResourceArc<ByteBuffer> {
+    let mut bytes = Vec::new();
+    bytes.push(first);
+    bytes.push(second);
+    rustler::ResourceArc::new(ByteBuffer { bytes })
+}
+/// Observes the same shared byte buffer through a first-party callee.
+#[rustler::nif(name = "buffer_length", schedule = "DirtyCpu")]
+#[lynx::buffer]
+fn buffer_length(buffer: rustler::ResourceArc<ByteBuffer>) -> u64 {
+    atomic_analysis::buffer_length(buffer.bytes.as_slice()) as u64
+}
+
+/// Reads the leading stored byte through the same shared resource.
+#[rustler::nif(name = "buffer_head", schedule = "DirtyCpu")]
+#[lynx::buffer]
+fn buffer_head(buffer: rustler::ResourceArc<ByteBuffer>) -> u8 {
+    atomic_analysis::buffer_head(buffer.bytes.as_slice())
+}
+/// Consumes an internal Rust owner without exposing a new NIF.
+#[lynx::buffer]
+pub fn buffer_dispose(buffer: rustler::ResourceArc<ByteBuffer>) {
+    drop(buffer);
+}

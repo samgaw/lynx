@@ -98,3 +98,20 @@ pub fn phase_total(phase: &Phase) -> u64 {
         _ => 0,
     }
 }
+
+/// Counts the stored protocol bytes without changing their order.
+pub fn buffer_length(bytes: &[u8]) -> usize {
+    bytes.len()
+}
+
+/// Reads the leading protocol byte, using zero for an empty buffer.
+#[expect(
+    clippy::get_first,
+    reason = "Exercise checked SliceIndex dispatch with a live resource owner"
+)]
+pub fn buffer_head(bytes: &[u8]) -> u8 {
+    match bytes.get(0) {
+        Some(first) => *first,
+        None => 0,
+    }
+}
