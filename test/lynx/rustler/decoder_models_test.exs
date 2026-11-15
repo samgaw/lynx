@@ -42,6 +42,42 @@ defmodule Lynx.Rustler.DecoderModelsTest do
              DecoderModels.external_names(audit)
   end
 
+  test "catalogues fixed-width scalar dictionaries and rejects altered signatures", ctx do
+    for name <- ~w(bool i8 i16 i32 i64 u8 u16 u32 u64) do
+      type =
+        if name == "bool",
+          do: %{"Scalar" => "Bool"},
+          else: %{
+            "Scalar" => %{
+              "Integer" => %{
+                if(String.starts_with?(name, "i"), do: "Signed", else: "Unsigned") =>
+                  String.upcase(name)
+              }
+            }
+          }
+
+      replace = fn value ->
+        replace_scalar(value, type)
+      end
+
+      function = replace.(ctx.function)
+      translated = replace.(ctx.translated)
+
+      assert %{lean: lean, decoder_trait: 4} =
+               model = DecoderModels.resolve(function, translated, %{})
+
+      assert lean == "Lynx.Rustler.Decoding.#{name}"
+
+      assert %{lean: native, native_cutoff_only: true} =
+               DecoderModels.for_execution(model, :runtime)
+
+      assert native == "Lynx.Rustler.NativeDecoding.#{name}"
+
+      assert DecoderModels.resolve(put_in(function, ["signature", "inputs"], []), translated, %{}) ==
+               nil
+    end
+  end
+
   test "runtime lifts reject uncatalogued decoder operations" do
     assert DecoderModels.for_execution(nil, :runtime) == nil
 
@@ -112,4 +148,14 @@ defmodule Lynx.Rustler.DecoderModelsTest do
     assert {:ok, %{}} =
              DecoderModels.audit([%{"body" => %{"Move" => place}}], ctx.translated, %{})
   end
+
+  defp replace_scalar(%{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}, type), do: type
+
+  defp replace_scalar(map, type) when is_map(map),
+    do: Map.new(map, fn {k, v} -> {k, replace_scalar(v, type)} end)
+
+  defp replace_scalar(list, type) when is_list(list),
+    do: Enum.map(list, &replace_scalar(&1, type))
+
+  defp replace_scalar(value, _type), do: value
 end

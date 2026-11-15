@@ -157,7 +157,8 @@ defmodule Lynx.Rustler do
       compiler drop elaboration. Their actual first-party bodies are extracted;
       temporary tuple-field vectors require a validated unconditional compiler Copy
       witness before their logical cleanup can be erased. The FFI models admit
-      bounded tuple-field extraction, u64 decoding and opaque forwarding of
+      bounded tuple-field extraction, bool and signed/unsigned fixed-width integer
+      decoding through 64 bits, and opaque forwarding of
       its error. Pure BadArg and bounded ASCII literal Atom/RaiseAtom construction
       are validated against the actual enum metadata and literal provenance.
       Admitted boxed Term/RaiseTerm payloads retain their actual Encoder dictionary

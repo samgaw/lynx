@@ -872,6 +872,47 @@ theorem getTuple_exhausted (fields : Array Term)
 
 @[simp] theorem atom_name (value : String) : atom (.atom value) = .ok (.Ok value) := rfl
 
+/-- The SDK bool decoder accepts exactly the true/false atoms. -/
+@[expose] def bool (term : NativeTerm) : RustM (core.result.Result Bool DecoderError) :=
+  .ok (match decodeBool term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+@[expose] def i8 (term : NativeTerm) : RustM (core.result.Result I8 DecoderError) :=
+  .ok (match decodeSigned .I8 32 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+@[expose] def i16 (term : NativeTerm) : RustM (core.result.Result I16 DecoderError) :=
+  .ok (match decodeSigned .I16 32 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+@[expose] def i32 (term : NativeTerm) : RustM (core.result.Result I32 DecoderError) :=
+  .ok (match decodeSigned .I32 32 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+@[expose] def i64 (term : NativeTerm) : RustM (core.result.Result I64 DecoderError) :=
+  .ok (match decodeSigned .I64 64 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+@[expose] def u8 (term : NativeTerm) : RustM (core.result.Result U8 DecoderError) :=
+  .ok (match decodeUnsigned .U8 32 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+@[expose] def u16 (term : NativeTerm) : RustM (core.result.Result U16 DecoderError) :=
+  .ok (match decodeUnsigned .U16 32 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
+@[expose] def u32 (term : NativeTerm) : RustM (core.result.Result U32 DecoderError) :=
+  .ok (match decodeUnsigned .U32 32 term with
+    | .ok value => .Ok value
+    | .error error => .Err (.error error))
+
 @[expose] def u64 (term : NativeTerm) : RustM (core.result.Result U64 DecoderError) :=
   .ok (match decodeUnsigned .U64 64 term with
     | .ok value => .Ok value
@@ -926,6 +967,30 @@ theorem execute_of_spec {α : Type} {computation : RustM α} {post : α → Prop
 namespace NativeDecoding
 
 variable [MonadLift RustM (@Lynx.Result)]
+
+@[expose] def bool (term : NativeTerm) : Result (core.result.Result Bool DecoderError) :=
+  monadLift (Decoding.bool term)
+
+@[expose] def i8 (term : NativeTerm) : Result (core.result.Result I8 DecoderError) :=
+  monadLift (Decoding.i8 term)
+
+@[expose] def i16 (term : NativeTerm) : Result (core.result.Result I16 DecoderError) :=
+  monadLift (Decoding.i16 term)
+
+@[expose] def i32 (term : NativeTerm) : Result (core.result.Result I32 DecoderError) :=
+  monadLift (Decoding.i32 term)
+
+@[expose] def i64 (term : NativeTerm) : Result (core.result.Result I64 DecoderError) :=
+  monadLift (Decoding.i64 term)
+
+@[expose] def u8 (term : NativeTerm) : Result (core.result.Result U8 DecoderError) :=
+  monadLift (Decoding.u8 term)
+
+@[expose] def u16 (term : NativeTerm) : Result (core.result.Result U16 DecoderError) :=
+  monadLift (Decoding.u16 term)
+
+@[expose] def u32 (term : NativeTerm) : Result (core.result.Result U32 DecoderError) :=
+  monadLift (Decoding.u32 term)
 
 @[expose] def u64 (term : NativeTerm) : Result (core.result.Result U64 DecoderError) :=
   monadLift (Decoding.u64 term)

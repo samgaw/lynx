@@ -96,41 +96,59 @@ defmodule Lynx.Rustler.DecoderModels do
   def resolve(%{"body" => "Opaque"} = function, translated, refs) do
     ctx = %{translated: translated, refs: refs, traits: %{}}
 
-    {scope, self, leaf, label} =
-      case named(translated, ~w(rustler types atom Atom)) do
-        %{"def_id" => atom, "kind" => "Opaque"} ->
-          if Enum.at(function["item_meta"]["name"], 2) == %{"Ident" => ["atom", 0]} do
-            {"atom", adt(atom), "atom",
-             "Rustler Atom Decoder FFI model: atom names retain exact identity; non-atoms return BadArg; native handles, atom interning and SDK/OTP implementation unverified"}
-          else
-            {"primitive", %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}, "u64",
-             "Rustler u64 Decoder FFI model with exact integer bounds and forwarded BadArg outcome; native Term handles and Rustler implementation unverified"}
-          end
+    scalars =
+      [{"bool", %{"Scalar" => "Bool"}}] ++
+        for family <- ["Signed", "Unsigned"], width <- [8, 16, 32, 64] do
+          name = if(family == "Signed", do: "i", else: "u") <> Integer.to_string(width)
+          {name, %{"Scalar" => %{"Integer" => %{family => String.upcase(name)}}}}
+        end
 
-        _ ->
-          {"primitive", %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}, "u64",
-           "Rustler u64 Decoder FFI model with exact integer bounds and forwarded BadArg outcome; native Term handles and Rustler implementation unverified"}
+    candidates =
+      for {leaf, self} <- scalars do
+        semantics =
+          if leaf == "bool",
+            do: "exact true/false atoms and BadArg for every other term",
+            else:
+              "the shared scalar adapter's SDK integer bounds and Rust narrowing cast semantics"
+
+        {"primitive", self, leaf,
+         "Rustler #{leaf} Decoder FFI model: #{semantics}; native handles and Rustler/OTP implementation unverified"}
       end
 
-    with %{"TraitImpl" => %{"impl_ref" => %{"id" => impl_id}}} <- function["src"],
-         true <-
-           function["item_meta"]["name"] ==
-             path(["rustler", "types", scope]) ++
-               [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => ["decode", 0]}],
-         true <- method?(function, self, ctx) do
-      %{
-        rust_name:
-          "rustler::types::#{scope}::{rustler::types::Decoder<'_, #{if leaf == "atom", do: "rustler::types::atom::Atom", else: leaf}>}::decode",
-        lean: "Lynx.Rustler.Decoding.#{leaf}",
-        decoder_trait: function["src"]["TraitImpl"]["trait_ref"]["id"],
-        builtin: false,
-        can_fail: true,
-        lift: false,
-        label: label
-      }
-    else
-      _ -> nil
-    end
+    candidates =
+      case named(translated, ~w(rustler types atom Atom)) do
+        %{"def_id" => atom, "kind" => "Opaque"} ->
+          [
+            {"atom", adt(atom), "atom",
+             "Rustler Atom Decoder FFI model: atom names retain exact identity; non-atoms return BadArg; native handles, atom interning and SDK/OTP implementation unverified"}
+            | candidates
+          ]
+
+        _ ->
+          candidates
+      end
+
+    Enum.find_value(candidates, fn {scope, self, leaf, label} ->
+      with %{"TraitImpl" => %{"impl_ref" => %{"id" => impl_id}}} <- function["src"],
+           true <-
+             function["item_meta"]["name"] ==
+               path(["rustler", "types", scope]) ++
+                 [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => ["decode", 0]}],
+           true <- method?(function, self, ctx) do
+        %{
+          rust_name:
+            "rustler::types::#{scope}::{rustler::types::Decoder<'_, #{if leaf == "atom", do: "rustler::types::atom::Atom", else: leaf}>}::decode",
+          lean: "Lynx.Rustler.Decoding.#{leaf}",
+          decoder_trait: function["src"]["TraitImpl"]["trait_ref"]["id"],
+          builtin: false,
+          can_fail: true,
+          lift: false,
+          label: label
+        }
+      else
+        _ -> nil
+      end
+    end)
   end
 
   def resolve(_, _, _), do: nil
@@ -138,7 +156,7 @@ defmodule Lynx.Rustler.DecoderModels do
   def for_execution(nil, _), do: nil
 
   def for_execution(%{lean: "Lynx.Rustler.Decoding." <> operation} = model, :runtime)
-      when operation in ~w(u64 atom getTuple) do
+      when operation in ~w(bool i8 i16 i32 i64 u8 u16 u32 u64 atom getTuple) do
     model
     |> Map.put(
       :lean,
