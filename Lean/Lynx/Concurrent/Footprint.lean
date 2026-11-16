@@ -141,7 +141,8 @@ insufficient when deciding whether scheduler effects commute. -/
     first.resourceTypes == second.resourceTypes &&
     nativeModeIdentical first.finalizerMode second.finalizerMode
 
-private theorem NativeState.eq_of_identical {first second : NativeState}
+/-- Structural native-state comparison establishes exact representation identity. -/
+theorem NativeState.eq_of_identical {first second : NativeState}
     (same : first.identical second = true) : first = second := by
   cases first
   cases second

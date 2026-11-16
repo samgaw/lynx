@@ -48,6 +48,11 @@ example (computation : Lynx.Result Bool) (before after : Lynx.Environment) (enco
       Lynx.Result.ReadyPrefix computation before (.ok value) after :=
   Lynx.Rustler.executeNative_returns trace
 
+-- Native verification can recover exact heap identity through ordinary imports.
+example (first second : Lynx.Concurrent.NativeState)
+    (same : first.identical second = true) : first = second :=
+  Lynx.Concurrent.NativeState.eq_of_identical same
+
 -- Closed comparison proofs use public evaluation equations.
 example : Lynx.Term.compare 8 (.atom "a") (.atom "b") = .lt := by cbv
 example : Lynx.Term.compare 8 (.integer 7) (.integer 3) = .gt := by cbv
