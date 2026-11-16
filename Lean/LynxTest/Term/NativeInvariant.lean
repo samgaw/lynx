@@ -107,6 +107,41 @@ theorem scheduler_boundary_rejected :
   intro safe
   exact (safe _ _ (.refl _ _)).2
 
+private def zeroCounter (env : Environment) : Bool := env.nativeRefCounter == 0
+
+/-- A terminal-only check misses the mutation that prefix checking rejects. -/
+theorem transient_check_rejected :
+    Concurrent.check Outcome.isTrue 8 (.start {} transient) = true ∧
+    NativeInvariant.check zeroCounter 8 transient {} = false := by
+  constructor <;> cbv
+
+theorem checking_budget_is_not_success :
+    NativeInvariant.check zeroCounter 0 (.ok () : Result Unit) {} = false := by cbv
+
+/-- A blocked operation is safe at the current state, while completion remains
+excluded by the independent successful-return properties above. -/
+theorem blocked_check_preserves :
+    NativeInvariant.check zeroCounter 2 pending {} = true := by cbv
+
+theorem checked_blocked_invariant : NativeInvariant (fun env => zeroCounter env = true) pending {} :=
+  NativeInvariant.of_check blocked_check_preserves
+
+/-- Exhaustion can preserve an invariant without supplying an ok result. -/
+theorem exhausted_check_is_only_safety :
+    NativeInvariant.check zeroCounter 1 (.error .exhausted : Result Term) {} = true ∧
+    Concurrent.check Outcome.isTrue 4 (.start {} (.error .exhausted)) = false := by
+  constructor <;> cbv
+
+theorem scheduled_check_rejected :
+    NativeInvariant.check zeroCounter 8
+      (Result.schedule {} (.ok .nil) fun _ => .ok Term.true) {} = false := by cbv
+
+/-- The actual reply and environment of a native transition both govern the check. -/
+theorem modify_reply_checked :
+    NativeInvariant.check zeroCounter 4
+      (.nativeModify (fun env => (7,{env with nativeRefCounter := 1}))
+        (fun reply => if reply == 7 then .nativeSet {} (.ok ()) else .error .exhausted)) {} = false := by cbv
+
 end LynxTest.Term.NativeInvariant
 
 run_cmd do

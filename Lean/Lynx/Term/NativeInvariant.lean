@@ -298,6 +298,49 @@ theorem handle {holds : Environment → Prop} {computation : Result α} {before 
       exact safe _ _ (.wait _ _ reply _ _ _ _ ready trace)
   | schedule | send | receive | request => exact False.elim (safe _ _ (.refl _ _)).2
 
+/-- Check the predicate at every local/native prefix within the step budget.
+A blocked wait and an exception preserve safety without implying completion.
+An exhausted checking budget or a scheduler boundary fails the check. -/
+@[expose] def check (accept : Environment → Bool) : Nat → Result α → Environment → Bool
+  | 0, _, _ => false
+  | fuel + 1, computation, env =>
+    accept env && match computation with
+      | .ok _ | .error _ => true
+      | .get next | .nativeGet next => check accept fuel (next env) env
+      | .set updated next | .nativeSet updated next => check accept fuel next updated
+      | .nativeModify transition next =>
+        let (reply, updated) := transition env
+        check accept fuel (next reply) updated
+      | .wait poll next => match poll env with
+        | none => true
+        | some (reply,updated) => check accept fuel (next reply) updated
+      | .schedule .. | .send .. | .receive .. | .request .. => false
+
+/-- Successful checking proves the existing all-prefix native invariant.
+It supplies neither a return witness nor a termination guarantee. -/
+theorem of_check {accept : Environment → Bool} {fuel : Nat} {computation : Result α}
+    {before : Environment} (checked : check accept fuel computation before = true) :
+    NativeInvariant (fun env => accept env = true) computation before := by
+  induction fuel generalizing computation before with
+  | zero => simp [check] at checked
+  | succ fuel ih =>
+    simp only [check, Bool.and_eq_true] at checked
+    obtain ⟨valid, checked⟩ := checked
+    cases computation with
+    | ok value => exact .ok _ _ _ valid
+    | error exception => exact .error _ _ _ valid
+    | get next => exact .get _ _ (ih checked)
+    | nativeGet next => exact .nativeGet _ _ (ih checked)
+    | set updated next => exact .set _ _ _ valid (ih checked)
+    | nativeSet updated next => exact .nativeSet _ _ _ valid (ih checked)
+    | nativeModify transition next => exact .nativeModify _ _ _ valid (ih checked)
+    | wait poll next =>
+      apply NativeInvariant.wait _ _ _ valid
+      intro reply updated ready
+      apply ih
+      simpa only [ready] using checked
+    | schedule | send | receive | request => contradiction
+
 private theorem blocked_stuck {poll : Environment → Option (β × Environment)}
     (next : β → Result α) (env : Environment) (elapsed : PID → Nat → Nat)
     (blocked : poll env = none) :

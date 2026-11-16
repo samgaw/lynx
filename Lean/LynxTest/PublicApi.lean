@@ -53,6 +53,13 @@ example (first second : Lynx.Concurrent.NativeState)
     (same : first.identical second = true) : first = second :=
   Lynx.Concurrent.NativeState.eq_of_identical same
 
+-- Native prefix checking exposes its soundness through the public API.
+example (accept : Lynx.Environment → Bool) (computation : Lynx.Result α)
+    (env : Lynx.Environment) (fuel : Nat)
+    (checked : Lynx.Result.NativeInvariant.check accept fuel computation env = true) :
+    Lynx.Result.NativeInvariant (fun world => accept world = true) computation env :=
+  Lynx.Result.NativeInvariant.of_check checked
+
 -- Closed comparison proofs use public evaluation equations.
 example : Lynx.Term.compare 8 (.atom "a") (.atom "b") = .lt := by cbv
 example : Lynx.Term.compare 8 (.integer 7) (.integer 3) = .gt := by cbv
@@ -859,6 +866,7 @@ private def expectedDeclarations : Array String := #[
   "Lynx.Result.IsPure",
   "Lynx.Result.IsReadOnly",
   "Lynx.Result.NativeInvariant",
+  "Lynx.Result.NativeInvariant.check",
   "Lynx.Result.ReadyPrefix",
   "Lynx.Result.RegisteredPrefix",
   "Lynx.Result.RegisteredSteps",
