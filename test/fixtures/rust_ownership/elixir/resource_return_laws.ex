@@ -9,28 +9,16 @@ defmodule LynxResourceReturnFixture.Laws do
         true
       ) == true,
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «returns_true:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law returns_false,
@@ -40,28 +28,16 @@ defmodule LynxResourceReturnFixture.Laws do
         true
       ) == false,
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «returns_false:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law rejects_after_creation,
@@ -73,28 +49,16 @@ defmodule LynxResourceReturnFixture.Laws do
          :error, :nif_panicked -> true
        end),
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «rejects_after_creation:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law rejects_first_argument,
@@ -106,28 +70,16 @@ defmodule LynxResourceReturnFixture.Laws do
          :error, :badarg -> true
        end),
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «rejects_first_argument:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law rejects_second_argument,
@@ -139,28 +91,16 @@ defmodule LynxResourceReturnFixture.Laws do
          :error, :badarg -> true
        end),
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «rejects_second_argument:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law rejects_later_decoding,
@@ -176,28 +116,16 @@ defmodule LynxResourceReturnFixture.Laws do
          :error, :badarg -> true
        end),
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «rejects_later_decoding:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law retains_handle,
@@ -209,28 +137,16 @@ defmodule LynxResourceReturnFixture.Laws do
           LynxResourceReturnFixture.Native.resource_checked(resource, true) == true
       ),
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «retains_handle:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law independent_handles,
@@ -243,36 +159,16 @@ defmodule LynxResourceReturnFixture.Laws do
           LynxResourceReturnFixture.Native.resource_checked(second, true) == false
       ),
     proof: ~LEAN"""
-    simp only [Lynx.concurrent_eq_run, Lynx.apply_eq, «independent_handles:ensures/0»]
-    rw [Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»]
-    simp only [Lynx.Rustler.withResourceTypes, Lynx.Result.nativeModify_bind,
-      Lynx.Result.nativeModify_run, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Result.ok_bind, List.nil_append, List.eraseDups_cons, List.eraseDups_nil]
-    rw [Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»]
-    change (Lynx.Result.run _ Returned.Properties.initial schedule).1 = _
-    rw [Returned.Properties.encoded_next]
-    simp only [Bool.true_eq, ite_true]
-    simp [Returned.Properties.pinned, Returned.Properties.initial, Lynx.concurrent_eq_run, «independent_handles:ensures/0»,
-        Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-        Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-        Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-        Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-        Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-        Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-        Returned.Properties.facade_return, Returned.Properties.facade_checked,
-        Returned.Properties.allocate, Returned.Properties.allocations_distinct, Returned.Properties.resource_reference_eq,
-        Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-        Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-        Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-        Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-        Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-        Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-        Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-        Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-        Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-         Lynx.Exception.classTerm, Lynx.Exception.reason,
-        List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-        Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 
   law preserves_prior_handle,
@@ -289,27 +185,15 @@ defmodule LynxResourceReturnFixture.Laws do
         end
       ),
     proof: ~LEAN"""
-    set_option maxHeartbeats 1000000 in
-    simp [Lynx.concurrent_eq_run, «preserves_prior_handle:ensures/0»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_allocate:execution/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked/2»,
-      Elixir.LynxResourceReturnFixture.Native.«resource_checked:execution/2»,
-      Lynx.Rustler.withResourceTypes, Lynx.Result.ofExcept, Lynx.Rustler.decodeBool,
-      Lynx.Rustler.executeNative, Lynx.NativeM.resumeCaptured, Lynx.NativeM.capturePanic,
-      Returned.Properties.facade_return, Returned.Properties.facade_checked,
-      Returned.Properties.allocate, Returned.Properties.allocations_distinct, Returned.Properties.resource_reference_eq,
-      Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.newCaptured,
-      Lynx.NativeResourceArc.new, Lynx.NativeResourceArc.deref, Lynx.NativeResourceArc.release,
-      Lynx.NativeResourceArc.takeOwner, Lynx.NativeResourceArc.ownerState,
-      Lynx.NativeResourceArc.retiredState, Lynx.NativeResourceArc.ownership,
-      Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.typeName,
-      Lynx.NativeResourceArc.termType, Lynx.NativeResourceArc.referenceLimit,
-      Lynx.NativeResourceArc.clone, Lynx.NativeResourceArc.encode_eq,
-      Lynx.NativeResourceArc.decode_eq, Lynx.NativeCodec.roundtrip,
-      Lynx.NativeM.allocate, Lynx.NativeM.ok, Lynx.NativeM.fail, Lynx.Result.handle,
-      Lynx.Result.tryWith, Lynx.Result.bind, Lynx.Exception.classTerm, Lynx.Exception.reason,
-      List.filter, List.map, List.eraseDups_cons, Lynx.Rustler.encodeBool,
-      Erlang.erlang.«==/2»]
+    set_option maxHeartbeats 12000000 in
+    set_option maxRecDepth 16384 in
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Lynx.Outcome.eq_of_isTrue
+    apply Lynx.Concurrent.checkPost_sound (depth := 1024)
+      (accept := fun config => config.outcome.isTrue) ?_ run terminal
+    clear enough events last outcome run terminal
+    cbv
     """
 end
