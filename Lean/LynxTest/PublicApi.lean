@@ -2,6 +2,7 @@ module
 
 meta import Lean
 public import Lynx.Runner
+public import Lynx.Runner.NativeArithmetic
 public import Lynx.Runner.CheckPost
 public import Lynx
 public import Lynx.Rustler
@@ -52,6 +53,13 @@ example (computation : Lynx.Result Bool) (before after : Lynx.Environment) (enco
 example (first second : Lynx.Concurrent.NativeState)
     (same : first.identical second = true) : first = second :=
   Lynx.Concurrent.NativeState.eq_of_identical same
+
+-- Symbolic native arithmetic is available through an ordinary opt-in import.
+section
+open scoped Lynx.NativeArithmetic
+example (counter : Nat) (positive : 1 ≤ counter) :
+    (Nat.ble 1 counter && !(Nat.beq 0 counter)) = true := by cbv
+end
 
 -- Native prefix checking exposes its soundness through the public API.
 example (accept : Lynx.Environment → Bool) (computation : Lynx.Result α)

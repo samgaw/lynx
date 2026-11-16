@@ -5,6 +5,7 @@ public import Lynx.Term.Bitstring.Matching
 public import Lynx.Term.Except
 public import Lynx.Concurrent.Trace
 public import Lynx.Runner.CheckPost
+public import Lynx.Runner.NativeArithmetic
 
 /-! Elaborators and simplification procedures for translated programs and their proofs.
 
