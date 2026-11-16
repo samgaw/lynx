@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+static NEXT_SCRATCH: AtomicUsize = AtomicUsize::new(0);
+
 struct Scratch(PathBuf);
 
 impl Drop for Scratch {
@@ -32,9 +34,11 @@ fn scratch() -> io::Result<Scratch> {
         .duration_since(UNIX_EPOCH)
         .expect("test clock must be after the Unix epoch")
         .as_nanos();
-    let directory = Scratch(
-        std::env::temp_dir().join(format!("lynx-file-await-{}-{nonce}", std::process::id())),
-    );
+    let sequence = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
+    let directory = Scratch(std::env::temp_dir().join(format!(
+        "lynx-file-await-{}-{nonce}-{sequence}",
+        std::process::id()
+    )));
     fs::create_dir(&directory.0)?;
     Ok(directory)
 }
