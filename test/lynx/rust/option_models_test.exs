@@ -2,6 +2,59 @@ defmodule Lynx.Rust.OptionModelsTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.CallModels
 
+  test "specialized Option naming preserves declarations, binders and implementation references" do
+    name = Enum.map(~w(core option Option), &%{"Ident" => [&1, 0]})
+    specialization = %{"Instantiated" => %{"kind" => "Other", "params" => %{}}}
+    ordinary = %{"def_id" => 1, "item_meta" => %{"name" => name}}
+
+    specialized = %{
+      "def_id" => 2,
+      "item_meta" => %{"name" => name ++ [specialization]},
+      "generics" => %{"regions" => [%{"index" => 0}]},
+      "kind" => %{"Enum" => [%{"name" => "Some", "fields" => [%{"ty" => "borrow"}]}]}
+    }
+
+    first_party =
+      specialized
+      |> Map.put("def_id", 3)
+      |> put_in(["item_meta", "name"], [%{"Ident" => ["app", 0]}])
+
+    document = %{
+      "translated" => %{
+        "type_decls" => [ordinary, specialized, nil, first_party],
+        "fun_decls" => [%{"signature" => %{"output" => %{"Adt" => %{"id" => 2}}}}]
+      }
+    }
+
+    assert {lowered, [%{type_id: 2, original: original, renamed: renamed}]} =
+             Lynx.Rust.OptionModels.lower_names!(document)
+
+    assert original == name ++ [specialization]
+
+    assert renamed == [
+             %{"Ident" => ["lynx_option", 0]},
+             %{"Ident" => ["Specialized2", 0]},
+             specialization
+           ]
+
+    assert lowered ==
+             put_in(document, ["translated", "type_decls"], [
+               ordinary,
+               put_in(specialized, ["item_meta", "name"], renamed),
+               nil,
+               first_party
+             ])
+
+    assert {^lowered, []} = Lynx.Rust.OptionModels.lower_names!(lowered)
+
+    collision = put_in(specialized, ["item_meta", "name"], renamed)
+    colliding = put_in(document, ["translated", "type_decls"], [specialized, collision])
+
+    assert_raise ArgumentError, ~r/specialized Option name collides/, fn ->
+      Lynx.Rust.OptionModels.lower_names!(colliding)
+    end
+  end
+
   test "successful Option expect requires the actual standard layout and consuming signature" do
     params = fn regions ->
       %{

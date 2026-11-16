@@ -8,6 +8,48 @@ defmodule Lynx.Rust.OptionModels do
 
   def fingerprint, do: Lynx.Rust.Fingerprint.digest(@contents)
 
+  # The backend's packaged Option pattern also matches Charon's specialized
+  # Option<&mut T> declaration and assigns both declarations the name Option.
+  # Give specializations a separate namespace so Aeneas extracts their actual
+  # enum bodies and borrow projections. This changes names only: IDs, binders,
+  # fields, call targets and executable bodies retain the audited representation.
+  def lower_names!(document) do
+    {types, aliases} =
+      Enum.map_reduce(document["translated"]["type_decls"], [], fn
+        %{
+          "def_id" => id,
+          "item_meta" => %{
+            "name" =>
+              [
+                %{"Ident" => ["core", 0]},
+                %{"Ident" => ["option", 0]},
+                %{"Ident" => ["Option", 0]},
+                %{"Instantiated" => _} = specialization
+              ] = original
+          }
+        } = type,
+        aliases ->
+          renamed = [
+            %{"Ident" => ["lynx_option", 0]},
+            %{"Ident" => ["Specialized#{id}", 0]},
+            specialization
+          ]
+
+          if Enum.any?(document["translated"]["type_decls"], fn other ->
+               other && other["item_meta"]["name"] == renamed
+             end),
+             do: raise(ArgumentError, "specialized Option name collides with another declaration")
+
+          {put_in(type, ["item_meta", "name"], renamed),
+           [%{type_id: id, original: original, renamed: renamed} | aliases]}
+
+        type, aliases ->
+          {type, aliases}
+      end)
+
+    {put_in(document, ["translated", "type_decls"], types), Enum.reverse(aliases)}
+  end
+
   def scope(audit, prefix) do
     calls =
       Map.new(audit.external_calls, fn {id, model} ->

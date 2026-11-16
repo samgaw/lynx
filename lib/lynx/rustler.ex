@@ -429,11 +429,26 @@ defmodule Lynx.Rustler do
 
     {discovered, roots, models} =
       if codecs? do
+        # An extracted Encoder can itself call fallible term constructors.
+        # Discovery of the facade signature need not have visited Error yet.
+        errors = [
+          %{
+            rust: "rustler::error::Error",
+            lean: "Lynx.Rustler.DecoderError",
+            import: bridge,
+            label:
+              "Opaque Rustler Error conversion outcome for supported primitive codecs; forwarding, validated BadArg/ASCII literal atom and admitted deferred boxed Encoder construction; Error inspection unsupported"
+          }
+        ]
+
         raw =
           Lynx.Rust.Extraction.describe!(context, tools, roots, project, prefix <> ".Discovery",
-            external_types: models,
+            external_types: Enum.uniq_by(models ++ errors, & &1.rust),
             root_attribute: opts[:root_attribute],
-            mir: mir
+            mir: mir,
+            unwind: Keyword.get(opts, :unwind, :reject),
+            futures: Keyword.get(opts, :futures, :reject),
+            owned_drops: Keyword.get(opts, :owned_drops, false)
           )
 
         resolved =
@@ -452,18 +467,6 @@ defmodule Lynx.Rustler do
                 label:
                   "Stateless Rustler term-construction FFI model; handles, allocation and native runtime unverified"
               }
-
-        # An extracted Encoder can itself call fallible term constructors.
-        # Discovery of the facade signature need not have visited Error yet.
-        errors = [
-          %{
-            rust: "rustler::error::Error",
-            lean: "Lynx.Rustler.DecoderError",
-            import: bridge,
-            label:
-              "Opaque Rustler Error conversion outcome for supported primitive codecs; forwarding, validated BadArg/ASCII literal atom and admitted deferred boxed Encoder construction; Error inspection unsupported"
-          }
-        ]
 
         {resolved,
          roots ++

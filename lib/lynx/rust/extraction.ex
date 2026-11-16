@@ -186,23 +186,18 @@ defmodule Lynx.Rust.Extraction do
                    "Rustler BadArg requires its explicit opaque Error conversion model"
                  )
 
-        layout_opts =
-          Keyword.take(opts, [:root_attribute, :mir, :unwind, :futures, :owned_drops])
-          |> Keyword.put(
-            :external_types,
-            Enum.reject(models, &(&1.rust == "rustler::error::Error"))
-          )
+        # Only the actual foreign enum layout is needed here. Coroutine
+        # monomorphization cannot represent Error's unused dynamic Encoder fields;
+        # selecting the type independently avoids visiting implementation bodies.
+        # The primary extraction retains every selected first-party body.
+        layout_opts = [
+          mir: opts[:mir],
+          item_roots: ["rustler::error::Error"],
+          external_types: Enum.reject(models, &(&1.rust == "rustler::error::Error"))
+        ]
 
         layout =
-          describe!(
-            context,
-            tools,
-            roots,
-            output,
-            module <> ".ErrorLayout",
-            layout_opts,
-            Enum.map(caches, & &1.opaque_pattern)
-          )
+          describe!(context, tools, [], output, module <> ".ErrorLayout", layout_opts)
 
         {lowered, proof} =
           Lynx.Rustler.ErrorConstructors.lower!(document, layout.document, first_party, module)
@@ -446,9 +441,11 @@ defmodule Lynx.Rust.Extraction do
     {backend_document, formatting_aliases} =
       Lynx.Rust.FormatModels.lower_names!(backend_document, audit)
 
+    {backend_document, option_aliases} = Lynx.Rust.OptionModels.lower_names!(backend_document)
+
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
-           native_model_aliases == [] do
+           native_model_aliases == [] and option_aliases == [] do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -624,6 +621,7 @@ defmodule Lynx.Rust.Extraction do
       native_model_aliases: native_model_aliases,
       formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
+      option_aliases: option_aliases,
       owned_drops: Keyword.get(opts, :owned_drops, false),
       resource_cleanup:
         for(
@@ -726,8 +724,13 @@ defmodule Lynx.Rust.Extraction do
   end
 
   defp describe!(context, tools, roots, output, module, opts, opaque) do
-    unless roots != [] && Enum.all?(roots, &is_binary/1),
-      do: raise(ArgumentError, "Rust extraction requires explicit function roots")
+    unless is_list(roots) and Enum.all?(roots, &is_binary/1) and
+             (roots != [] or Keyword.get(opts, :item_roots, []) != []),
+           do:
+             raise(
+               ArgumentError,
+               "Rust extraction requires explicit function or metadata item roots"
+             )
 
     unless Regex.match?(~r/^[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*$/, module),
       do: raise(ArgumentError, "invalid generated Lean module prefix: #{inspect(module)}")

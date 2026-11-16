@@ -66,6 +66,19 @@ defmodule Lynx.Rust.RootSelectionTest do
     end
   end
 
+  test "metadata discovery requires an explicit root and never becomes function verification",
+       context do
+    for roots <- [[], nil, true, [1]] do
+      assert_raise ArgumentError, ~r/explicit function or metadata item roots/, fn ->
+        Lynx.Rust.Extraction.describe!(context, "/unused", roots, "/unused", "Demo")
+      end
+    end
+
+    assert_raise ArgumentError, ~r/unknown Rust verification option: item_roots/, fn ->
+      Lynx.Rust.verify!("/unused", "unused", item_roots: ["rustler::error::Error"])
+    end
+  end
+
   test "attributes are literal qualified Rust paths and invalid values fail before building" do
     assert RootSelection.attribute!(nil) == nil
     assert RootSelection.attribute!("verify::start_from") == "verify::start_from"
