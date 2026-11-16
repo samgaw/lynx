@@ -328,3 +328,11 @@ fn read_retryable_nif() -> bool {
 fn read_exact_word_nif() -> Result<Option<u16>, u8> {
     io_protocol::read_exact_optional("input")
 }
+
+/// Decodes a word without consuming an optional trailing payload.
+/// # Errors
+/// Returns one for truncated input.
+#[rustler::nif(name = "slice_word")]
+fn slice_word_nif(input: rustler::Binary<'_>) -> Result<(u16, u64), u8> {
+    io_protocol::parse_packet(input.as_slice())
+}
