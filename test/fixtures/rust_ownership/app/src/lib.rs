@@ -284,3 +284,11 @@ mod reply_tests {
         );
     }
 }
+
+/// Composes buffer ownership transfer with cross-crate request validation.
+///
+/// # Panics
+/// Rejection preserves the emptied borrowed input.
+pub fn checked_bytes(input: &mut Vec<u8>, accepted: bool) -> Result<Option<Vec<u8>>, u8> {
+    ownership_base::take_bytes(input, accepted)
+}

@@ -373,3 +373,15 @@ fn reply_request(
 ) -> (bool, bool, bool, u8) {
     ownership_app::local_reply(value, accepted, present, rejected)
 }
+
+/// Returns an owned buffer through cross-crate validation.
+///
+/// # Panics
+/// Rejection destroys the taken buffer before Rustler catches the panic.
+#[cfg(feature = "captured-bytes")]
+#[rustler::nif(name = "captured_bytes", schedule = "DirtyCpu")]
+#[lynx::captured_bytes]
+fn bytes_request(input: Vec<u8>, accepted: bool) -> Result<Option<Vec<u8>>, u8> {
+    let mut input = input;
+    ownership_app::checked_bytes(&mut input, accepted)
+}

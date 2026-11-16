@@ -126,3 +126,47 @@ pub fn reply(
         Ok(None)
     }
 }
+
+/// Validates a request before its caller transfers an owned reply.
+///
+/// # Panics
+/// Panics when the request is rejected.
+pub fn require_bytes(accepted: bool) {
+    assert!(accepted);
+}
+
+/// Takes the complete buffer before validating the request.
+///
+/// # Panics
+/// Rejection drops the taken buffer and leaves the borrowed input empty.
+#[expect(
+    clippy::mem_replace_with_default,
+    reason = "Exercise the verified replacement primitive without a generic Default dependency"
+)]
+pub fn take_bytes(input: &mut Vec<u8>, accepted: bool) -> Result<Option<Vec<u8>>, u8> {
+    let original = std::mem::replace(input, Vec::new());
+    require_bytes(accepted);
+    Ok(Some(original))
+}
+
+#[cfg(test)]
+mod byte_reply_tests {
+    use super::take_bytes;
+
+    #[test]
+    fn success_moves_every_byte() {
+        let mut input = vec![0, 128, 255];
+        assert_eq!(take_bytes(&mut input, true), Ok(Some(vec![0, 128, 255])));
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn panic_preserves_the_completed_take() {
+        let mut input = vec![0, 128, 255];
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            take_bytes(&mut input, false)
+        }));
+        assert!(result.is_err());
+        assert!(input.is_empty());
+    }
+}

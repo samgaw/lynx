@@ -242,8 +242,10 @@ defmodule Lynx.Rustler do
   Successful adapter audits and dependent laws reuse Lynx's proof cache. Cargo
   compilation and extraction still run to establish the current implementation.
   Captured unwind also supports canonical `Result`/`Option` wrappers around
-  scalar/unit tuples and compiler-certified plain data. References, native
-  owners and values requiring destruction are excluded from this admission.
+  scalar/unit tuples, compiler-certified plain data and owned `Vec<u8>` values.
+  Vector cleanup must pass the compiler-linked structural drop audit; allocator
+  and native deallocation effects remain unverified. References, other native
+  owners and custom destructor outputs are excluded from this admission.
   Ordinary returned errors remain values; captured panic uses a separate outer
   `Result.Err Unit`, with borrowed updates and actual guard cleanup retained.
   Result/Option and tuple traversal is limited to 16 levels; deeper shapes are

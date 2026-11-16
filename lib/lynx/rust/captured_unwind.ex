@@ -45,14 +45,14 @@ defmodule Lynx.Rust.CapturedUnwind do
         unless match?(%{"Structured" => _}, function["body"]) and
                  function["src"] == "Normal" and function["generics"]["types"] == [] and
                  function["generics"]["trait_clauses"] == [] and
-                 (plain_output?(output, translated, refs, 16) or
+                 (supported_output?(output, translated, refs, 16) or
                     nif_result_output?(output, translated, refs, runtime) or
                     resource_output?(output, translated, refs, runtime)),
                do:
                  LLBC.failure!(
                    function,
                    translated,
-                   "captured unwind requires a monomorphic ordinary function with plain data, scalar/unit tuples, supported NifResult or destructor-free ResourceArc output; fallible trait methods are unsupported"
+                   "captured unwind requires a monomorphic ordinary function with plain data, byte vectors, scalar/unit tuples, supported NifResult or destructor-free ResourceArc output; fallible trait methods are unsupported"
                  )
 
         adt = %{
@@ -188,14 +188,29 @@ defmodule Lynx.Rust.CapturedUnwind do
   defp plain_output?(_, _, _, 0), do: false
 
   defp plain_output?(output, translated, refs, depth) do
+    wrapped_output?(output, translated, refs, depth, false)
+  end
+
+  # Returning an owner does not make its locals plain data. In particular, the
+  # reconstructed-assertion guard must still require original cleanup for Vec.
+  defp supported_output?(_, _, _, 0), do: false
+
+  defp supported_output?(output, translated, refs, depth) do
+    wrapped_output?(output, translated, refs, depth, true)
+  end
+
+  defp wrapped_output?(output, translated, refs, depth, vectors) do
     if trivial_output?(output, refs, depth) or
-         Lynx.Rust.NativeDrops.plain_data?(output, translated, refs) do
+         Lynx.Rust.NativeDrops.plain_data?(output, translated, refs) or
+         (vectors and
+            Lynx.Rust.CollectionModels.scalar_vector_element(output, translated, refs) ==
+              {:ok, %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}}) do
       true
     else
       case CallModels.expand(output, refs) do
         %{"Adt" => %{"builtin" => "Tuple", "generics" => args}} ->
           args == arguments(args["types"]) and
-            Enum.all?(args["types"], &plain_output?(&1, translated, refs, depth - 1))
+            Enum.all?(args["types"], &nested_output?(&1, translated, refs, depth - 1, vectors))
 
         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => types} = args}}
         when is_list(types) ->
@@ -204,13 +219,19 @@ defmodule Lynx.Rust.CapturedUnwind do
           args == arguments(types) and
             ((length(types) == 1 and LLBC.option_type?(id, audit)) or
                (length(types) == 2 and LLBC.result_type?(id, audit))) and
-            Enum.all?(types, &plain_output?(&1, translated, refs, depth - 1))
+            Enum.all?(types, &nested_output?(&1, translated, refs, depth - 1, vectors))
 
         _ ->
           false
       end
     end
   end
+
+  defp nested_output?(output, translated, refs, depth, true),
+    do: supported_output?(output, translated, refs, depth)
+
+  defp nested_output?(output, translated, refs, depth, false),
+    do: plain_output?(output, translated, refs, depth)
 
   defp nif_result_output?(output, translated, refs, true) do
     with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
@@ -365,6 +386,19 @@ defmodule Lynx.Rust.CapturedUnwind do
   defp lower(%{"kind" => %{"Switch" => switch}} = s, state, cleanup) do
     {branches, state} = Enum.map_reduce(switch["branches"], state, &block(&1, &2, cleanup))
     {[put_in(s, ["kind", "Switch", "branches"], branches)], state}
+  end
+
+  defp lower(%{"kind" => %{"Drop" => drop}} = s, state, _) do
+    unless DropModels.nonpanicking_site?(drop, state.function, state.translated, state.refs),
+      do:
+        reject!(
+          state,
+          "captured unwind requires compiler-audited nonpanicking structural destruction"
+        )
+
+    # Keep the actual site for the complete DropModels audit and erasure report.
+    # Only the separately certified unreachable exceptional continuation goes.
+    {[put_in(s, ["kind", "Drop", "on_unwind", "statements"], [])], state}
   end
 
   defp lower(%{"kind" => %{"Loop" => body}} = s, state, cleanup) do
