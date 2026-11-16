@@ -64,7 +64,7 @@ theorem acknowledged_image (choice saved : ByteArray)
   simp [path,size,NativeFile.filesystemCrashImage,written,fileCells,NativeFile.namespaceSnapshot,
     NativeFile.namespaceTable,NativeFile.namespaceHistory,NativeFile.namespaceEntry,
     NativeFile.encodeNamespace,NativeFile.encodeNames,NativeFile.tablesEqual,List.eraseDups_cons,
-    NativeFile.namespaceCrashAllowed,NativeFile.namedInode,names,fileName,bytes,image,
+    NativeFile.namespaceCrashAllowed,NativeFile.namedInode,names,fileName,bytes,image,imageAt,
     NativeFile.inode,NativeFile.decode,NativeFile.encode,NativeFile.limit,admitted,
     NativeFile.inodeTypeName,NativeFile.namespaceTypeName,NativeFile.writableHandleTypeName,
     NativeMutex.typeName,NativeCodec.typeName,mutex]

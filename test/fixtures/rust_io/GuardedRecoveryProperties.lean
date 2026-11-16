@@ -23,23 +23,26 @@ namespace GuardedRecovery.Properties
 @[expose] def opening (complete : Bool) : Term :=
   .cons (.tuple #[.atom "open", .bitstring fileName 0, .atom "ok", .integer 0,
     reads complete]) .nil
-@[expose] def image (complete : Bool) : NativeFile.FilesystemImage :=
-  ⟨names, [(1,bytes complete)], 6⟩
-@[expose] def boot (complete : Bool) : Environment := {
-  nativeRefCounter := 6
+@[expose] def imageAt (highWater : Nat) (complete : Bool) : NativeFile.FilesystemImage :=
+  ⟨names, [(1,bytes complete)], highWater⟩
+@[expose] def image (complete : Bool) := imageAt 6 complete
+@[expose] def bootAt (highWater : Nat) (complete : Bool) : Environment := {
+  nativeRefCounter := highWater
   nativeHeap := [
     (0, NativeFile.namespaceTypeName,
       NativeFile.encodeNamespace ⟨names,names,[],opening complete⟩),
     (1, NativeFile.inodeTypeName,
       NativeFile.encode ⟨bytes complete,bytes complete,0,.nil⟩)] }
-@[expose] def after (complete : Bool) : Environment := {
-  nativeRefCounter := 10
+@[expose] def boot (complete : Bool) := bootAt 6 complete
+@[expose] def afterAt (highWater : Nat) (complete : Bool) : Environment := {
+  nativeRefCounter := highWater + 4
   nativeHeap := [
-    (7, NativeFile.closedHandleTypeName,
+    (highWater + 1, NativeFile.closedHandleTypeName,
       NativeFile.encodeHandle ⟨1,(if complete then 4 else 2),.nil⟩),
     (0, NativeFile.namespaceTypeName, NativeFile.encodeNamespace ⟨names,names,[],.nil⟩),
     (1, NativeFile.inodeTypeName,
       NativeFile.encode ⟨bytes complete,bytes complete,0,.nil⟩)] }
+@[expose] def after (complete : Bool) := afterAt 6 complete
 @[expose] def recovered (complete : Bool)
     (config : Concurrent.Config (core.result.Result (Option U16 × Option U16) U8)) : Bool :=
   let returned := match config.outcome with
