@@ -1,6 +1,7 @@
 module
 public import GuardedRecovery.AdapterProof
 public import GuardedRecovery.RecoveryTrace
+public import GuardedRecovery.RecoveryCompleteness
 public section
 open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol
 namespace GuardedRecovery.RecoveryAdapter
@@ -28,6 +29,30 @@ theorem recovery_ready {before after : Environment} {value : Reply}
   rw [recovery_contract]
   apply Rustler.withResourceTypes_readyPrefix
   simpa only [Rustler.executeNative_ok] using Rustler.executeNative_readyPrefix trace.ready encode
+
+/-- Every successful return of the actual generated adapter originates in a
+completed extracted recovery trace, after actual resource registration. -/
+theorem recovery_complete {before after : Environment} {encoded : Term}
+    (trace : Result.ReadyPrefix AdapterProof.recovery before (.ok encoded) after) :
+    ∃ value, encoded = encode value ∧ Reopens path
+      {before with nativeResourceTypes := (before.nativeResourceTypes ++ NifProperties.registered).eraseDups}
+      value after := by
+  rw [recovery_contract] at trace
+  have computation := Rustler.withResourceTypes_returns NifProperties.registered trace
+  obtain ⟨value,encoding,returned⟩ := Rustler.executeNative_returns computation
+  exact ⟨value,encoding,GuardedRecovery.RecoveryCompleteness.reopen_complete returned⟩
+
+/-- The modelled boundary and extracted Rust recovery have precisely the same
+successful encoded executions, with the full final environment preserved. -/
+theorem recovery_iff (before after : Environment) (encoded : Term) :
+    Result.ReadyPrefix AdapterProof.recovery before (.ok encoded) after ↔
+      ∃ value, encoded = encode value ∧ Reopens path
+        {before with nativeResourceTypes := (before.nativeResourceTypes ++ NifProperties.registered).eraseDups}
+        value after := by
+  constructor
+  · exact recovery_complete
+  · rintro ⟨value,rfl,trace⟩
+    exact recovery_ready trace
 
 /-- Every witnessed fault/data scenario works with any incoming loader registry.
 The final state includes the actual deduplicated registration and Rust cleanup. -/

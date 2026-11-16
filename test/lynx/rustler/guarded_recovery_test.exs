@@ -38,7 +38,10 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
           {"GuardedRecoveryWriterProperties.lean", "Writer.lean"},
           {"GuardedSyncProperties.lean", "Sync.lean"},
           {"GuardedReadTraceProperties.lean", "ReadTrace.lean"},
-          {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"}
+          {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"},
+          {"ReadTraceCompleteness.lean", "ReadCompleteness.lean"},
+          {"LockedTraceCompleteness.lean", "LockedCompleteness.lean"},
+          {"RecoveryTraceCompleteness.lean", "RecoveryCompleteness.lean"}
         ] do
       contents =
         File.read!(Path.join(@fixture, source))
@@ -71,13 +74,18 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
         "GuardedRecovery.Writer",
         "GuardedRecovery.Sync",
         "GuardedRecovery.ReadTrace",
-        "GuardedRecovery.RecoveryTrace"
+        "GuardedRecovery.RecoveryTrace",
+        "GuardedRecovery.ReadCompleteness",
+        "GuardedRecovery.LockedCompleteness",
+        "GuardedRecovery.RecoveryCompleteness"
       ],
       required_properties: ~w(GuardedRecovery.Properties.recovery_after_restart
         GuardedRecovery.Writer.every_acknowledged_recovery
         GuardedRecovery.RecoveryTrace.reopen_contract
         GuardedRecovery.RecoveryTrace.admitted_execution
-        GuardedRecovery.RecoveryTrace.admitted_every_run),
+        GuardedRecovery.RecoveryTrace.admitted_every_run
+        GuardedRecovery.RecoveryCompleteness.reopen_complete
+        GuardedRecovery.RecoveryCompleteness.reopen_iff),
       nonpanicking: [{"io_protocol::poll_locked_sync", "GuardedRecovery.SyncProperties.no_panic"}]
     ]
 
@@ -139,6 +147,35 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
                &(String.contains?(&1.message, "axiom") or String.contains?(&1.message, "sorry"))
              )
     end
+
+    wrong_registration =
+      update_in(faults, ["preludes", Access.at(0), "source"], fn source ->
+        [helpers, inverse] = String.split(source, "theorem recovery_complete", parts: 2)
+
+        helpers <>
+          "theorem recovery_complete" <>
+          String.replace(
+            inverse,
+            "(before.nativeResourceTypes ++ NifProperties.registered).eraseDups",
+            "before.nativeResourceTypes",
+            global: false
+          )
+      end)
+
+    refute wrong_registration == faults
+
+    rejected =
+      Lynx.Commands.verify!(
+        project,
+        verification_files(checked, [adapter, file, wrong_registration])
+      )
+
+    assert Enum.any?(rejected, &(&1.status == :error))
+
+    assert Enum.any?(
+             Enum.flat_map(rejected, & &1.diagnostics),
+             &(&1.module == "GuardedRecovery.RecoveryAdapter" and &1.severity == :error)
+           )
 
     wrong_bound =
       update_in(file, ["preludes", Access.at(0), "source"], fn source ->

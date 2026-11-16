@@ -2,7 +2,7 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
   use ExUnit.Case
   @fixture Path.expand("../../fixtures/rust_io", __DIR__)
   @tools System.get_env("LYNX_FILE_AWAIT_DIR")
-  @moduletag timeout: 900_000
+  @moduletag timeout: 1_800_000
   unless @tools,
     do: @moduletag(skip: "set LYNX_FILE_AWAIT_DIR for guarded future crash and recovery proofs")
 
@@ -31,7 +31,8 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
           {"GuardedReadTraceProperties.lean", "ReadTrace.lean"},
           {"ReadTraceCompleteness.lean", "ReadCompleteness.lean"},
           {"LockedTraceCompleteness.lean", "LockedCompleteness.lean"},
-          {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"}
+          {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"},
+          {"RecoveryTraceCompleteness.lean", "RecoveryCompleteness.lean"}
         ],
         do:
           File.write!(
@@ -52,7 +53,8 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
       GuardedRecovery.LockedCompleteness.locked_complete GuardedRecovery.LockedCompleteness.locked_iff
       GuardedRecovery.RecoveryTrace.reopen_contract GuardedRecovery.RecoveryTrace.Reopens.ready
       GuardedRecovery.RecoveryTrace.Reopens.every_final_state
-      GuardedRecovery.RecoveryTrace.admitted_execution GuardedRecovery.RecoveryTrace.admitted_every_run)
+      GuardedRecovery.RecoveryTrace.admitted_execution GuardedRecovery.RecoveryTrace.admitted_every_run
+      GuardedRecovery.RecoveryCompleteness.reopen_complete GuardedRecovery.RecoveryCompleteness.reopen_iff)
 
     options = [
       roots: ~w(io_protocol::reopen_words io_protocol::poll_locked_sync),
@@ -71,7 +73,8 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
         "GuardedRecovery.ReadTrace",
         "GuardedRecovery.ReadCompleteness",
         "GuardedRecovery.LockedCompleteness",
-        "GuardedRecovery.RecoveryTrace"
+        "GuardedRecovery.RecoveryTrace",
+        "GuardedRecovery.RecoveryCompleteness"
       ],
       required_properties: properties
     ]
@@ -202,6 +205,30 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
     File.write!(Path.join(tmp, "wrong-poison-classification.log"), error.message)
     File.write!(locked, valid_locked)
 
+    recovery = Path.join(project, "GuardedRecovery/RecoveryCompleteness.lean")
+    valid_recovery = File.read!(recovery)
+    [helpers, characterization] = String.split(valid_recovery, "theorem reopen_iff", parts: 2)
+
+    wrong_success =
+      String.replace(
+        characterization,
+        "↔ Reopens path before value after",
+        "↔ (∃ first second, value = .Ok (first, second)) ∧ Reopens path before value after"
+      )
+
+    refute wrong_success == characterization
+    File.write!(recovery, helpers <> "theorem reopen_iff" <> wrong_success)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rust.verify!(workspace, "io-protocol", options)
+      end
+
+    assert error.message =~ "RecoveryCompleteness.lean"
+    assert error.message =~ ~r/unsolved goals|Type mismatch|Tactic|rfl/
+    File.write!(Path.join(tmp, "wrong-recovery-classification.log"), error.message)
+    File.write!(recovery, valid_recovery)
+
     for extra <- [
           "private axiom assumed_crash_image : False",
           "private theorem unfinished_recovery : True := by sorry"
@@ -240,6 +267,19 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
     end
 
     File.write!(locked, valid_locked)
+
+    for extra <- [
+          "private axiom assumed_owning_cleanup : False",
+          "private theorem unfinished_owning_cleanup : True := by sorry"
+        ] do
+      File.write!(recovery, valid_recovery <> "\n" <> extra)
+
+      assert_raise RuntimeError, ~r/proof audit failed/, fn ->
+        Lynx.Rust.verify!(workspace, "io-protocol", options)
+      end
+    end
+
+    File.write!(recovery, valid_recovery)
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
   end
 end

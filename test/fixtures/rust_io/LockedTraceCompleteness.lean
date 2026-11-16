@@ -40,7 +40,8 @@ private theorem seek_returns {file returnedFile : NativeFile} {offset : U64}
         · simp only [Option.some.injEq,Prod.mk.injEq,Except.ok.injEq] at poll
           exact poll.1.2.symm
 
-private theorem dispose_returns {error : NativeIoError} {before after : Environment}
+/-- Completed disposal derives its unique live OS-error admission and exact removal. -/
+theorem dispose_returns {error : NativeIoError} {before after : Environment}
     (trace : Result.ReadyPrefix (NativeIoError.dispose error) before (.ok ()) after) :
     error.identity ≠ 0 ∧ error.identity ≤ before.nativeRefCounter ∧
       before.nativeHeap.filter (fun cell => cell.1 == error.identity) =
