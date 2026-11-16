@@ -246,6 +246,27 @@ pub fn checked_suffix() -> bool {
     experiment_core::protocol::checked_suffix()
 }
 
+/// Composes owned text decoding across the workspace.
+///
+/// # Errors
+/// Returns the original malformed byte vector.
+pub fn decode_owned(bytes: Vec<u8>) -> Result<String, Vec<u8>> {
+    experiment_core::protocol::decode_owned(bytes)
+}
+
+/// Composes owned text append across the workspace.
+///
+/// # Panics
+/// Propagates capacity overflow from the standard String operation.
+pub fn append_owned(text: String, suffix: &str) -> String {
+    experiment_core::protocol::append_owned(text, suffix)
+}
+
+/// Composes exact byte recovery, including invalid UTF-8.
+pub fn owned_bytes_roundtrip(bytes: Vec<u8>) -> Vec<u8> {
+    experiment_core::protocol::owned_bytes_roundtrip(bytes)
+}
+
 #[cfg(test)]
 mod framing_tests {
     #[test]

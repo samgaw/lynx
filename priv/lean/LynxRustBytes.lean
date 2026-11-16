@@ -545,6 +545,18 @@ private theorem toList_data (bs : ByteArray) : bs.toList = bs.data.toList := by
       simp [last]
   simpa [ByteArray.toList] using loop 0 [] (Nat.zero_le _)
 
+theorem bytes_values (input : Slice U8) :
+    (bytes input).toList.map (fun byte => (⟨BitVec.ofNat 8 byte.toNat⟩ : U8)) = input.val := by
+  rw [toList_data]
+  simp [bytes, List.map_map]
+  have roundtrip (byte : U8) :
+      (⟨(UInt8.ofNat byte.val).toBitVec⟩ : U8) = byte := by
+    cases byte
+    simp [UScalar.val, UInt8.ofNat]
+  simp only [Function.comp_def, roundtrip]
+  change input.val.map id = input.val
+  exact List.map_id _
+
 private theorem bytes_length (input : Slice U8) :
     (bytes input).toList.length = input.val.length := by
   rw [toList_data]

@@ -49,8 +49,12 @@ defmodule Lynx.Rust do
   Shared `str::as_bytes`, `str::len` and `str::is_empty` reuse the existing
   Aeneas byte-slice representation. Views preserve bytes and lengths count bytes,
   including multi-byte Unicode text. The standard-library conversion and native
-  layout remain reported models; owned/mutable strings and character-safe slicing
-  are not included in this subset.
+  layout remain reported models. Owned String construction from Vec<u8>, conversion
+  back into bytes, recovery of rejected UTF-8 bytes and push_str use checked
+  standard models. Conversion retains exact bytes and UTF-8 errors. Append beyond
+  262144 total bytes exhausts verification; allocation, capacity and reclamation
+  remain unverified. Other owned operations, explicit FromUtf8Error disposal and
+  character-safe slicing remain outside this subset.
 
   Immutable named scalar-array and fieldless-enum constants, static shared scalar slices and
   promoted shared arrays retain their actual checked initializers across crate

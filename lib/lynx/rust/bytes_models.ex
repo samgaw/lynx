@@ -166,14 +166,14 @@ defmodule Lynx.Rust.BytesModels do
 
   defp accessor?(_, _, _, _), do: false
 
-  defp error_type?(%{"kind" => %{"Struct" => [a, b]}, "generics" => params}, translated, refs) do
+  def error_type?(%{"kind" => %{"Struct" => [a, b]}, "generics" => params}, translated, refs) do
     Enum.all?(Map.values(params), &(&1 == [])) and a["name"] == "valid_up_to" and
       b["name"] == "error_len" and
       CallModels.expand(a["ty"], refs) == scalar("Usize") and
       option?(CallModels.expand(b["ty"], refs), translated, refs)
   end
 
-  defp error_type?(_, _, _), do: false
+  def error_type?(_, _, _), do: false
 
   defp option?(type, translated, refs, element \\ scalar("U8"))
 

@@ -250,6 +250,34 @@ pub fn read_header(input: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes([input[0], input[1], input[2], input[3]]))
 }
 
+/// Converts owned protocol bytes to text, retaining every byte on rejection.
+///
+/// # Errors
+/// Returns the original bytes when they are not valid UTF-8.
+pub fn decode_owned(bytes: Vec<u8>) -> Result<String, Vec<u8>> {
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(text),
+        Err(error) => Err(error.into_bytes()),
+    }
+}
+
+/// Appends borrowed UTF-8 text to an owned value.
+///
+/// # Panics
+/// Panics if the requested capacity exceeds isize::MAX bytes.
+pub fn append_owned(mut text: String, suffix: &str) -> String {
+    text.push_str(suffix);
+    text
+}
+
+/// Recovers every input byte through successful or failed owned text conversion.
+pub fn owned_bytes_roundtrip(bytes: Vec<u8>) -> Vec<u8> {
+    match decode_owned(bytes) {
+        Ok(text) => text.into_bytes(),
+        Err(bytes) => bytes,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
