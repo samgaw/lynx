@@ -649,3 +649,86 @@ pub fn locked_word(mutex: &std::sync::Mutex<File>, offset: u64) -> Result<Option
     drop(guard);
     reply
 }
+
+/// Writes before suspension and synchronizes the accepted prefix on resumption.
+///
+/// Cancellation releases the guard without synchronizing or rolling back writes.
+/// A returned count acknowledges only that prefix, including short writes.
+///
+/// # Errors
+/// Returns one for a write failure and two for a synchronization failure, after
+/// consuming the OS error. Poisoned locks are recovered without clearing poison.
+///
+/// # Panics
+/// Recursive acquisition may block or panic; the verification model rejects it.
+#[expect(
+    clippy::await_holding_lock,
+    reason = "Verification fixture retains a lease until synchronization or cancellation"
+)]
+pub async fn locked_suspended_sync(
+    mutex: &std::sync::Mutex<File>,
+    bytes: [u8; 2],
+) -> Result<usize, u8> {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let written = match io_core::write_once(&mut guard, &bytes) {
+        Ok(count) => Ok(count),
+        Err(error) => {
+            drop(error);
+            Err(1)
+        }
+    };
+    io_core::yield_once().await;
+    let reply = synchronize_written(&guard, written);
+    drop(guard);
+    reply
+}
+
+/// Polls the guarded synchronization future once or resumes it once.
+///
+/// Dropping the pending future cancels synchronization and retains the write.
+///
+/// # Panics
+/// Recursive acquisition may block or panic; the verification model rejects it.
+pub fn poll_locked_sync(
+    mutex: &std::sync::Mutex<File>,
+    bytes: [u8; 2],
+    resume: bool,
+) -> Option<Result<usize, u8>> {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    let mut context = Context::from_waker(Waker::noop());
+    let mut writer = std::pin::pin!(locked_suspended_sync(mutex, bytes));
+    match writer.as_mut().poll(&mut context) {
+        Poll::Ready(reply) => Some(reply),
+        Poll::Pending => {
+            if resume {
+                match writer.as_mut().poll(&mut context) {
+                    Poll::Ready(reply) => Some(reply),
+                    Poll::Pending => None,
+                }
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Synchronizes a successful write, preserving its actual count or write error.
+///
+/// # Errors
+/// Preserves write errors and returns two for synchronization failure.
+fn synchronize_written(file: &File, written: Result<usize, u8>) -> Result<usize, u8> {
+    match written {
+        Ok(count) => match io_core::synchronize(file) {
+            Ok(()) => Ok(count),
+            Err(error) => {
+                drop(error);
+                Err(2)
+            }
+        },
+        Err(error) => Err(error),
+    }
+}

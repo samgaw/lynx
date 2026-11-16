@@ -113,3 +113,23 @@ fn failed_readonly_writes_release_guard_and_preserve_readable_file() {
     drop(mutex);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn guarded_sync_cancellation_and_resumption_preserve_shared_file() {
+    let (mutex, path) = shared_file();
+    let mut context = Context::from_waker(Waker::noop());
+    {
+        let mut writer = std::pin::pin!(io_protocol::locked_suspended_sync(&mutex, [7, 8]));
+        assert_eq!(writer.as_mut().poll(&mut context), Poll::Pending);
+        assert!(matches!(mutex.try_lock(), Err(TryLockError::WouldBlock)));
+    }
+    assert_eq!(
+        io_protocol::poll_locked_sync(&mutex, [9, 10], true),
+        Some(Ok(2))
+    );
+    assert!(mutex.try_lock().is_ok());
+    assert_eq!(io_protocol::locked_word(&mutex, 0), Ok(Some(2055)));
+    assert_eq!(io_protocol::locked_word(&mutex, 2), Ok(Some(2569)));
+    drop(mutex);
+    std::fs::remove_file(path).unwrap();
+}

@@ -4331,6 +4331,22 @@ theorem file_write (file : NativeFile) (data : Slice U8) :
     exact .exhausted
 
 set_option maxHeartbeats 2000000 in
+theorem file_sync (file : NativeFile) : NativeM.NoPanic (NativeFile.syncAll file) := by
+  unfold NativeFile.syncAll
+  apply NativeM.NoPanic.wait
+  intro env reply after ready
+  cases reply with
+  | ok value => exact .ok value
+  | error error =>
+    have equal : error = .exhausted := by
+      unfold NativeFile.pollSync NativeFile.pollDirectorySync at ready
+      repeat' first
+        | split at ready
+        | simp_all
+    subst error
+    exact .exhausted
+
+set_option maxHeartbeats 2000000 in
 theorem io_error_dispose (error : NativeIoError) : NativeM.NoPanic (NativeIoError.dispose error) := by
   unfold NativeIoError.dispose Result.consumeNativeCapability
   apply NativeM.NoPanic.wait
