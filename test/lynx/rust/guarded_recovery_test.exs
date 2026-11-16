@@ -29,6 +29,7 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
           {"GuardedRecoveryProperties.lean", "Properties.lean"},
           {"GuardedRecoveryWriterProperties.lean", "Writer.lean"},
           {"GuardedReadTraceProperties.lean", "ReadTrace.lean"},
+          {"ReadTraceCompleteness.lean", "ReadCompleteness.lean"},
           {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"}
         ],
         do:
@@ -46,6 +47,7 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
       GuardedRecovery.ReadTrace.Reads.ready GuardedRecovery.ReadTrace.locked_contract
       GuardedRecovery.ReadTrace.locked_ready GuardedRecovery.ReadTrace.locked_every_run
       GuardedRecovery.ReadTrace.admitted_locked GuardedRecovery.ReadTrace.missing_error_exhausts
+      GuardedRecovery.ReadCompleteness.reads_complete GuardedRecovery.ReadCompleteness.completed_iff
       GuardedRecovery.RecoveryTrace.reopen_contract GuardedRecovery.RecoveryTrace.Reopens.ready
       GuardedRecovery.RecoveryTrace.Reopens.every_final_state
       GuardedRecovery.RecoveryTrace.admitted_execution GuardedRecovery.RecoveryTrace.admitted_every_run)
@@ -65,6 +67,7 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
         "GuardedRecovery.Properties",
         "GuardedRecovery.Writer",
         "GuardedRecovery.ReadTrace",
+        "GuardedRecovery.ReadCompleteness",
         "GuardedRecovery.RecoveryTrace"
       ],
       required_properties: properties
@@ -145,6 +148,32 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
     File.write!(Path.join(tmp, "wrong-cleanup.log"), error.message)
     File.write!(proof, valid_proof)
 
+    completeness = Path.join(project, "GuardedRecovery/ReadCompleteness.lean")
+    valid_completeness = File.read!(completeness)
+
+    [helpers, characterization] =
+      String.split(valid_completeness, "theorem completed_iff", parts: 2)
+
+    wrong_eof =
+      String.replace(
+        characterization,
+        "returnedFile = file ∧ Reads",
+        "returnedFile = file ∧ reply = .Ok none ∧ Reads"
+      )
+
+    refute wrong_eof == characterization
+    File.write!(completeness, helpers <> "theorem completed_iff" <> wrong_eof)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rust.verify!(workspace, "io-protocol", options)
+      end
+
+    assert error.message =~ "ReadCompleteness.lean"
+    assert error.message =~ ~r/unsolved goals|Type mismatch|Tactic|rfl/
+    File.write!(Path.join(tmp, "wrong-read-classification.log"), error.message)
+    File.write!(completeness, valid_completeness)
+
     for extra <- [
           "private axiom assumed_crash_image : False",
           "private theorem unfinished_recovery : True := by sorry"
@@ -157,6 +186,19 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
     end
 
     File.write!(proof, valid_proof)
+
+    for extra <- [
+          "private axiom assumed_read_outcome : False",
+          "private theorem unfinished_read : True := by sorry"
+        ] do
+      File.write!(completeness, valid_completeness <> "\n" <> extra)
+
+      assert_raise RuntimeError, ~r/proof audit failed/, fn ->
+        Lynx.Rust.verify!(workspace, "io-protocol", options)
+      end
+    end
+
+    File.write!(completeness, valid_completeness)
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
   end
 end
