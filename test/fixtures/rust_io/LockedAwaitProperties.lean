@@ -125,4 +125,54 @@ theorem no_panic (mutex : NativeMutex NativeFile) (data : Bytes) (resume : Bool)
     simp only [Result.ok_bind]
     exact (NativeM.NoPanic.guard_release _).bind _ (fun _ => .ok _)
 
+/-- A ready short or complete write retains its actual count and updated file.
+The premises are executable primitive transitions, not assumed Rust contracts. -/
+theorem caller_success_prefix (mutex : NativeMutex NativeFile) (data : Bytes) (resume : Bool)
+    (acquired : core.result.Result (NativeGuard NativeFile)
+      (NativePoisonError (NativeGuard NativeFile)))
+    (count : Usize) (file : NativeFile) (before locked written released : Environment)
+    (lock : NativeMutex.pollLock mutex before = some (.ok acquired, locked))
+    (write : NativeFile.pollWrite (recover acquired).value (Array.to_slice data) locked =
+      some (.ok (.Ok count, file), written))
+    (release : NativeGuard.pollRelease {recover acquired with value := file} written =
+      some (.ok (), released)) :
+    Result.ReadyPrefix (poll_locked_write mutex data resume) before
+      (.ok (if resume then some (.Ok count) else none)) released := by
+  rw [caller_contract]
+  simp only [NativeMutex.lock, Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ (.ok acquired) _ _ _ _ lock
+  simp only [Result.ok_bind, io_core.write_once, monadLift_self,
+    NativeFile.write, Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ (.ok (.Ok count, file)) _ _ _ _ write
+  simp only [Result.ok_bind, NativeM.ok, NativeGuard.release, Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ (.ok ()) _ _ _ _ release
+  exact .refl _ _
+
+/-- Write failures consume their admitted OS error before releasing the guard.
+Cancellation suppresses the stored reply, not the completed native effects. -/
+theorem caller_error_prefix (mutex : NativeMutex NativeFile) (data : Bytes) (resume : Bool)
+    (acquired : core.result.Result (NativeGuard NativeFile)
+      (NativePoisonError (NativeGuard NativeFile)))
+    (error : NativeIoError) (file : NativeFile)
+    (before locked written cleaned released : Environment)
+    (lock : NativeMutex.pollLock mutex before = some (.ok acquired, locked))
+    (write : NativeFile.pollWrite (recover acquired).value (Array.to_slice data) locked =
+      some (.ok (.Err error, file), written))
+    (dispose : Result.ReadyPrefix (NativeIoError.dispose error) written (.ok ()) cleaned)
+    (release : NativeGuard.pollRelease {recover acquired with value := file} cleaned =
+      some (.ok (), released)) :
+    Result.ReadyPrefix (poll_locked_write mutex data resume) before
+      (.ok (if resume then some (.Err 1#u8) else none)) released := by
+  rw [caller_contract]
+  simp only [NativeMutex.lock, Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ (.ok acquired) _ _ _ _ lock
+  simp only [Result.ok_bind, io_core.write_once, monadLift_self,
+    NativeFile.write, Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ (.ok (.Err error, file)) _ _ _ _ write
+  simp only [Result.ok_bind, NativeM.ok]
+  apply (dispose.bind _).trans
+  simp only [Result.ok_bind, NativeGuard.release, Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ (.ok ()) _ _ _ _ release
+  exact .refl _ _
+
 end LockedAwait.Properties
