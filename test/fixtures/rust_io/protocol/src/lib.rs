@@ -732,3 +732,29 @@ fn synchronize_written(file: &File, written: Result<usize, u8>) -> Result<usize,
         Err(error) => Err(error),
     }
 }
+
+/// Reopens two words using fresh file and lock state after a restart.
+///
+/// Truncated words return `None`; no old resource or mutex capability is reused.
+///
+/// # Errors
+/// Returns three for opening failure and one for seeking or reading failure.
+pub fn reopen_words(path: &str) -> Result<(Option<u16>, Option<u16>), u8> {
+    let file = match io_core::open_readonly(path) {
+        Ok(file) => file,
+        Err(error) => {
+            drop(error);
+            return Err(3);
+        }
+    };
+    let mutex = std::sync::Mutex::new(file);
+    let reply = match locked_word(&mutex, 0) {
+        Err(error) => Err(error),
+        Ok(first) => match locked_word(&mutex, 2) {
+            Err(error) => Err(error),
+            Ok(second) => Ok((first, second)),
+        },
+    };
+    drop(mutex);
+    reply
+}

@@ -133,3 +133,21 @@ fn guarded_sync_cancellation_and_resumption_preserve_shared_file() {
     drop(mutex);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn reopening_reads_complete_words_and_rejects_truncated_words() {
+    let (mutex, path) = shared_file();
+    drop(mutex);
+    std::fs::write(&path, [7, 8, 9, 10]).unwrap();
+    assert_eq!(
+        io_protocol::reopen_words(path.to_str().unwrap()),
+        Ok((Some(2055), Some(2569)))
+    );
+    std::fs::write(&path, [7]).unwrap();
+    assert_eq!(
+        io_protocol::reopen_words(path.to_str().unwrap()),
+        Ok((None, None))
+    );
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(io_protocol::reopen_words(path.to_str().unwrap()), Err(3));
+}
