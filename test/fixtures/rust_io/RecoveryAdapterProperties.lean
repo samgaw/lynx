@@ -2,6 +2,7 @@ module
 public import GuardedRecovery.AdapterProof
 public import GuardedRecovery.RecoveryTrace
 public import GuardedRecovery.RecoveryCompleteness
+public import GuardedRecovery.RecoveryRun
 public section
 open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol
 namespace GuardedRecovery.RecoveryAdapter
@@ -53,6 +54,27 @@ theorem recovery_iff (before after : Environment) (encoded : Term) :
   · exact recovery_complete
   · rintro ⟨value,rfl,trace⟩
     exact recovery_ready trace
+
+/-- The actual adapter stays native/local for every initial environment,
+including blocked and exceptional paths, without requiring IO completion. -/
+theorem recovery_local (before : Environment) :
+    Result.NativeInvariant (fun _ => True) AdapterProof.recovery before := by
+  rw [recovery_contract]
+  unfold Rustler.withResourceTypes
+  apply Result.NativeInvariant.nativeModify _ _ _ trivial
+  exact Rustler.executeNative_invariant (GuardedRecovery.RecoveryRun.reopen_local path _) encode
+
+/-- Successful terminal scheduler runs of the generated adapter retain their
+actual Rust origin, registration and full final environment. -/
+theorem recovery_run_complete (before : Environment) (elapsed : PID → Nat → Nat)
+    (run : Concurrent.Run (.start before AdapterProof.recovery elapsed) events last)
+    (terminal : Concurrent.Terminal last (.ok encoded)) :
+    ∃ value after, encoded = encode value ∧ Reopens path
+      {before with nativeResourceTypes := (before.nativeResourceTypes ++ NifProperties.registered).eraseDups}
+      value after ∧ last = .start after (.ok encoded) elapsed := by
+  obtain ⟨after,prefixTrace,equal⟩ := (recovery_local before).run_returns elapsed run terminal
+  obtain ⟨value,encoding,reopened⟩ := recovery_complete prefixTrace
+  exact ⟨value,after,encoding,reopened,equal⟩
 
 /-- Every witnessed fault/data scenario works with any incoming loader registry.
 The final state includes the actual deduplicated registration and Rust cleanup. -/

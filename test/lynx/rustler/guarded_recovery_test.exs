@@ -41,7 +41,8 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
           {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"},
           {"ReadTraceCompleteness.lean", "ReadCompleteness.lean"},
           {"LockedTraceCompleteness.lean", "LockedCompleteness.lean"},
-          {"RecoveryTraceCompleteness.lean", "RecoveryCompleteness.lean"}
+          {"RecoveryTraceCompleteness.lean", "RecoveryCompleteness.lean"},
+          {"RecoveryRunProperties.lean", "RecoveryRun.lean"}
         ] do
       contents =
         File.read!(Path.join(@fixture, source))
@@ -77,7 +78,8 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
         "GuardedRecovery.RecoveryTrace",
         "GuardedRecovery.ReadCompleteness",
         "GuardedRecovery.LockedCompleteness",
-        "GuardedRecovery.RecoveryCompleteness"
+        "GuardedRecovery.RecoveryCompleteness",
+        "GuardedRecovery.RecoveryRun"
       ],
       required_properties: ~w(GuardedRecovery.Properties.recovery_after_restart
         GuardedRecovery.Writer.every_acknowledged_recovery
@@ -85,7 +87,8 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
         GuardedRecovery.RecoveryTrace.admitted_execution
         GuardedRecovery.RecoveryTrace.admitted_every_run
         GuardedRecovery.RecoveryCompleteness.reopen_complete
-        GuardedRecovery.RecoveryCompleteness.reopen_iff),
+        GuardedRecovery.RecoveryCompleteness.reopen_iff
+        GuardedRecovery.RecoveryRun.reopen_local GuardedRecovery.RecoveryRun.reopen_run_complete),
       nonpanicking: [{"io_protocol::poll_locked_sync", "GuardedRecovery.SyncProperties.no_panic"}]
     ]
 
