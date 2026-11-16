@@ -556,3 +556,96 @@ pub fn poll_write(file: File, bytes: [u8; 2], resume: bool) -> Option<Result<usi
         }
     }
 }
+
+/// Writes under a shared file lock, retaining the guard across suspension.
+///
+/// # Errors
+/// Returns one on write failure after consuming the OS error payload. Poisoned
+/// locks are recovered without clearing their poison flag.
+///
+/// # Panics
+/// Recursive acquisition may block or panic; the verification model rejects it.
+#[expect(
+    clippy::await_holding_lock,
+    reason = "Verification fixture retains a lease across Pending"
+)]
+pub async fn locked_suspended_write(
+    mutex: &std::sync::Mutex<File>,
+    bytes: [u8; 2],
+) -> Result<usize, u8> {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let reply = match io_core::write_once(&mut guard, &bytes) {
+        Ok(written) => Ok(written),
+        Err(error) => {
+            drop(error);
+            Err(1)
+        }
+    };
+    io_core::yield_once().await;
+    drop(guard);
+    reply
+}
+
+/// Polls once, optionally resumes, then destroys the retained guarded frame.
+///
+/// Cancellation retains completed writes and releases the guard. It does not
+/// close the file, synchronize storage, or roll back writes.
+///
+/// # Panics
+/// Recursive acquisition may block or panic; the verification model rejects it.
+pub fn poll_locked_write(
+    mutex: &std::sync::Mutex<File>,
+    bytes: [u8; 2],
+    resume: bool,
+) -> Option<Result<usize, u8>> {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    let mut context = Context::from_waker(Waker::noop());
+    let mut writer = std::pin::pin!(locked_suspended_write(mutex, bytes));
+    match writer.as_mut().poll(&mut context) {
+        Poll::Ready(reply) => Some(reply),
+        Poll::Pending => {
+            if resume {
+                match writer.as_mut().poll(&mut context) {
+                    Poll::Ready(reply) => Some(reply),
+                    Poll::Pending => None,
+                }
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Reads one little-endian word at an absolute offset under the shared file lock.
+///
+/// # Errors
+/// Returns one for seeking or reading failure, consuming the OS error payload.
+/// The guard is released after success, EOF and either I/O failure.
+///
+/// # Panics
+/// Recursive acquisition may block or panic; the verification model rejects it.
+pub fn locked_word(mutex: &std::sync::Mutex<File>, offset: u64) -> Result<Option<u16>, u8> {
+    let mut guard = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let reply = match io_core::seek_from(&mut guard, std::io::SeekFrom::Start(offset)) {
+        Ok(_) => match read_word(&mut guard) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                drop(error);
+                Err(1)
+            }
+        },
+        Err(error) => {
+            drop(error);
+            Err(1)
+        }
+    };
+    drop(guard);
+    reply
+}

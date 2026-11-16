@@ -198,3 +198,50 @@ fn write_poll_request(first: u8, second: u8, resume: bool) -> Result<Option<u64>
         None => Ok(None),
     }
 }
+
+#[cfg(feature = "async-shared-write")]
+mod async_log {
+    use super::shared_log::LogResource;
+    use rustler::ResourceArc;
+    use std::sync::Mutex;
+
+    #[rustler::nif(name = "async_log_open", schedule = "DirtyIo")]
+    fn open_request() -> rustler::NifResult<ResourceArc<LogResource>> {
+        let file = match io_protocol::open_readwrite("journal") {
+            Ok(file) => file,
+            Err(error) => {
+                drop(error);
+                return Err(rustler::Error::Atom("open_failed"));
+            }
+        };
+        Ok(ResourceArc::new(LogResource {
+            file: Mutex::new(file),
+        }))
+    }
+
+    #[rustler::nif(name = "async_log_write", schedule = "DirtyIo")]
+    fn write_request(
+        owner: ResourceArc<LogResource>,
+        first: u8,
+        second: u8,
+        resume: bool,
+    ) -> Result<Option<u64>, u8> {
+        let reply = io_protocol::poll_locked_write(&owner.file, [first, second], resume);
+        drop(owner);
+        match reply {
+            None => Ok(None),
+            Some(Ok(count)) => Ok(Some(count as u64)),
+            Some(Err(error)) => Err(error),
+        }
+    }
+    /// Reads a word from the same shared file state used by the async writer.
+    ///
+    /// # Errors
+    /// Returns one for seeking or reading failure.
+    #[rustler::nif(name = "async_log_read", schedule = "DirtyIo")]
+    fn read_request(owner: ResourceArc<LogResource>, offset: u64) -> Result<Option<u16>, u8> {
+        let reply = io_protocol::locked_word(&owner.file, offset);
+        drop(owner);
+        reply
+    }
+}

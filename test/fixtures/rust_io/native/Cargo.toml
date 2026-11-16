@@ -14,3 +14,4 @@ rustler = "=0.39.0"
 shared-log = []
 captured-write = []
 async-write = []
+async-shared-write = ["shared-log"]
