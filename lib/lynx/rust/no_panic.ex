@@ -63,7 +63,16 @@ defmodule Lynx.Rust.NoPanic do
         end
       end
 
-    dependencies = Map.new(functions, fn {id, f} -> {id, references(f["body"])} end)
+    initializers =
+      Map.new(Enum.reject(translated["global_decls"] || [], &is_nil/1), fn global ->
+        {global["def_id"], Lynx.Rust.Constants.initializer_id(global)}
+      end)
+
+    dependencies =
+      Map.new(functions, fn {id, f} ->
+        {id, references(f["body"]) ++ global_references(f["body"], initializers)}
+      end)
+
     protected = closure(Enum.map(selected, & &1.id), dependencies, MapSet.new())
 
     {document, %{contracts: selected, protected: protected}}
@@ -147,6 +156,19 @@ defmodule Lynx.Rust.NoPanic do
   defp references(map) when is_map(map), do: Enum.flat_map(Map.values(map), &references/1)
   defp references(list) when is_list(list), do: Enum.flat_map(list, &references/1)
   defp references(_), do: []
+
+  # A const read executes its actual initializer. Protect that body and its
+  # dependencies before any pending certificate can simplify unwind cleanup.
+  defp global_references(%{"Global" => %{"id" => id}} = node, initializers),
+    do: List.wrap(initializers[id]) ++ global_references(Map.values(node), initializers)
+
+  defp global_references(node, initializers) when is_map(node),
+    do: global_references(Map.values(node), initializers)
+
+  defp global_references(nodes, initializers) when is_list(nodes),
+    do: Enum.flat_map(nodes, &global_references(&1, initializers))
+
+  defp global_references(_, _), do: []
 
   defp closure([], _, seen), do: seen
 

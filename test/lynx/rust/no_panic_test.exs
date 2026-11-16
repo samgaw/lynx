@@ -54,6 +54,26 @@ defmodule Lynx.Rust.NoPanicTest do
     assert protected == MapSet.new([1, 2, 3])
   end
 
+  test "protects actual constant initializers and their transitive callees" do
+    reader =
+      put_in(function(1, "parse", []), ["body", "Structured"], %{
+        "place" => %{"Global" => %{"id" => 8}}
+      })
+
+    input = document([reader, function(2, "initializer", [3]), function(3, "leaf", [])])
+
+    input =
+      put_in(input, ["translated", "global_decls"], [
+        %{
+          "def_id" => 8,
+          "value" => %{"Value" => [40, [%{"Call" => [%{"kind" => %{"Fun" => 2}}, []]}, %{}]]}
+        }
+      ])
+
+    {_, plan} = NoPanic.prepare!(input, [{"core_lib::parse", "Proofs.safe"}], ["core_lib"])
+    assert plan.protected == MapSet.new([1, 2, 3])
+  end
+
   test "rejects a missing or opaque first-party implementation" do
     for functions <- [[], [put_in(function(1, "parse", []), ["body"], "Opaque")]] do
       assert_raise ArgumentError, ~r/extracted ordinary first-party/, fn ->
