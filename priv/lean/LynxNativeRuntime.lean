@@ -628,6 +628,21 @@ instance {α : Type} [NativeCodec α] : NativeCodec (NativeMutex α) where
           .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode value]) :: env.nativeHeap }) := by
   simp [new, NativeM.allocate, fresh]
 
+/-- A fresh mutex construction retains the actual allocation transition. -/
+theorem new_prefix {α : Type} [NativeCodec α] (value : α) (env : Environment)
+    (fresh : env.nativeHeap.any (fun cell => cell.1 == env.nativeRefCounter + 1) = false) :
+    Result.ReadyPrefix (new value) env (.ok ⟨env.nativeRefCounter + 1⟩) {env with
+      nativeRefCounter := env.nativeRefCounter + 1
+      nativeHeap := (env.nativeRefCounter + 1,typeName α,
+        .tuple #[.atom "unlocked",.atom "unpoisoned",NativeCodec.encode value]) :: env.nativeHeap} := by
+  simp only [new,NativeM.allocate,Result.wait_bind]
+  apply Result.ReadyPrefix.wait _ _ (.ok (env.nativeRefCounter + 1)) _ {env with
+    nativeRefCounter := env.nativeRefCounter + 1
+    nativeHeap := (env.nativeRefCounter + 1,typeName α,
+      .tuple #[.atom "unlocked",.atom "unpoisoned",NativeCodec.encode value]) :: env.nativeHeap} _ _
+  · simp [fresh]
+  · exact .refl _ _
+
 /-- Destruction of an owned unlocked mutex. Admission separately restricts the
 payload to scalars or compiler-certified destructor-free structs. -/
 @[expose] def dispose {α : Type} [NativeCodec α] (mutex : NativeMutex α) : NativeM Unit := do
@@ -3333,6 +3348,19 @@ an unknown destructor. The admitted std/allocator cleanup is nonpanicking. -/
 @[expose] def dispose (error : NativeIoError) : NativeM Unit :=
   Result.consumeNativeCapability typeName error.identity
 
+/-- A uniquely admitted OS error is consumed in a real native prefix. -/
+theorem dispose_prefix (error : NativeIoError) (env : Environment)
+    (nonzero : error.identity ≠ 0) (bounded : error.identity ≤ env.nativeRefCounter)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == error.identity) =
+      [(error.identity,typeName,.atom "live")]) :
+    Result.ReadyPrefix (dispose error) env (.ok ()) {env with
+      nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)} := by
+  simp only [dispose,Result.consumeNativeCapability]
+  apply Result.ReadyPrefix.wait _ _ (.ok ()) _ {env with
+    nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)} _ _
+  · simp [nonzero,not_lt.mpr bounded,stored]
+  · exact .refl _ _
+
 end NativeIoError
 
 instance : NativeDrop NativeIoError where
@@ -4275,6 +4303,33 @@ theorem disposeFile_next {α : Type} (mutex : NativeMutex NativeFile)
     try dsimp only
     rw [Result.wait_ready_run _ _ _ _ _ ready]
     simp [Result.ok_bind, NativeM.removeCell, retained]
+
+/-- File close precedes removal of the owning mutex in the actual prefix.
+The mutex must survive the close step, and unrelated cells are retained. -/
+theorem disposeFile_prefix (mutex : NativeMutex NativeFile)
+    (file : NativeFile) (poisoned : Bool) (env after : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,typeName NativeFile,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode file])])
+    (ready : NativeFile.pollClose file env = some (.ok (),after))
+    (retained : after.nativeHeap.filter (fun cell => cell.1 == mutex.id) =
+      [(mutex.id,typeName NativeFile,.tuple #[.atom "unlocked",
+        .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode file])]) :
+    Result.ReadyPrefix (disposeFile mutex) env (.ok ()) {after with
+      nativeHeap := after.nativeHeap.filter (fun cell => cell.1 != mutex.id)} := by
+  let contents : Term := .tuple #[.atom "unlocked",
+    .atom (if poisoned then "poisoned" else "unpoisoned"),NativeCodec.encode file]
+  cases poisoned <;>
+    simp only [disposeFile,NativeM.readCell,Result.nativeGet_bind]
+  all_goals apply Result.ReadyPrefix.nativeGet
+  all_goals simp [stored,NativeCodec.roundtrip,NativeFile.close,Result.wait_bind]
+  all_goals apply Result.ReadyPrefix.wait _ _ (.ok ()) _ after _ _ ready
+  all_goals simp only [Result.ok_bind]
+  all_goals simp only [NativeM.removeCell,Result.wait_bind]
+  all_goals apply Result.ReadyPrefix.wait _ _ (.ok contents) _ {after with
+    nativeHeap := after.nativeHeap.filter (fun cell => cell.1 != mutex.id)} _ _
+  all_goals simp [retained,contents]
+  all_goals exact .refl _ _
 
 end NativeMutex
 
