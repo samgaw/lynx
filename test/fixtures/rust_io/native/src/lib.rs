@@ -313,3 +313,9 @@ fn classify_end_of_file() -> bool {
 fn classify_interrupted_read() -> bool {
     io_protocol::truncated_input(std::io::ErrorKind::Interrupted)
 }
+
+/// Reports retryable opening or reading failures through the first-party crates.
+#[rustler::nif(name = "read_retryable", schedule = "DirtyIo")]
+fn read_retryable_nif() -> bool {
+    io_protocol::read_is_retryable("missing")
+}
