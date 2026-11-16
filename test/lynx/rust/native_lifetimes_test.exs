@@ -2,6 +2,20 @@ defmodule Lynx.Rust.NativeLifetimesTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.NativeLifetimes
 
+  test "projected place mentions do not silently disappear while native owners are live" do
+    mention = %{
+      "kind" => %{
+        "PlaceMention" => %{
+          "kind" => %{"Projection" => [place(1), %{"Field" => [nil, 0]}]},
+          "ty" => scalar()
+        }
+      }
+    }
+
+    error = audit([create(1), mention, dispose(1), create(0), returned()], false)
+    assert error.description =~ "projected place mentions"
+  end
+
   test "primitive comparisons preserve live owners without admitting arithmetic panics" do
     for op <- ~w(BitAnd BitOr BitXor Eq Ne Lt Le Gt Ge Add Sub Mul Div Rem Shl Shr) do
       operation = %{

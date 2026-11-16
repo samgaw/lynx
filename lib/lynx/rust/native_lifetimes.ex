@@ -1208,6 +1208,18 @@ defmodule Lynx.Rust.NativeLifetimes do
 
   defp statement!("UndefinedBehavior", _live, %{cutoff_undefined: true}), do: :terminal
 
+  defp statement!(%{"PlaceMention" => place}, live, ctx) do
+    if MapSet.size(live) > 0 or nested_owner?(place, ctx),
+      do:
+        LLBC.failure!(
+          ctx.function,
+          ctx.translated,
+          "native owner lifetime cannot validate projected place mentions; projection validity must be preserved"
+        )
+
+    live
+  end
+
   defp statement!(
          %{"Drop" => %{"fn_ptr" => %{"kind" => %{"Fun" => id}}, "place" => place}},
          live,
