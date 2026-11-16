@@ -244,4 +244,26 @@ mod async_log {
         drop(owner);
         reply
     }
+
+    /// Opens a readable resource whose writes fail without poisoning its mutex.
+    ///
+    /// # Errors
+    /// Returns the raw atom `open_failed` if opening the journal fails.
+    ///
+    /// # Panics
+    /// Panics if Rustler has not registered the resource type.
+    #[cfg(feature = "async-readonly")]
+    #[rustler::nif(name = "async_log_readonly", schedule = "DirtyIo")]
+    fn readonly_request() -> rustler::NifResult<ResourceArc<LogResource>> {
+        let file = match io_protocol::open_readonly("journal") {
+            Ok(file) => file,
+            Err(error) => {
+                drop(error);
+                return Err(rustler::Error::Atom("open_failed"));
+            }
+        };
+        Ok(ResourceArc::new(LogResource {
+            file: Mutex::new(file),
+        }))
+    }
 }

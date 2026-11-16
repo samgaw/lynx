@@ -93,3 +93,23 @@ fn concurrent_cancelled_and_completed_writers_preserve_both_words() {
     drop(mutex);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn failed_readonly_writes_release_guard_and_preserve_readable_file() {
+    let (original, path) = shared_file();
+    drop(original);
+    std::fs::write(&path, [7, 8]).unwrap();
+    let file = io_protocol::open_readonly(path.to_str().unwrap()).unwrap();
+    let mutex = Mutex::new(file);
+    assert_eq!(io_protocol::poll_locked_write(&mutex, [9, 10], false), None);
+    assert_eq!(
+        io_protocol::poll_locked_write(&mutex, [9, 10], true),
+        Some(Err(1))
+    );
+    assert!(!mutex.is_poisoned());
+    assert!(mutex.try_lock().is_ok());
+    assert_eq!(io_protocol::locked_word(&mutex, 0), Ok(Some(2055)));
+    assert_eq!(std::fs::read(&path).unwrap(), [7, 8]);
+    drop(mutex);
+    std::fs::remove_file(path).unwrap();
+}
