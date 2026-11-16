@@ -5,8 +5,21 @@ defmodule Lynx.Rustler.RuntimeTest do
   @moduletag timeout: 900_000
   if is_nil(@tools), do: @moduletag(skip: "set LYNX_AENEAS_DIR for native runtime NIF proofs")
 
-  @tag :tmp_dir
-  test "composes actual native critical sections and failures into Elixir laws", %{tmp_dir: tmp} do
+  for sysroot <- [:default, :full_mir] do
+    @tag sysroot: sysroot
+    if sysroot == :full_mir and System.get_env("LYNX_FULL_MIR") != "1",
+      do: @tag(skip: "set LYNX_FULL_MIR=1 for full-MIR native runtime NIF proofs")
+
+    @tag :tmp_dir
+    test "#{sysroot}: composes actual native critical sections and failures into Elixir laws", %{
+      tmp_dir: tmp,
+      sysroot: sysroot
+    } do
+      verify_runtime(tmp, sysroot)
+    end
+  end
+
+  defp verify_runtime(tmp, sysroot) do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -26,6 +39,7 @@ defmodule Lynx.Rustler.RuntimeTest do
       workspace: workspace,
       package: "effects-native",
       tools: @tools,
+      sysroot: sysroot,
       execution: :runtime,
       lean_project: project,
       module_prefix: "RuntimeNif.Extraction",
@@ -42,6 +56,10 @@ defmodule Lynx.Rustler.RuntimeTest do
     end
 
     assert prepared.verification.execution == :runtime
+
+    assert Enum.any?(prepared.verification.trusted_boundary, &String.starts_with?(&1, "Full-MIR")) ==
+             (sysroot == :full_mir)
+
     assert Enum.all?(prepared.external.purities, fn {_, purity} -> purity == :concurrent end)
     audit = prepared.extraction.audit
 
@@ -109,7 +127,8 @@ defmodule Lynx.Rustler.RuntimeTest do
         do: assert_raise(ArgumentError, fn -> apply(native, :checked, args) end)
 
     path = Path.join(tmp, "laws.ex")
-    File.write!(path, laws())
+    released = Enum.find(prepared.bindings.bindings, &(&1["name"] == "released"))
+    File.write!(path, String.replace(laws(), "__RELEASED__", released["lean_name"]))
     [{_, beam}] = Code.compile_file(path)
     reports = Lynx.Laws.verify([beam], native: {Lynx.Rustler, options})
 
@@ -220,45 +239,67 @@ defmodule Lynx.Rustler.RuntimeTest do
       law successful_update,
         expects: LynxEffectsFixture.Native.checked(7, 3) == true,
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «successful_update:ensures/0», Elixir.LynxEffectsFixture.Native.«checked/2»,
-          Elixir.LynxEffectsFixture.Native.«checked:execution/2», Lynx.Rustler.decodeUnsigned,
-          Lynx.Result.ofExcept, RuntimeNif.Properties.facade_adapter_continuation,
-          Lynx.Rustler.encodeBool, Erlang.erlang.«==/2», Aeneas.Std.U64.max,
-          Aeneas.Std.UScalar.val, Aeneas.Std.U64.numBits]
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        cbv
         """
       law overflow_rejected,
         expects: LynxEffectsFixture.Native.checked(18446744073709551615, 1) == false,
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «overflow_rejected:ensures/0», Elixir.LynxEffectsFixture.Native.«checked/2»,
-          Elixir.LynxEffectsFixture.Native.«checked:execution/2», Lynx.Rustler.decodeUnsigned,
-          Lynx.Result.ofExcept, RuntimeNif.Properties.facade_adapter_continuation,
-          Lynx.Rustler.encodeBool, Erlang.erlang.«==/2», Aeneas.Std.U64.max,
-          Aeneas.Std.UScalar.val, Aeneas.Std.U64.numBits]
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        cbv
         """
       law repeated_checks,
         expects: LynxEffectsFixture.Native.checked(7, 3) == true and
           LynxEffectsFixture.Native.checked(18446744073709551615, 1) == false,
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «repeated_checks:ensures/0», Elixir.LynxEffectsFixture.Native.«checked/2»,
-          Elixir.LynxEffectsFixture.Native.«checked:execution/2», Lynx.Rustler.decodeUnsigned,
-          Lynx.Result.ofExcept, RuntimeNif.Properties.facade_adapter_continuation,
-          Lynx.Rustler.encodeBool, Erlang.erlang.«==/2», Aeneas.Std.U64.max,
-          Aeneas.Std.UScalar.val, Aeneas.Std.U64.numBits]
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        cbv
         """
       law badarg,
         expects: (try do LynxEffectsFixture.Native.checked(-1, 0) catch :error, :badarg -> true end),
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «badarg:ensures/0», Elixir.LynxEffectsFixture.Native.«checked/2»,
-          Lynx.Rustler.decodeUnsigned, Lynx.Result.ofExcept, Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind,
-          Lynx.Exception.classTerm, Lynx.Exception.reason]
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        cbv
         """
       law panic_after_cleanup,
         expects: (try do LynxEffectsFixture.Native.released(7, false); false catch :error, :nif_panicked -> true end),
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «panic_after_cleanup:ensures/0», Elixir.LynxEffectsFixture.Native.«released/2»,
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        simp [«panic_after_cleanup:ensures/0», Elixir.LynxEffectsFixture.Native.«released/2»,
           Elixir.LynxEffectsFixture.Native.«released:execution/2», Lynx.Rustler.decodeUnsigned,
-          Lynx.Rustler.decodeBool, Lynx.Result.ofExcept, RuntimeNif.Properties.released_handler_prefix,
-          Lynx.Exception.classTerm, Lynx.Exception.reason]
+          Lynx.Rustler.decodeBool, Lynx.Result.ofExcept, __RELEASED__,
+          effects_native.mutex_dispose_then_assert, Lynx.NativeM.massert]
+        cbv
         """
     end
     '''

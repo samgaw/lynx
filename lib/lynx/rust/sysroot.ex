@@ -4,9 +4,6 @@ defmodule Lynx.Rust.Sysroot do
   def validate!(opts) do
     unless Keyword.get(opts, :sysroot, :default) in [:default, :full_mir],
       do: raise(ArgumentError, "Rust sysroot must be :default or :full_mir")
-
-    if opts[:sysroot] == :full_mir and Keyword.get(opts, :execution, :pure) != :pure,
-      do: raise(ArgumentError, "full-MIR sysroot currently requires pure execution")
   end
 
   # An explicit target also changes Cargo's host Rust-flags handling. Use the

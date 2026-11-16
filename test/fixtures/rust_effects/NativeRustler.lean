@@ -32,12 +32,12 @@ theorem internal_state (value amount : U64) (env : Environment)
   refine ⟨changed, ?_, ?_⟩
   · simp [mutex_locked_scalar, effects_core.locked_scalar_increment, NativeMutex.new, NativeM.allocate,
       NativeMutex.lock, NativeM.ok, empty, bind_assoc]
-    rw [Result.wait_ready_apply _ _ _ _ _ (by
+    rw [Result.wait_ready_run _ _ _ _ _ (by
       simp [NativeMutex.pollLock, NativeCodec.roundtrip]
       constructor <;> rfl)]
     simp [NativeGuard.deref, NativeGuard.deref_mut, NativeM.lift,
       NativeDrop.drop, NativeGuard.release, returned]
-    rw [Result.wait_ready_apply _ _ _ _ _ (by
+    rw [Result.wait_ready_run _ _ _ _ _ (by
       simp [NativeGuard.pollRelease, NativeCodec.roundtrip]
       constructor <;> rfl)]
     simp [NativeMutex.dispose, NativeM.readCell, NativeM.removeCell,
@@ -76,12 +76,12 @@ theorem facade_adapter_continuation {β : Type} (value amount : U64)
   simp [Rustler.executeNative, Result.handle, __CHECKED__,
     mutex_locked_scalar, effects_core.locked_scalar_increment, NativeMutex.new, NativeM.allocate,
     NativeMutex.lock, NativeM.ok, empty, bind_assoc]
-  rw [Result.wait_ready_apply _ _ _ _ _ (by
+  rw [Result.wait_ready_run _ _ _ _ _ (by
     simp [NativeMutex.pollLock, NativeCodec.roundtrip]
     constructor <;> rfl)]
   simp [NativeGuard.deref, NativeGuard.deref_mut, NativeM.lift,
     NativeDrop.drop, NativeGuard.release, returned, Result.handle]
-  rw [Result.wait_ready_apply _ _ _ _ _ (by
+  rw [Result.wait_ready_run _ _ _ _ _ (by
     simp [NativeGuard.pollRelease, NativeCodec.roundtrip]
     constructor <;> rfl)]
   simp [NativeMutex.dispose, NativeM.readCell, NativeM.removeCell,

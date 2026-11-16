@@ -12,8 +12,21 @@ defmodule Lynx.Rust.FileReadTest do
   unless @available,
     do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned tuple-back-projections backend")
 
-  @tag :tmp_dir
-  test "proves a two-crate file parser and rejects endian and EOF violations", %{tmp_dir: tmp} do
+  for sysroot <- [:default, :full_mir] do
+    @tag sysroot: sysroot
+    if sysroot == :full_mir and System.get_env("LYNX_FULL_MIR") != "1",
+      do: @tag(skip: "set LYNX_FULL_MIR=1 for full-MIR runtime parser proofs")
+
+    @tag :tmp_dir
+    test "#{sysroot}: proves a two-crate file parser and rejects endian and EOF violations", %{
+      tmp_dir: tmp,
+      sysroot: sysroot
+    } do
+      verify_parser(tmp, sysroot)
+    end
+  end
+
+  defp verify_parser(tmp, sysroot) do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -39,6 +52,7 @@ defmodule Lynx.Rust.FileReadTest do
     end
 
     options = [
+      sysroot: sysroot,
       roots: ["io_protocol::read_word", "io_protocol::write_then_sync"],
       execution: :runtime,
       files: :regular,
@@ -56,6 +70,12 @@ defmodule Lynx.Rust.FileReadTest do
 
     result = Lynx.Rust.verify!(workspace, "io-protocol", options)
     assert [%{status: :ok}] = result.reports
+
+    if sysroot == :full_mir do
+      assert %{path: _, fingerprint: _} = result.extraction.sysroot
+
+      assert "Full-MIR Miri standard-library configuration; native standard-library equivalence is not verified" in result.verification.trusted_boundary
+    end
 
     assert Enum.any?(
              result.verification.guarantees,
@@ -112,7 +132,10 @@ defmodule Lynx.Rust.FileReadTest do
     export = Path.join(tmp, "parser.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
-    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+
+    {status, output} =
+      Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+
     assert status == 0, output
 
     for extra <- [

@@ -24,7 +24,9 @@ defmodule Lynx.Rust do
   Host build scripts and procedural macros retain the native sysroot. The normal
   native build is retained; both builds use the same explicit target, resolved
   from Cargo configuration or the host. Matching package, features, profile and
-  target are checked. Named targets are supported; custom target files are rejected. This opt-in mode currently requires pure execution. Its Miri library
+  target are checked. Named targets are supported; custom target files are rejected.
+  Both pure and runtime extraction use the same configuration checks and external
+  call admission. Its Miri library
   configuration and equivalence to the native standard library remain explicit
   trusted boundaries. The sysroot artifacts are included in proof fingerprints.
 

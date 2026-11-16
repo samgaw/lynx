@@ -12,13 +12,9 @@ defmodule Lynx.Rust.SysrootTest do
     end
   end
 
-  test "full-MIR runtime extraction remains outside the qualified subset" do
-    assert_raise ArgumentError, "full-MIR sysroot currently requires pure execution", fn ->
-      Lynx.Rust.verify!("missing-workspace", "core",
-        roots: ["core::run"],
-        sysroot: :full_mir,
-        execution: :runtime
-      )
+  test "full-MIR selection is independent of the execution model" do
+    for execution <- [:pure, :runtime] do
+      assert is_nil(Lynx.Rust.Sysroot.validate!(sysroot: :full_mir, execution: execution))
     end
   end
 
