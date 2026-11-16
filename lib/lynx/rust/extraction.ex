@@ -412,6 +412,7 @@ defmodule Lynx.Rust.Extraction do
     audit = Lynx.Rust.FileModels.scope(audit, module)
     audit = Lynx.Rust.IoErrorModels.scope(audit, module)
     audit = Lynx.Rust.CollectionModels.scope(audit, module)
+    audit = Lynx.Rust.SliceModels.scope(audit, module)
     codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
@@ -434,7 +435,11 @@ defmodule Lynx.Rust.Extraction do
     # Supply their validated primitive names to prevent unnecessary axiom
     # templates. Only actual call dependencies belong in the verification report;
     # their scoped mappings take precedence over the unreferenced candidates.
-    backend_calls = Map.merge(audit.available_external_calls, audit.external_calls)
+    backend_calls =
+      Lynx.Rust.SliceModels.backend_calls(audit.available_external_calls, audit.external_calls)
+
+    {backend_document, slice_model_aliases, backend_calls} =
+      Lynx.Rust.SliceModels.lower_names!(backend_document, backend_calls)
 
     {backend_document, native_model_aliases} =
       Lynx.Rust.ResultModels.lower_native_names!(backend_document, backend_calls)
@@ -446,7 +451,7 @@ defmodule Lynx.Rust.Extraction do
 
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
-           native_model_aliases == [] and option_aliases == [] do
+           native_model_aliases == [] and option_aliases == [] and slice_model_aliases == [] do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -511,6 +516,7 @@ defmodule Lynx.Rust.Extraction do
                   Keyword.get(opts, :execution, :pure)
                 ),
                 Lynx.Rust.ResourceModels.external_names(audit.external_calls),
+                Lynx.Rust.SliceModels.external_names(audit.external_calls, module),
                 Lynx.Rust.ResultModels.external_names(
                   audit,
                   Keyword.get(opts, :execution, :pure)
@@ -519,7 +525,8 @@ defmodule Lynx.Rust.Extraction do
               ]
               |> Enum.reduce(%{}, fn names, combined ->
                 Map.merge(combined, names, fn _key, left, right -> left ++ right end)
-              end)
+              end),
+              fn _key, left, right -> left ++ right end
             )
           )
         )
@@ -584,7 +591,8 @@ defmodule Lynx.Rust.Extraction do
       Lynx.Rust.OptionModels.install!(audit, output, module) ++
         Lynx.Rust.FileModels.install!(audit, translation, output, module) ++
         Lynx.Rust.IoErrorModels.install!(audit, translation, output, module) ++
-        Lynx.Rust.CollectionModels.install!(audit, translation, output, module)
+        Lynx.Rust.CollectionModels.install!(audit, translation, output, module) ++
+        Lynx.Rust.SliceModels.install!(audit, output, module)
 
     Lynx.Rust.ExactRead.install!(audit, translation, output)
 
@@ -623,6 +631,7 @@ defmodule Lynx.Rust.Extraction do
       compiler_drop_queries: compiler_drop_queries,
       rustler_constructors: rustler_constructors,
       native_model_aliases: native_model_aliases,
+      slice_model_aliases: slice_model_aliases,
       formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
       option_aliases: option_aliases,

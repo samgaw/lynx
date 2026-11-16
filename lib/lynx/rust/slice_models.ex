@@ -2,7 +2,69 @@ defmodule Lynx.Rust.SliceModels do
   @moduledoc false
   alias Lynx.Rust.CallModels
 
-  def resolve(function, translated, refs) do
+  def resolve(function, translated, refs),
+    do: copy(function, translated, refs) || slice(function, translated, refs)
+
+  defp copy(function, translated, refs) do
+    variable = %{"TypeVar" => %{"Free" => 0}}
+    slice = %{"Slice" => [variable, nil]}
+    reference = fn index, kind -> %{"Ref" => [%{"Var" => %{"Free" => index}}, slice, kind]} end
+
+    with %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "generics" => raw,
+           "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"} = sig
+         } <- function,
+         true <- inherent?(function["item_meta"]["name"], slice, refs, "copy_from_slice"),
+         params = CallModels.expand(raw, refs),
+         true <- Enum.map(params["regions"], & &1["index"]) == [0, 1],
+         [%{"index" => 0}] <- params["types"],
+         true <- params["const_generics"] == [] and params["trait_type_constraints"] == [],
+         [
+           %{
+             "clause_id" => 0,
+             "trait_" => %{
+               "regions" => [],
+               "outlives" => [],
+               "skip_binder" => %{"id" => trait, "generics" => args}
+             }
+           }
+         ] <- params["trait_clauses"],
+         true <- args == arguments([variable]),
+         [decl] <- Enum.filter(translated["trait_decls"] || [], &(&1 && &1["def_id"] == trait)),
+         true <-
+           decl["item_meta"]["name"] == Enum.map(~w(core marker Copy), &%{"Ident" => [&1, 0]}) and
+             decl["item_meta"]["lang_item"] == "Copy",
+         true <-
+           decl["src"] == "Normal" and decl["is_unsafe"] == false and
+             Enum.all?(~w(methods consts types), &(decl[&1] == [])),
+         true <-
+           params["outlives"] ==
+             Enum.map([0, 1], fn index ->
+               %{
+                 "regions" => [],
+                 "outlives" => [],
+                 "skip_binder" => [%{"Lub" => variable}, %{"Var" => %{"Free" => index}}]
+               }
+             end),
+         true <-
+           CallModels.expand(sig["inputs"], refs) == [
+             reference.(0, "Mut"),
+             reference.(1, "Shared")
+           ],
+         true <- tuple?(CallModels.expand(sig["output"], refs), []) do
+      model("core::slice::{[@T]}::copy_from_slice", "Aeneas.Std.core.slice.Slice.copy_from_slice")
+      |> Map.put(
+        :label,
+        "Upstream Copy slice model: equal-length copying replaces every destination element; length mismatch panics; the canonical Copy marker has no callbacks; Rust core and native memory layout remain unverified"
+      )
+    else
+      _ -> nil
+    end
+  end
+
+  defp slice(function, translated, refs) do
     with %{
            "body" => "Opaque",
            "signature" => %{"is_unsafe" => false, "abi" => "Rust", "is_variadic" => false} = sig,
@@ -222,14 +284,12 @@ defmodule Lynx.Rust.SliceModels do
         fn {kind, fields} ->
           index = range_type(translated, refs, usize, kind, fields)
 
-          # The pinned upstream shared RangeFrom.index model returns undef on
-          # invalid bounds instead of Rust's panic. Keep that operation closed.
           reference =
             if method == "index_mut",
               do: %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Mut"]},
               else: shared
 
-          if (method in ["get", "index_mut"] or kind != "RangeFrom") and index != nil and
+          if index != nil and
                inputs == [index, reference] and
                index_identity?(
                  function,
@@ -255,9 +315,235 @@ defmodule Lynx.Rust.SliceModels do
                 ) <>
                 "; Rust core implementation not verified"
             )
+            |> checked_range_from(kind, method)
           end
         end
       )
+    end
+  end
+
+  # Upstream's shared RangeFrom index returns undef outside bounds. Override
+  # both the direct function and its dictionary field with the checked model.
+  defp checked_range_from(model, "RangeFrom", "index"),
+    do:
+      model
+      |> Map.put(:builtin, false)
+      |> Map.put(:slice_range_from_checked, true)
+      |> Map.put(
+        :label,
+        "Checked shared RangeFrom indexing adapter and dictionary: reuse upstream valid slicing, preserve Rust bounds panics instead of upstream undef; nominal type IDs/fields retained under a backend alias; Rust core and native memory layout remain unverified"
+      )
+
+  defp checked_range_from(model, _, _), do: model
+
+  def scope(audit, prefix) do
+    %{
+      audit
+      | external_calls:
+          Map.new(audit.external_calls, fn {id, model} ->
+            if model[:slice_range_from_checked],
+              do: {id, %{model | lean: prefix <> ".SliceModel.indexFrom"}},
+              else: {id, model}
+          end)
+    }
+  end
+
+  # An available but uncalled shared index must retain the packaged dictionary:
+  # otherwise a File-only extraction would rename RangeFrom without installing
+  # the checked shared-index dictionary. Called models always use scoped names.
+  def backend_calls(available, called) do
+    available
+    |> Map.reject(fn {id, model} ->
+      model[:slice_range_from_checked] == true and not Map.has_key?(called, id)
+    end)
+    |> Map.merge(called)
+  end
+
+  # Alias only the already audited standard range type, retaining its ID,
+  # fields and generic arguments. ExternalNames deliberately forbids overriding
+  # a packaged model; the distinct backend name selects the checked dictionary.
+  def lower_names!(document, calls) do
+    if Enum.any?(calls, fn {_, m} -> m[:slice_range_from_checked] end) do
+      original = Enum.map(~w(core ops range RangeFrom), &%{"Ident" => [&1, 0]})
+      renamed = Enum.map(~w(lynx_slice RangeFrom), &%{"Ident" => [&1, 0]})
+      types = document["translated"]["type_decls"]
+      [type] = Enum.filter(types, &(&1 && &1["item_meta"]["name"] == original))
+      type_id = type["def_id"]
+
+      if Enum.any?(types, &(&1 && &1["item_meta"]["name"] == renamed)),
+        do: raise(ArgumentError, "checked slice range model name collides with another type")
+
+      document =
+        put_in(
+          document,
+          ["translated", "type_decls"],
+          Enum.map(types, fn
+            %{"def_id" => ^type_id} = item ->
+              put_in(item, ["item_meta", "name"], renamed)
+
+            item ->
+              item
+          end)
+        )
+
+      calls =
+        Map.new(calls, fn {id, model} ->
+          if String.contains?(model.rust_name, "core::ops::range::RangeFrom<usize>") do
+            {id,
+             model
+             |> Map.put(:builtin, false)
+             |> Map.put(
+               :backend_rust_name,
+               String.replace(
+                 model.rust_name,
+                 "core::ops::range::RangeFrom<usize>",
+                 "lynx_slice::RangeFrom<usize>"
+               )
+             )}
+          else
+            {id, model}
+          end
+        end)
+
+      impls =
+        calls
+        |> Map.values()
+        |> Enum.filter(& &1[:slice_range_from_checked])
+        |> Enum.map(&get_in(&1, [:function, "src", "TraitImpl", "impl_ref", "id"]))
+        |> Enum.uniq()
+
+      functions = document["translated"]["fun_decls"]
+
+      omitted =
+        for function <- functions,
+            function,
+            function["body"] == "Opaque",
+            source_impl(function["src"]) in impls,
+            not Map.has_key?(calls, function["def_id"]),
+            do: function["def_id"]
+
+      used =
+        (functions |> Enum.reject(&is_nil/1) |> Enum.flat_map(&function_refs(&1["body"]))) ++
+          function_refs(document["translated"]["global_decls"])
+
+      unless Enum.all?(omitted, &(&1 not in used)),
+        do: raise(ArgumentError, "unmodelled slice dictionary member is called")
+
+      document =
+        put_in(
+          document,
+          ["translated", "fun_decls"],
+          Enum.map(functions, fn function ->
+            if function && function["def_id"] in omitted, do: nil, else: function
+          end)
+        )
+
+      document =
+        update_in(document, ["translated", "ordered_decls"], fn groups ->
+          Enum.flat_map(groups, fn
+            %{"Fun" => %{"NonRec" => id}} = group ->
+              if id in omitted, do: [], else: [group]
+
+            %{"Fun" => %{"Rec" => ids}} ->
+              case ids -- omitted do
+                [] -> []
+                kept -> [%{"Fun" => %{"Rec" => kept}}]
+              end
+
+            group ->
+              [group]
+          end)
+        end)
+
+      {document,
+       [
+         %{
+           type_id: type["def_id"],
+           original: original,
+           renamed: renamed,
+           omitted_unreferenced_functions: omitted
+         }
+       ], calls}
+    else
+      {document, [], calls}
+    end
+  end
+
+  defp source_impl(%{"TraitImpl" => %{"impl_ref" => %{"id" => id}}}), do: id
+  defp source_impl(_), do: nil
+
+  defp function_refs(%{"Fun" => id}) when is_integer(id), do: [id]
+  defp function_refs(node) when is_map(node), do: function_refs(Map.values(node))
+  defp function_refs(nodes) when is_list(nodes), do: Enum.flat_map(nodes, &function_refs/1)
+  defp function_refs(_), do: []
+
+  def external_names(calls, prefix) do
+    if Enum.any?(calls, fn {_, model} -> model[:slice_range_from_checked] end) do
+      %{
+        "types" => [
+          %{
+            "rust_pattern" => "lynx_slice::RangeFrom",
+            "extract_name" => "Aeneas.Std.core.ops.range.RangeFrom"
+          }
+        ],
+        "trait_impls" => [
+          %{
+            "rust_pattern" =>
+              "core::slice::index::SliceIndex<lynx_slice::RangeFrom<usize>, [@T], [@T]>",
+            "extract_name" => prefix <> ".SliceModel.rangeFrom"
+          }
+        ]
+      }
+    else
+      %{}
+    end
+  end
+
+  def install!(audit, output, prefix) do
+    if Enum.any?(audit.external_calls, fn {_, model} -> model[:slice_range_from_checked] end) do
+      module = prefix <> ".SliceModel"
+      path = Path.join(output, String.replace(module, ".", "/") <> ".lean")
+
+      case File.read(path) do
+        {:ok, "-- Generated by Lynx: bounds-checked shared slice indexing.\n" <> _} -> :ok
+        {:error, :enoent} -> :ok
+        _ -> raise(ArgumentError, "refusing to overwrite a user slice model module: #{path}")
+      end
+
+      File.mkdir_p!(Path.dirname(path))
+
+      File.write!(path, """
+      -- Generated by Lynx: bounds-checked shared slice indexing.
+      module
+      public import Aeneas
+      public section
+      open Aeneas Aeneas.Std
+      namespace #{module}
+      @[expose] def indexFrom {T : Type} (range : core.ops.range.RangeFrom Usize) (input : Slice T) : RustM (Slice T) :=
+        if range.start.val ≤ input.length then core.slice.index.SliceIndexRangeFromUsizeSlice.index range input
+        else RustM.fail .panic
+      @[expose] def rangeFrom (T : Type) : core.slice.index.SliceIndex (core.ops.range.RangeFrom Usize) (Slice T) (Slice T) :=
+        {core.slice.index.SliceIndexRangeFromUsizeSlice T with index := indexFrom}
+      theorem indexFrom_valid {T : Type} (range : core.ops.range.RangeFrom Usize) (input : Slice T)
+          (valid : range.start.val ≤ input.length) : indexFrom range input = RustM.ok (input.drop range.start) := by
+        simp [indexFrom,valid,core.slice.index.SliceIndexRangeFromUsizeSlice.index]
+      theorem indexFrom_invalid {T : Type} (range : core.ops.range.RangeFrom Usize) (input : Slice T)
+          (invalid : ¬range.start.val ≤ input.length) : indexFrom range input = RustM.fail .panic := by
+        simp [indexFrom,invalid]
+      end #{module}
+      """)
+
+      funs = Path.join(output, String.replace(prefix, ".", "/") <> "/Funs.lean")
+      source = File.read!(funs)
+      marker = "public import " <> prefix <> ".Types"
+
+      unless String.contains?(source, marker),
+        do: raise(ArgumentError, "missing generated slice Types import")
+
+      File.write!(funs, String.replace(source, marker, marker <> "\npublic import " <> module))
+      [module]
+    else
+      []
     end
   end
 

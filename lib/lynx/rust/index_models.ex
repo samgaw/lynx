@@ -171,19 +171,20 @@ defmodule Lynx.Rust.IndexModels do
            ) == expected,
          [%{"skip_binder" => %{"id" => method}}] <-
            Enum.filter(impl["methods"] || [], &(&1["kind"] == %{"TraitMethod" => [trait, index]})),
-         %{lean: lean} <- models[method],
+         %{lean: lean} = model <- models[method],
          method_name when method_name in ["get", "index", "index_mut"] <-
            %{0 => "get", 4 => "index", 5 => "index_mut"}[index],
          true <-
-           lean in Enum.map(
-             [
-               "Usize",
-               "SliceIndexRangeToUsizeSlice",
-               "SliceIndexRangeUsizeSlice",
-               "SliceIndexRangeFromUsizeSlice"
-             ],
-             &("Aeneas.Std.core.slice.index." <> &1 <> "." <> method_name)
-           ) do
+           model[:slice_range_from_checked] == true or
+             lean in Enum.map(
+               [
+                 "Usize",
+                 "SliceIndexRangeToUsizeSlice",
+                 "SliceIndexRangeUsizeSlice",
+                 "SliceIndexRangeFromUsizeSlice"
+               ],
+               &("Aeneas.Std.core.slice.index." <> &1 <> "." <> method_name)
+             ) do
       method
     else
       _ ->

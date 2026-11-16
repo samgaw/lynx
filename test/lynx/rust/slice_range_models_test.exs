@@ -92,6 +92,38 @@ defmodule Lynx.Rust.SliceRangeModelsTest do
     end
   end
 
+  test "reports the checked shared suffix adapter and its external boundary" do
+    {function, translated, _} = snapshot("RangeFrom")
+    trait = function["src"]["TraitImpl"]["trait_ref"]["id"]
+    impl_id = function["src"]["TraitImpl"]["impl_ref"]["id"]
+
+    # Reuse the compiled range/getter metadata to exercise the matching index
+    # method signature and dictionary slot rather than bypassing the selector.
+    function =
+      function
+      |> put_in(["src", "TraitImpl", "item_id"], 4)
+      |> put_in(["signature", "output"], Enum.at(function["signature"]["inputs"], 1))
+      |> update_in(["item_meta", "name"], &List.replace_at(&1, -1, %{"Ident" => ["index", 0]}))
+
+    translated =
+      Map.update!(translated, "trait_impls", fn impls ->
+        Enum.map(impls, fn
+          %{"def_id" => ^impl_id} = impl ->
+            method = Enum.find(impl["methods"], &(&1["kind"] == %{"TraitMethod" => [trait, 0]}))
+            Map.put(impl, "methods", [Map.put(method, "kind", %{"TraitMethod" => [trait, 4]})])
+
+          other ->
+            other
+        end)
+      end)
+
+    assert %{builtin: false, slice_range_from_checked: true, label: label} =
+             SliceModels.resolve(function, translated, %{})
+
+    assert label =~ "instead of upstream undef"
+    assert label =~ "Rust core and native memory layout remain unverified"
+  end
+
   defp snapshot(kind) do
     %{"functions" => functions, "translated" => translated} = JSON.decode!(File.read!(@snapshot))
 
