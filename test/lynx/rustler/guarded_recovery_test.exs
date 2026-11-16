@@ -98,14 +98,18 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
     assert Enum.all?(checked.reports, &(&1.status == :ok))
     assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok and &1.cached))
 
-    file = adapter_proof(checked)
+    adapter = adapter_proof(checked)
+    file = prefix_proof(adapter)
     export = Path.join(tmp, "composition.export")
-    reports = Lynx.Commands.verify!(project, verification_files(checked, file), export: export)
+
+    reports =
+      Lynx.Commands.verify!(project, verification_files(checked, [adapter, file]), export: export)
+
     assert_ok(reports)
     check_export(project, export)
 
     assert Enum.all?(
-             Lynx.Commands.verify!(project, verification_files(checked, file)),
+             Lynx.Commands.verify!(project, verification_files(checked, [adapter, file])),
              &(&1.status == :ok and &1.cached)
            )
 
@@ -114,7 +118,7 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
           "private theorem unfinished_recovery : True := by sorry"
         ] do
       injected = update_in(file, ["preludes", Access.at(0), "source"], &(&1 <> "\n" <> extra))
-      reports = Lynx.Commands.verify!(project, verification_files(checked, injected))
+      reports = Lynx.Commands.verify!(project, verification_files(checked, [adapter, injected]))
       assert Enum.any?(reports, &(&1.status == :error))
 
       assert Enum.any?(
@@ -122,6 +126,20 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
                &(String.contains?(&1.message, "axiom") or String.contains?(&1.message, "sorry"))
              )
     end
+
+    wrong_bound =
+      update_in(file, ["preludes", Access.at(0), "source"], fn source ->
+        String.replace(source, "highWater + 4 &&", "highWater + 3 &&", global: false)
+      end)
+
+    refute wrong_bound == file
+    rejected = Lynx.Commands.verify!(project, verification_files(checked, [adapter, wrong_bound]))
+    assert Enum.any?(rejected, &(&1.status == :error))
+
+    assert Enum.any?(
+             Enum.flat_map(rejected, & &1.diagnostics),
+             &String.contains?(&1.message, "unsolved goals")
+           )
 
     library = Path.join(tmp, "librecovery")
     File.cp!(checked.library, library <> ".so")
@@ -216,7 +234,13 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
     assert Enum.all?(restored.reports, &(&1.status == :ok))
 
     assert_ok(
-      Lynx.Commands.verify!(project, verification_files(restored, adapter_proof(restored)))
+      Lynx.Commands.verify!(
+        project,
+        verification_files(restored, [
+          adapter_proof(restored),
+          prefix_proof(adapter_proof(restored))
+        ])
+      )
     )
   end
 
@@ -252,8 +276,29 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
     }
   end
 
+  defp prefix_proof(adapter) do
+    name = "GuardedRecovery.Interrupted"
+
+    %{
+      "module" => name,
+      "file" => name <> ".lean",
+      "imports" => [adapter["module"]],
+      "contents" => [],
+      "audit_modules" =>
+        Enum.uniq([name, "Lynx.Term.NativeInvariant" | adapter["audit_modules"]]),
+      "preludes" => [
+        %{
+          "source" => File.read!(Path.join(@fixture, "GuardedRecoveryPrefixProperties.lean")),
+          "file" => name <> ".lean",
+          "span" => [1],
+          "indentation" => 0
+        }
+      ]
+    }
+  end
+
   defp verification_files(checked, proof) do
-    Enum.map(checked.external.files ++ [proof], fn file ->
+    Enum.map(checked.external.files ++ List.wrap(proof), fn file ->
       key = Lynx.Rust.Fingerprint.digest(JSON.encode!(file) <> checked.external.fingerprint)
       Map.put(file, "cache_key", key)
     end)
