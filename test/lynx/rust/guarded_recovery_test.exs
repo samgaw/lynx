@@ -28,7 +28,8 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
     for {source, target} <- [
           {"GuardedRecoveryProperties.lean", "Properties.lean"},
           {"GuardedRecoveryWriterProperties.lean", "Writer.lean"},
-          {"GuardedReadTraceProperties.lean", "ReadTrace.lean"}
+          {"GuardedReadTraceProperties.lean", "ReadTrace.lean"},
+          {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"}
         ],
         do:
           File.write!(
@@ -44,7 +45,10 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
       GuardedRecovery.Writer.every_acknowledged_recovery
       GuardedRecovery.ReadTrace.Reads.ready GuardedRecovery.ReadTrace.locked_contract
       GuardedRecovery.ReadTrace.locked_ready GuardedRecovery.ReadTrace.locked_every_run
-      GuardedRecovery.ReadTrace.admitted_locked GuardedRecovery.ReadTrace.missing_error_exhausts)
+      GuardedRecovery.ReadTrace.admitted_locked GuardedRecovery.ReadTrace.missing_error_exhausts
+      GuardedRecovery.RecoveryTrace.reopen_contract GuardedRecovery.RecoveryTrace.Reopens.ready
+      GuardedRecovery.RecoveryTrace.Reopens.every_final_state
+      GuardedRecovery.RecoveryTrace.admitted_execution GuardedRecovery.RecoveryTrace.admitted_every_run)
 
     options = [
       roots: ~w(io_protocol::reopen_words io_protocol::poll_locked_sync),
@@ -60,7 +64,8 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
       proof_modules: [
         "GuardedRecovery.Properties",
         "GuardedRecovery.Writer",
-        "GuardedRecovery.ReadTrace"
+        "GuardedRecovery.ReadTrace",
+        "GuardedRecovery.RecoveryTrace"
       ],
       required_properties: properties
     ]
@@ -86,11 +91,13 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
     source = Path.join(workspace, "protocol/src/lib.rs")
     valid = File.read!(source)
 
-    for {marker, from, to} <- [
-          {"pub fn reopen_words(", "locked_word(&mutex, 2)", "locked_word(&mutex, 0)"},
-          {"pub fn read_word(", "from_le_bytes([low, high])", "from_le_bytes([high, low])"},
-          {"pub fn locked_word(", "Err(1)", "Err(2)"},
-          {"fn synchronize_written(", "        Ok(count) => match",
+    for {label, marker, from, to} <- [
+          {"offset", "pub fn reopen_words(", "locked_word(&mutex, 2)", "locked_word(&mutex, 0)"},
+          {"endian", "pub fn read_word(", "from_le_bytes([low, high])",
+           "from_le_bytes([high, low])"},
+          {"error_code", "pub fn locked_word(", "Err(1)", "Err(2)"},
+          {"open_error", "pub fn reopen_words(", "Err(3)", "Err(4)"},
+          {"sync", "fn synchronize_written(", "        Ok(count) => match",
            "        Ok(2) => Ok(2),\n        Ok(count) => match"}
         ] do
       [prefix, body] = String.split(valid, marker, parts: 2)
@@ -108,15 +115,35 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
         assert error.message =~ ~r/unsolved goals|Type mismatch|Tactic|rfl/
       end
 
-      label = String.replace(marker, ~r/[^a-z0-9]/i, "_")
+      if label == "open_error" do
+        assert error.message =~ "RecoveryTrace.lean"
+        assert error.message =~ ~r/unsolved goals|Type mismatch|Tactic|rfl/
+      end
+
       File.write!(Path.join(tmp, "mutation-" <> label <> ".log"), error.message)
 
       File.write!(source, valid)
       assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
     end
 
-    proof = Path.join(project, "GuardedRecovery/ReadTrace.lean")
+    proof = Path.join(project, "GuardedRecovery/RecoveryTrace.lean")
     valid_proof = File.read!(proof)
+
+    wrong_cleanup =
+      String.replace(valid_proof, ".nil false true", ".nil false false", global: false)
+
+    refute wrong_cleanup == valid_proof
+    File.write!(proof, wrong_cleanup)
+
+    error =
+      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+        Lynx.Rust.verify!(workspace, "io-protocol", options)
+      end
+
+    assert error.message =~ "RecoveryTrace.lean"
+    assert error.message =~ ~r/unsolved goals|Type mismatch|Tactic|rfl/
+    File.write!(Path.join(tmp, "wrong-cleanup.log"), error.message)
+    File.write!(proof, valid_proof)
 
     for extra <- [
           "private axiom assumed_crash_image : False",
