@@ -258,6 +258,35 @@ defmodule Lynx.Rust.NativeCodecsTest do
     end
   end
 
+  test "allocator-confirmed byte records have a lossless representation without a cleanup dictionary" do
+    byte = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
+    vector = %{"Adt" => %{"id" => 2, "builtin" => nil, "generics" => ResourceModels.args([byte])}}
+    initial = audit(vector)
+    [record] = initial.translated["type_decls"]
+
+    declaration = %{
+      "def_id" => 2,
+      "kind" => "Opaque",
+      "item_meta" => %{"name" => Enum.map(~w(alloc vec Vec), &%{"Ident" => [&1, 0]})},
+      "generics" => Map.put(record["generics"], "types", [%{"index" => 0}])
+    }
+
+    changed =
+      initial
+      |> put_in([:translated, "options", "owned_drops"], false)
+      |> put_in([:translated, "type_decls"], [Map.put(record, "needs_drop", true), declaration])
+
+    assert_raise ArgumentError, ~r/unsupported native heap handle/, fn ->
+      NativeCodecs.plan!(changed)
+    end
+
+    admitted = Map.put(changed, :allocator_layout, %{global_vectors: true})
+    assert [%{native_cleanup: nil, native_tag: tag}] = NativeCodecs.plan!(admitted)
+    assert JSON.decode!(tag) == ["fixture::Balance", [["value", ["alloc::vec::Vec", "u8"]]]]
+    type = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => ResourceModels.args([])}}
+    refute NativeDrops.destructor_free?(type, admitted.translated, %{})
+  end
+
   defp enum_audit do
     audit = audit(%{"Scalar" => %{"Integer" => %{"Signed" => "I64"}}})
     [type] = audit.translated["type_decls"]

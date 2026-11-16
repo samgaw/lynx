@@ -6,6 +6,9 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+captured-frames = []
+
 [dependencies]
 atomic-core = { path = "../core" }
 atomic-analysis = { path = "../analysis" }

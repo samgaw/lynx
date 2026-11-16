@@ -29,11 +29,11 @@ defmodule Lynx.Rust.NoPanic do
 
     if contracts != [] and
          (Keyword.get(opts, :execution, :pure) != :runtime or
-            Keyword.get(opts, :unwind, :reject) != :reject),
+            Keyword.get(opts, :unwind, :reject) not in [:reject, :captured]),
        do:
          raise(
            ArgumentError,
-           "nonpanicking proofs currently require runtime execution with unwind: :reject"
+           "nonpanicking proofs require runtime execution with unwind: :reject or :captured"
          )
 
     :ok

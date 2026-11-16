@@ -142,7 +142,13 @@ defmodule Lynx.Rust.NativeCodecs do
         type = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))
 
         vector =
-          get_in(audit.translated, ["options", "owned_drops"]) == true and
+          (get_in(audit.translated, ["options", "owned_drops"]) == true or
+             (match?(%{global_vectors: true}, audit[:allocator_layout]) and
+                Lynx.Rust.CollectionModels.scalar_vector_element(
+                  self,
+                  audit.translated,
+                  audit.references
+                ) == {:ok, %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}})) and
             match?(
               {:ok, _},
               Lynx.Rust.CollectionModels.scalar_vector_element(

@@ -172,6 +172,27 @@ pub fn parse_frame(state: &std::sync::Mutex<ReceiveState>) -> (u8, u64, u64) {
     (status, consumed, remaining)
 }
 
+/// Parses before applying request policy, retaining any consumed input on failure.
+///
+/// # Panics
+/// Rejection destroys the produced reply after the parser updated the buffer.
+pub fn checked_frame(input: &mut Vec<u8>, accepted: bool) -> Result<Option<Vec<u8>>, u8> {
+    let frame = atomic_core::frames::take_frame(input);
+    atomic_core::accept_frame(accepted);
+    frame
+}
+
+/// Releases a buffer guard on success and poisons it after request rejection.
+///
+/// # Panics
+/// Rejection retains the parser's mutation before unwinding through the guard.
+pub fn guard_frame(
+    mut guard: std::sync::MutexGuard<'_, ReceiveState>,
+    accepted: bool,
+) -> Result<Option<Vec<u8>>, u8> {
+    checked_frame(&mut guard.buffer.bytes, accepted)
+}
+
 #[cfg(test)]
 mod locked_buffer_tests {
     use super::{copy_locked, locked_append};
@@ -237,5 +258,27 @@ mod frame_tests {
         assert_eq!(parse_frame(&state), (2, 3, 0));
         assert_eq!(read_state(&state), (0, 0));
         assert!(state.is_poisoned());
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_tests {
+    use super::{guard_frame, ReceiveState};
+    use atomic_core::BufferState;
+    use std::sync::Mutex;
+
+    #[test]
+    fn rejection_releases_and_poisons_the_updated_buffer() {
+        let state = Mutex::new(ReceiveState {
+            buffer: BufferState {
+                bytes: vec![1, 0, 1, 255, 1, 0, 0],
+            },
+        });
+        let rejected = std::panic::catch_unwind(|| guard_frame(state.lock().unwrap(), false));
+        assert!(rejected.is_err());
+        match state.lock() {
+            Err(error) => assert_eq!(error.get_ref().buffer.bytes, vec![1, 0, 0]),
+            Ok(_) => panic!("rejected frame must poison the mutex"),
+        };
     }
 }

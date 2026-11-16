@@ -295,3 +295,15 @@ pub fn shared_release(buffer: rustler::ResourceArc<SharedBuffer>) {
 fn shared_frame(buffer: rustler::ResourceArc<SharedBuffer>) -> (u8, u64, u64) {
     atomic_analysis::parse_frame(&buffer.state)
 }
+
+/// Returns an owned parsed frame after cross-crate request validation.
+///
+/// # Panics
+/// Rejected requests panic after parsing and disposing the produced reply.
+#[cfg(feature = "captured-frames")]
+#[rustler::nif(name = "captured_frame", schedule = "DirtyCpu")]
+#[lynx::captured_frames]
+fn captured_frame_request(input: Vec<u8>, accepted: bool) -> Result<Option<Vec<u8>>, u8> {
+    let mut input = input;
+    atomic_analysis::checked_frame(&mut input, accepted)
+}

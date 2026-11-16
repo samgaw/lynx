@@ -136,6 +136,14 @@ pub struct BufferState {
     pub bytes: Vec<u8>,
 }
 
+/// Checks request policy separately from parsing.
+///
+/// # Panics
+/// Panics when the parsed request is rejected.
+pub fn accept_frame(accepted: bool) {
+    assert!(accepted);
+}
+
 #[cfg(test)]
 mod byte_handoff_tests {
     use super::take_bytes;

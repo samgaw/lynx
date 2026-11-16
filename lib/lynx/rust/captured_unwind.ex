@@ -9,14 +9,25 @@ defmodule Lynx.Rust.CapturedUnwind do
     translated = document["translated"]
     models = Keyword.get(opts, :models, %{})
     runtime = Keyword.get(opts, :runtime, false)
+    protected = Keyword.get(opts, :protected, MapSet.new())
 
     safe =
       NativeBorrows.nonpanicking_calls(functions, models, %{
         translated: translated,
-        references: refs
+        references: refs,
+        nonpanicking: Keyword.get(opts, :nonpanicking, []),
+        allocator_layout: opts[:allocator_layout]
       })
 
-    lifted = Enum.reject(functions, &MapSet.member?(safe, &1["def_id"]))
+    # Certificates are checked against these original implementations. Their
+    # dependency bodies must not acquire a successful outer Err panic value, nor
+    # use the provisional certificate to prune their own exceptional behavior.
+    lifted =
+      Enum.reject(
+        functions,
+        &(MapSet.member?(safe, &1["def_id"]) or
+            MapSet.member?(protected, &1["def_id"]))
+      )
 
     results =
       Enum.filter(
@@ -132,7 +143,9 @@ defmodule Lynx.Rust.CapturedUnwind do
           {changed, {[record | records], state.next}}
         else
           function =
-            if runtime, do: Map.update!(function, "body", &prune_safe(&1, safe)), else: function
+            if runtime and not MapSet.member?(protected, function["def_id"]),
+              do: Map.update!(function, "body", &prune_safe(&1, safe)),
+              else: function
 
           {function, {records, next}}
         end

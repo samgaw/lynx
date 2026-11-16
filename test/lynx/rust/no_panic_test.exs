@@ -23,6 +23,21 @@ defmodule Lynx.Rust.NoPanicTest do
     assert_raise ArgumentError, ~r/runtime execution/, fn ->
       NoPanic.validate!(nonpanicking: [{"core_lib::parse", "Proofs.safe"}])
     end
+
+    assert :ok =
+             NoPanic.validate!(
+               execution: :runtime,
+               unwind: :captured,
+               nonpanicking: [{"core_lib::parse", "Proofs.safe"}]
+             )
+
+    assert_raise ArgumentError, ~r/unwind: :reject or :captured/, fn ->
+      NoPanic.validate!(
+        execution: :runtime,
+        unwind: :assertions,
+        nonpanicking: [{"core_lib::parse", "Proofs.safe"}]
+      )
+    end
   end
 
   test "protects complete original direct-call bodies including recursive dependencies" do

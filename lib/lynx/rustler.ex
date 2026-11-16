@@ -241,6 +241,10 @@ defmodule Lynx.Rustler do
   `:lean_project`. Audit reports must all succeed before this function returns.
   Successful adapter audits and dependent laws reuse Lynx's proof cache. Cargo
   compilation and extraction still run to establish the current implementation.
+  Runtime `:nonpanicking` certificates also compose with captured callers. Their
+  implementations and dependency bodies retain original panic semantics while
+  callers receive explicit captured outcomes. Such certificates are checked
+  against the actual original implementation, including all its dependencies.
   Captured unwind also supports canonical `Result`/`Option` wrappers around
   scalar/unit tuples, compiler-certified plain data and owned `Vec<u8>` values.
   Vector cleanup must pass the compiler-linked structural drop audit; allocator

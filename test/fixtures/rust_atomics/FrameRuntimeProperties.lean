@@ -50,6 +50,40 @@ private theorem add_exact (x y z : Usize) (equal : x.val + y.val = z.val) :
   apply UScalar.eq_of_val_eq
   omega
 
+theorem consumes_exact (input : alloc.vec.Vec U8) (high low : U8) (payload tail : List U8)
+    (shape : input.val = [1#u8, high, low] ++ payload ++ tail)
+    (wire : (core.num.U16.from_be_bytes (Array.make 2#usize [high, low])).val = payload.length)
+    (bound : input.val.length ≤ 262144) :
+    ∃ frame rest, atomic_core.frames.take_frame input = Lynx.NativeM.ok (.Ok (some frame), rest) ∧
+      frame.val = [1#u8, high, low] ++ payload ∧ rest.val = tail := by
+  let length := core.num.U16.from_be_bytes (Array.make 2#usize [high, low])
+  have count_val : (UScalar.cast .Usize length).val = length.val := by
+    rw [UScalar.cast_val_mod_pow_greater_numBits_eq]
+    cases System.Platform.numBits_eq <;> simp_all [UScalarTy.numBits]
+  let finish := Usize.ofNatCore (3 + length.val) (by scalar_tac)
+  have added : 3#usize + UScalar.cast .Usize length = RustM.ok finish := by
+    apply add_exact
+    simp [finish, count_val]
+  dsimp [length] at added
+  have not_short : ¬input.val.length < 3 := by simp [shape] <;> omega
+  have not_truncated : ¬input.val.length < finish.val := by
+    simp [finish, length, wire, shape] <;> omega
+  have inside : finish.val ≤ input.val.length := by omega
+  have slices : input.slice.val = [1#u8, high, low] ++ payload ++ tail := shape
+  have split := split_exact input finish inside bound
+  have take : input.val.take finish.val = [1#u8, high, low] ++ payload := by
+    have equal : finish.val = ([1#u8, high, low] ++ payload).length := by simp [finish, length, wire] <;> omega
+    rw [equal, shape]
+    simp
+  have drop : input.val.drop finish.val = tail := by
+    have equal : finish.val = ([1#u8, high, low] ++ payload).length := by simp [finish, length, wire] <;> omega
+    rw [equal, shape]
+    simp
+  simp [atomic_core.frames.take_frame, alloc.vec.Vec.index,
+    core.slice.index.SliceIndexUsizeSlice, core.slice.index.Usize.index, Slice.index_usize,
+    not_short, slices, UScalar.lt_equiv, lift, added, not_truncated, split,
+    core.mem.replace, take, drop]
+
 -- Values fitting u32 fit both supported Rust machine-word widths. Preserve
 -- the upstream checked failure test for larger values.
 @[cbv_eval] theorem try_usize_eq (value : Nat) :

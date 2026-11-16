@@ -585,7 +585,13 @@ defmodule Lynx.Rust do
   protected from this reduction; unsupported hidden dependencies fail closed.
   Certificates are checked against the same extraction, not an assumed contract
   or cached implementation. Missing, conditional, incorrect and unfinished
-  certificates fail verification. Currently requires `unwind: :reject`.
+  certificates fail verification. Supports `unwind: :reject` and `:captured`.
+  In captured callers, the certified implementation and its dependency closure
+  retain their original signatures and bodies. A captured panic tag cannot count
+  as a normal return when checking this obligation. Protected dependencies need
+  their own certificate if called from outside that closure and not otherwise
+  established nonpanicking. Allocator-confirmed byte-vector records can be borrowed
+  through native guards; their heap representation does not grant payload destruction.
   Captured unwind also supports canonical `Result`/`Option` wrappers around
   scalar/unit tuples, compiler-certified plain data and owned `Vec<u8>` values.
   Vector cleanup must pass the compiler-linked structural drop audit; allocator

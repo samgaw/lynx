@@ -367,6 +367,7 @@ defmodule Lynx.Rust.Extraction do
         rustler_atom_caches: {caches, module},
         rustler_constructors: rustler_constructors,
         nonpanicking: Enum.map(no_panic.contracts, & &1.id),
+        nonpanicking_protected: no_panic.protected,
         allocator_layout: discovery.allocator_layout,
         explicit_ownership: Keyword.get(opts, :owned_drops, false) == :explicit
       )

@@ -172,7 +172,9 @@ defmodule Lynx.Rust.LLBC do
         Lynx.Rust.CapturedUnwind.lower!(document, functions, refs,
           models: models,
           runtime: Keyword.get(opts, :execution, :pure) == :runtime,
-          allocator_layout: opts[:allocator_layout]
+          allocator_layout: opts[:allocator_layout],
+          nonpanicking: Keyword.get(opts, :nonpanicking, []),
+          protected: Keyword.get(opts, :nonpanicking_protected, MapSet.new())
         )
       else
         {document, []}
@@ -431,7 +433,8 @@ defmodule Lynx.Rust.LLBC do
           translated,
           refs,
           drops,
-          Keyword.get(opts, :nonpanicking, [])
+          Keyword.get(opts, :nonpanicking, []),
+          opts[:allocator_layout]
         )
 
     for type <- translated["type_decls"], type != nil, first_party?(type, first_party) do
@@ -460,6 +463,7 @@ defmodule Lynx.Rust.LLBC do
       trait_dependencies: trait_dependencies,
       decoder_dispatch: decoder_dispatch,
       drops: drops,
+      allocator_layout: opts[:allocator_layout],
       constants: constants,
       external_functions: external,
       external_calls: modelled,

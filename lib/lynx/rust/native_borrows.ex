@@ -6,7 +6,15 @@ defmodule Lynx.Rust.NativeBorrows do
   # failure outputs are supported, a borrowed guard must not be lost on panic.
   # Check actual callee bodies transitively. Optional proof obligations protect
   # their implementations from pruning and must pass exact kernel checks later.
-  def audit!(functions, models, translated, refs, frame_inputs \\ %{}, nonpanicking \\ []) do
+  def audit!(
+        functions,
+        models,
+        translated,
+        refs,
+        frame_inputs \\ %{},
+        nonpanicking \\ [],
+        allocator_layout \\ nil
+      ) do
     guards =
       for type <- translated["type_decls"], LockModels.guard?(type, refs), do: type["def_id"]
 
@@ -22,7 +30,8 @@ defmodule Lynx.Rust.NativeBorrows do
       implementations(functions, %{
         translated: translated,
         references: refs,
-        nonpanicking: nonpanicking
+        nonpanicking: nonpanicking,
+        allocator_layout: allocator_layout
       })
 
     for function <- functions,
@@ -298,7 +307,8 @@ defmodule Lynx.Rust.NativeBorrows do
                 [],
                 expanded["translated"],
                 context.references,
-                []
+                [],
+                context[:allocator_layout]
               )
             ],
             do: function["def_id"]
