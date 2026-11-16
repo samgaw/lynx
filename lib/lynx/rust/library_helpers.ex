@@ -17,10 +17,68 @@ defmodule Lynx.Rust.LibraryHelpers do
           "core::slice::_::strip_prefix",
           "core::slice::_::strip_suffix",
           "core::slice::_::as_slice",
-          "core::slice::SlicePattern"
+          "core::slice::SlicePattern",
+          "core::io::error::ErrorKind",
+          "core::io::error::_::eq"
         ],
         else: []
       )
+  end
+
+  # Keep the actual derived comparison body, including its discriminant reads.
+  # This is not an external equality specification for the standard enum.
+  def selected?(
+        %{
+          "body" => %{"Structured" => _},
+          "signature" => %{"is_unsafe" => false, "is_variadic" => false, "abi" => "Rust"},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["io", 0]},
+              %{"Ident" => ["error", 0]},
+              %{"Impl" => %{"Trait" => impl}},
+              %{"Ident" => ["eq", 0]}
+            ]
+          },
+          "src" => %{"TraitImpl" => %{"trait_ref" => %{"id" => trait}, "item_id" => 0}}
+        } = function,
+        translated
+      ) do
+    refs = Lynx.Rust.LLBC.type_references!(translated)
+
+    with %{"item_meta" => %{"name" => name}} <-
+           Enum.find(translated["trait_decls"], &(&1 && &1["def_id"] == trait)),
+         true <- name == Enum.map(~w(core cmp PartialEq), &%{"Ident" => [&1, 0]}),
+         %{} = implementation <-
+           Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl)),
+         [self, self] <-
+           Lynx.Rust.CallModels.expand(implementation["impl_trait"]["generics"]["types"], refs),
+         %{"Adt" => %{"id" => kind, "builtin" => nil}} <- self,
+         %{"item_meta" => %{"name" => kind_name}, "kind" => %{"Enum" => _}} <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == kind)),
+         true <- kind_name == Enum.map(~w(core io error ErrorKind), &%{"Ident" => [&1, 0]}),
+         true <-
+           Lynx.Rust.CallModels.expand(function["signature"]["inputs"], refs) ==
+             Enum.map(0..1, &%{"Ref" => [%{"Var" => %{"Free" => &1}}, self, "Shared"]}),
+         true <-
+           Lynx.Rust.CallModels.expand(function["signature"]["output"], refs) ==
+             %{"Scalar" => "Bool"} do
+      Lynx.Rust.FormatModels.method_identity?(
+        function,
+        %{
+          implementation
+          | "methods" =>
+              Enum.filter(
+                implementation["methods"],
+                &match?(%{"kind" => %{"TraitMethod" => [^trait, 0]}}, &1)
+              )
+        },
+        trait,
+        %{translated: translated, refs: refs}
+      )
+    else
+      _ -> false
+    end
   end
 
   def selected?(

@@ -159,3 +159,11 @@ impl std::future::Future for YieldOnce {
 pub fn yield_once() -> YieldOnce {
     YieldOnce { waiting: true }
 }
+
+/// Standard error kind produced when a complete protocol input is unavailable.
+pub const TRUNCATED_INPUT: io::ErrorKind = io::ErrorKind::UnexpectedEof;
+
+/// Classifies the standard truncation kind using its actual derived comparison.
+pub fn is_truncated(kind: io::ErrorKind) -> bool {
+    kind == TRUNCATED_INPUT
+}

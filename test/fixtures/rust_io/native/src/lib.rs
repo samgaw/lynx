@@ -301,3 +301,15 @@ mod async_log {
         }))
     }
 }
+
+/// Classifies the standard end-of-file kind through the first-party crates.
+#[rustler::nif]
+fn classify_end_of_file() -> bool {
+    io_protocol::truncated_input(std::io::ErrorKind::UnexpectedEof)
+}
+
+/// Distinguishes retryable interruption from a truncated protocol input.
+#[rustler::nif]
+fn classify_interrupted_read() -> bool {
+    io_protocol::truncated_input(std::io::ErrorKind::Interrupted)
+}

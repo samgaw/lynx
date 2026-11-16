@@ -758,3 +758,8 @@ pub fn reopen_words(path: &str) -> Result<(Option<u16>, Option<u16>), u8> {
     drop(mutex);
     reply
 }
+
+/// Propagates standard truncation classification across a workspace dependency.
+pub fn truncated_input(kind: io::ErrorKind) -> bool {
+    io_core::is_truncated(kind)
+}

@@ -51,9 +51,13 @@ defmodule Lynx.Rust do
   layout remain reported models; owned/mutable strings and character-safe slicing
   are not included in this subset.
 
-  Immutable named scalar-array constants, static shared scalar slices and
+  Immutable named scalar-array and fieldless-enum constants, static shared scalar slices and
   promoted shared arrays retain their actual checked initializers across crate
-  boundaries. This includes byte-string literals with zero or non-UTF-8 bytes.
+  boundaries. This includes byte-string literals with zero or non-UTF-8 bytes. Fieldless-enum
+  promotions retain the actual initializer and standard derived comparison bodies,
+  including ErrorKind classification when using full-MIR extraction.
+  This classifies `ErrorKind` values; `Error::kind` and `Read::read_exact` still
+  require additional error representation support.
   Array lengths must be literal usize values; mutable, nested and generic constant
   payloads remain rejected. Array views and endian conversions retain their
   existing reported standard-library models.
