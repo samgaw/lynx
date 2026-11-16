@@ -21,7 +21,7 @@ defmodule Lynx.Rust.LibraryHelpers do
             "core::slice::SlicePattern",
             "core::io::error::ErrorKind",
             "core::io::error::_::eq"
-          ] ++ Lynx.Rust.ExactRead.includes(),
+          ] ++ Lynx.Rust.ExactRead.includes() ++ ["alloc::io::impls::_::read_exact"],
         else: []
       )
   end
@@ -355,7 +355,10 @@ defmodule Lynx.Rust.LibraryHelpers do
       )
   end
 
-  def selected?(function, translated), do: Lynx.Rust.ExactRead.selected?(function, translated)
+  def selected?(function, translated),
+    do:
+      Lynx.Rust.ExactRead.selected?(function, translated) or
+        Lynx.Rust.SliceRead.selected?(function, translated)
 
   defp pin_storage?(%{"kind" => %{"StorageLive" => id}}) when id in [0, 1], do: true
   defp pin_storage?(%{"kind" => %{"StorageDead" => id}}) when id in [0, 1], do: true

@@ -13,8 +13,9 @@ defmodule Lynx.Rust do
   offsets and sequence lengths, without an artificial protocol-size cutoff.
   These standard-library operations are explicitly reported models,
   not proofs of Rust core's implementation. Other slice/string operations remain
-  rejected unless separately supported. Shared `input[start..]` indexing remains
-  rejected: the pinned upstream failure model does not preserve its bounds panic.
+  rejected unless separately supported. Shared `input[start..]` indexing uses a
+  checked standard model that preserves bounds panics, correcting the pinned
+  upstream undefined-failure behavior without patching its library.
   `RangeFrom::get` remains supported. Array and vector indexing must retain
   evidence for each delegated standard indexing method; opaque or missing
   dictionary dependencies are rejected.
@@ -275,9 +276,13 @@ defmodule Lynx.Rust do
   `Error::is_interrupted` uses the admitted classification, including the explicit
   OS assumption that the standard callback agrees with the Interrupted kind.
   General simple/custom constructors and `Error::new` remain unsupported.
-  Only the checked concrete File reader dictionary is admitted; other readers
-  require implementation support. Byte-array repetition admits only u8 and the
-  exact standard Clone<u8> dictionary. Mutable slice reconstruction retains the
+  The checked File dictionary and actual standard `Read for &[u8]::read_exact`
+  override are admitted; other readers require implementation support. Short
+  slice reads consume the source and preserve the destination, unlike the File
+  loop. The override retains its single-byte path and upstream Copy slice model;
+  standard Copy metadata, source/destination lengths and bounds failures are
+  checked. Native copying and memory layout remain external boundaries.
+  Byte-array repetition admits only u8 and the exact standard Clone<u8> dictionary. Mutable slice reconstruction retains the
   upstream checked range semantics. The existing loop budget remains a verification
   cutoff, not a Rust execution limit or termination assumption.
   A caller owning a File across this loop can use the existing `:nonpanicking`

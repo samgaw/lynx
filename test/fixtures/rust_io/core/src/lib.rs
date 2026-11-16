@@ -196,3 +196,26 @@ pub fn exact_word(file: &mut File) -> io::Result<u16> {
     fill_exact(file, &mut bytes)?;
     Ok(u16::from_le_bytes(bytes))
 }
+
+/// Fills a destination through the actual standard byte-slice reader.
+/// # Errors
+/// Short input is consumed and returns the standard UnexpectedEof error.
+pub fn fill_slice(input: &mut &[u8], output: &mut [u8]) -> io::Result<()> {
+    input.read_exact(output)
+}
+
+/// Reads a little-endian word and retains the unread input suffix.
+/// # Errors
+/// Propagates the standard exact-read error.
+pub fn slice_word(input: &mut &[u8]) -> io::Result<u16> {
+    let mut bytes = [0; 2];
+    fill_slice(input, &mut bytes)?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+/// Borrows the suffix beginning at a checked offset.
+/// # Panics
+/// Panics when the offset exceeds the input length.
+pub fn slice_suffix(input: &[u8], start: usize) -> &[u8] {
+    &input[start..]
+}

@@ -106,8 +106,14 @@ defmodule Lynx.Rust.LLBC do
     if functions == [],
       do: raise(ArgumentError, "no first-party function implementations were extracted")
 
+    needed_defaults = Lynx.Rust.ExactRead.needed_defaults(translated)
+
     {library_helpers, external} =
-      Enum.split_with(external, &Lynx.Rust.LibraryHelpers.selected?(&1, translated))
+      Enum.split_with(
+        external,
+        &(Lynx.Rust.LibraryHelpers.selected?(&1, translated) and
+            Lynx.Rust.ExactRead.retained?(&1, needed_defaults))
+      )
 
     {primitives, external} =
       Enum.split_with(external, &MapSet.member?(primitive_ids, &1["def_id"]))

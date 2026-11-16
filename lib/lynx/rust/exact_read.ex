@@ -49,6 +49,61 @@ defmodule Lynx.Rust.ExactRead do
 
   def selected?(_, _), do: false
 
+  # Read's default method can be retained in trait metadata even when a concrete
+  # reader overrides it. Keep only defaults referenced by implementation bodies
+  # or const initializers; a later unsupported indirect call still fails closed.
+  def needed_defaults(translated) do
+    functions = Enum.reject(translated["fun_decls"], &is_nil/1)
+
+    defaults =
+      Enum.filter(functions, fn f ->
+        name = f["item_meta"]["name"]
+
+        name in [
+          path(~w(alloc io read Read read_exact)),
+          path(~w(alloc io read default_read_exact))
+        ]
+      end)
+      |> MapSet.new(& &1["def_id"])
+
+    globals =
+      Map.new(
+        Enum.reject(translated["global_decls"] || [], &is_nil/1),
+        &{&1["def_id"], Lynx.Rust.Constants.initializer_id(&1)}
+      )
+
+    edges = Map.new(functions, &{&1["def_id"], definition_refs(&1["body"], globals)})
+    roots = for f <- functions, not MapSet.member?(defaults, f["def_id"]), do: f["def_id"]
+    closure(roots, edges, MapSet.new())
+  end
+
+  defp definition_refs(%{"Fun" => id}, _) when is_integer(id), do: [id]
+
+  defp definition_refs(%{"Global" => %{"id" => id}} = node, globals),
+    do: List.wrap(globals[id]) ++ definition_refs(Map.values(node), globals)
+
+  defp definition_refs(node, globals) when is_map(node),
+    do: definition_refs(Map.values(node), globals)
+
+  defp definition_refs(nodes, globals) when is_list(nodes),
+    do: Enum.flat_map(nodes, &definition_refs(&1, globals))
+
+  defp definition_refs(_, _), do: []
+  defp closure([], _, seen), do: seen
+
+  defp closure([id | rest], edges, seen) do
+    if MapSet.member?(seen, id),
+      do: closure(rest, edges, seen),
+      else: closure(Map.get(edges, id, []) ++ rest, edges, MapSet.put(seen, id))
+  end
+
+  def retained?(function, needed) do
+    function["item_meta"]["name"] not in [
+      path(~w(alloc io read Read read_exact)),
+      path(~w(alloc io read default_read_exact))
+    ] or MapSet.member?(needed, function["def_id"])
+  end
+
   # The upstream trait builder unfolds tagged definitions to resolve references
   # to already supplied methods. Expose only the actual selected helper bodies;
   # no definition or equation is replaced and a genuine cycle still fails.

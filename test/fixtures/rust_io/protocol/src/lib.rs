@@ -828,3 +828,25 @@ pub fn read_exact_optional(path: &str) -> Result<Option<u16>, u8> {
     drop(file);
     reply
 }
+
+/// Decodes a word and reports exact remaining input length across the crate boundary.
+/// # Errors
+/// Propagates the actual standard slice-reader error.
+pub fn parse_slice(input: &mut &[u8]) -> io::Result<(u16, usize)> {
+    let value = io_core::slice_word(input)?;
+    Ok((value, input.len()))
+}
+
+/// Decodes a binary word and exposes the exact unconsumed length.
+/// # Errors
+/// Returns one when the standard slice reader reports truncation.
+pub fn parse_packet(input: &[u8]) -> Result<(u16, u64), u8> {
+    let mut remaining = input;
+    match parse_slice(&mut remaining) {
+        Ok((value, count)) => Ok((value, count as u64)),
+        Err(error) => {
+            drop(error);
+            Err(1)
+        }
+    }
+}
