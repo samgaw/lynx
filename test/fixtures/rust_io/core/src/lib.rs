@@ -167,3 +167,13 @@ pub const TRUNCATED_INPUT: io::ErrorKind = io::ErrorKind::UnexpectedEof;
 pub fn is_truncated(kind: io::ErrorKind) -> bool {
     kind == TRUNCATED_INPUT
 }
+
+/// Reads the standard classification of a borrowed error without consuming it.
+pub fn error_kind(error: &io::Error) -> io::ErrorKind {
+    error.kind()
+}
+
+/// Recognizes the standard retryable interruption classification.
+pub fn is_retryable(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::Interrupted
+}

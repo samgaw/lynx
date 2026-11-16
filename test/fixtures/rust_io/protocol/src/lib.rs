@@ -763,3 +763,33 @@ pub fn reopen_words(path: &str) -> Result<(Option<u16>, Option<u16>), u8> {
 pub fn truncated_input(kind: io::ErrorKind) -> bool {
     io_core::is_truncated(kind)
 }
+
+/// Recognizes an interrupted operation by classifying its actual borrowed error.
+pub fn error_is_retryable(error: &io::Error) -> bool {
+    io_core::is_retryable(io_core::error_kind(error))
+}
+
+/// Attempts one read and reports whether an error permits retrying.
+///
+/// The returned error and opened file are consumed on their actual control paths.
+pub fn read_is_retryable(path: &str) -> bool {
+    let mut file = match io_core::open_readonly(path) {
+        Ok(file) => file,
+        Err(error) => {
+            let retryable = error_is_retryable(&error);
+            drop(error);
+            return retryable;
+        }
+    };
+    let mut byte = [0u8];
+    let retryable = match io_core::read_once(&mut file, &mut byte) {
+        Ok(_) => false,
+        Err(error) => {
+            let retryable = error_is_retryable(&error);
+            drop(error);
+            retryable
+        }
+    };
+    drop(file);
+    retryable
+}

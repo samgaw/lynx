@@ -3342,6 +3342,48 @@ rejects every actual call to this method; no formatting outcome is established. 
 Native payload reclamation and allocator behavior remain trusted boundaries. -/
 @[expose] def typeName : String := "rust:os-io-error"
 
+/-- Immutable host classification metadata is separate from the owned OS-error
+capability. It is preserved when the capability is consumed. -/
+@[expose] def kindTypeName : String := "rust:os-io-error-kind"
+
+@[expose] def kindEntry (error : NativeIoError) (label : String) : Term :=
+  .tuple #[.nativeReference error.identity,.atom label]
+
+@[expose] def decodeKindEntry : Term → Option (Nat × String)
+  | .tuple fields => do
+    if size : fields.size = 2 then
+      let .nativeReference identity := fields[0]'(by omega) | none
+      let .atom label := fields[1]'(by omega) | none
+      some (identity,label)
+    else none
+  | _ => none
+
+/-- Read a uniquely admitted live OS error's classification. The host must
+justify the metadata's correspondence to std's Error::kind. Missing, stale,
+ambiguous, custom or unbounded capabilities/metadata exhaust verification. -/
+@[expose] def getKind (error : NativeIoError) (env : Environment) : Except Exception String :=
+  if error.identity = 0 ∨ env.nativeRefCounter < error.identity then .error .exhausted
+  else match env.nativeHeap.filter (fun cell => cell.1 == error.identity) with
+  | [(_,storedType,.atom "live")] =>
+    if storedType == typeName then
+      match env.nativeHeap.filter (fun cell => cell.2.1 == kindTypeName &&
+        (match decodeKindEntry cell.2.2 with
+          | some (owner,_) => owner == error.identity
+          | none => false)) with
+      | [(identity,_,payload)] =>
+        if identity = 0 ∨ env.nativeRefCounter < identity ∨
+            (env.nativeHeap.filter (fun cell => cell.1 == identity)).length ≠ 1 then
+          .error .exhausted
+        else match decodeKindEntry payload with
+          | some (_,kind) => .ok kind
+          | none => .error .exhausted
+      | _ => .error .exhausted
+    else .error .exhausted
+  | _ => .error .exhausted
+
+@[expose] def kind (error : NativeIoError) : NativeM String :=
+  .nativeGet fun env => Result.ofExcept (getKind error env)
+
 /-- Consume one unique live admitted OS error. Missing, stale, wrong-type,
 ambiguous or custom-payload identities exhaust verification instead of erasing
 an unknown destructor. The admitted std/allocator cleanup is nonpanicking. -/

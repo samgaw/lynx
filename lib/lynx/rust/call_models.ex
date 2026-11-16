@@ -28,6 +28,7 @@ defmodule Lynx.Rust.CallModels do
                   do:
                     Lynx.Rust.ResultModels.resolve_unused_io_debug(function, translated, refs) ||
                       Lynx.Rust.FileModels.resolve(function, translated, refs) ||
+                      Lynx.Rust.IoErrorModels.resolve(function, translated, refs) ||
                       Lynx.Rust.FileOpenModels.resolve(function, translated, refs) ||
                       Lynx.Rust.FileDrops.resolve(function, translated, refs)
                 ) ||

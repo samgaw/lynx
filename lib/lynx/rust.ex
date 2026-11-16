@@ -56,8 +56,9 @@ defmodule Lynx.Rust do
   boundaries. This includes byte-string literals with zero or non-UTF-8 bytes. Fieldless-enum
   promotions retain the actual initializer and standard derived comparison bodies,
   including ErrorKind classification when using full-MIR extraction.
-  This classifies `ErrorKind` values; `Error::kind` and `Read::read_exact` still
-  require additional error representation support.
+  Runtime regular-file verification also admits `Error::kind` for registered OS
+  errors, using the classification metadata described below. `Read::read_exact`
+  still requires additional error representation support.
   Array lengths must be literal usize values; mutable, nested and generic constant
   payloads remain rejected. Array views and endian conversions retain their
   existing reported standard-library models.
@@ -246,7 +247,7 @@ defmodule Lynx.Rust do
   persistence may tear bytewise between old and visible images, without device
   corruption. These filesystem/device guarantees and native descriptor
   correspondence are external assumptions, reported with the verification result.
-  Error identities are opaque; payloads and error inspection are unsupported.
+  Error identities are opaque; arbitrary error payload inspection is unsupported.
   Explicit and compiler-inserted error destruction additionally require a unique
   live `rust:os-io-error` cell at that identity, within the environment's allocated
   reference range. Its `live` marker is host admission of a callback-free OS error
@@ -255,6 +256,18 @@ defmodule Lynx.Rust do
   and unadmitted errors exhaust verification. Error payload reclamation and native
   correspondence remain reported assumptions. Application-created/custom error
   constructors and their arbitrary destructors are not admitted by this model.
+  `Error::kind(&self)` additionally requires a separate immutable metadata cell
+  tagged `NativeIoError.kindTypeName`, with payload
+  `NativeIoError.kindEntry error label`. Its identity must be unique, nonzero and
+  within the allocated reference range. Exactly one descriptor must name the live
+  OS-error identity; the label must name an actual extracted standard `ErrorKind`
+  variant. Missing, stale, ambiguous or unknown classification exhausts verification.
+  Reading classification preserves the environment; destroying the error consumes
+  its owned capability while preserving the metadata. Subsequent classification
+  still requires the live capability. Metadata records a host admission, not a
+  native allocation or pointer, and does not derive the kind from an error identity.
+  Its correspondence to std and the OS is an explicitly reported external model.
+  Static/simple/custom errors, `Error::new` and `Read::read_exact` are not covered.
   Read counts select a visible prefix; unread buffer bytes survive. Read errors
   preserve the buffer and offset in this bounded external model; these are explicit
   std/OS correspondence assumptions rather than verified native guarantees.

@@ -410,6 +410,7 @@ defmodule Lynx.Rust.Extraction do
     audit = Lynx.Rust.OptionModels.scope(audit, module)
     audit = Lynx.Rust.BytesModels.scope(audit, module)
     audit = Lynx.Rust.FileModels.scope(audit, module)
+    audit = Lynx.Rust.IoErrorModels.scope(audit, module)
     audit = Lynx.Rust.CollectionModels.scope(audit, module)
     codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
@@ -582,6 +583,7 @@ defmodule Lynx.Rust.Extraction do
     operation_modules =
       Lynx.Rust.OptionModels.install!(audit, output, module) ++
         Lynx.Rust.FileModels.install!(audit, translation, output, module) ++
+        Lynx.Rust.IoErrorModels.install!(audit, translation, output, module) ++
         Lynx.Rust.CollectionModels.install!(audit, translation, output, module)
 
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
