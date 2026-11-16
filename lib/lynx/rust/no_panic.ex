@@ -120,19 +120,17 @@ defmodule Lynx.Rust.NoPanic do
       let expected ← liftTermElabM do
         let info ← getConstInfo implementation
         Meta.forallTelescope info.type fun inputs resultType => do
-          let .app (.const ``Lynx.Result _) valueType ← Meta.whnf resultType
+          let .app (.const ``Lynx.Result _) _ ← Meta.whnf resultType
             | throwError "nonpanicking implementation must return NativeM: {implementation}"
           let call := mkAppN (mkConst implementation) inputs
-          let success ← Meta.withLocalDeclD `result valueType fun value => do
-            let outcome ← Meta.mkAppM ``Lynx.Result.ok #[value]
-            let equal ← Meta.mkEq call outcome
-            let predicate ← Meta.mkLambdaFVars #[value] equal
-            Meta.mkAppM ``Exists #[predicate]
-          let exhausted ← Meta.mkAppOptM ``Lynx.Result.error #[some valueType, some (mkConst ``Lynx.Exception.exhausted)]
-          let failure ← Meta.mkEq call exhausted
-          let outcome ← Meta.mkAppM ``Or #[success, failure]
-          PrettyPrinter.delab (← Meta.mkForallFVars inputs outcome)
-      let command ← `(command| private theorem $(mkIdent declaration) : $expected := $(mkIdent certificate))
+          let safe ← Meta.mkAppM ``Lynx.NativeM.NoPanic #[call]
+          PrettyPrinter.delab (← Meta.mkForallFVars inputs safe)
+      let command ← `(command| private theorem $(mkIdent declaration) : $expected := by
+        intros
+        first
+        | apply $(mkIdent certificate)
+        | apply Lynx.NativeM.NoPanic.of_pure
+          apply $(mkIdent certificate))
       elabCommand command
     #{checks}
     """

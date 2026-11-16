@@ -101,6 +101,79 @@ Other exceptions and verification exhaustion retain their original meaning. -/
 @[simp] theorem capturePanic_exhausted {α : Type} :
     capturePanic (.error .exhausted : NativeM α) = .error .exhausted := rfl
 
+/-- Native-only exception safety, across arbitrary environments at every shared
+state access and every poll. It permits blocking and exhaustion, not success or
+termination assumptions. Only actual possible poll replies need safe continuations. -/
+inductive NoPanic : {α : Type} → NativeM α → Prop where
+  | ok (value : α) : NoPanic (Result.ok value)
+  | exhausted : NoPanic (Result.error .exhausted : NativeM α)
+  | get (next : Environment → NativeM α) (safe : ∀ env, NoPanic (next env)) :
+      NoPanic (Result.get next)
+  | set (env : Environment) (next : NativeM α) (safe : NoPanic next) :
+      NoPanic (Result.set env next)
+  | nativeGet (next : Environment → NativeM α) (safe : ∀ env, NoPanic (next env)) :
+      NoPanic (Result.nativeGet next)
+  | nativeSet (env : Environment) (next : NativeM α) (safe : NoPanic next) :
+      NoPanic (Result.nativeSet env next)
+  | nativeModify (transition : Environment → β × Environment) (next : β → NativeM α)
+      (safe : ∀ env, NoPanic (next (transition env).1)) :
+      NoPanic (Result.nativeModify transition next)
+  | wait (poll : Environment → Option (β × Environment)) (next : β → NativeM α)
+      (safe : ∀ env reply after, poll env = some (reply, after) → NoPanic (next reply)) :
+      NoPanic (Result.wait poll next)
+
+namespace NoPanic
+
+theorem of_pure {computation : NativeM α}
+    (pure : (∃ value, computation = NativeM.ok value) ∨ computation = Result.error .exhausted) :
+    NoPanic computation := by
+  rcases pure with ⟨value, rfl⟩ | rfl
+  · exact .ok value
+  · exact .exhausted
+
+theorem bind {computation : NativeM α} (safe : NoPanic computation)
+    (next : α → NativeM β) (continuation : ∀ value, NoPanic (next value)) :
+    NoPanic (computation >>= next) := by
+  induction safe with
+  | ok value => exact continuation value
+  | exhausted => exact .exhausted
+  | get body safe ih => exact .get _ (fun env => ih env next continuation)
+  | set env body safe ih => exact .set env _ (ih next continuation)
+  | nativeGet body safe ih => exact .nativeGet _ (fun env => ih env next continuation)
+  | nativeSet env body safe ih => exact .nativeSet env _ (ih next continuation)
+  | nativeModify transition body safe ih => exact .nativeModify transition _ (fun env => ih env next continuation)
+  | wait poll body safe ih => exact .wait poll _ (fun env reply after ready => ih env reply after ready next continuation)
+
+theorem ready_prefix {computation residual : NativeM α} {before after : Environment}
+    (safe : NoPanic computation) (trace : Result.ReadyPrefix computation before residual after) :
+    NoPanic residual := by
+  induction trace with
+  | refl => exact safe
+  | get next before residual after rest ih =>
+    cases safe with | get _ proof => exact ih (proof before)
+  | nativeGet next before residual after rest ih =>
+    cases safe with | nativeGet _ proof => exact ih (proof before)
+  | set middle next before residual after rest ih =>
+    cases safe with | set _ _ proof => exact ih proof
+  | nativeSet middle next before residual after rest ih =>
+    cases safe with | nativeSet _ _ proof => exact ih proof
+  | nativeModify transition next reply before middle residual after ready rest ih =>
+    cases safe with
+    | nativeModify _ _ proof =>
+      apply ih
+      simpa only [ready] using proof before
+  | wait poll next reply before middle residual after ready rest ih =>
+    cases safe with | wait _ _ proof => exact ih (proof before reply middle ready)
+
+theorem error_eq_exhausted {computation : NativeM α} {before after : Environment}
+    (safe : NoPanic computation)
+    (trace : Result.ReadyPrefix computation before (.error error) after) : error = .exhausted := by
+  have terminal := safe.ready_prefix trace
+  cases terminal
+  rfl
+
+end NoPanic
+
 /-- A successful standard `Result::expect` transfers the actual Ok payload.
 The error path cannot establish a Rust outcome: Debug formatting, error
 destruction and unwind require separate models before that path is supported. -/
@@ -4195,6 +4268,86 @@ instance (priority := 1100) : NativeResourceUnwindDrop (NativeMutex NativeFile) 
   drop := NativeMutex.disposeFile
 
 end Lynx
+
+namespace Lynx.NativeM.NoPanic
+
+set_option maxHeartbeats 2000000 in
+theorem mutex_lock {α : Type} [NativeCodec α] (mutex : NativeMutex α) :
+    NativeM.NoPanic (NativeMutex.lock mutex) := by
+  unfold NativeMutex.lock
+  apply NativeM.NoPanic.wait
+  intro env reply after ready
+  cases reply with
+  | ok value => exact .ok value
+  | error error =>
+    have equal : error = .exhausted := by
+
+      unfold NativeMutex.pollLock at ready
+      repeat' first
+        | split at ready
+        | simp_all
+        | rcases ready with ⟨branch, ready⟩
+
+    subst error
+    exact .exhausted
+
+set_option maxHeartbeats 2000000 in
+theorem guard_release {α : Type} [NativeCodec α] (guard : NativeGuard α) :
+    NativeM.NoPanic (NativeGuard.release guard) := by
+  unfold NativeGuard.release
+  apply NativeM.NoPanic.wait
+  intro env reply after ready
+  cases reply with
+  | ok value => exact .ok value
+  | error error =>
+    have equal : error = .exhausted := by
+
+      unfold NativeGuard.pollRelease at ready
+      repeat' first
+        | split at ready
+        | simp_all
+        | rcases ready with ⟨branch, ready⟩
+
+    subst error
+    exact .exhausted
+
+set_option maxHeartbeats 2000000 in
+theorem file_write (file : NativeFile) (data : Slice U8) :
+    NativeM.NoPanic (NativeFile.write file data) := by
+  unfold NativeFile.write
+  apply NativeM.NoPanic.wait
+  intro env reply after ready
+  cases reply with
+  | ok value => exact .ok value
+  | error error =>
+    have equal : error = .exhausted := by
+
+      unfold NativeFile.pollWrite at ready
+      repeat' first
+        | split at ready
+        | simp_all
+
+    subst error
+    exact .exhausted
+
+set_option maxHeartbeats 2000000 in
+theorem io_error_dispose (error : NativeIoError) : NativeM.NoPanic (NativeIoError.dispose error) := by
+  unfold NativeIoError.dispose Result.consumeNativeCapability
+  apply NativeM.NoPanic.wait
+  intro env reply after ready
+  cases reply with
+  | ok value => exact .ok value
+  | error error =>
+    have equal : error = .exhausted := by
+
+      repeat' first
+        | split at ready
+        | simp_all
+
+    subst error
+    exact .exhausted
+
+end Lynx.NativeM.NoPanic
 
 namespace Lynx.NativeCallbacks
 open Aeneas.Std

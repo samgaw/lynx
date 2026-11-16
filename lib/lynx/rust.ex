@@ -602,15 +602,21 @@ defmodule Lynx.Rust do
   Unsupported recursive/trait combinations fail elaboration.
   `nonpanicking: [{"crate::helper", "Proofs.helper_no_panic"}]` selects an
   all-input theorem from `proof_modules` for a runtime helper. The kernel must
-  check that its actual extracted body returns normally or exhausts verification,
-  with no other failures or effects. This can justify omitted unreachable panic
-  cleanup in guarded callers. The helper and its original dependencies are
-  protected from this reduction; unsupported hidden dependencies fail closed.
+  check `Lynx.NativeM.NoPanic` for its actual extracted body. This allows native
+  effects and blocking, but every shared read and possible poll continuation
+  must remain exception-safe under arbitrary environments. Verification exhaustion
+  is permitted; this proves neither successful return nor termination. Pure
+  normal-return-or-exhaustion certificates are also accepted through a checked
+  embedding. This can justify omitted unreachable panic cleanup in guarded callers.
+  The helper and its original dependencies cannot use pending certificates to
+  justify their own cleanup; independently checked bodies and validated primitives
+  remain available. Unsupported hidden dependencies fail closed.
   Certificates are checked against the same extraction, not an assumed contract
   or cached implementation. Missing, conditional, incorrect and unfinished
   certificates fail verification. Supports `unwind: :reject` and `:captured`.
   In captured callers, the certified implementation and its dependency closure
-  retain their original signatures and bodies. A captured panic tag cannot count
+  retain their original signatures and checked implementations, with only
+  independently justified unreachable cleanup pruned. A captured panic tag cannot count
   as a normal return when checking this obligation. Protected dependencies need
   their own certificate if called from outside that closure and not otherwise
   established nonpanicking. Allocator-confirmed byte-vector records can be borrowed
