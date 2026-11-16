@@ -234,6 +234,30 @@ mod async_log {
             Some(Err(error)) => Err(error),
         }
     }
+    /// Acknowledges a written prefix only after synchronization on resumption.
+    ///
+    /// # Errors
+    /// Returns one for write failure and two for synchronization failure.
+    ///
+    /// # Panics
+    /// Recursive acquisition may block or panic; the verification model rejects it.
+    #[cfg(feature = "async-sync")]
+    #[rustler::nif(name = "async_log_sync", schedule = "DirtyIo")]
+    fn sync_request(
+        owner: ResourceArc<LogResource>,
+        first: u8,
+        second: u8,
+        resume: bool,
+    ) -> Result<Option<u64>, u8> {
+        let reply = io_protocol::poll_locked_sync(&owner.file, [first, second], resume);
+        drop(owner);
+        match reply {
+            None => Ok(None),
+            Some(Ok(count)) => Ok(Some(count as u64)),
+            Some(Err(error)) => Err(error),
+        }
+    }
+
     /// Reads a word from the same shared file state used by the async writer.
     ///
     /// # Errors
