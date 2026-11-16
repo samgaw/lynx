@@ -319,3 +319,12 @@ fn classify_interrupted_read() -> bool {
 fn read_retryable_nif() -> bool {
     io_protocol::read_is_retryable("missing")
 }
+
+/// Reads an optional protocol word through the standard exact-read loop.
+///
+/// # Errors
+/// Returns two for opening failure and one for a non-EOF reading failure.
+#[rustler::nif(name = "read_exact_word", schedule = "DirtyIo")]
+fn read_exact_word_nif() -> Result<Option<u16>, u8> {
+    io_protocol::read_exact_optional("input")
+}
