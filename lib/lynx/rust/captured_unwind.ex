@@ -97,6 +97,7 @@ defmodule Lynx.Rust.CapturedUnwind do
             safe: safe,
             models: models,
             runtime: runtime,
+            allocator_layout: opts[:allocator_layout],
             plans: plans,
             plan: plan,
             unit: unit,
@@ -389,12 +390,19 @@ defmodule Lynx.Rust.CapturedUnwind do
   end
 
   defp lower(%{"kind" => %{"Drop" => drop}} = s, state, _) do
-    unless DropModels.nonpanicking_site?(drop, state.function, state.translated, state.refs),
-      do:
-        reject!(
-          state,
-          "captured unwind requires compiler-audited nonpanicking structural destruction"
-        )
+    unless DropModels.nonpanicking_site?(
+             drop,
+             state.function,
+             state.translated,
+             state.refs,
+             [],
+             state.allocator_layout
+           ),
+           do:
+             reject!(
+               state,
+               "captured unwind requires compiler-audited nonpanicking structural destruction"
+             )
 
     # Keep the actual site for the complete DropModels audit and erasure report.
     # Only the separately certified unreachable exceptional continuation goes.

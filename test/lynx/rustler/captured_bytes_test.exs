@@ -45,6 +45,16 @@ defmodule Lynx.Rustler.CapturedBytesTest do
     result = Lynx.Rust.verify!(workspace, "ownership-app", rust)
     assert [%{status: :ok}] = result.reports
     assert length(result.extraction.captured_unwind) == 3
+
+    assert %{global_vectors: true, source: :allocator_preserving_charon} =
+             result.verification.allocator_layout
+
+    assert Enum.any?(
+             result.verification.structural_drops,
+             &(&1.type == "core::result::Result" and &1.implementation_verified == false and
+                 String.contains?(&1.label, "Global byte-vector"))
+           )
+
     assert Enum.any?(result.verification.guarantees, &(&1.kind == :cross_crate_contract))
 
     assert [%{status: :ok, cached: true}] =
@@ -180,6 +190,29 @@ defmodule Lynx.Rustler.CapturedBytesTest do
           Keyword.put(rejects, :roots, ["ownership_base::" <> name])
         )
       end
+    end
+
+    File.write!(
+      base,
+      "#![feature(allocator_api)]\n" <>
+        original <>
+        """
+
+        pub fn system_reply(input: Vec<u8, std::alloc::System>, accepted: bool)
+            -> Result<Option<Vec<u8, std::alloc::System>>, u8> {
+            let reply = Ok(Some(input));
+            require_bytes(accepted);
+            reply
+        }
+        """
+    )
+
+    assert_raise ArgumentError, ~r/compiler-confirmed Global/, fn ->
+      Lynx.Rust.verify!(
+        workspace,
+        "ownership-base",
+        Keyword.put(rejects, :roots, ["ownership_base::system_reply"])
+      )
     end
 
     File.write!(base, original)

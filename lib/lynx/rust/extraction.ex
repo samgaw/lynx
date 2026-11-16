@@ -367,6 +367,7 @@ defmodule Lynx.Rust.Extraction do
         rustler_atom_caches: {caches, module},
         rustler_constructors: rustler_constructors,
         nonpanicking: Enum.map(no_panic.contracts, & &1.id),
+        allocator_layout: discovery.allocator_layout,
         explicit_ownership: Keyword.get(opts, :owned_drops, false) == :explicit
       )
 
@@ -610,6 +611,7 @@ defmodule Lynx.Rust.Extraction do
 
     %{
       audit: audit,
+      allocator_layout: discovery.allocator_layout,
       nonpanicking: Lynx.Rust.NoPanic.link!(no_panic, implementations),
       encoder_disposals: encoder_disposals,
       explicit_ownership: audit.explicit_ownership,
@@ -650,7 +652,7 @@ defmodule Lynx.Rust.Extraction do
               {digest, Lynx.Rust.Runtime.fingerprint(execution), codec_hashes, native_drops,
                Lynx.Rustler.ErrorConstructors.cache_inputs(rustler_constructors),
                Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
-               requested_calls, no_panic.contracts,
+               requested_calls, no_panic.contracts, discovery.allocator_layout,
                audit.external_calls
                |> Map.values()
                |> Enum.map(&Map.drop(&1, [:function, :definition_id]))
@@ -840,7 +842,37 @@ defmodule Lynx.Rust.Extraction do
       models ++
         Lynx.Rust.Futures.type_models!(Keyword.get(opts, :futures, :reject), document, module)
 
-    %{document: document, llbc: llbc, first_party: first_party, models: models}
+    allocator_layout =
+      if opts[:unwind] == :captured and Lynx.Rust.AllocatorLayout.required?(document) do
+        allocator_file = Path.rootname(llbc) <> ".allocators.llbc"
+
+        allocator_args =
+          Enum.flat_map(args, fn
+            "--preset=aeneas" -> Lynx.Rust.AllocatorLayout.arguments()
+            ^llbc -> [allocator_file]
+            argument -> [argument]
+          end)
+
+        diagnostics =
+          run!(charon, allocator_args,
+            cd: context.record["directory"],
+            env: Lynx.Rust.Cargo.environment(context)
+          )
+
+        allocator_document = read_llbc!(allocator_file, diagnostics)
+        validate_target!(allocator_document)
+
+        Lynx.Rust.AllocatorLayout.audit!(allocator_document, document, first_party)
+        |> Map.put(:fingerprint, Lynx.Rust.Fingerprint.file!(allocator_file))
+      end
+
+    %{
+      document: document,
+      llbc: llbc,
+      first_party: first_party,
+      models: models,
+      allocator_layout: allocator_layout
+    }
   end
 
   @doc false

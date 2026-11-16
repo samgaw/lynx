@@ -274,6 +274,7 @@ defmodule Lynx.Rust.Report do
       owned_drops: Map.get(extraction, :owned_drops, false),
       resource_cleanup: Map.get(extraction, :resource_cleanup, []),
       structural_drops: Lynx.Rust.DropModels.report(extraction.audit.drops),
+      allocator_layout: Map.get(extraction, :allocator_layout),
       external_models:
         ["Aeneas bounded scalar operations and RustM computation model"] ++
           if(Map.get(extraction, :futures, :reject) in [:polling, :suspending, :cancelling],

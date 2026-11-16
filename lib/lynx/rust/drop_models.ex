@@ -27,23 +27,31 @@ defmodule Lynx.Rust.DropModels do
   # Check one compiler destruction site without its unwind-only continuation.
   # A successful structural erasure audit proves that this model has no
   # observable destructor or panic; it does not certify native-owned payloads.
-  def nonpanicking_site?(drop, function, translated, refs, first_party \\ []) do
+  def nonpanicking_site?(
+        drop,
+        function,
+        translated,
+        refs,
+        first_party \\ [],
+        allocator_layout \\ nil
+      ) do
     function =
       put_in(function, ["body", "Structured", "body", "statements"], [
         %{"kind" => %{"Drop" => Map.delete(drop, "on_unwind")}}
       ])
 
-    match?({:ok, _}, audit([function], [], translated, refs, first_party))
+    match?({:ok, _}, audit([function], [], translated, refs, first_party, allocator_layout))
   end
 
   # Aeneas removes Destruct items and evaluates Drop as ownership removal. Admit
   # that erasure only after checking each actual compiler-generated body. This
   # does not implement general Drop or assume a first-party destructor contract.
-  def audit(functions, generated, translated, refs, first_party) do
+  def audit(functions, generated, translated, refs, first_party, allocator_layout \\ nil) do
     ctx = %{
       translated: translated,
       refs: refs,
       first_party: first_party,
+      allocator_layout: allocator_layout,
       functions: declarations(translated["fun_decls"]),
       types: declarations(translated["type_decls"]),
       traits: declarations(translated["trait_decls"]),
@@ -55,6 +63,8 @@ defmodule Lynx.Rust.DropModels do
     Enum.reduce_while(functions ++ generated, {:ok, %{erasures: %{}, sites: %{}}}, fn function,
                                                                                       {:ok,
                                                                                        result} ->
+      ctx = Map.put(ctx, :function, JSON.encode!(function["item_meta"]["name"]))
+
       try do
         {entries, ids} =
           if generated?(function) do
@@ -415,6 +425,12 @@ defmodule Lynx.Rust.DropModels do
 
     entries = block!(body, body_ctx, [id | seen])
 
+    payload_model =
+      if ctx[:allocator_layout],
+        do:
+          "scalar/Copy payloads or logical String deallocation; compiler-confirmed Global byte-vector and canonical Option/Result cleanup models",
+        else: "scalar/Copy payloads or logical String deallocation only"
+
     {id,
      put_entry(entries, id, %{
        definition_id: id,
@@ -426,7 +442,7 @@ defmodule Lynx.Rust.DropModels do
        implementation_verified: false,
        dependencies: Map.keys(entries),
        label:
-         "Compiler-generated Result drop checked at concrete payload types; scalar/Copy payloads or logical String deallocation only; native allocator and deallocation correctness unverified"
+         "Compiler-generated Result drop checked at concrete payload types; #{payload_model}; native allocator and deallocation correctness unverified"
      })}
   end
 
@@ -660,15 +676,54 @@ defmodule Lynx.Rust.DropModels do
           %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} ->
             type = ctx.types[id]
 
-            type != nil and type["item_meta"]["name"] == path(~w(alloc string String)) and
-              type["kind"] == "Opaque" and parameters?(type["generics"], 0, 0) and
-              Constants.empty_arguments?(args)
+            (type != nil and type["item_meta"]["name"] == path(~w(alloc string String)) and
+               type["kind"] == "Opaque" and parameters?(type["generics"], 0, 0) and
+               Constants.empty_arguments?(args)) or
+              nested_bytes?(
+                %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}},
+                ctx,
+                Map.get(ctx, :nested_depth, 16)
+              )
 
           _ ->
             false
         end
     end
   end
+
+  # This is a closed standard-library deallocation model, not an implementation
+  # proof of opaque generic payload glue. Every first-party vector type was
+  # separately checked before Charon erased its actual allocator parameter.
+  defp nested_bytes?(_, _, 0), do: false
+
+  defp nested_bytes?(type, %{allocator_layout: %{global_vectors: true}} = ctx, depth) do
+    if ctx[:function] not in ctx.allocator_layout.functions do
+      false
+    else
+      if Lynx.Rust.CollectionModels.scalar_vector_element(type, ctx.translated, ctx.refs) ==
+           {:ok, %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}} do
+        true
+      else
+        case expand(type, ctx) do
+          %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => %{"types" => types} = args}} ->
+            audit = %{translated: ctx.translated, references: ctx.refs}
+
+            args == arguments(types) and
+              ((length(types) == 1 and Lynx.Rust.LLBC.option_type?(id, audit)) or
+                 (length(types) == 2 and Lynx.Rust.LLBC.result_type?(id, audit))) and
+              Enum.all?(
+                types,
+                &nonobservable_payload?(&1, Map.put(ctx, :nested_depth, depth - 1))
+              )
+
+          _ ->
+            false
+        end
+      end
+    end
+  end
+
+  defp nested_bytes?(_, _, _), do: false
 
   @doc false
   def nondestructive_payload(type, translated, refs) do

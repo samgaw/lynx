@@ -290,5 +290,20 @@ mod reply_tests {
 /// # Panics
 /// Rejection preserves the emptied borrowed input.
 pub fn checked_bytes(input: &mut Vec<u8>, accepted: bool) -> Result<Option<Vec<u8>>, u8> {
-    ownership_base::take_bytes(input, accepted)
+    let reply = ownership_base::take_bytes(input, true);
+    ownership_base::require_bytes(accepted);
+    reply
+}
+
+#[cfg(test)]
+mod nested_byte_reply_tests {
+    #[test]
+    fn rejection_drops_an_already_produced_reply() {
+        let mut input = vec![0, 128, 255];
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::checked_bytes(&mut input, false)
+        }));
+        assert!(result.is_err());
+        assert!(input.is_empty());
+    }
 }

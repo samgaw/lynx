@@ -171,7 +171,8 @@ defmodule Lynx.Rust.LLBC do
 
         Lynx.Rust.CapturedUnwind.lower!(document, functions, refs,
           models: models,
-          runtime: Keyword.get(opts, :execution, :pure) == :runtime
+          runtime: Keyword.get(opts, :execution, :pure) == :runtime,
+          allocator_layout: opts[:allocator_layout]
         )
       else
         {document, []}
@@ -407,7 +408,14 @@ defmodule Lynx.Rust.LLBC do
         # executable calls checked above, so no structural erasure is requested.
         %{erasures: %{}, sites: %{}}
       else
-        case Lynx.Rust.DropModels.audit(functions, generated_drops, translated, refs, first_party) do
+        case Lynx.Rust.DropModels.audit(
+               functions,
+               generated_drops,
+               translated,
+               refs,
+               first_party,
+               opts[:allocator_layout]
+             ) do
           {:ok, drops} -> drops
           {:error, function, message} -> failure!(function, translated, message)
         end

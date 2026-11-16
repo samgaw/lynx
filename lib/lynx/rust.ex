@@ -589,8 +589,11 @@ defmodule Lynx.Rust do
   Captured unwind also supports canonical `Result`/`Option` wrappers around
   scalar/unit tuples, compiler-certified plain data and owned `Vec<u8>` values.
   Vector cleanup must pass the compiler-linked structural drop audit; allocator
-  and native deallocation effects remain unverified. References, other native
-  owners and custom destructor outputs are excluded from this admission.
+  and native deallocation effects remain unverified. Nested Result/Option cleanup
+  additionally matches first-party types against an allocator-preserving Charon
+  extraction, admitting only Global byte vectors under a closed standard-library
+  deallocation model. Custom or unknown vector allocators are rejected. References,
+  other native owners and custom destructor outputs are excluded from this admission.
   Ordinary returned errors remain values; captured panic uses a separate outer
   `Result.Err Unit`, with borrowed updates and actual guard cleanup retained.
   Result/Option and tuple traversal is limited to 16 levels; deeper shapes are
