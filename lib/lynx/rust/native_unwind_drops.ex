@@ -49,7 +49,7 @@ defmodule Lynx.Rust.NativeUnwindDrops do
     end
   end
 
-  def resolve(function, translated, refs) do
+  def resolve(function, translated, refs, opts \\ []) do
     with true <- function["item_meta"]["name"] == @name,
          %{"body" => "Opaque", "src" => "Normal"} <- function,
          source when not is_nil(source) <-
@@ -60,7 +60,12 @@ defmodule Lynx.Rust.NativeUnwindDrops do
          true <-
            function["signature"] == source["signature"] and
              function["generics"] == source["generics"],
-         %{} = model <- NativeDrops.resolve(source, translated, refs) do
+         %{} = model <-
+           if(Keyword.get(opts, :files, false),
+             do: Lynx.Rust.FileDrops.resolve(source, translated, refs)
+           ) || NativeDrops.resolve(source, translated, refs) do
+      file_boundary = if model[:native_file_drop], do: " " <> model.label, else: ""
+
       Map.merge(model, %{
         rust_name: "LynxCompilerUnwind::drop",
         lean:
@@ -72,7 +77,8 @@ defmodule Lynx.Rust.NativeUnwindDrops do
           ),
         native_unwind_dispose: true,
         label:
-          "Compiler unwind adapter for validated std MutexGuard/Mutex, RwLock guard and Rustler ResourceArc destructor dictionaries; commits the latest borrowed guard payload, unlocks and poisons on panic for mutex or writer guards; read guards release only their lease without poisoning; disposes an unlocked mutex, or releases one resource owner while preserving aliases and VM pins; owning payload cleanup requires its actual extracted nonpanicking destructor and retains explicit resource finalizer timing; nonpanicking entry and guard acquisition, including incoming guards, and no nested cleanup calls required; std, Rustler, physical thread context, allocation and FFI correctness unverified"
+          "Compiler unwind adapter for validated std MutexGuard/Mutex, RwLock guard and Rustler ResourceArc destructor dictionaries; commits the latest borrowed guard payload, unlocks and poisons on panic for mutex or writer guards; read guards release only their lease without poisoning; disposes an unlocked mutex, or releases one resource owner while preserving aliases and VM pins; owning payload cleanup requires its actual extracted nonpanicking destructor and retains explicit resource finalizer timing; configured regular-file cleanup retains the validated close model, consumes File and admitted OS-error capabilities, suppresses close errors without rollback or an implicit sync, and preserves permitted persistence choices; nonpanicking entry and guard acquisition, including incoming guards, and no nested cleanup calls required; std, Rustler, physical thread context, allocation, descriptor/OS correspondence and FFI correctness unverified" <>
+            file_boundary
       })
     else
       _ -> nil

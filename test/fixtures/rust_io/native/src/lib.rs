@@ -154,3 +154,26 @@ pub mod shared_log {
         }
     }
 }
+
+/// Writes one prefix before applying request policy.
+///
+/// # Errors
+/// Returns two for opening failure and one for a write failure.
+///
+/// # Panics
+/// Rejection panics after the I/O attempt and closes the owned file.
+#[cfg(feature = "captured-write")]
+#[rustler::nif(name = "checked_write", schedule = "DirtyIo")]
+fn checked_write_request(input: rustler::Binary<'_>, accepted: bool) -> Result<u64, u8> {
+    let file = match io_protocol::open_readwrite("journal") {
+        Ok(file) => file,
+        Err(error) => {
+            drop(error);
+            return Err(2);
+        }
+    };
+    match io_protocol::checked_write(file, input.as_slice(), accepted) {
+        Ok(count) => Ok(count as u64),
+        Err(error) => Err(error),
+    }
+}

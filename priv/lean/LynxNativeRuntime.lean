@@ -3268,6 +3268,12 @@ instance : NativeDrop NativeIoError where
 instance : NativeOwnedDrop NativeIoError where
   drop := NativeIoError.dispose
 
+instance : NativeUnwindDrop NativeIoError where
+  drop := NativeIoError.dispose
+
+instance : NativeResourceUnwindDrop NativeIoError where
+  drop := NativeIoError.dispose
+
 namespace NativeFile
 
 @[expose] def asRefStr (path : Str) : RustM Str := RustM.ok path
@@ -4124,6 +4130,12 @@ instance : NativeDrop NativeFile where
 instance : NativeOwnedDrop NativeFile where
   drop := NativeFile.close
 
+instance : NativeUnwindDrop NativeFile where
+  drop := NativeFile.close
+
+instance : NativeResourceUnwindDrop NativeFile where
+  drop := NativeFile.close
+
 namespace NativeMutex
 
 /-- Consuming an unlocked mutex that owns a File runs file cleanup before
@@ -4177,6 +4189,9 @@ theorem disposeFile_next {α : Type} (mutex : NativeMutex NativeFile)
 end NativeMutex
 
 instance (priority := 1100) : NativeOwnedDrop (NativeMutex NativeFile) where
+  drop := NativeMutex.disposeFile
+
+instance (priority := 1100) : NativeResourceUnwindDrop (NativeMutex NativeFile) where
   drop := NativeMutex.disposeFile
 
 end Lynx

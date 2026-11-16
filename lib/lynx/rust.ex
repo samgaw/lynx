@@ -314,8 +314,15 @@ defmodule Lynx.Rust do
   Physical close/descriptor reclamation, descriptor cloning, physical durability,
   standalone unlink, unrestricted concurrent I/O and general crash injection
   remain unsupported. Compiler-checked resource payloads may own File and
-  Mutex<File> fields with `owned_drops: true`; panic cleanup of live files remains
-  rejected. This option verifies first-party protocols against the explicit model,
+  Mutex<File> fields with `owned_drops: true`. Captured unwind can close validated
+  File and admitted OS-error capabilities, and dispose owned Mutex<File> values,
+  retaining prior writes, permitted persistence choices and close-error suppression.
+  It does not introduce synchronization or rollback. Missing outcomes and
+  unadmitted/custom error payloads remain verification exhaustion. Native close,
+  error payload reclamation and std/OS/FFI correspondence remain explicit models.
+  Typed integer-to-integer casts in captured bodies retain their actual Rust
+  widths and truncation; pointer and floating-point casts remain unsupported.
+  This option verifies first-party protocols against the explicit model,
   not the operating system.
 
   Standard Result `?` propagation reuses Aeneas's Try/FromResidual primitives.

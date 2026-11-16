@@ -41,7 +41,9 @@ defmodule Lynx.Rust.CallModels do
                 Lynx.Rust.NativeDrops.resolve(function, translated, refs) ||
                 if(:captured_unwind_drops in enabled,
                   do:
-                    Lynx.Rust.NativeUnwindDrops.resolve(function, translated, refs) ||
+                    Lynx.Rust.NativeUnwindDrops.resolve(function, translated, refs,
+                      files: :native_files in enabled
+                    ) ||
                       Lynx.Rust.NativePanicCapture.resolve(function, translated, refs)
                 )
           ) ||

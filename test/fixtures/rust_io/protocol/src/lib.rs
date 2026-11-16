@@ -475,3 +475,41 @@ pub fn discard_error_ack(error: io::Error) -> bool {
     io_core::discard_io_error(error);
     true
 }
+
+/// Write once before applying request policy and consuming the file.
+///
+/// # Errors
+/// Returns one for an operating-system write error.
+///
+/// # Panics
+/// Rejection panics after the write; scope destruction closes the file.
+pub fn checked_write(mut file: File, bytes: &[u8], accepted: bool) -> Result<usize, u8> {
+    let result = match io_core::write_once(&mut file, bytes) {
+        Ok(written) => Ok(written),
+        Err(error) => {
+            drop(error);
+            Err(1)
+        }
+    };
+    io_core::require_write(accepted);
+    result
+}
+
+/// Applies request policy while owning an admitted operating-system error.
+///
+/// # Panics
+/// Rejection destroys the owned error while unwinding.
+pub fn checked_error(error: io::Error, accepted: bool) {
+    io_core::require_write(accepted);
+    drop(error);
+}
+
+/// Applies request policy while owning a file through a mutex.
+///
+/// # Panics
+/// Rejection closes the file and disposes the mutex while unwinding.
+pub fn checked_file_mutex(file: File, accepted: bool) {
+    let mutex = std::sync::Mutex::new(file);
+    io_core::require_write(accepted);
+    drop(mutex);
+}

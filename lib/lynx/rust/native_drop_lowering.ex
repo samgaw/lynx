@@ -80,7 +80,7 @@ defmodule Lynx.Rust.NativeDropLowering do
         walk_children(statement, ctx, state, cleanup)
 
       {:ok, site} ->
-        if cleanup and site.native_kind not in [:guard, :mutex, :resource],
+        if cleanup and site.native_kind not in [:guard, :mutex, :resource, :file, :io_error],
           do:
             LLBC.failure!(
               ctx.function,
@@ -210,8 +210,7 @@ defmodule Lynx.Rust.NativeDropLowering do
       (get_in(ctx.translated, ["options", "owned_drops"]) == true and
          case site.native_kind do
            :mutex ->
-             Lynx.Rust.NativeOwnedDrops.vector_cleanup_for(site.payload, ctx.translated, ctx.refs) !=
-               nil
+             NativeDrops.supported_mutex_payload?(site.self, ctx.translated, ctx.refs)
 
            :resource ->
              Lynx.Rust.NativeOwnedDrops.function_for(site.payload, ctx.translated, ctx.refs) !=

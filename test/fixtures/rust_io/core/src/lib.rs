@@ -121,3 +121,11 @@ pub fn discard_io_error(error: io::Error) {
 /// # Panics
 /// A custom error payload's destructor may panic.
 pub fn discard_io_error_implicit(_error: io::Error) {}
+
+/// Reject a request after performing its I/O operation.
+///
+/// # Panics
+/// Panics when the request is rejected.
+pub fn require_write(accepted: bool) {
+    assert!(accepted);
+}
