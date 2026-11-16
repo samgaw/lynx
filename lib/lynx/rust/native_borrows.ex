@@ -107,12 +107,19 @@ defmodule Lynx.Rust.NativeBorrows do
       {:error, function, message} -> LLBC.failure!(function, translated, message)
     end
 
+    context = %{translated: translated, references: refs}
+    independent = nonpanicking_calls(functions ++ helpers, models, context)
+    contracts = Enum.map(Map.get(certificates, :contracts, []), & &1.id)
+
     safe =
-      nonpanicking_calls(functions ++ helpers, models, %{
-        translated: translated,
-        references: refs,
-        nonpanicking: Enum.map(Map.get(certificates, :contracts, []), & &1.id)
-      })
+      if contracts == [],
+        do: independent,
+        else:
+          nonpanicking_calls(
+            functions ++ helpers,
+            models,
+            Map.put(context, :nonpanicking, contracts)
+          )
 
     owners =
       for type <- translated["type_decls"],
@@ -140,8 +147,15 @@ defmodule Lynx.Rust.NativeBorrows do
               false
           end
 
-        if owned and function["def_id"] not in Map.get(certificates, :protected, MapSet.new()) and
-             Enum.any?(functions, &(&1["def_id"] == function["def_id"])) do
+        if owned and Enum.any?(functions, &(&1["def_id"] == function["def_id"])) do
+          # A pending certificate must never justify its own implementation or
+          # dependencies. Independently checked bodies and validated primitives
+          # may still discharge unreachable cleanup inside that protected scope.
+          safe =
+            if function["def_id"] in Map.get(certificates, :protected, MapSet.new()),
+              do: independent,
+              else: safe
+
           models = Map.put(models, :drop_context, {function, translated, refs})
           {body, records} = prune(function["body"], safe, function["def_id"], models, records)
           {Map.put(function, "body", body), records}

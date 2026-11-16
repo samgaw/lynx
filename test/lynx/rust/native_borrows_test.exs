@@ -352,4 +352,78 @@ defmodule Lynx.Rust.NativeBorrowsTest do
       assert MapSet.member?(result, 1) == expected
     end
   end
+
+  test "protected certificates use only independently proved cleanup reductions" do
+    args = fn types ->
+      %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
+    end
+
+    scalar = %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}
+    owner = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args.([scalar])}}
+
+    mutex = %{
+      "def_id" => 1,
+      "kind" => "Opaque",
+      "generics" => %{
+        "regions" => [],
+        "types" => [%{"index" => 0}],
+        "const_generics" => [],
+        "trait_clauses" => [],
+        "trait_type_constraints" => [],
+        "outlives" => []
+      },
+      "item_meta" => %{
+        "name" => Enum.map(~w(std sync poison mutex Mutex), &%{"Ident" => [&1, 0]})
+      }
+    }
+
+    call = fn id ->
+      %{
+        "id" => id + 10,
+        "kind" => %{
+          "Call" => %{
+            "call" => %{"func" => %{"Regular" => %{"kind" => %{"Fun" => id}}}},
+            "on_unwind" => %{"id" => id + 20, "statements" => [%{"kind" => "Return"}]}
+          }
+        }
+      }
+    end
+
+    function = fn id, body ->
+      %{
+        "def_id" => id,
+        "item_meta" => %{"name" => [%{"Ident" => ["sample", 0]}, %{"Ident" => ["f#{id}", 0]}]},
+        "body" => %{
+          "Structured" => %{
+            "locals" => %{"locals" => [%{"index" => 1, "ty" => owner}]},
+            "body" => %{"statements" => body}
+          }
+        }
+      }
+    end
+
+    caller = function.(1, [call.(2), call.(3), %{"kind" => "Return"}])
+    safe = function.(2, [%{"kind" => "Return"}])
+    pending = function.(3, [%{"kind" => %{"Panic" => %{"on_unwind" => %{"statements" => []}}}}])
+
+    document = %{
+      "translated" => %{"type_decls" => [mutex], "fun_decls" => [caller, safe, pending]}
+    }
+
+    {changed, records} =
+      NativeBorrows.prune_owned_calls!(document, ["sample"], [], %{
+        contracts: [%{id: 3}],
+        protected: MapSet.new([1, 3])
+      })
+
+    assert [
+             %{"kind" => %{"Call" => %{"on_unwind" => %{"statements" => []}}}},
+             %{
+               "kind" => %{"Call" => %{"on_unwind" => %{"statements" => [%{"kind" => "Return"}]}}}
+             },
+             %{"kind" => "Return"}
+           ] = hd(changed["translated"]["fun_decls"])["body"]["Structured"]["body"]["statements"]
+
+    assert [%{caller: 1, function: 2, kind: :nonpanicking_borrow_call}] = records
+  end
 end
