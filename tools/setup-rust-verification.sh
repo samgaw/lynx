@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install pinned extractors; --runtime opts into the patched native runtime stack.
+# Install pinned extractors; runtime profiles opt into the patched native stack.
 set -eu
 
 verification_profile=pure
@@ -9,10 +9,11 @@ case "${1-}" in
   --captured) verification_profile=captured; shift ;;
   --recover-joins) verification_profile=join-recovery; shift ;;
   --runtime) verification_profile=runtime; shift ;;
-  -*) echo "usage: $0 [--pure|--unpatched|--captured|--recover-joins|--runtime] NEW_INSTALL_DIRECTORY" >&2; exit 1 ;;
+  --runtime-captured) verification_profile=runtime-captured; shift ;;
+  -*) echo "usage: $0 [--pure|--unpatched|--captured|--recover-joins|--runtime|--runtime-captured] NEW_INSTALL_DIRECTORY" >&2; exit 1 ;;
 esac
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 [--pure|--unpatched|--captured|--recover-joins|--runtime] NEW_INSTALL_DIRECTORY" >&2
+  echo "usage: $0 [--pure|--unpatched|--captured|--recover-joins|--runtime|--runtime-captured] NEW_INSTALL_DIRECTORY" >&2
   exit 1
 fi
 if [ "$verification_profile" != pure ] && [ "$verification_profile" != unpatched ] &&
@@ -41,7 +42,7 @@ case "$(uname -s):$(uname -m)" in
   *) echo "no pinned Aeneas binary for this platform" >&2; exit 1 ;;
 esac
 release_tag=nightly-2026.11.04-2b9e3ea
-if [ "$verification_profile" != runtime ]; then
+if [ "$verification_profile" != runtime ] && [ "$verification_profile" != runtime-captured ]; then
   release_tag=build-2b9e3ea
   checksum=$pure_checksum
 fi
@@ -76,7 +77,7 @@ if [ "$verification_profile" = captured ]; then
 else
   git -C "$source_dir" apply "$script_dir/patches/charon-nested-proof-roots.patch"
 fi
-if [ "$verification_profile" = runtime ]; then
+if [ "$verification_profile" = runtime ] || [ "$verification_profile" = runtime-captured ]; then
   git -C "$source_dir" apply "$script_dir/patches/charon-needs-drop.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-immediate-futures.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-pin-borrow-transfer.patch"
@@ -87,6 +88,10 @@ if [ "$verification_profile" = runtime ]; then
   git -C "$source_dir" apply "$script_dir/patches/charon-safe-pin-new.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-pin-macro.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-pin-as-mut.patch"
+fi
+if [ "$verification_profile" = runtime-captured ]; then
+  git -C "$source_dir" apply "$script_dir/patches/charon-assertion-cleanup.patch"
+  cp "$script_dir/tests/captured_owned.rs" "$source_dir/charon/tests/captured_owned.rs"
 fi
 cd "$source_dir/charon"
 # Use one explicit location for builds, tests and the installed artifacts.
@@ -106,7 +111,7 @@ else
   IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
     --no-default-features --features rustc --test ui -- nested-function-proof-root
 fi
-if [ "$verification_profile" = runtime ]; then
+if [ "$verification_profile" = runtime ] || [ "$verification_profile" = runtime-captured ]; then
   IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
     --no-default-features --features rustc --test crate_data -- needs_drop
   IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
@@ -123,6 +128,12 @@ if [ "$verification_profile" = runtime ]; then
     --no-default-features --features rustc --test crate_data -- pin_macro_links_actual_coroutine_poll_and_structural_drop
   IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
     --no-default-features --features rustc --test crate_data -- pin_as_mut_reborrows_only_standard_mutable_references
+fi
+if [ "$verification_profile" = runtime-captured ]; then
+  IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+    --no-default-features --features rustc --test crate_data -- reconstructed_assertions_preserve_observable_unwind_cleanup
+  IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+    --no-default-features --features rustc --test captured_owned
 fi
 cp "$verification_target_dir/release/charon" "$verification_target_dir/release/charon-driver" "$install_dir/"
 if [ "$verification_profile" = captured ]; then
@@ -189,11 +200,19 @@ if [ "$verification_profile" = join-recovery ]; then
   echo "Installed join-recovery toolchain with the unmodified Lean library. Set LYNX_AENEAS_DIR to $install_dir"
   exit 0
 fi
-printf '%s\n' 'profile=runtime' 'aeneas_branching=duplicate-v1' "aeneas=$aeneas_version" \
-  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1+suspending-futures-v1+cancelling-futures-v1+owned-drops-v1+owned-captures-v1+safe-pin-new-v1+pin-macro-v1+pin-as-mut-v1' \
+charon_cleanup_suffix=
+if [ "$verification_profile" = runtime-captured ]; then
+  charon_cleanup_suffix=+cleanup-edges-v1
+fi
+printf '%s\n' "profile=$verification_profile" 'aeneas_branching=duplicate-v1' "aeneas=$aeneas_version" \
+  'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1+suspending-futures-v1+cancelling-futures-v1+owned-drops-v1+owned-captures-v1+safe-pin-new-v1+pin-macro-v1+pin-as-mut-v1'"$charon_cleanup_suffix" \
   'aeneas_lean=tuple-back-projections-v1' \
   'aeneas_loops=native-loops-v1' \
   'aeneas_effects=effectful-calls-v1' \
   'aeneas_discriminants=partial-discriminants-v1' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
+if [ "$verification_profile" = runtime-captured ]; then
+  printf '%s\n' 'charon_cleanup_edges=preserved-v1' >> "$install_dir/lynx-toolchain"
+  echo "Compiler cleanup and owning-drop extraction are qualified; Lynx still rejects captured owned_drops."
+fi
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"

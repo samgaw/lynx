@@ -28,16 +28,11 @@ index 1402250e59e6..40ea2bb28887 100644
 
          for block in b.body.iter_mut() {
              if let TerminatorKind::Switch { data, branches } = &block.terminator.kind
-diff --git i/charon/tests/crate_data.rs w/charon/tests/crate_data.rs
-index 9c9115671cd9..adceefa71c7d 100644
---- i/charon/tests/crate_data.rs
-+++ w/charon/tests/crate_data.rs
-@@ -1242,3 +1242,44 @@ fn reuses_default_only_for_default_copies() -> anyhow::Result<()> {
-     assert_eq!(seen, 5, "3 impl methods and 2 impl consts");
-     Ok(())
- }
-+
-+#[test]
+diff --git a/charon/tests/crate_data.rs b/charon/tests/crate_data.rs
+--- a/charon/tests/crate_data.rs
++++ b/charon/tests/crate_data.rs
+@@ -1189,2 +1189,43 @@
+ #[test]
 +fn reconstructed_assertions_preserve_observable_unwind_cleanup() -> anyhow::Result<()> {
 +    let crate_data = translate(
 +        r#"//@ charon-args=--preset=aeneas --precise-drops --desugar-drops --start-from=test_crate::run
@@ -77,3 +72,6 @@ index 9c9115671cd9..adceefa71c7d 100644
 +    assert_eq!(panics, 1, "expected the original guarded panic");
 +    Ok(())
 +}
++
++#[test]
+ fn reuses_default_only_for_default_copies() -> anyhow::Result<()> {
