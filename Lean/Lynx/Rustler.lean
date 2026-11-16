@@ -31,6 +31,20 @@ theorem withResourceTypes_readyPrefix {computation residual : Result α}
   unfold withResourceTypes
   exact .nativeModify _ _ () _ _ _ _ rfl trace
 
+/-- Successful registration cannot fabricate a return or skip the computation.
+Its completed prefix starts in the actual deduplicated loader registry. -/
+theorem withResourceTypes_returns {computation : Result α} {before after : Environment}
+    {value : α} (types : List String)
+    (trace : Result.ReadyPrefix (withResourceTypes types computation) before (.ok value) after) :
+    Result.ReadyPrefix computation
+      {before with nativeResourceTypes := (before.nativeResourceTypes ++ types).eraseDups}
+      (.ok value) after := by
+  unfold withResourceTypes at trace
+  cases trace with
+  | nativeModify _ _ reply _ middle _ _ ready rest =>
+    obtain ⟨_,rfl⟩ := Prod.mk.inj ready
+    exact rest
+
 theorem registered_resource_type (types : List String) (env : Environment)
     (name : String) (member : name ∈ types) :
     name ∈ (env.nativeResourceTypes ++ types).eraseDups := by

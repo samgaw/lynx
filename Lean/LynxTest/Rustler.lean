@@ -23,6 +23,15 @@ theorem registrationPrefix (names : List String) (env : Lynx.Environment) :
   apply Lynx.Rustler.withResourceTypes_readyPrefix
   exact .nativeGet _ _ _ _ (.refl _ _)
 
+/-- Registering capabilities cannot turn verification exhaustion into a value. -/
+theorem registrationCannotFabricateValue (names : List String) (env after : Lynx.Environment)
+    (value : Lynx.Term)
+    (trace : Lynx.Result.ReadyPrefix
+      (Lynx.Rustler.withResourceTypes names (Lynx.Result.error .exhausted)) env (.ok value) after) :
+    False := by
+  have impossible := Lynx.Rustler.withResourceTypes_returns names trace
+  cases impossible
+
 /-- Loader capabilities do not allocate or modify resource cells. -/
 theorem registrationKeepsHeap (names : List String) (env : Lynx.Environment) :
     Lynx.Rustler.withResourceTypes names

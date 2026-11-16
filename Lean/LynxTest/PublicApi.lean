@@ -80,6 +80,16 @@ example (types : List String) (env : Lynx.Environment) :
       {env with nativeResourceTypes := (env.nativeResourceTypes ++ types).eraseDups} :=
   Lynx.Rustler.withResourceTypes_readyPrefix types (.refl _ _)
 
+-- Completed registration retains the actual computation and updated registry.
+example (types : List String) (computation : Lynx.Result α) (before after : Lynx.Environment)
+    (value : α)
+    (trace : Lynx.Result.ReadyPrefix (Lynx.Rustler.withResourceTypes types computation)
+      before (.ok value) after) :
+    Lynx.Result.ReadyPrefix computation
+      {before with nativeResourceTypes := (before.nativeResourceTypes ++ types).eraseDups}
+      (.ok value) after :=
+  Lynx.Rustler.withResourceTypes_returns types trace
+
 -- Native prefix checking exposes its soundness through the public API.
 example (accept : Lynx.Environment → Bool) (computation : Lynx.Result α)
     (env : Lynx.Environment) (fuel : Nat)
