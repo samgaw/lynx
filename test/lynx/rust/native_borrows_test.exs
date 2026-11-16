@@ -315,4 +315,41 @@ defmodule Lynx.Rust.NativeBorrowsTest do
 
     refute MapSet.member?(NativeBorrows.nonpanicking_calls([caller, lowered], %{}), 2)
   end
+
+  test "invalid compiler cleanup states remain cutoffs without admitting ordinary UB or panics" do
+    for {method, cancelling, kind, expected} <- [
+          {"drop_owned", true, "UndefinedBehavior", true},
+          {"drop_owned", false, "UndefinedBehavior", false},
+          {"poll", true, "UndefinedBehavior", false},
+          {"ordinary", true, "UndefinedBehavior", false},
+          {"drop_owned", true, %{"Abort" => "Panic"}, false}
+        ] do
+      function = %{
+        "def_id" => 1,
+        "item_meta" => %{
+          "name" => [
+            %{"Ident" => ["sample", 0]},
+            %{"Ident" => ["writer", 0]},
+            %{"Builtin" => ["Closure", 0]},
+            %{"Ident" => [method, 0]}
+          ]
+        },
+        "body" => %{"Structured" => %{"body" => %{"statements" => [%{"kind" => kind}]}}}
+      }
+
+      translated = %{
+        "options" => %{"cancelling_futures" => cancelling},
+        "fun_decls" => [function],
+        "type_decls" => []
+      }
+
+      result =
+        NativeBorrows.nonpanicking_calls([function], %{}, %{
+          translated: translated,
+          references: %{}
+        })
+
+      assert MapSet.member?(result, 1) == expected
+    end
+  end
 end

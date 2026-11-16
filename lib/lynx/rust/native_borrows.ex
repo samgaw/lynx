@@ -338,6 +338,7 @@ defmodule Lynx.Rust.NativeBorrows do
             context =
               functions
               |> Map.put(:loop_depth, 0)
+              |> Map.put(:cutoff_undefined, compiler_drop_cutoff?(function, functions[:context]))
               |> Map.put(
                 :drop_safe,
                 MapSet.member?(functions[:erased_drop_bodies] || MapSet.new(), id)
@@ -354,6 +355,21 @@ defmodule Lynx.Rust.NativeBorrows do
     end
   end
 
+  # Cancelling-coroutine extraction retains invalid frame states as undef,
+  # which NativeM.fail maps to verification exhaustion, never a Rust panic or
+  # successful return. Keep those branches in the generated implementation.
+  # Only compiler-created consuming frame cleanup gets this classification;
+  # ordinary functions and poll's completed-state panic remain unsafe.
+  defp compiler_drop_cutoff?(function, %{translated: translated}) do
+    name = function["item_meta"]["name"] || []
+
+    get_in(translated, ["options", "cancelling_futures"]) == true and
+      Enum.at(name, -2) == %{"Builtin" => ["Closure", 0]} and
+      List.last(name) == %{"Ident" => ["drop_owned", 0]}
+  end
+
+  defp compiler_drop_cutoff?(_, _), do: false
+
   defp block?(block, functions, models, seen),
     do: block_flow(block, functions, models, seen) != :unsafe
 
@@ -362,6 +378,10 @@ defmodule Lynx.Rust.NativeBorrows do
 
   defp block_flow(_, _, _, _), do: :unsafe
   defp statements_flow([], _, _, _), do: :continue
+
+  defp statements_flow([%{"kind" => "UndefinedBehavior"} | _], functions, _, _),
+    do: if(functions[:cutoff_undefined] == true, do: :return, else: :unsafe)
+
   defp statements_flow([%{"kind" => "Return"} | _], _, _, _), do: :return
 
   # Structured branches can return from the function. Charon may retain an
