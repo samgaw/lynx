@@ -586,6 +586,8 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.IoErrorModels.install!(audit, translation, output, module) ++
         Lynx.Rust.CollectionModels.install!(audit, translation, output, module)
 
+    Lynx.Rust.ExactRead.install!(audit, translation, output)
+
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
 
     encoder_disposals = Lynx.Rustler.EncoderDisposal.install!(audit, translation, output)
@@ -781,7 +783,6 @@ defmodule Lynx.Rust.Extraction do
 
     args =
       ["rustc", "--sysroot", if(context[:sysroot], do: context.sysroot.path, else: "default")] ++
-        if(context[:sysroot], do: ["--translate-all-methods"], else: []) ++
         Lynx.Rust.Futures.arguments!(Keyword.get(opts, :futures, :reject), tools) ++
         Lynx.Rust.NativeOwnedDrops.arguments!(Keyword.get(opts, :owned_drops, false), tools) ++
         Lynx.Rust.Mir.arguments!(opts) ++
@@ -823,6 +824,7 @@ defmodule Lynx.Rust.Extraction do
         includes ++
         Enum.flat_map(Lynx.Rustler.EncoderModels.metadata_includes(models), &["--include", &1]) ++
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(context), &["--include", &1]) ++
+        if(context[:sysroot], do: ["--exclude", "alloc::io::read::Read::read"], else: []) ++
         Enum.flat_map(models, &["--opaque", &1.rust]) ++
         Enum.flat_map(opaque, &["--opaque", &1]) ++
         Enum.flat_map(Keyword.get(opts, :excluded_functions, []), &["--exclude", &1]) ++

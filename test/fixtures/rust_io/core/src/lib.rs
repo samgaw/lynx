@@ -105,8 +105,9 @@ pub fn rename_file(from: &str, to: &str) -> io::Result<()> {
 
 /// Consume an I/O error after a caller has handled its failure.
 ///
-/// Verification admits only registered callback-free operating-system errors.
-/// Application-created custom error payloads may execute arbitrary destruction.
+/// Verification admits registered callback-free operating-system errors and
+/// checked allocation-free standard errors. Custom error payloads may execute
+/// arbitrary destruction and require separate implementation support.
 ///
 /// # Panics
 /// A custom error payload's destructor may panic.
@@ -176,4 +177,22 @@ pub fn error_kind(error: &io::Error) -> io::ErrorKind {
 /// Recognizes the standard retryable interruption classification.
 pub fn is_retryable(kind: io::ErrorKind) -> bool {
     kind == io::ErrorKind::Interrupted
+}
+
+/// Fills the caller's buffer through the actual standard exact-read method.
+///
+/// # Errors
+/// Returns the standard error, preserving any earlier reads and buffer changes.
+pub fn fill_exact(file: &mut File, buffer: &mut [u8]) -> io::Result<()> {
+    file.read_exact(buffer)
+}
+
+/// Reads a little-endian protocol word through the workspace reader.
+///
+/// # Errors
+/// Returns the standard exact-read error without replacing its kind.
+pub fn exact_word(file: &mut File) -> io::Result<u16> {
+    let mut bytes = [0; 2];
+    fill_exact(file, &mut bytes)?;
+    Ok(u16::from_le_bytes(bytes))
 }

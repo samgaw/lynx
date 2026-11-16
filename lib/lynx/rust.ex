@@ -57,8 +57,9 @@ defmodule Lynx.Rust do
   promotions retain the actual initializer and standard derived comparison bodies,
   including ErrorKind classification when using full-MIR extraction.
   Runtime regular-file verification also admits `Error::kind` for registered OS
-  errors, using the classification metadata described below. `Read::read_exact`
-  still requires additional error representation support.
+  errors, using the classification metadata described below. Full-MIR runtime
+  extraction also retains the actual standard `Read::read_exact` loop for File
+  readers, including partial buffers, Interrupted retry and static UnexpectedEof.
   Array lengths must be literal usize values; mutable, nested and generic constant
   payloads remain rejected. Array views and endian conversions retain their
   existing reported standard-library models.
@@ -267,7 +268,24 @@ defmodule Lynx.Rust do
   still requires the live capability. Metadata records a host admission, not a
   native allocation or pointer, and does not derive the kind from an error identity.
   Its correspondence to std and the OS is an explicitly reported external model.
-  Static/simple/custom errors, `Error::new` and `Read::read_exact` are not covered.
+  Full-MIR extraction retains the actual standard `Read::read_exact` implementation
+  and EOF initializer. The model for `Error::from_static_message` preserves the
+  extracted kind and static message bytes in a disjoint allocation-free value;
+  classification and disposal do not borrow or consume an OS error capability.
+  `Error::is_interrupted` uses the admitted classification, including the explicit
+  OS assumption that the standard callback agrees with the Interrupted kind.
+  General simple/custom constructors and `Error::new` remain unsupported.
+  Only the checked concrete File reader dictionary is admitted; other readers
+  require implementation support. Byte-array repetition admits only u8 and the
+  exact standard Clone<u8> dictionary. Mutable slice reconstruction retains the
+  upstream checked range semantics. The existing loop budget remains a verification
+  cutoff, not a Rust execution limit or termination assumption.
+  A caller owning a File across this loop can use the existing `:nonpanicking`
+  certificate mechanism. The certificate must prove `NativeM.NoPanic` for its actual
+  extracted implementation on every input, including read reply bounds and error
+  cleanup. Original dependencies and constant initializers remain protected from
+  circular certificate use; no pending certificate counts as verified without its
+  complete checked proof. See the exact-read Rust and Rustler fixture tests.
   Read counts select a visible prefix; unread buffer bytes survive. Read errors
   preserve the buffer and offset in this bounded external model; these are explicit
   std/OS correspondence assumptions rather than verified native guarantees.

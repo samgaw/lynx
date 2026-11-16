@@ -102,7 +102,7 @@ defmodule Lynx.Rust.NativeBorrows do
 
     models = CallModels.resolve(external, translated, refs, enabled_models, :runtime)
 
-    case Lynx.Rust.NativeDrops.audit(functions, models, translated, refs) do
+    case Lynx.Rust.NativeDrops.audit(functions ++ helpers, models, translated, refs) do
       :ok -> :ok
       {:error, function, message} -> LLBC.failure!(function, translated, message)
     end
@@ -128,7 +128,9 @@ defmodule Lynx.Rust.NativeBorrows do
                Lynx.Rust.RwLockModels.type?(type) or Lynx.Rust.AtomicModels.type?(type) or
                Lynx.Rust.ResourceModels.type?(type) or
                (Lynx.Rust.FileModels.file_type?(translated, type["def_id"]) and
-                  Enum.any?(models, fn {_, model} -> model[:native_file_drop] == true end))),
+                  Enum.any?(models, fn {_, model} -> model[:native_file_drop] == true end)) or
+               (Lynx.Rust.FileModels.error_type?(translated, type["def_id"]) and
+                  Enum.any?(models, fn {_, model} -> model[:native_io_error_drop] == true end))),
           do: type["def_id"]
 
     {all, records} =
@@ -137,17 +139,14 @@ defmodule Lynx.Rust.NativeBorrows do
           case function["body"] do
             %{"Structured" => %{"locals" => %{"locals" => locals}}} ->
               Enum.any?(locals, fn local ->
-                case CallModels.expand(local["ty"], refs) do
-                  %{"Adt" => %{"id" => id}} -> id in owners
-                  _ -> false
-                end
+                native_owner_annotation?(CallModels.expand(local["ty"], refs), owners)
               end)
 
             _ ->
               false
           end
 
-        if owned and Enum.any?(functions, &(&1["def_id"] == function["def_id"])) do
+        if owned and Enum.any?(functions ++ helpers, &(&1["def_id"] == function["def_id"])) do
           # A pending certificate must never justify its own implementation or
           # dependencies. Independently checked bodies and validated primitives
           # may still discharge unreachable cleanup inside that protected scope.
@@ -173,6 +172,14 @@ defmodule Lynx.Rust.NativeBorrows do
        end)
      ), Enum.reverse(records)}
   end
+
+  # A Result/Option can hold the owned error directly in a variant projection.
+  # This only selects where independently proved nonpanic calls may be pruned;
+  # it does not infer ownership or authorize any destructor erasure.
+  defp native_owner_annotation?(%{"Adt" => %{"id" => id, "generics" => args}}, owners),
+    do: id in owners or Enum.any?(args["types"], &native_owner_annotation?(&1, owners))
+
+  defp native_owner_annotation?(_, _), do: false
 
   defp prune(
          %{"kind" => %{"Call" => %{"call" => call, "on_unwind" => cleanup}}} = statement,

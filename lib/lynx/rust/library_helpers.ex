@@ -12,15 +12,16 @@ defmodule Lynx.Rust.LibraryHelpers do
       "rustler::term::_::decode"
     ] ++
       if(context[:sysroot],
-        do: [
-          "core::slice::_::starts_with",
-          "core::slice::_::strip_prefix",
-          "core::slice::_::strip_suffix",
-          "core::slice::_::as_slice",
-          "core::slice::SlicePattern",
-          "core::io::error::ErrorKind",
-          "core::io::error::_::eq"
-        ],
+        do:
+          [
+            "core::slice::_::starts_with",
+            "core::slice::_::strip_prefix",
+            "core::slice::_::strip_suffix",
+            "core::slice::_::as_slice",
+            "core::slice::SlicePattern",
+            "core::io::error::ErrorKind",
+            "core::io::error::_::eq"
+          ] ++ Lynx.Rust.ExactRead.includes(),
         else: []
       )
   end
@@ -354,7 +355,7 @@ defmodule Lynx.Rust.LibraryHelpers do
       )
   end
 
-  def selected?(_, _), do: false
+  def selected?(function, translated), do: Lynx.Rust.ExactRead.selected?(function, translated)
 
   defp pin_storage?(%{"kind" => %{"StorageLive" => id}}) when id in [0, 1], do: true
   defp pin_storage?(%{"kind" => %{"StorageDead" => id}}) when id in [0, 1], do: true

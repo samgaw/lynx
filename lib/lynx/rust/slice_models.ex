@@ -210,6 +210,7 @@ defmodule Lynx.Rust.SliceModels do
       cond do
         option_reference?(output, slice, translated, refs) -> {"get", 0}
         output == %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Shared"]} -> {"index", 4}
+        output == %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Mut"]} -> {"index_mut", 5}
         true -> nil
       end
 
@@ -223,8 +224,13 @@ defmodule Lynx.Rust.SliceModels do
 
           # The pinned upstream shared RangeFrom.index model returns undef on
           # invalid bounds instead of Rust's panic. Keep that operation closed.
-          if (method == "get" or kind != "RangeFrom") and index != nil and
-               inputs == [index, shared] and
+          reference =
+            if method == "index_mut",
+              do: %{"Ref" => [%{"Var" => %{"Free" => 0}}, slice, "Mut"]},
+              else: shared
+
+          if (method in ["get", "index_mut"] or kind != "RangeFrom") and index != nil and
+               inputs == [index, reference] and
                index_identity?(
                  function,
                  translated,

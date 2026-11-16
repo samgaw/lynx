@@ -359,6 +359,14 @@ defmodule Lynx.Rust.CollectionModels do
          translated,
          refs
        ) do
+    if get_in(models, [id, :byte_array_repeat]) &&
+         not Lynx.Rust.ArrayModels.repeat_call?(args, translated, refs),
+       do:
+         raise(
+           ArgumentError,
+           "unsupported array repeat: requires concrete u8 and the exact standard Clone<u8> dictionary"
+         )
+
     if method = get_in(models, [id, :vec_owned_method]) do
       types = CallModels.expand(args["types"], refs)
 

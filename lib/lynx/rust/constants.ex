@@ -131,8 +131,10 @@ defmodule Lynx.Rust.Constants do
     end
   end
 
-  defp supported_initializer_type?(%{"global_kind" => "NamedConst"}, type, refs, types),
-    do: scalar_or_array?(type, refs) or fieldless_enum?(type, types)
+  defp supported_initializer_type?(%{"global_kind" => "NamedConst"} = global, type, refs, types),
+    do:
+      scalar_or_array?(type, refs) or fieldless_enum?(type, types) or
+        Lynx.Rust.ExactRead.constant?(global, refs, types)
 
   defp supported_initializer_type?(
          %{"global_kind" => "AnonConst", "item_meta" => %{"name" => name}},
@@ -150,9 +152,9 @@ defmodule Lynx.Rust.Constants do
 
   defp supported_initializer_type?(_, _, _, _), do: false
 
-  defp fieldless_enum?(%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}, types) do
+  def fieldless_enum?(%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}, types) do
     empty_arguments?(args) and
-      Enum.any?(types, fn
+      Enum.any?(types || [], fn
         %{"def_id" => ^id, "generics" => params, "kind" => %{"Enum" => variants}}
         when is_list(variants) ->
           empty_parameters?(params) and variants != [] and
@@ -163,7 +165,7 @@ defmodule Lynx.Rust.Constants do
       end)
   end
 
-  defp fieldless_enum?(_, _), do: false
+  def fieldless_enum?(_, _), do: false
 
   defp scalar_or_array?(%{"Array" => [element, length, nil]}, refs) do
     usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
@@ -192,7 +194,7 @@ defmodule Lynx.Rust.Constants do
 
   defp str_type?(%{"Adt" => %{"id" => id, "builtin" => "Str", "generics" => args}}, types, refs) do
     empty_arguments?(args) and
-      Enum.any?(types, fn
+      Enum.any?(types || [], fn
         %{
           "def_id" => ^id,
           "item_meta" => %{"name" => [%{"Builtin" => ["Str", 0]}]},

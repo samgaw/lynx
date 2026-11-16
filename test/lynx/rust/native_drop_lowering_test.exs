@@ -143,13 +143,15 @@ defmodule Lynx.Rust.NativeDropLoweringTest do
           Map.put(global, "global_kind", "Static"),
           Map.put(global, "ty", %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args}})
         ] do
-      assert_raise CompileError, ~r/read-only scalar or static string constant/, fn ->
-        NativeDropLowering.place_type!(
-          place,
-          put_in(ctx, [:translated, "global_decls"], [changed]),
-          true
-        )
-      end
+      assert_raise CompileError,
+                   ~r/read-only scalar, fieldless enum, static string or checked standard static-error constant/,
+                   fn ->
+                     NativeDropLowering.place_type!(
+                       place,
+                       put_in(ctx, [:translated, "global_decls"], [changed]),
+                       true
+                     )
+                   end
     end
   end
 end

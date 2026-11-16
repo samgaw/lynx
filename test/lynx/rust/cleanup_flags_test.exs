@@ -124,6 +124,127 @@ defmodule Lynx.Rust.CleanupFlagsTest do
              get_in(List.last(statements), ["kind", "Panic", "on_unwind", "statements"])
   end
 
+  test "a shared enum discriminant selects only its matching unwind cleanup" do
+    {document, records} = lower_enum([])
+    assert Enum.any?(records, &match?(%{kind: :known_variant_cleanup_branch, variant: 1}, &1))
+    assert [%{"kind" => "UnwindResume"}] = enum_cleanup(document)
+  end
+
+  test "enum cleanup facts expire after moves, overwrites and loop backedges" do
+    move = %{
+      "kind" => %{"Assign" => [enum_place(2), %{"Use" => [%{"Move" => enum_place(1)}, "Yes"]}]}
+    }
+
+    overwrite = %{
+      "kind" => %{"Assign" => [enum_place(1), %{"Use" => [%{"Copy" => enum_place(2)}, "Yes"]}]}
+    }
+
+    loop = %{"kind" => %{"Loop" => %{"statements" => []}}}
+
+    for prefix <- [[move], [overwrite], [loop]] do
+      {document, records} = lower_enum(prefix)
+      refute Enum.any?(records, &(&1.kind == :known_variant_cleanup_branch))
+      assert [%{"kind" => %{"Switch" => _}}] = enum_cleanup(document)
+    end
+  end
+
+  test "mutable references and raw pointers prevent enum tag inference" do
+    for kind <- ["Mut", "RawPtr"] do
+      borrow =
+        if kind == "RawPtr",
+          do: %{"RawPtr" => %{"place" => enum_place(1)}},
+          else: %{"Ref" => %{"place" => enum_place(1), "kind" => kind}}
+
+      {document, records} = lower_enum([%{"kind" => %{"Assign" => [place(3), borrow]}}])
+      refute Enum.any?(records, &(&1.kind == :known_variant_cleanup_branch))
+      assert [%{"kind" => %{"Switch" => _}}] = enum_cleanup(document)
+    end
+  end
+
+  defp enum_type,
+    do: %{
+      "Adt" => %{"id" => 0, "builtin" => nil, "generics" => Lynx.Rust.ResourceModels.args([])}
+    }
+
+  defp enum_place(index), do: %{"kind" => %{"Local" => index}, "ty" => enum_type()}
+
+  defp enum_switch(branches) do
+    %{
+      "id" => 20,
+      "kind" => %{
+        "Switch" => %{
+          "data" => %{
+            "scrutinee" => %{"Discriminant" => enum_place(1)},
+            "branches" => [
+              [
+                %{
+                  "Value" => [
+                    50,
+                    [%{"Discriminant" => [enum_type()["Adt"], 0]}, %{"Scalar" => "Usize"}]
+                  ]
+                },
+                0
+              ]
+            ],
+            "fallback" => 1
+          },
+          "branches" => Enum.map(branches, &%{"statements" => &1})
+        }
+      }
+    }
+  end
+
+  defp lower_enum(prefix) do
+    # The live Err arm borrows the value immutably before a potentially panicking call.
+    shared = %{
+      "kind" => %{
+        "Assign" => [place(3), %{"Ref" => %{"place" => enum_place(1), "kind" => "Shared"}}]
+      }
+    }
+
+    unwind = enum_switch([[%{"kind" => %{"Drop" => %{}}}], [%{"kind" => "UnwindResume"}]])
+    call = put_in(call(), ["kind", "Call", "on_unwind"], %{"statements" => [unwind]})
+    outer = enum_switch([[%{"kind" => "Return"}], [shared] ++ prefix ++ [call]])
+    document = document([outer])
+
+    document =
+      put_in(document, ["translated", "type_decls"], [
+        %{"def_id" => 0, "kind" => %{"Enum" => [%{"id" => 0}, %{"id" => 1}]}}
+      ])
+
+    document =
+      update_in(
+        document,
+        ["translated", "fun_decls", Access.at(0), "body", "Structured", "locals", "locals"],
+        fn locals ->
+          Enum.map(locals, fn local ->
+            if local["index"] in [1, 2], do: Map.put(local, "ty", enum_type()), else: local
+          end)
+        end
+      )
+
+    CleanupFlags.lower!(document, ["facade"])
+  end
+
+  defp enum_cleanup(document) do
+    document["translated"]["fun_decls"]
+    |> hd()
+    |> get_in([
+      "body",
+      "Structured",
+      "body",
+      "statements",
+      Access.at(0),
+      "kind",
+      "Switch",
+      "branches",
+      Access.at(1),
+      "statements"
+    ])
+    |> List.last()
+    |> get_in(["kind", "Call", "on_unwind", "statements"])
+  end
+
   defp place(index), do: %{"kind" => %{"Local" => index}, "ty" => %{"Scalar" => "Bool"}}
 
   defp literal(value),
@@ -165,8 +286,10 @@ defmodule Lynx.Rust.CleanupFlagsTest do
     }
   end
 
-  defp lower(statements) do
-    document = %{
+  defp lower(statements), do: CleanupFlags.lower!(document(statements), ["facade"])
+
+  defp document(statements) do
+    %{
       "translated" => %{
         "fun_decls" => [
           %{
@@ -184,8 +307,6 @@ defmodule Lynx.Rust.CleanupFlagsTest do
         ]
       }
     }
-
-    CleanupFlags.lower!(document, ["facade"])
   end
 
   defp cleanup(document) do

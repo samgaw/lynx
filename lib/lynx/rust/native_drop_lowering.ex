@@ -36,7 +36,9 @@ defmodule Lynx.Rust.NativeDropLowering do
 
     {functions, state} =
       Enum.map_reduce(functions, initial, fn function, state ->
-        if function && first_party?(function, first_party) && is_map(function["body"]) do
+        if function && is_map(function["body"]) &&
+             (first_party?(function, first_party) ||
+                Lynx.Rust.LibraryHelpers.selected?(function, translated)) do
           locals = function["body"]["Structured"]["locals"]["locals"]
 
           context = %{
@@ -261,12 +263,18 @@ defmodule Lynx.Rust.NativeDropLowering do
           unless global && global["global_kind"] in ["NamedConst", "AnonConst"] &&
                    Lynx.Rust.Constants.empty_arguments?(args) &&
                    (Lynx.Rust.DropModels.primitive_scalar?(type) ||
-                      Lynx.Rustler.ErrorLiterals.static_string?(type, ctx.refs)),
+                      readonly_constant_type?(type, ctx.translated["type_decls"]) ||
+                      Lynx.Rustler.ErrorLiterals.static_string?(type, ctx.refs) ||
+                      Lynx.Rust.ExactRead.static_error_reference?(
+                        %{"kind" => kind, "ty" => annotation},
+                        ctx.translated,
+                        ctx.refs
+                      )),
                  do:
                    LLBC.failure!(
                      ctx.function,
                      ctx.translated,
-                     "native lifetime analysis requires a read-only scalar or static string constant"
+                     "native lifetime analysis requires a read-only scalar, fieldless enum, static string or checked standard static-error constant"
                    )
 
           type
@@ -396,4 +404,11 @@ defmodule Lynx.Rust.NativeDropLowering do
 
   defp arguments(types),
     do: %{"regions" => [], "types" => types, "const_generics" => [], "trait_refs" => []}
+
+  defp readonly_constant_type?(%{"Ref" => [_, element, "Shared"]}, types),
+    do:
+      Lynx.Rust.DropModels.primitive_scalar?(element) or
+        Lynx.Rust.Constants.fieldless_enum?(element, types)
+
+  defp readonly_constant_type?(type, types), do: Lynx.Rust.Constants.fieldless_enum?(type, types)
 end

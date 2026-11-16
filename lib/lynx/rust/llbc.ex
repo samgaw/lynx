@@ -123,7 +123,11 @@ defmodule Lynx.Rust.LLBC do
     refs = type_references!(document)
 
     globals =
-      Enum.filter(translated["global_decls"], &(&1 != nil && first_party?(&1, first_party)))
+      Enum.filter(
+        translated["global_decls"],
+        &(&1 != nil &&
+            (first_party?(&1, first_party) or Lynx.Rust.ExactRead.global?(&1, translated, refs)))
+      )
       |> Lynx.Rust.LLBCJson.restore_constant_references!(document)
       |> Lynx.Rust.LLBCJson.restore_global_constant_values!(document)
 
@@ -307,6 +311,17 @@ defmodule Lynx.Rust.LLBC do
         Enum.uniq(a ++ b)
       end)
 
+    read_dispatch =
+      case Lynx.Rust.ExactRead.audit(functions, available_models, translated, refs) do
+        {:ok, dispatch} -> dispatch
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
+    trait_dependencies =
+      Map.merge(trait_dependencies, read_dispatch.dependencies, fn _, a, b ->
+        Enum.uniq(a ++ b)
+      end)
+
     path_dependencies =
       case Lynx.Rust.FileOpenModels.audit(functions, available_models, translated, refs) do
         {:ok, dependencies} -> dependencies
@@ -372,6 +387,7 @@ defmodule Lynx.Rust.LLBC do
           Enum.uniq(left ++ right)
         end)
         |> Map.merge(pattern_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
+        |> Map.merge(read_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
     }
 
     for function <- functions do

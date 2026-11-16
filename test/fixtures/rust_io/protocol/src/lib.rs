@@ -793,3 +793,38 @@ pub fn read_is_retryable(path: &str) -> bool {
     drop(file);
     retryable
 }
+
+/// Reads an optional word while distinguishing truncation from other IO errors.
+///
+/// # Errors
+/// Returns errors other than unexpected EOF from the actual workspace reader.
+pub fn optional_exact_word(file: &mut File) -> io::Result<Option<u16>> {
+    match io_core::exact_word(file) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Opens a protocol input and reads one optional little-endian word.
+///
+/// # Errors
+/// Returns two for opening failure and one for a non-EOF reading failure.
+pub fn read_exact_optional(path: &str) -> Result<Option<u16>, u8> {
+    let mut file = match io_core::open_readonly(path) {
+        Ok(file) => file,
+        Err(error) => {
+            drop(error);
+            return Err(2);
+        }
+    };
+    let reply = match optional_exact_word(&mut file) {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            drop(error);
+            Err(1)
+        }
+    };
+    drop(file);
+    reply
+}

@@ -172,7 +172,8 @@ defmodule Lynx.Rust.IndexModels do
          [%{"skip_binder" => %{"id" => method}}] <-
            Enum.filter(impl["methods"] || [], &(&1["kind"] == %{"TraitMethod" => [trait, index]})),
          %{lean: lean} <- models[method],
-         method_name when method_name in ["get", "index"] <- %{0 => "get", 4 => "index"}[index],
+         method_name when method_name in ["get", "index", "index_mut"] <-
+           %{0 => "get", 4 => "index", 5 => "index_mut"}[index],
          true <-
            lean in Enum.map(
              [
@@ -301,12 +302,16 @@ defmodule Lynx.Rust.IndexModels do
            "def_id" => id,
            "item_meta" => %{"name" => path}
          } <- function,
-         {_library, container, scope} <- index_scope(path, impl_id),
+         %{"Ident" => [method, 0]} <- List.last(path),
+         true <- method in ["index", "index_mut"],
+         {_library, container, scope} <- index_scope(path, impl_id, method),
+         true <- method == "index" or container == "slice",
          impl when not is_nil(impl) <-
            Enum.find(translated["trait_impls"], &(&1 && &1["def_id"] == impl_id)),
          decl when not is_nil(decl) <-
            Enum.find(translated["trait_decls"], &(&1 && &1["def_id"] == trait)),
-         true <- decl["item_meta"]["name"] == name(~w(core ops index Index)),
+         trait_name = if(method == "index", do: "Index", else: "IndexMut"),
+         true <- decl["item_meta"]["name"] == name(["core", "ops", "index", trait_name]),
          true <-
            impl["src"] == "Normal" and impl["is_unsafe"] == false and impl["is_negative"] == false do
       indices = if container == "vec", do: [0, 1, 2, 3], else: [0, 1, 2]
@@ -351,7 +356,16 @@ defmodule Lynx.Rust.IndexModels do
 
       expanded = CallModels.expand(params, refs)
       impl_params = CallModels.expand(impl["generics"], refs)
-      ref = fn type -> %{"Ref" => [%{"Var" => %{"Free" => 0}}, type, "Shared"]} end
+
+      ref = fn type ->
+        %{
+          "Ref" => [
+            %{"Var" => %{"Free" => 0}},
+            type,
+            if(method == "index", do: "Shared", else: "Mut")
+          ]
+        }
+      end
 
       if (container != "vec" or (vector != nil and simple_parent?(vector["generics"]))) and
            parameters?(expanded, consts, 1, clause_types, clause_name, translated, indices) and
@@ -378,12 +392,12 @@ defmodule Lynx.Rust.IndexModels do
 
         model = %{
           rust_name:
-            "#{Enum.join(scope, "::")}::{core::ops::index::Index<#{rust_type}, @I, @O>}::index",
+            "#{Enum.join(scope, "::")}::{core::ops::index::#{trait_name}<#{rust_type}, @I, @O>}::#{method}",
           lean:
             if(container == "vec",
               do: "Aeneas.Std.alloc.vec.Vec.index",
               else:
-                "Aeneas.Std.core.#{container}.#{if container == "array", do: "Array", else: "index.Slice"}.index"
+                "Aeneas.Std.core.#{container}.#{if container == "array", do: "Array", else: "index.Slice"}.#{method}"
             ),
           builtin: true,
           can_fail: true,
@@ -399,7 +413,7 @@ defmodule Lynx.Rust.IndexModels do
             |> Map.put(:standard_index_container, "vec")
 
           "slice" ->
-            Map.put(model, :slice_index_method, 4)
+            Map.put(model, :slice_index_method, if(method == "index", do: 4, else: 5))
 
           "array" ->
             Map.put(model, :standard_index_container, "array")
@@ -410,7 +424,7 @@ defmodule Lynx.Rust.IndexModels do
     end
   end
 
-  defp index_scope(path, impl_id) do
+  defp index_scope(path, impl_id, method) do
     Enum.find_value(
       [
         {"core", "array", ~w(core array)},
@@ -418,7 +432,7 @@ defmodule Lynx.Rust.IndexModels do
         {"alloc", "vec", ~w(alloc vec)}
       ],
       fn {library, container, scope} ->
-        if path == name(scope) ++ [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => ["index", 0]}],
+        if path == name(scope) ++ [%{"Impl" => %{"Trait" => impl_id}}, %{"Ident" => [method, 0]}],
           do: {library, container, scope}
       end
     )

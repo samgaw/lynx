@@ -150,7 +150,6 @@ defmodule Lynx.Rust.VectorExtensions do
   # Clone dictionary and reject opaque/custom callbacks before pruning unwind.
   def valid_call?(arguments, translated, refs) do
     arguments = Map.update!(arguments, "types", &CallModels.expand(&1, refs))
-    traits = ResourceModels.trait_references(translated)
 
     with %{
            "types" => [element, _],
@@ -159,7 +158,17 @@ defmodule Lynx.Rust.VectorExtensions do
            "trait_refs" => [dict]
          } <- arguments,
          true <- element == byte(),
-         %{
+         true <- valid_byte_clone?(dict, translated, refs) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def valid_byte_clone?(dict, translated, refs) do
+    traits = ResourceModels.trait_references(translated)
+
+    with %{
            "kind" => %{"TraitImpl" => %{"id" => impl_id, "generics" => empty}},
            "trait_decl_ref" => decl
          } <- ResourceModels.dictionary(dict, traits),

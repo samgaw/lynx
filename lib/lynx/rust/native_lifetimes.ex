@@ -137,6 +137,10 @@ defmodule Lynx.Rust.NativeLifetimes do
           translated: translated,
           types: types,
           refs: refs,
+          stable_enums:
+            MapSet.new(
+              Map.keys(Lynx.Rust.CleanupFlags.immutable_enum_locals(body, translated, refs))
+            ),
           locals:
             Map.new(body["locals"]["locals"], &{&1["index"], CallModels.expand(&1["ty"], refs)}),
           stable_booleans:
@@ -479,7 +483,11 @@ defmodule Lynx.Rust.NativeLifetimes do
               loop_edge!(:continue, target, state, ctx)
 
             _ ->
-              case statement!(kind, state.live, Map.put(ctx, :known, state.known)) do
+              case statement!(
+                     kind,
+                     state.live,
+                     ctx |> Map.put(:known, state.known) |> Map.put(:statement, statement["id"])
+                   ) do
                 :terminal -> {:terminal, state.exits}
                 live -> %{state | live: live, known: known_after(kind, state.known, ctx)}
               end
@@ -908,6 +916,8 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp parse_state(_), do: :unknown
 
   defp known_after(%{"Assign" => [%{"kind" => %{"Local" => local}}, value]}, known, ctx) do
+    known = forget_moved_enums(known, value, ctx)
+
     known =
       known
       |> Map.delete({:alias, local})
@@ -996,7 +1006,7 @@ defmodule Lynx.Rust.NativeLifetimes do
            "Call" => %{
              "call" => %{
                "func" => %{"Regular" => %{"kind" => %{"Fun" => callee}}},
-               "args" => [%{"Move" => %{"kind" => %{"Local" => pin}}}, _]
+               "args" => [%{"Move" => %{"kind" => %{"Local" => pin}}}, _] = args
              },
              "dest" => dest
            }
@@ -1004,6 +1014,7 @@ defmodule Lynx.Rust.NativeLifetimes do
          known,
          ctx
        ) do
+    known = forget_moved_enums(known, args, ctx)
     frame = known[{:frame_borrow, pin}]
 
     case {ctx.preserving_polls[callee], frame} do
@@ -1018,8 +1029,8 @@ defmodule Lynx.Rust.NativeLifetimes do
     end
   end
 
-  defp known_after(%{"Call" => %{"dest" => dest}}, known, ctx),
-    do: retain_stable(known, dest, ctx)
+  defp known_after(%{"Call" => %{"dest" => dest, "call" => %{"args" => args}}}, known, ctx),
+    do: retain_stable(forget_moved_enums(known, args, ctx), dest, ctx)
 
   defp known_after(%{"Assign" => [dest, _]}, known, ctx),
     do: retain_stable(known, dest, ctx)
@@ -1032,8 +1043,33 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp retain_stable(known, dest, ctx),
     do:
       Map.filter(known, fn {key, value} ->
-        match?({:alias, _}, key) or stable_boolean?(key, value, dest, ctx)
+        match?({:alias, _}, key) or stable_boolean?(key, value, dest, ctx) or
+          stable_enum?(key, value, dest, ctx)
       end)
+
+  defp stable_enum?({:enum_domain, local}, tags, dest, ctx),
+    do:
+      is_list(tags) and MapSet.member?(ctx.stable_enums, local) and
+        not match?(%{"kind" => %{"Local" => ^local}}, dest)
+
+  defp stable_enum?(_, _, _, _), do: false
+
+  defp forget_moved_enums(known, %{"Move" => place}, ctx) do
+    if match?(%{"Ref" => _}, CallModels.expand(place["ty"], ctx.refs)) do
+      known
+    else
+      {root, _} = resolve_place(place, known)
+      Map.delete(known, {:enum_domain, root})
+    end
+  end
+
+  defp forget_moved_enums(known, map, ctx) when is_map(map),
+    do: Enum.reduce(Map.values(map), known, &forget_moved_enums(&2, &1, ctx))
+
+  defp forget_moved_enums(known, list, ctx) when is_list(list),
+    do: Enum.reduce(list, known, &forget_moved_enums(&2, &1, ctx))
+
+  defp forget_moved_enums(known, _, _), do: known
 
   defp stable_boolean?(local, value, dest, ctx) do
     is_integer(local) and is_boolean(value) and
@@ -1312,7 +1348,7 @@ defmodule Lynx.Rust.NativeLifetimes do
 
   defp transfer!(dest, value, live, ctx) do
     remaining = moves!(value, live, ctx)
-    transferred = MapSet.size(remaining) < MapSet.size(live)
+    transferred = MapSet.size(remaining) < MapSet.size(live) or fresh_static_error?(value, ctx)
     if transferred and not native_place?(dest, ctx), do: reject!(ctx)
     if transferred, do: destination!(dest, remaining, ctx), else: remaining
   end
@@ -1372,6 +1408,13 @@ defmodule Lynx.Rust.NativeLifetimes do
   # A projection transfers either one tracked saved field, or the complete
   # ownership of a single-owner container/whole compiler frame. A frame inside
   # another aggregate must account for all of that aggregate's native owners.
+  defp moves!(%{"Move" => %{"kind" => %{"Global" => _}} = place}, live, ctx) do
+    unless Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs),
+      do: if(native_place?(place, ctx), do: reject!(ctx))
+
+    live
+  end
+
   defp moves!(%{"Move" => place}, live, ctx) do
     if native_place?(place, ctx) do
       {root, path} = resolve_place(place, ctx.known)
@@ -1381,7 +1424,8 @@ defmodule Lynx.Rust.NativeLifetimes do
           LLBC.failure!(
             ctx.function,
             ctx.translated,
-            "native owner lifetime: projected native field is uninitialized or consumed"
+            "native owner lifetime: projected native field is uninitialized or consumed " <>
+              "(statement #{inspect(ctx[:statement])}, root #{inspect(root)}, path #{inspect(path)}, live #{inspect(MapSet.to_list(live))})"
           )
 
       root_type =
@@ -1415,6 +1459,13 @@ defmodule Lynx.Rust.NativeLifetimes do
     end
   end
 
+  defp moves!(%{"Copy" => %{"kind" => %{"Global" => _}} = place}, live, ctx) do
+    unless Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs),
+      do: if(native_place?(place, ctx), do: reject!(ctx))
+
+    live
+  end
+
   defp moves!(%{"Copy" => place}, live, ctx) do
     if native_place?(place, ctx), do: reject!(ctx)
     live
@@ -1426,6 +1477,16 @@ defmodule Lynx.Rust.NativeLifetimes do
     do: Enum.reduce(list, live, &moves!(&1, &2, ctx))
 
   defp moves!(_, live, _), do: live
+
+  # A const access evaluates the retained initializer each time. The checked
+  # static-message constant is a fresh value, not a move from owned global state.
+  defp fresh_static_error?(%{"Use" => [%{"Move" => place}, _]}, ctx),
+    do: Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs)
+
+  defp fresh_static_error?(%{"Use" => [%{"Copy" => place}, _]}, ctx),
+    do: Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs)
+
+  defp fresh_static_error?(_, _), do: false
 
   defp nested_owner?(%{"Local" => id}, ctx), do: MapSet.member?(ctx.owners, id)
 

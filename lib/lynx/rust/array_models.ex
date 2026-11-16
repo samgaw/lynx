@@ -2,7 +2,68 @@ defmodule Lynx.Rust.ArrayModels do
   @moduledoc false
   alias Lynx.Rust.CallModels
 
-  def resolve(function, _translated, refs) do
+  def resolve(function, translated, refs),
+    do: repeat(function, translated, refs) || view(function, refs)
+
+  defp repeat(function, translated, refs) do
+    with %{
+           "body" => "Opaque",
+           "src" => "Normal",
+           "generics" => params,
+           "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false} = sig,
+           "item_meta" => %{
+             "name" => [
+               %{"Ident" => ["core", 0]},
+               %{"Ident" => ["array", 0]},
+               %{"Ident" => ["repeat", 0]}
+             ]
+           }
+         } <- function,
+         params = CallModels.expand(params, refs),
+         [%{"clause_id" => 0, "trait_" => clause}] <- params["trait_clauses"],
+         true <- parameters?(%{params | "trait_clauses" => []}, 0),
+         %{
+           "regions" => [],
+           "outlives" => [],
+           "skip_binder" => %{"id" => trait, "generics" => args}
+         } <- CallModels.expand(clause, refs),
+         true <- args == Lynx.Rust.ResourceModels.args([%{"TypeVar" => %{"Free" => 0}}]),
+         [declaration] <- Enum.filter(translated["trait_decls"], &(&1 && &1["def_id"] == trait)),
+         true <- Lynx.Rust.VectorExtensions.clone_trait?(declaration, refs),
+         variable = %{"TypeVar" => %{"Free" => 0}},
+         usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}},
+         true <- CallModels.expand(sig["inputs"], refs) == [variable],
+         true <-
+           CallModels.expand(sig["output"], refs) == %{
+             "Array" => [variable, [%{"Var" => %{"Free" => 0}}, usize], nil]
+           } do
+      %{
+        rust_name: "core::array::repeat",
+        lean: "Aeneas.Std.Array.repeat",
+        builtin: true,
+        can_fail: false,
+        lift: false,
+        byte_array_repeat: true,
+        label:
+          "Upstream array repeat model restricted at every call to concrete u8 and the exact standard Clone<u8> dictionary; callback-free byte cloning and logical array length/content preserved; Rust core implementation, native storage and allocation failure are unverified; custom/effectful clones and non-byte elements are rejected"
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  def repeat_call?(args, translated, refs) do
+    case args do
+      %{"regions" => [], "types" => [element], "const_generics" => [_], "trait_refs" => [dict]} ->
+        CallModels.expand(element, refs) == %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}} and
+          Lynx.Rust.VectorExtensions.valid_byte_clone?(dict, translated, refs)
+
+      _ ->
+        false
+    end
+  end
+
+  defp view(function, refs) do
     with %{
            "body" => "Opaque",
            "src" => "Normal",
