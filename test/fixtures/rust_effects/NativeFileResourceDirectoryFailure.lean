@@ -97,7 +97,7 @@ theorem file_poll (env : Environment) (value : U16) (ns : NamespaceSnapshot) :
 
 theorem open_error_poll (env : Environment) (value : U16) (closeFailed : Bool) :
     pollOpenReadOnly (toStr ".") (owned env (Record.synced value) (namespaceBefore .opening closeFailed)) =
-      some (.ok (.Err ⟨10⟩),nativeDone env value .opening) := by
+      some (.ok (.Err (.os 10)),nativeDone env value .opening) := by
   simp [pollOpenReadOnly,Publish.dot_bytes,supportedOpenPath,owned,frame,CommitFailure.errorCell,
     namespaceBefore,opening,Publish.namespaceAfter,Publish.names,namespaceState,namespaceSnapshot,namespaceTable,
     namespaceHistory,namespaceEntry,encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,
@@ -113,7 +113,7 @@ theorem open_sync_poll (env : Environment) (value : U16) (closeFailed : Bool) :
 
 theorem directory_sync_poll (env : Environment) (value : U16) (closeFailed : Bool) :
     pollSync ⟨12⟩ (directory env value false (syncing closeFailed)) =
-      some (.ok (.Err ⟨10⟩),directory env value false (closing closeFailed)) := by
+      some (.ok (.Err (.os 10)),directory env value false (closing closeFailed)) := by
   simp [pollSync,lookup,pollDirectorySync,directoryHandle,directory,owned,frame,CommitFailure.errorCell,
     Publish.namespaceAfter,Publish.names,namespaceSnapshot,namespaceTable,namespaceHistory,namespaceEntry,
     encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,Publish.valid_path,syncing,action,storeDirectory,
@@ -134,7 +134,7 @@ theorem directory_close_poll (env : Environment) (value : U16) (closeFailed : Bo
 including compiler destruction of a successfully opened directory. -/
 theorem directory_prefix (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool) :
     Result.ReadyPrefix effects_core.synchronize_directory
-      (owned env (Record.synced value) (namespaceBefore failure closeFailed)) (.ok (.Err ⟨10⟩))
+      (owned env (Record.synced value) (namespaceBefore failure closeFailed)) (.ok (.Err (.os 10)))
       (nativeDone env value failure) := by
   simp only [effects_core.synchronize_directory,monadLift_self,openReadOnly,Result.wait_bind]
   cases failure
@@ -155,7 +155,7 @@ theorem directory_prefix (env : Environment) (value : U16) (failure : Failure) (
 /-- Data fsync succeeds before the actual cross-crate directory failure. -/
 theorem commit_prefix (env : Environment) (value : U16) (failure : Failure) (closeFailed : Bool) :
     Result.ReadyPrefix (file_resource_commit ⟨3,11⟩)
-      (owned env (Record.written value) (namespaceBefore failure closeFailed)) (.ok (.Err ⟨10⟩))
+      (owned env (Record.written value) (namespaceBefore failure closeFailed)) (.ok (.Err (.os 10)))
       (nativeDone env value failure) := by
   simp only [file_resource_commit,file_resource_sync,monadLift_self,bind_assoc]
   apply ((borrow_prefix env (Record.written value) (namespaceBefore failure closeFailed)).bind _).trans
@@ -302,14 +302,14 @@ theorem failure_recovery (env : Environment) (value : U16) (failure : Failure) (
     ∃ script before after result,
       restartFilesystem image script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok (some value)) := by
   refine ⟨call_prefix env value failure closeFailed registered,?_⟩
   obtain ⟨inodes,high,names⟩ := crash_shape env value failure chosen masks image accepted
   have valid : 1 ≤ water failure := by cases failure <;> decide +kernel
   rcases names with absent | retained
   · have imageEq : image = ⟨[],[(1,Record.content value)],water failure⟩ := by cases image; simp_all
     refine ⟨ShortRecovery.missingChoice error,ShortRecovery.missingBoot (Record.content value) (water failure) error,
-      ShortRecovery.missingDone (Record.content value) (water failure),.Err ⟨error⟩,?_,
+      ShortRecovery.missingDone (Record.content value) (water failure),.Err (.os error),?_,
       ShortRecovery.missing_recovery (Record.content value) (water failure) error,Or.inl rfl⟩
     rw [imageEq]
     exact ShortRecovery.missing_restart _ (by simp [Record.content_size,limit]) _ valid error

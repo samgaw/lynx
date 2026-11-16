@@ -296,7 +296,7 @@ inductive Scenario where
 @[expose] def nativeOutput : Scenario → core.result.Result (Option U16) NativeIoError
   | .complete => .Ok (some (word 7#u8 8#u8))
   | .firstEof | .secondEof => .Ok none
-  | _ => .Err ⟨3⟩
+  | _ => .Err (.os 3)
 
 open scoped Lynx.NativeArithmetic
 

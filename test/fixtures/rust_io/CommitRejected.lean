@@ -34,7 +34,7 @@ theorem created_poll (script : Term) :
 
 theorem error_poll (value : U16) (code : Nat) :
     pollWrite ⟨2⟩ (wire value) (world ByteArray.empty 0 (attempt false code)) =
-      some (.ok (.Err ⟨code⟩,⟨2⟩),world ByteArray.empty 0 closeScript) := by
+      some (.ok (.Err (.os code),⟨2⟩),world ByteArray.empty 0 closeScript) := by
   simp [pollWrite,world,lookup,sharedLookup,getHandle,decodeHandle,encodeHandle,inode,decode,encode,
     limit,not_lt.mpr (Int.natCast_nonneg code),blocked,attempt,action,writeStep,wire_length,Payload.persist_empty,store,sharedStore,
     writableHandleTypeName,handleTypeName,typeName,inodeTypeName,namespaceTypeName]
@@ -67,7 +67,7 @@ theorem close_poll (data : ByteArray) (position : Nat) (bounded : data.size ≤ 
 /-- An actual Rust write error is propagated after closing, with no publication or synchronization. -/
 theorem write_error (value : U16) (code : Nat) :
     commit_word source target value (start (attempt false code)) =
-      (.ok (.Err ⟨code⟩),world ByteArray.empty 0 .nil true) := by
+      (.ok (.Err (.os code)),world ByteArray.empty 0 .nil true) := by
   simp only [commit_word,io_core.create_new_file,monadLift_self,createNew,Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ (created_poll _)]
   simp only [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,

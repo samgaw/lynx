@@ -18,7 +18,7 @@ theorem persist_zero (data : ByteArray) : persist data data (zeroMask data) = so
     unfold persist
     simp only [Nat.min_self, Nat.max_self]
     rw [if_pos conditions]
-  rw [persist_same data (zeroMask data) result accepted] at accepted
+  rw [Publish.Properties.persist_same data (zeroMask data) result accepted] at accepted
   exact accepted
 
 theorem not_directory : (b.data == #[46]) = false := by decide +kernel
@@ -152,7 +152,7 @@ theorem checkpoint_image_all (mask result : ByteArray)
     filesystemCrashImage newNames [(1,mask)] (published data) =
       some ⟨newNames,[(1,data)],3⟩ := by
   simp only [limit] at bounded
-  have same := persist_same data mask result accepted
+  have same := Publish.Properties.persist_same data mask result accepted
   subst result
   simp [filesystemCrashImage,published,namespaceSnapshot,namespaceTable,namespaceHistory,
     namespaceEntry,encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,
@@ -231,7 +231,7 @@ theorem persist_empty : persist ByteArray.empty data ByteArray.empty = some Byte
   rfl
 
 theorem failed_sync_poll (error : Nat) : pollSync ⟨2⟩ (failing data error) =
-    some (.ok (.Err ⟨error⟩),failed data) := by
+    some (.ok (.Err (.os error)),failed data) := by
   simp only [limit] at bounded
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   simp [pollSync,lookup,sharedLookup,getHandle,decodeHandle,encodeHandle,failing,failed,
@@ -251,7 +251,7 @@ theorem failed_close_poll : pollClose ⟨2⟩ (failed data) =
 publication does not proceed to rename or acknowledge durability. -/
 theorem failed_publication (error : Nat) :
     publish_file ⟨2⟩ source target (failing data error) =
-      (.ok (.Err ⟨error⟩),failing data 0 true) := by
+      (.ok (.Err (.os error)),failing data 0 true) := by
   simp only [publish_file,synchronize_then_close,io_core.synchronize,monadLift_self,
     syncAll,Result.wait_bind]
   try dsimp only

@@ -273,7 +273,7 @@ theorem uncommitted_short_recovery (env : Environment) (value : U16) (mask data 
 
 theorem missing_poll (data : ByteArray) (generation error : Nat) :
     pollOpenReadOnly (toStr "resource") (missingBoot data generation error) =
-      some (.ok (.Err ⟨error⟩),missingDone data generation) := by
+      some (.ok (.Err (.os error)),missingDone data generation) := by
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   simp [pollOpenReadOnly,path_bytes,supportedOpenPath,Publish.valid_path,missingBoot,missingDone,
     namespaceState,namespaceSnapshot,namespaceTable,namespaceHistory,encodeNamespace,encodeNames,
@@ -283,7 +283,7 @@ theorem missing_poll (data : ByteArray) (generation error : Nat) :
 path, without allocating, reading or closing a nonexistent file descriptor. -/
 theorem missing_recovery (data : ByteArray) (generation error : Nat) :
     recover_file_record (toStr "resource") (missingBoot data generation error) =
-      (.ok (.Err ⟨error⟩),missingDone data generation) := by
+      (.ok (.Err (.os error)),missingDone data generation) := by
   simp only [recover_file_record,monadLift_self,openReadOnly,Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ (missing_poll data generation error)]
   simp [core.result.Result.Insts.CoreOpsTry.branch,
@@ -330,7 +330,7 @@ theorem uncommitted_missing_recovery (env : Environment) (value : U16) (mask dat
       some ⟨[],[(1,data)],7⟩ ∧
     restartFilesystem ⟨[],[(1,data)],7⟩ (missingChoice error) = some (missingBoot data 7 error) ∧
     recover_file_record (toStr "resource") (missingBoot data 7 error) =
-      (.ok (.Err ⟨error⟩),missingDone data 7) := by
+      (.ok (.Err (.os error)),missingDone data 7) := by
   have bound : data.size ≤ limit := by have := fresh_image_size value mask data accepted; simp only [limit]; omega
   exact ⟨absent_image_of_persist env value mask data accepted,
     missing_restart data bound 7 (by decide +kernel) error,missing_recovery data 7 error⟩
@@ -577,12 +577,12 @@ theorem all_image_recovery (env : Environment) (value : U16) (chosen : Names)
     ∃ script before after result,
       restartFilesystem image script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok none ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok none ∨ result = .Ok (some value)) := by
   obtain ⟨mask,data,masksEq,persisted,inodes,water,names⟩ := write_crash_shape env value chosen masks image accepted
   rcases names with absent | retained
   · have imageEq : image = ⟨[],[(1,data)],7⟩ := by cases image; simp_all
     have bound : data.size ≤ limit := by have := fresh_image_size value mask data persisted; simp only [limit]; omega
-    refine ⟨missingChoice error,missingBoot data 7 error,missingDone data 7,.Err ⟨error⟩,?_,
+    refine ⟨missingChoice error,missingBoot data 7 error,missingDone data 7,.Err (.os error),?_,
       missing_recovery data 7 error,Or.inl rfl⟩
     rw [imageEq]
     exact missing_restart data bound 7 (by decide +kernel) error
@@ -715,7 +715,7 @@ theorem partial_missing_recovery (env : Environment) (value : U16) (count : Nat)
       some ⟨[],[(1,data)],7⟩ ∧
     restartFilesystem ⟨[],[(1,data)],7⟩ (missingChoice error) = some (missingBoot data 7 error) ∧
     recover_file_record (toStr "resource") (missingBoot data 7 error) =
-      (.ok (.Err ⟨error⟩),missingDone data 7) := by
+      (.ok (.Err (.os error)),missingDone data 7) := by
   have size := fresh_persist_size (partialState value count).visible mask data accepted
   have bound : data.size ≤ limit := by rw [partial_size value count shortCount] at size; simp only [limit]; omega
   exact ⟨partial_image env value count shortCount false mask data accepted,

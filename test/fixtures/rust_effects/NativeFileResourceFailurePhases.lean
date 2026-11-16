@@ -92,7 +92,7 @@ theorem close_prefix (env : Environment) (value : U16) (closeFailed : Bool) :
       (DirectoryFailure.owned env (Record.written value) (DirectoryFailure.namespaceBefore .synchronization closeFailed))
       (do
         NativeOwnedDrop.drop (⟨12⟩ : NativeFile)
-        NativeM.ok (.Err ⟨10⟩)) (DirectoryFailure.directory env value false (DirectoryFailure.closing closeFailed)) := by
+        NativeM.ok (.Err (.os 10))) (DirectoryFailure.directory env value false (DirectoryFailure.closing closeFailed)) := by
   apply (sync_prefix env value closeFailed).trans
   simp only [syncAll,Result.wait_bind]
   apply Result.ReadyPrefix.wait _ _ _ _ _ _ _ (DirectoryFailure.directory_sync_poll env value closeFailed)
@@ -297,7 +297,7 @@ theorem boundary_recovery (env : Environment) (value : U16) (failure : Failure) 
     ∃ script before after result,
       restartFilesystem image script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok none ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok none ∨ result = .Ok (some value)) := by
   refine ⟨boundary_prefix env value failure closeFailed boundary registered,?_⟩
   obtain ⟨mask,contents,masksEq,saved,inodes,water,names⟩ :=
     boundary_crash env value failure closeFailed boundary chosen masks image accepted
@@ -315,7 +315,7 @@ theorem boundary_recovery (env : Environment) (value : U16) (failure : Failure) 
   rcases names with absent | retained
   · have imageEq : image = ⟨[],[(1,contents)],boundaryWater failure boundary⟩ := by cases image; simp_all
     refine ⟨ShortRecovery.missingChoice error,ShortRecovery.missingBoot contents (boundaryWater failure boundary) error,
-      ShortRecovery.missingDone contents (boundaryWater failure boundary),.Err ⟨error⟩,?_,
+      ShortRecovery.missingDone contents (boundaryWater failure boundary),.Err (.os error),?_,
       ShortRecovery.missing_recovery contents (boundaryWater failure boundary) error,Or.inl rfl⟩
     rw [imageEq]
     exact ShortRecovery.missing_restart contents (by simp only [limit]; omega) _ valid error

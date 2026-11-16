@@ -12,8 +12,8 @@ theorem explicit_cleanup (error : NativeIoError) (env : Environment)
       [(error.identity,NativeIoError.typeName,.atom "live")]) :
     io_core.discard_io_error error env = (.ok (),
       {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)}) := by
-  simp [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability,
-    nonzero,not_lt.mpr bounded,stored]
+  simpa only [io_core.discard_io_error,NativeOwnedDrop.drop,monadLift_self,Result.ok_apply] using
+    (NativeIoError.dispose_prefix error env nonzero bounded stored).apply
 
 /-- The compiler-generated implicit cleanup has the same consuming behavior. -/
 theorem implicit_cleanup (error : NativeIoError) (env : Environment)
@@ -22,36 +22,36 @@ theorem implicit_cleanup (error : NativeIoError) (env : Environment)
       [(error.identity,NativeIoError.typeName,.atom "live")]) :
     io_core.discard_io_error_implicit error env = (.ok (),
       {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)}) := by
-  simp [io_core.discard_io_error_implicit,NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability,
-    nonzero,not_lt.mpr bounded,stored]
+  simpa only [io_core.discard_io_error_implicit,NativeOwnedDrop.drop,monadLift_self,Result.ok_apply] using
+    (NativeIoError.dispose_prefix error env nonzero bounded stored).apply
 
 /-- An unadmitted error never acquires a successful destruction proof. -/
-theorem missing_cleanup (error : NativeIoError) (env : Environment)
-    (missing : env.nativeHeap.filter (fun cell => cell.1 == error.identity) = []) :
-    io_core.discard_io_error error env = (.error .exhausted,env) := by
-  simp [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability,missing]
+theorem missing_cleanup (error : Nat) (env : Environment)
+    (missing : env.nativeHeap.filter (fun cell => cell.1 == error) = []) :
+    io_core.discard_io_error (.os error) env = (.error .exhausted,env) := by
+  simp [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,NativeIoError.identity,Result.consumeNativeCapability,missing]
 
 /-- A custom-payload marker does not satisfy OS-only error admission. -/
-theorem custom_cleanup (error : NativeIoError) (env : Environment)
-    (stored : env.nativeHeap.filter (fun cell => cell.1 == error.identity) =
-      [(error.identity,NativeIoError.typeName,.atom "custom")]) :
-    io_core.discard_io_error error env = (.error .exhausted,env) := by
-  simp [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability,stored]
+theorem custom_cleanup (error : Nat) (env : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == error) =
+      [(error,NativeIoError.typeName,.atom "custom")]) :
+    io_core.discard_io_error (.os error) env = (.error .exhausted,env) := by
+  simp [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,NativeIoError.identity,Result.consumeNativeCapability,stored]
 
 /-- Duplicate identities cannot certify unique error ownership. -/
-theorem duplicate_cleanup (error : NativeIoError) (env : Environment)
-    (stored : env.nativeHeap.filter (fun cell => cell.1 == error.identity) =
-      [(error.identity,NativeIoError.typeName,.atom "live"),
-       (error.identity,NativeIoError.typeName,.atom "live")]) :
-    io_core.discard_io_error error env = (.error .exhausted,env) := by
-  simp [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability,stored]
+theorem duplicate_cleanup (error : Nat) (env : Environment)
+    (stored : env.nativeHeap.filter (fun cell => cell.1 == error) =
+      [(error,NativeIoError.typeName,.atom "live"),
+       (error,NativeIoError.typeName,.atom "live")]) :
+    io_core.discard_io_error (.os error) env = (.error .exhausted,env) := by
+  simp [io_core.discard_io_error,NativeOwnedDrop.drop,NativeIoError.dispose,NativeIoError.identity,Result.consumeNativeCapability,stored]
 
 /-- A consumed error identity cannot be consumed a second time. -/
-theorem repeated_cleanup (error : NativeIoError) (env : Environment) :
-    io_core.discard_io_error error
-      {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)} =
+theorem repeated_cleanup (error : Nat) (env : Environment) :
+    io_core.discard_io_error (.os error)
+      {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error)} =
       (.error .exhausted,
-        {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)}) := by
+        {env with nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error)}) := by
   apply missing_cleanup
   simp [List.filter_filter]
 
@@ -121,7 +121,7 @@ theorem acknowledged (value : U16) :
 @[expose] def disposed : Environment :=
   {nativeRefCounter := 1,nativeHeap := [(0,namespaceTypeName,encodeNamespace ⟨[],[],[],.nil⟩)]}
 
-theorem creation_error : pollCreateNew source rejected = some (.ok (.Err ⟨1⟩),returned) := by
+theorem creation_error : pollCreateNew source rejected = some (.ok (.Err (.os 1)),returned) := by
   simp [pollCreateNew,source_bytes,valid_a,rejected,returned,pathChoice,
     namespaceSnapshot,namespaceTable,namespaceHistory,tablesEqual,
     encodeNamespace,encodeNames,namespaceTypeName,replaceNamespaceScript]

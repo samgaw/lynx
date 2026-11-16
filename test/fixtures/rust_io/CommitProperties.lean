@@ -275,7 +275,7 @@ theorem committed_image (value : U16) (mask result : ByteArray)
     (accepted : persist (content value) (content value) mask = some result) :
     filesystemCrashImage newNames [(1,mask)] (done value) =
       some ⟨newNames,[(1,content value)],3⟩ := by
-  have same := persist_same (content value) mask result accepted
+  have same := Publish.Properties.persist_same (content value) mask result accepted
   subst result
   simp [filesystemCrashImage,done,namespaceSnapshot,namespaceTable,namespaceHistory,
     namespaceEntry,encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,

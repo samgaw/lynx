@@ -44,7 +44,7 @@ theorem replace_next {α : Type} (first second : State) (validFirst : Bounded fi
     (next : core.result.Result Unit NativeIoError → NativeM α) :
     (rename_visible source target >>= next)
       (world first second originalNames [] (choice success error true rest)) =
-      next (if success then .Ok () else .Err ⟨error⟩)
+      next (if success then .Ok () else .Err (.os error))
         (world first second replacedNames [replacedNames] rest) := by
   obtain ⟨firstVisible,firstDurable⟩ := validFirst
   obtain ⟨secondVisible,secondDurable⟩ := validSecond
@@ -52,7 +52,7 @@ theorem replace_next {α : Type} (first second : State) (validFirst : Bounded fi
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   have poll : pollRename source target
       (world first second originalNames [] (choice success error true rest)) =
-      some (.ok (if success then .Ok () else .Err ⟨error⟩),
+      some (.ok (if success then .Ok () else .Err (.os error)),
         world first second replacedNames [replacedNames] rest) := by
     cases success
     all_goals simp [status,nonnegative,pollRename,source_bytes,target_bytes,source_valid,target_valid,
@@ -70,7 +70,7 @@ theorem replace_next {α : Type} (first second : State) (validFirst : Bounded fi
 theorem error_can_apply (first second : State) (validFirst : Bounded first) (validSecond : Bounded second)
     (error : Nat) (rest : Term) :
     rename_visible source target (world first second originalNames [] (choice false error true rest)) =
-      (.ok (.Err ⟨error⟩),world first second replacedNames [replacedNames] rest) := by
+      (.ok (.Err (.os error)),world first second replacedNames [replacedNames] rest) := by
   have returned := replace_next first second validFirst validSecond false error (by simp) rest Result.ok
   simpa [Result.bind_ok,Result.ok_apply] using returned
 
@@ -109,11 +109,11 @@ theorem replaced_capabilities (first second : State) (validFirst : Bounded first
 errors can apply the mutation, as shown by error_can_apply. -/
 theorem error_keeps_names (first second : State) (error : Nat) (rest : Term) :
     rename_visible source target (world first second originalNames [] (choice false error false rest)) =
-      (.ok (.Err ⟨error⟩),world first second originalNames [] rest) := by
+      (.ok (.Err (.os error)),world first second originalNames [] rest) := by
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   have poll : pollRename source target
       (world first second originalNames [] (choice false error false rest)) =
-      some (.ok (.Err ⟨error⟩),world first second originalNames [] rest) := by
+      some (.ok (.Err (.os error)),world first second originalNames [] rest) := by
     simp [pollRename,source_bytes,target_bytes,source_valid,target_valid,world,choice,
       renameChoice,namespaceSnapshot,namespaceTable,namespaceHistory,namespaceEntry,
       encodeNamespace,encodeNames,tablesEqual,originalNames,List.eraseDups_cons,

@@ -49,10 +49,10 @@ theorem sync_next {α : Type} (state : State) (success : Bool) (error : Nat)
     (next : core.result.Result Unit NativeIoError → NativeM α) :
     (io_core.synchronize ⟨2⟩ >>= next)
       (world state false false (outcome "sync_dir" success error script) rest) =
-      next (if success then .Ok () else .Err ⟨error⟩) (world state success false script rest) := by
+      next (if success then .Ok () else .Err (.os error)) (world state success false script rest) := by
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   have poll : pollSync ⟨2⟩ (world state false false (outcome "sync_dir" success error script) rest) =
-      some (.ok (if success then .Ok () else .Err ⟨error⟩),world state success false script rest) := by
+      some (.ok (if success then .Ok () else .Err (.os error)),world state success false script rest) := by
     cases success <;> simp [status,nonnegative,pollSync,lookup,pollDirectorySync,directoryHandle,
       world,ns,names,node,outcome,action,namespaceSnapshot,namespaceTable,namespaceHistory,
       namespaceEntry,encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,file_name,
@@ -84,7 +84,7 @@ theorem sync_directory_contract (state : State) (success : Bool) (error : Nat)
     (closeStatus : closeSuccess = true → closeError = 0) (script rest : Term) :
     sync_directory (initial state (opening
       (outcome "sync_dir" success error (outcome "close_dir" closeSuccess closeError script)) rest)) =
-      (.ok (if success then .Ok () else .Err ⟨error⟩),world state success true script rest) := by
+      (.ok (if success then .Ok () else .Err (.os error)),world state success true script rest) := by
   simp only [sync_directory,monadLift_self]
   rw [open_next]
   simp only [core.result.Result.Insts.CoreOpsTry.branch,NativeM.monadLift_eq,
@@ -97,12 +97,12 @@ theorem sync_directory_contract (state : State) (success : Bool) (error : Nat)
 theorem opening_error (state : State) (error : Nat) (rest : Term) :
     sync_directory (initial state (.cons (.tuple #[.atom "open",.bitstring directoryName 0,
       .atom "error",.integer error,.nil]) rest)) =
-      (.ok (.Err ⟨error⟩),initial state rest) := by
+      (.ok (.Err (.os error)),initial state rest) := by
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   have poll : pollOpenReadOnly (toStr ".")
       (initial state (.cons (.tuple #[.atom "open",.bitstring directoryName 0,
         .atom "error",.integer error,.nil]) rest)) =
-      some (.ok (.Err ⟨error⟩),initial state rest) := by
+      some (.ok (.Err (.os error)),initial state rest) := by
     simp [pollOpenReadOnly,supportedOpenPath,directory_bytes,directoryName,initial,ns,names,
       namespaceState,namespaceSnapshot,namespaceTable,namespaceHistory,namespaceEntry,
       encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,file_name,openChoice,

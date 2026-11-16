@@ -143,7 +143,7 @@ theorem read_success (path : Str) (before opened readEnv after : Environment)
   apply Result.ReadyPrefix.wait _ _ _ _ _ _ _ closing
   simpa only [Result.ok_bind,NativeM.ok] using Result.ReadyPrefix.refl (.ok false) after
 
-@[expose] def error : NativeIoError := ⟨1⟩
+@[expose] def error : NativeIoError := .os 1
 @[expose] def metadata (label : String) : Nat × String × Term :=
   (2, NativeIoError.kindTypeName, NativeIoError.kindEntry error label)
 @[expose] def path : Str := toStr "missing"
@@ -279,7 +279,7 @@ inductive Invalid where
       if cell.1 == 1 then (1,NativeIoError.typeName,.atom "custom") else cell}
   | .zeroError => env
   | .wrongMetadataOwner => {env with nativeHeap := env.nativeHeap.map fun cell =>
-      if cell.1 == 2 then (2,cell.2.1,NativeIoError.kindEntry ⟨99⟩ "Interrupted") else cell}
+      if cell.1 == 2 then (2,cell.2.1,NativeIoError.kindEntry (.os 99) "Interrupted") else cell}
   | .zeroMetadata => {env with nativeHeap := env.nativeHeap.map fun cell =>
       if cell.1 == 2 then (0,cell.2.1,cell.2.2) else cell}
   | .wrongErrorType => {env with nativeHeap := env.nativeHeap.map fun cell =>
@@ -309,18 +309,18 @@ theorem unrecognized (error : NativeIoError) (env : Environment) (label : String
 
 /-- Unsupported classification exhausts the actual Rust caller without changing state. -/
 theorem rejected (case_ : Invalid) :
-    Result.ReadyPrefix (error_is_retryable (if case_ = .zeroError then ⟨0⟩ else error))
+    Result.ReadyPrefix (error_is_retryable (if case_ = .zeroError then .os 0 else error))
       (invalid case_) (.error .exhausted) (invalid case_) := by
   cases case_ with
   | unknownKind =>
     exact unrecognized error (invalid .unknownKind) "not-a-kind" (by
-      simp [NativeIoError.getKind,NativeIoError.kindTypeName,NativeIoError.kindEntry,NativeIoError.decodeKindEntry,invalid,initial,namespaceCell,
+      simp [NativeIoError.getKind,NativeIoError.identity,NativeIoError.kindTypeName,NativeIoError.kindEntry,NativeIoError.decodeKindEntry,invalid,initial,namespaceCell,
         inodeCell,errorCell,metadata,error,hasError,label,NativeIoError.typeName,
         NativeFile.namespaceTypeName,NativeFile.inodeTypeName])
       (by simp [IoPayload.Extraction.IoErrorModel.decodeKind])
   | _ =>
     apply unavailable
-    simp [NativeIoError.getKind,NativeIoError.kindTypeName,NativeIoError.kindEntry,NativeIoError.decodeKindEntry,invalid,initial,namespaceCell,
+    simp [NativeIoError.getKind,NativeIoError.identity,NativeIoError.kindTypeName,NativeIoError.kindEntry,NativeIoError.decodeKindEntry,invalid,initial,namespaceCell,
       inodeCell,errorCell,metadata,error,hasError,label,NativeIoError.typeName,
       NativeFile.namespaceTypeName,NativeFile.inodeTypeName]
 

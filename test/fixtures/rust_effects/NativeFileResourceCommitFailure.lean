@@ -74,7 +74,7 @@ private theorem borrowed (env : Environment) (state : State) :
 theorem sync_poll (env : Environment) (value : U16) (mask saved : ByteArray)
     (persisted : persist ByteArray.empty (Record.content value) mask = some saved) (rest : Term := .nil) :
     pollSync ⟨2⟩ (decoded env (before value mask rest)) =
-      some (.ok (.Err ⟨10⟩),decoded env (after value saved rest)) := by
+      some (.ok (.Err (.os 10)),decoded env (after value saved rest)) := by
   simp [pollSync,lookup,sharedLookup,getHandle,decodeHandle,encodeHandle,decoded,frame,errorCell,
     before,after,errorScript,inode,decode,encode,limit,Record.content_size,blocked,syncStep,action,persisted,
     store,sharedStore,List.filter,List.map,NativeIoError.typeName,
@@ -86,7 +86,7 @@ the persisted image retained, and never opens or synchronizes the directory. -/
 theorem commit_prefix (env : Environment) (value : U16) (mask saved : ByteArray)
     (persisted : persist ByteArray.empty (Record.content value) mask = some saved) (rest : Term := .nil) :
     Result.ReadyPrefix (file_resource_commit ⟨3,11⟩) (decoded env (before value mask rest))
-      (.ok (.Err ⟨10⟩)) (decoded env (after value saved rest)) := by
+      (.ok (.Err (.os 10))) (decoded env (after value saved rest)) := by
   simp only [file_resource_commit,file_resource_sync,monadLift_self,bind_assoc]
   apply ((borrowed env (before value mask rest)).bind _).trans
   simp only [Result.ok_bind,payload,effects_core.synchronize_file,monadLift_self,syncAll,Result.wait_bind]

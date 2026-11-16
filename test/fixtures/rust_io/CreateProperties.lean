@@ -80,9 +80,9 @@ theorem existing_success_exhausts (script rest : Term) :
 both namespace tables; it consumes only the host outcome. -/
 theorem existing_error (error : Nat) (rest : Term) :
     create_fresh path (occupied (choice false error .nil rest)) =
-      (.ok (.Err ⟨error⟩), occupied rest) := by
+      (.ok (.Err (.os error)), occupied rest) := by
   have poll : pollCreateNew path (occupied (choice false error .nil rest)) =
-      some (.ok (.Err ⟨error⟩), occupied rest) := by
+      some (.ok (.Err (.os error)), occupied rest) := by
     have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
     simp [pollCreateNew,path_bytes,valid_name,occupied,choice,pathChoice,nonnegative,
       namespaceSnapshot,namespaceTable,namespaceHistory,namespaceEntry,tablesEqual,

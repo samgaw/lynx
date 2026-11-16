@@ -164,7 +164,7 @@ theorem acknowledged_prefix (value : U16) (env : Environment)
 theorem creation_error_poll (env : Environment)
     (counter : env.nativeRefCounter = Publish.IoErrors.rejected.nativeRefCounter)
     (heap : env.nativeHeap = Publish.IoErrors.rejected.nativeHeap) :
-    pollCreateNew source env = some (.ok (.Err ⟨1⟩),
+    pollCreateNew source env = some (.ok (.Err (.os 1)),
       {env with nativeRefCounter := Publish.IoErrors.returned.nativeRefCounter, nativeHeap := Publish.IoErrors.returned.nativeHeap}) := by
   simp [pollCreateNew,source_bytes,valid_a,Publish.IoErrors.rejected,Publish.IoErrors.returned,
     counter,heap,pathChoice,namespaceSnapshot,namespaceTable,namespaceHistory,tablesEqual,

@@ -3316,20 +3316,47 @@ instance : NativeCodec NativeFile where
     | _ => none
   decode_encode file := by cases file; rfl
 
-/-- Opaque I/O error identity. Payload and kind remain external. Only a separately
-admitted callback-free OS error capability has a consuming cleanup model. -/
-structure NativeIoError where
-  identity : Nat
+/-- OS errors own admitted opaque capabilities. Simple and static-message errors
+are allocation-free values; they never borrow an OS error's ownership. Custom
+payloads and their user destructors are outside this model. -/
+inductive NativeIoError where
+  | os (identity : Nat)
+  | simple (kind : String)
+  | staticMessage (kind : String) (message : ByteArray)
+
+/-- Only an OS error has an owned identity. Zero is not an OS capability. -/
+@[expose] def NativeIoError.identity : NativeIoError → Nat
+  | .os identity => identity
+  | .simple _ | .staticMessage _ _ => 0
+
+@[expose] def NativeIoError.encode : NativeIoError → Term
+  | .os identity => .nativeReference identity
+  | .simple kind => .tuple #[.atom "rust:simple-io-error",.atom kind]
+  | .staticMessage kind message =>
+    .tuple #[.atom "rust:static-io-error",.atom kind,.bitstring message 0]
+
+@[expose] def NativeIoError.decode : Term → Option NativeIoError
+  | .nativeReference identity => some (.os identity)
+  | .tuple fields => do
+    if size : fields.size = 2 then
+      let .atom "rust:simple-io-error" := fields[0]'(by omega) | none
+      let .atom kind := fields[1]'(by omega) | none
+      some (.simple kind)
+    else if size : fields.size = 3 then
+      let .atom "rust:static-io-error" := fields[0]'(by omega) | none
+      let .atom kind := fields[1]'(by omega) | none
+      let .bitstring message 0 := fields[2]'(by omega) | none
+      some (.staticMessage kind message)
+    else none
+  | _ => none
 
 /-- Internal identity representation only; this does not decode a Rustler argument
 or assert that an arbitrary error is safe to destroy. -/
 instance : NativeCodec NativeIoError where
-  typeName := "core::io::error::Error:os-capability-v1"
-  encode error := .nativeReference error.identity
-  decode
-    | .nativeReference identity => some ⟨identity⟩
-    | _ => none
-  decode_encode error := by cases error; rfl
+  typeName := "core::io::error::Error:disjoint-values-v1"
+  encode := NativeIoError.encode
+  decode := NativeIoError.decode
+  decode_encode error := by cases error <;> simp [NativeIoError.encode,NativeIoError.decode]
 
 namespace NativeIoError
 
@@ -3362,24 +3389,27 @@ capability. It is preserved when the capability is consumed. -/
 justify the metadata's correspondence to std's Error::kind. Missing, stale,
 ambiguous, custom or unbounded capabilities/metadata exhaust verification. -/
 @[expose] def getKind (error : NativeIoError) (env : Environment) : Except Exception String :=
-  if error.identity = 0 ∨ env.nativeRefCounter < error.identity then .error .exhausted
-  else match env.nativeHeap.filter (fun cell => cell.1 == error.identity) with
-  | [(_,storedType,.atom "live")] =>
-    if storedType == typeName then
-      match env.nativeHeap.filter (fun cell => cell.2.1 == kindTypeName &&
-        (match decodeKindEntry cell.2.2 with
-          | some (owner,_) => owner == error.identity
-          | none => false)) with
-      | [(identity,_,payload)] =>
-        if identity = 0 ∨ env.nativeRefCounter < identity ∨
-            (env.nativeHeap.filter (fun cell => cell.1 == identity)).length ≠ 1 then
-          .error .exhausted
-        else match decodeKindEntry payload with
-          | some (_,kind) => .ok kind
-          | none => .error .exhausted
-      | _ => .error .exhausted
-    else .error .exhausted
-  | _ => .error .exhausted
+  match error with
+  | .simple kind | .staticMessage kind _ => .ok kind
+  | .os _ =>
+    if error.identity = 0 ∨ env.nativeRefCounter < error.identity then .error .exhausted
+    else match env.nativeHeap.filter (fun cell => cell.1 == error.identity) with
+    | [(_,storedType,.atom "live")] =>
+      if storedType == typeName then
+        match env.nativeHeap.filter (fun cell => cell.2.1 == kindTypeName &&
+          (match decodeKindEntry cell.2.2 with
+            | some (owner,_) => owner == error.identity
+            | none => false)) with
+        | [(identity,_,payload)] =>
+          if identity = 0 ∨ env.nativeRefCounter < identity ∨
+              (env.nativeHeap.filter (fun cell => cell.1 == identity)).length ≠ 1 then
+            .error .exhausted
+          else match decodeKindEntry payload with
+            | some (_,kind) => .ok kind
+            | none => .error .exhausted
+        | _ => .error .exhausted
+      else .error .exhausted
+    | _ => .error .exhausted
 
 @[expose] def kind (error : NativeIoError) : NativeM String :=
   .nativeGet fun env => Result.ofExcept (getKind error env)
@@ -3388,7 +3418,9 @@ ambiguous, custom or unbounded capabilities/metadata exhaust verification. -/
 ambiguous or custom-payload identities exhaust verification instead of erasing
 an unknown destructor. The admitted std/allocator cleanup is nonpanicking. -/
 @[expose] def dispose (error : NativeIoError) : NativeM Unit :=
-  Result.consumeNativeCapability typeName error.identity
+  match error with
+  | .os identity => Result.consumeNativeCapability typeName identity
+  | .simple _ | .staticMessage _ _ => .ok ()
 
 /-- A uniquely admitted OS error is consumed in a real native prefix. -/
 theorem dispose_prefix (error : NativeIoError) (env : Environment)
@@ -3397,11 +3429,16 @@ theorem dispose_prefix (error : NativeIoError) (env : Environment)
       [(error.identity,typeName,.atom "live")]) :
     Result.ReadyPrefix (dispose error) env (.ok ()) {env with
       nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)} := by
-  simp only [dispose,Result.consumeNativeCapability]
-  apply Result.ReadyPrefix.wait _ _ (.ok ()) _ {env with
-    nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != error.identity)} _ _
-  · simp [nonzero,not_lt.mpr bounded,stored]
-  · exact .refl _ _
+  cases error with
+  | simple kind => simp [identity] at nonzero
+  | staticMessage kind message => simp [identity] at nonzero
+  | os identity =>
+    simp only [NativeIoError.identity] at *
+    simp only [dispose,Result.consumeNativeCapability]
+    apply Result.ReadyPrefix.wait _ _ (.ok ()) _ {env with
+      nativeHeap := env.nativeHeap.filter (fun cell => cell.1 != identity)} _ _
+    · simp [nonzero,not_lt.mpr bounded,stored]
+    · exact .refl _ _
 
 end NativeIoError
 
@@ -3515,7 +3552,7 @@ theorem persist_same (bytes mask result : ByteArray)
     else none
   else do
     let durable ← persist state.durable state.visible mask
-    some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+    some (.Err (.os value), {state with durable := durable, script := rest})
 
 /-- Replace only the returned prefix of a mutable byte slice. Its remaining
 initialized bytes survive a short read. -/
@@ -3553,7 +3590,7 @@ both cases independently of the read. -/
             script := rest }, readBuffer state buffer value bounded available)
       else none
     else none
-  else some (.Err ⟨value⟩, {state with durable := durable, script := rest}, buffer)
+  else some (.Err (.os value), {state with durable := durable, script := rest}, buffer)
 
 /-- The constructor conversion is generated from the actual extracted SeekFrom
 schema; integer widths are retained in the runtime argument. -/
@@ -3585,7 +3622,7 @@ Failure preserves the previous offset under the explicit std/OS model. -/
         position := target.toNat
         durable := durable
         script := rest })
-  else some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+  else some (.Err (.os value), {state with durable := durable, script := rest})
 
 @[expose] def syncStep (state : State) :
     Option (core.result.Result Unit NativeIoError × State) := do
@@ -3595,7 +3632,7 @@ Failure preserves the previous offset under the explicit std/OS model. -/
     else some (.Ok (), {state with durable := state.visible, script := rest})
   else do
     let durable ← persist state.durable state.visible mask
-    some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+    some (.Err (.os value), {state with durable := durable, script := rest})
 
 /-- Set the visible length, preserving the prefix and zero-filling extension.
 The descriptor offset is unchanged. Durability still requires synchronization. -/
@@ -3613,7 +3650,7 @@ The descriptor offset is unchanged. Durability still requires synchronization. -
       some (.Ok (), {state with visible := visible, durable := durable, script := rest})
   else do
     let durable ← persist state.durable state.visible mask
-    some (.Err ⟨value⟩, {state with durable := durable, script := rest})
+    some (.Err (.os value), {state with durable := durable, script := rest})
 
 /-- Named files use one inode image and distinct handle offsets/scripts. A
 pre-admitted independent file remains an explicitly disjoint host capability. -/
@@ -3796,7 +3833,7 @@ persistence guarantee. A reported success for an existing name is rejected. -/
     match pathChoice "create_new" path state.script with
     | none => invalid
     | some (success, error, ioScript, rest) =>
-      if !success then some (.ok (.Err ⟨error⟩), replaceNamespaceScript rest env)
+      if !success then some (.ok (.Err (.os error)), replaceNamespaceScript rest env)
       else if error != 0 || state.names.any (fun entry => entry.1.data == path.data) ||
           state.names.length ≥ 1024 || state.pending.length ≥ 1024 then invalid
       else
@@ -3859,7 +3896,7 @@ Physical Unix/filesystem atomicity and error correspondence are external models.
     | none => invalid
     | some (success,error,applied,rest) =>
       if success && (error != 0 || !applied) then invalid else
-      let reply := if success then core.result.Result.Ok () else .Err ⟨error⟩
+      let reply := if success then core.result.Result.Ok () else .Err (.os error)
       if !applied then some (.ok reply, replaceNamespaceScript rest env) else
       match state.names.filter (fun entry => entry.1.data == source.data) with
       | [(_,node)] =>
@@ -3919,7 +3956,7 @@ may still have reached disk. Filesystem/device fsync correspondence is assumed. 
       let updated := storeDirectory file directoryTypeName rest env
       if success then
         some (.ok (.Ok ()),storeNamespace {state with committed := state.names, pending := []} updated)
-      else some (.ok (.Err ⟨error⟩),updated)
+      else some (.ok (.Err (.os error)),updated)
     | _,_ => invalid
 
 /-- Directory destruction consumes the capability on either close outcome and
@@ -3970,7 +4007,7 @@ never supplies the namespace synchronization guarantee of fsync. -/
               nativeRefCounter := fresh
               nativeHeap := (fresh, handleTypeName, encodeHandle ⟨id,0,ioScript⟩) :: updated.nativeHeap})
         | _ => invalid
-      else some (.ok (.Err ⟨error⟩), replaceNamespaceScript rest env)
+      else some (.ok (.Err (.os error)), replaceNamespaceScript rest env)
 
 @[expose] def openReadOnly (path : Str) : NativeM (core.result.Result NativeFile NativeIoError) :=
   .wait (pollOpenReadOnly path) fun reply => match reply with
@@ -4007,7 +4044,7 @@ Directories, creation, append mode and truncation are outside this operation. -/
               nativeRefCounter := fresh
               nativeHeap := (fresh, writableHandleTypeName, encodeHandle ⟨id,0,ioScript⟩) :: updated.nativeHeap})
         | _ => invalid
-      else some (.ok (.Err ⟨error⟩), replaceNamespaceScript rest env)
+      else some (.ok (.Err (.os error)), replaceNamespaceScript rest env)
 
 @[expose] def openReadWrite (path : Str) : NativeM (core.result.Result NativeFile NativeIoError) :=
   .wait (pollOpenReadWrite path) fun reply => match reply with
@@ -4462,20 +4499,24 @@ theorem file_sync (file : NativeFile) : NativeM.NoPanic (NativeFile.syncAll file
 
 set_option maxHeartbeats 2000000 in
 theorem io_error_dispose (error : NativeIoError) : NativeM.NoPanic (NativeIoError.dispose error) := by
-  unfold NativeIoError.dispose Result.consumeNativeCapability
-  apply NativeM.NoPanic.wait
-  intro env reply after ready
-  cases reply with
-  | ok value => exact .ok value
-  | error error =>
-    have equal : error = .exhausted := by
+  cases error with
+  | simple kind => exact .ok ()
+  | staticMessage kind message => exact .ok ()
+  | os identity =>
+      unfold NativeIoError.dispose Result.consumeNativeCapability
+      apply NativeM.NoPanic.wait
+      intro env reply after ready
+      cases reply with
+      | ok value => exact .ok value
+      | error error =>
+        have equal : error = .exhausted := by
 
-      repeat' first
-        | split at ready
-        | simp_all
+          repeat' first
+            | split at ready
+            | simp_all
 
-    subst error
-    exact .exhausted
+        subst error
+        exact .exhausted
 
 end Lynx.NativeM.NoPanic
 

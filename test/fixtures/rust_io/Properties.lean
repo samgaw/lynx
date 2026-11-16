@@ -315,10 +315,10 @@ theorem protocol_write_error (file : NativeFile) (data : Slice U8)
     (script : before.script = outcome "write" false error mask rest)
     (accepted : persist before.durable before.visible mask = some durable) :
     write_then_sync file data (fileEnv env file before frame) =
-      (.ok (.Err ⟨error⟩, file), fileEnv env file
+      (.ok (.Err (.os error), file), fileEnv env file
         { before with durable := durable, script := rest } frame) := by
   have ready : pollWrite file data (fileEnv env file before frame) =
-      some (.ok (.Err ⟨error⟩, file), fileEnv env file
+      some (.ok (.Err (.os error), file), fileEnv env file
         { before with durable := durable, script := rest } frame) := by
     simp [-getHandle, pollWrite, no_shared_handle_at env file before frame separate,
       lookup_at env file before frame separate valid,

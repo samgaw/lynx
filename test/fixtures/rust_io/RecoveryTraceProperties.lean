@@ -275,7 +275,7 @@ inductive Scenario where
   | .empty => .Ok none
   | _ => .Ok (some (GuardedRecovery.ReadTrace.word 7#u8 8#u8))
 @[expose] def firstNativeReply : Scenario → core.result.Result (Option U16) NativeIoError
-  | .firstError => .Err ⟨2⟩
+  | .firstError => .Err (.os 2)
   | .empty => .Ok none
   | _ => .Ok (some (GuardedRecovery.ReadTrace.word 7#u8 8#u8))
 @[expose] def firstUnlocked (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
@@ -370,7 +370,7 @@ theorem first_locked (registry : List String) (counter : Nat) (scenario : Scenar
   | _ => .Ok (some (GuardedRecovery.ReadTrace.word 9#u8 10#u8))
 @[expose] def secondNativeReply : Scenario → core.result.Result (Option U16) NativeIoError
   | .empty | .tail => .Ok none
-  | .secondError => .Err ⟨2⟩
+  | .secondError => .Err (.os 2)
   | _ => .Ok (some (GuardedRecovery.ReadTrace.word 9#u8 10#u8))
 @[expose] def secondUnlocked (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
   world registry counter scenario 4 false (secondPosition scenario) (closing scenario)

@@ -155,7 +155,7 @@ theorem boundary_recovery (env : Environment) (value : U16) (mask saved : ByteAr
     ∃ script before after result,
       restartFilesystem image script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok none ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok none ∨ result = .Ok (some value)) := by
   refine ⟨boundary_prefix env value mask saved persisted rest boundary registered,?_⟩
   obtain ⟨later,contents,masksEq,step,inodes,water,names⟩ :=
     boundary_crash env value mask saved persisted rest boundary chosen masks image accepted
@@ -170,7 +170,7 @@ theorem boundary_recovery (env : Environment) (value : U16) (mask saved : ByteAr
   rcases names with absent | retained
   · have imageEq : image = ⟨[],[(1,contents)],boundaryWater boundary⟩ := by cases image; simp_all
     refine ⟨ShortRecovery.missingChoice error,ShortRecovery.missingBoot contents (boundaryWater boundary) error,
-      ShortRecovery.missingDone contents (boundaryWater boundary),.Err ⟨error⟩,?_,
+      ShortRecovery.missingDone contents (boundaryWater boundary),.Err (.os error),?_,
       ShortRecovery.missing_recovery contents (boundaryWater boundary) error,Or.inl rfl⟩
     rw [imageEq]
     exact ShortRecovery.missing_restart contents (by simp only [limit]; omega) _ valid error
@@ -239,7 +239,7 @@ theorem finite_background_recovery (env : Environment) (value : U16) (mask saved
         some ⟨(if retainName then Publish.names else []),[(1,contents)],boundaryWater boundary⟩ ∧
       restartFilesystem ⟨(if retainName then Publish.names else []),[(1,contents)],boundaryWater boundary⟩ script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok none ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok none ∨ result = .Ok (some value)) := by
   obtain ⟨combined,step⟩ := Persistence.finite_compose
     (if afterFailure boundary then saved else ByteArray.empty) (Record.content value) history contents advanced
   have captured := image_of_persist env value mask saved persisted rest boundary combined contents step retainName

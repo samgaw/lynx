@@ -108,7 +108,7 @@ theorem boundary_recovery (env : Environment) (value : U16) (boundary : Boundary
     ∃ script before after result,
       restartFilesystem image script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok none ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok none ∨ result = .Ok (some value)) := by
   refine ⟨boundary_prefix env value boundary registered,?_⟩
   cases boundary with
   | beforeDecode => exact ShortRecovery.all_image_recovery env value chosen masks image error accepted

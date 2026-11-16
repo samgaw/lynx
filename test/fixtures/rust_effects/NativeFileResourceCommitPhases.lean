@@ -150,7 +150,7 @@ theorem phase_recovery (env : Environment) (value : U16) (phase : Phase) (chosen
     ∃ script before after result,
       restartFilesystem image script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok none ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok none ∨ result = .Ok (some value)) := by
   refine ⟨phase_prefix env value phase,?_⟩
   obtain ⟨mask,contents,masksEq,saved,inodes,water,names,published⟩ :=
     phase_crash env value phase chosen masks image accepted
@@ -163,7 +163,7 @@ theorem phase_recovery (env : Environment) (value : U16) (phase : Phase) (chosen
   · have imageEq : image = ⟨[],[(1,contents)],phaseWater phase⟩ := by cases image; simp_all
     refine ⟨ShortRecovery.missingChoice error,
       ShortRecovery.missingBoot contents (phaseWater phase) error,
-      ShortRecovery.missingDone contents (phaseWater phase),.Err ⟨error⟩,?_,
+      ShortRecovery.missingDone contents (phaseWater phase),.Err (.os error),?_,
       ShortRecovery.missing_recovery contents (phaseWater phase) error,Or.inl rfl⟩
     rw [imageEq]
     exact ShortRecovery.missing_restart contents (by simp only [limit]; omega) _ valid error
@@ -305,7 +305,7 @@ theorem nif_phase_recovery (env : Environment) (value : U16) (phase : Phase) (ch
     ∃ script before after result,
       restartFilesystem image script = some before ∧
       recover_file_record (toStr "resource") before = (.ok result,after) ∧
-      (result = .Err ⟨error⟩ ∨ result = .Ok none ∨ result = .Ok (some value)) := by
+      (result = .Err (.os error) ∨ result = .Ok none ∨ result = .Ok (some value)) := by
   exact ⟨nif_phase_prefix env value phase,(phase_recovery env value phase chosen masks image error accepted).2⟩
 
 end FileResource.CommitPhases

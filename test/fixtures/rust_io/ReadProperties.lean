@@ -127,7 +127,7 @@ theorem error_step (before : State) (error : Nat) (mask durable : ByteArray) (re
     (choice : action "read" before.script = some (false, error, mask, rest))
     (accepted : persist before.durable before.visible mask = some durable) :
     readStep before (one 0#u8) =
-      some (.Err ⟨error⟩, readState before 0 durable rest, one 0#u8) := by
+      some (.Err (.os error), readState before 0 durable rest, one 0#u8) := by
   simp [readStep, one, choice, accepted, limit, readState]
 
 /-- An empty file does not produce a word from the initialized zero buffer. -/

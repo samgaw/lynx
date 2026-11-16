@@ -310,7 +310,7 @@ theorem commit_recovery (env : Environment) (value : U16)
 
 theorem error_poll (low high : UInt8) (generation : Nat) (validGeneration : 1 ≤ generation) (error : Nat) :
     pollRead ⟨generation + 1⟩ (one 0#u8) (scan low high generation 0 (readError error)) =
-      some (.ok (.Err ⟨error⟩,⟨generation + 1⟩,one 0#u8),scan low high generation 0 closeScript) := by
+      some (.ok (.Err (.os error),⟨generation + 1⟩,one 0#u8),scan low high generation 0 closeScript) := by
   have inside : ¬ generation + 1 < 1 := by omega
   have genNonzero : generation ≠ 0 := by omega
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
@@ -323,7 +323,7 @@ theorem error_poll (low high : UInt8) (generation : Nat) (validGeneration : 1 �
 /-- The actual failed read returns its error and closes the newly opened file. -/
 theorem read_error_cleanup (low high : UInt8) (generation : Nat) (validGeneration : 1 ≤ generation) (error : Nat) :
     recover_file_word (toStr "resource") (boot low high generation (readError error)) =
-      (.ok (.Err ⟨error⟩),scan low high generation 0 .nil true) := by
+      (.ok (.Err (.os error)),scan low high generation 0 .nil true) := by
   simp only [recover_file_word,monadLift_self,openReadOnly,Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ (open_poll low high generation validGeneration (readError error))]
   simp only [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,

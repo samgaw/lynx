@@ -131,7 +131,7 @@ theorem publication_recovery (mask result : ByteArray)
   .cons (.tuple #[.atom "read",.atom "error",.integer error,.bitstring ⟨#[0,0]⟩ 0]) closeScript
 
 theorem error_poll (error : Nat) : pollRead ⟨4⟩ (one 0#u8) (scan 0 (readError error)) =
-    some (.ok (.Err ⟨error⟩,⟨4⟩,one 0#u8),scan 0 closeScript) := by
+    some (.ok (.Err (.os error),⟨4⟩,one 0#u8),scan 0 closeScript) := by
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   simp [pollRead,lookup,sharedLookup,getHandle,decodeHandle,encodeHandle,scan,inode,
     decode,encode,limit,content_size,blocked,readStep,readError,closeScript,actionOk,
@@ -149,7 +149,7 @@ theorem close_error_path : pollClose ⟨4⟩ (scan 0 closeScript) = some (.ok ()
 its owned capability, rather than reporting a successful decoded word. -/
 theorem read_error_cleanup (error : Nat) :
     read_and_close_word ⟨4⟩ (scan 0 (readError error)) =
-      (.ok (.Err ⟨error⟩),scan 0 .nil true) := by
+      (.ok (.Err (.os error)),scan 0 .nil true) := by
   simp only [read_and_close_word,read_word,NativeM.lift,monadLift_self,Result.ok_bind,
     Array.to_slice_mut,Array.to_slice,Array.make_val,bind_assoc]
   change (io_core.read_once ⟨4⟩ (one 0#u8) >>= _).run _ = _

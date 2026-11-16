@@ -13,9 +13,9 @@ The mailbox joins the workers before inspecting their shared capability heap. -/
     (explicit : NativeIoError → NativeM Bool)
     (implicit : NativeIoError → NativeM Unit) : Result Term :=
   Result.schedule {} (do
-    implicit ⟨1⟩
+    implicit (.os 1)
     Result.send [] (.atom "done") (.ok .nil)) fun _ => do
-      let acknowledged ← explicit ⟨2⟩
+      let acknowledged ← explicit (.os 2)
       Result.receive .infinity (fun _ message => some message) fun message =>
         .nativeGet fun env =>
           match env.nativeHeap with

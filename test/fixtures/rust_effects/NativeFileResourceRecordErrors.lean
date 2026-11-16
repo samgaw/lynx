@@ -58,7 +58,7 @@ theorem success_poll (position : Nat) (inside : position < 4) (rest : Term) :
 theorem error_poll (position error : Nat) (bounded : position ≤ 4) (rest : Term) :
     pollRead ⟨generation + 1⟩ (one 0#u8)
       (scan a b c d generation position (failedRead error rest)) =
-      some (.ok (.Err ⟨error⟩,⟨generation + 1⟩,one 0#u8),
+      some (.ok (.Err (.os error),⟨generation + 1⟩,one 0#u8),
         scan a b c d generation position rest) := by
   have insideId : ¬ generation + 1 < 1 := by omega
   have genNonzero : generation ≠ 0 := by omega
@@ -87,7 +87,7 @@ theorem word_error_first (position error : Nat) (bounded : position ≤ 4) (rest
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
     (effects_core.read_file_word ⟨generation + 1⟩ >>= next)
       (scan a b c d generation position (failedRead error rest)) =
-    next (.Err ⟨error⟩,⟨generation + 1⟩) (scan a b c d generation position rest) := by
+    next (.Err (.os error),⟨generation + 1⟩) (scan a b c d generation position rest) := by
   simp only [effects_core.read_file_word,NativeM.lift,monadLift_self,Result.ok_bind,
     Array.to_slice_mut,Array.to_slice,Array.make_val,bind_assoc]
   change (effects_core.read_file_once ⟨generation + 1⟩ (one 0#u8) >>= _) _ = _
@@ -98,7 +98,7 @@ theorem word_error_second (position error : Nat) (inside : position < 4) (rest :
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
     (effects_core.read_file_word ⟨generation + 1⟩ >>= next)
       (scan a b c d generation position (successRead (failedRead error rest))) =
-    next (.Err ⟨error⟩,⟨generation + 1⟩) (scan a b c d generation (position + 1) rest) := by
+    next (.Err (.os error),⟨generation + 1⟩) (scan a b c d generation (position + 1) rest) := by
   simp only [effects_core.read_file_word,NativeM.lift,monadLift_self,Result.ok_bind,
     Array.to_slice_mut,Array.to_slice,Array.make_val,bind_assoc]
   change (effects_core.read_file_once ⟨generation + 1⟩ (one 0#u8) >>= _) _ = _
@@ -130,7 +130,7 @@ theorem record_error (position error : Nat) (inside : position < 4) (rest : Term
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α) :
     (effects_core.read_file_record ⟨generation + 1⟩ >>= next)
       (scan a b c d generation 0 (reads error rest position)) =
-    next (.Err ⟨error⟩,⟨generation + 1⟩) (scan a b c d generation position rest) := by
+    next (.Err (.os error),⟨generation + 1⟩) (scan a b c d generation position rest) := by
   interval_cases position <;> simp only [effects_core.read_file_record,monadLift_self,bind_assoc,reads]
   · rw [word_error_first a b c d generation validGeneration _ _ (by omega)]
     simp [NativeM.ok]
@@ -148,7 +148,7 @@ file on all ordinary returns, even when close itself reports an error. -/
 theorem recover_error (position error : Nat) (inside : position < 4) (closeError : Option Nat) :
     recover_file_record (toStr "resource")
       (boot a b c d generation (reads error (closing closeError) position)) =
-      (.ok (.Err ⟨error⟩),scan a b c d generation position .nil true) := by
+      (.ok (.Err (.os error)),scan a b c d generation position .nil true) := by
   simp only [recover_file_record,monadLift_self,openReadOnly,Result.wait_bind]
   rw [Result.wait_ready_apply _ _ _ _ _ (open_poll a b c d generation validGeneration _)]
   simp only [Result.ok_bind,core.result.Result.Insts.CoreOpsTry.branch,
@@ -210,7 +210,7 @@ theorem committed_error (env : Environment) (value : U16) (chosen : Names)
     recover_file_record (toStr "resource")
       (boot (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) image.highWater (reads error (closing closeError) position)) =
-      (.ok (.Err ⟨error⟩),scan (Record.low value) (Record.high value) (Record.low (~~~value))
+      (.ok (.Err (.os error)),scan (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) image.highWater position .nil true) := by
   have same := RecordRetry.committed_crash env value chosen masks image accepted
   have valid : 1 ≤ image.highWater := by rw [same]; change 1 ≤ 9; decide +kernel
@@ -264,7 +264,7 @@ theorem error_then_retries (value : U16) (generation : Nat) (valid : 1 ≤ gener
     recover_file_record (toStr "resource")
       (boot (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) generation (reads error (closing closeError) position)) =
-      (.ok (.Err ⟨error⟩),scan (Record.low value) (Record.high value) (Record.low (~~~value))
+      (.ok (.Err (.os error)),scan (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) generation position .nil true) ∧
     restartFilesystem image openingScript =
       some (RecordRecovery.boot (Record.low value) (Record.high value)
@@ -294,7 +294,7 @@ theorem error_crash_witness (value : U16) (generation : Nat) (valid : 1 ≤ gene
     recover_file_record (toStr "resource")
       (boot (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) generation (reads error (closing closeError) position)) =
-      (.ok (.Err ⟨error⟩),scan (Record.low value) (Record.high value) (Record.low (~~~value))
+      (.ok (.Err (.os error)),scan (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) generation position .nil true) ∧
     filesystemCrashImage Publish.names [(1,⟨#[0,0,0,0]⟩)]
       (scan (Record.low value) (Record.high value) (Record.low (~~~value))
@@ -318,7 +318,7 @@ omit validGeneration in
 allocated and no inode contents or durability checkpoint are changed. -/
 theorem open_failure_poll (contents : ByteArray) (generation error : Nat) :
     pollOpenReadOnly (toStr "resource") (checkpoint contents generation (openingFailure error)) =
-      some (.ok (.Err ⟨error⟩),checkpoint contents generation .nil) := by
+      some (.ok (.Err (.os error)),checkpoint contents generation .nil) := by
   have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
   simp [pollOpenReadOnly,path_bytes,supportedOpenPath,Publish.valid_path,checkpoint,
     namespaceState,namespaceSnapshot,namespaceTable,namespaceHistory,namespaceEntry,
@@ -331,7 +331,7 @@ any file; its residual is the exact original I/O error. -/
 theorem open_failure_prefix (contents : ByteArray) (generation error : Nat) :
     Result.ReadyPrefix (recover_file_record (toStr "resource"))
       (checkpoint contents generation (openingFailure error))
-      (.ok (.Err ⟨error⟩)) (checkpoint contents generation .nil) := by
+      (.ok (.Err (.os error))) (checkpoint contents generation .nil) := by
   simp only [recover_file_record,monadLift_self,openReadOnly,Result.wait_bind]
   apply Result.ReadyPrefix.wait _ _ _ _ _ _ _ (open_failure_poll contents generation error)
   simp [core.result.Result.Insts.CoreOpsTry.branch,
@@ -342,7 +342,7 @@ theorem open_failure_prefix (contents : ByteArray) (generation error : Nat) :
 omit validGeneration in
 theorem recover_open_failure (contents : ByteArray) (generation error : Nat) :
     recover_file_record (toStr "resource") (checkpoint contents generation (openingFailure error)) =
-      (.ok (.Err ⟨error⟩),checkpoint contents generation .nil) := by
+      (.ok (.Err (.os error)),checkpoint contents generation .nil) := by
   simpa only [Result.ok_apply] using (open_failure_prefix contents generation error).apply
 
 /-- Consuming a namespace script changes no persistent observation. -/
@@ -477,7 +477,7 @@ theorem one_failed_attempt (value : U16) (generation : Nat) (valid : 1 ≤ gener
     recover_file_record (toStr "resource")
       (boot (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) generation (reads error (closing closeError) position)) =
-      (.ok (.Err ⟨error⟩),scan (Record.low value) (Record.high value) (Record.low (~~~value))
+      (.ok (.Err (.os error)),scan (Record.low value) (Record.high value) (Record.low (~~~value))
         (Record.high (~~~value)) generation position .nil true) ∧
     Attempts value generation (generation + 1) ∧
     recover_file_record (toStr "resource")
@@ -501,7 +501,7 @@ theorem committed_open_failure (env : Environment) (value : U16) (chosen : Names
       some (checkpoint (Record.content value) image.highWater (openingFailure error)) ∧
     recover_file_record (toStr "resource")
       (checkpoint (Record.content value) image.highWater (openingFailure error)) =
-      (.ok (.Err ⟨error⟩),checkpoint (Record.content value) image.highWater .nil) := by
+      (.ok (.Err (.os error)),checkpoint (Record.content value) image.highWater .nil) := by
   have same := RecordRetry.committed_crash env value chosen masks image accepted
   refine ⟨?_,recover_open_failure _ _ _⟩
   rw [same,content_layout]
@@ -517,7 +517,7 @@ theorem opening_retry (value : U16) (generation : Nat) (valid : 1 ≤ generation
     (trace : Attempts value image.highWater last) :
     recover_file_record (toStr "resource")
       (checkpoint (Record.content value) generation (openingFailure error)) =
-      (.ok (.Err ⟨error⟩),checkpoint (Record.content value) generation .nil) ∧
+      (.ok (.Err (.os error)),checkpoint (Record.content value) generation .nil) ∧
     restartFilesystem image openingScript =
       some (RecordRecovery.boot (Record.low value) (Record.high value)
         (Record.low (~~~value)) (Record.high (~~~value)) image.highWater) ∧
@@ -539,7 +539,7 @@ The retry relation includes this failed attempt despite its unchanged watermark.
 theorem opening_witness (value : U16) (generation : Nat) (valid : 1 ≤ generation) (error : Nat) :
     Result.ReadyPrefix (recover_file_record (toStr "resource"))
       (checkpoint (Record.content value) generation (openingFailure error))
-      (.ok (.Err ⟨error⟩)) (checkpoint (Record.content value) generation .nil) ∧
+      (.ok (.Err (.os error))) (checkpoint (Record.content value) generation .nil) ∧
     filesystemCrashImage Publish.names [(1,⟨#[0,0,0,0]⟩)]
       (checkpoint (Record.content value) generation .nil) =
       some ⟨Publish.names,[(1,Record.content value)],generation⟩ ∧

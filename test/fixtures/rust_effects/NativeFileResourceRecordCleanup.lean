@@ -10,7 +10,7 @@ open FileResource.Recovery (one)
 for the Rust reader or a hypothesis about its result. -/
 @[expose] def cleanup (generation error : Nat) : NativeM (core.result.Result (Option U16) NativeIoError) := do
   NativeOwnedDrop.drop (⟨generation + 1⟩ : NativeFile)
-  NativeM.ok (.Err ⟨error⟩)
+  NativeM.ok (.Err (.os error))
 
 variable (a b c d : U8) (generation : Nat) (validGeneration : 1 ≤ generation)
 include validGeneration
@@ -49,7 +49,7 @@ theorem before_close (position error : Nat) (inside : position < 4) (closeError 
 theorem after_close (position error : Nat) (inside : position < 4) (closeError : Option Nat) :
     Result.ReadyPrefix (recover_file_record (toStr "resource"))
       (RecordErrors.boot a b c d generation (reads error (closing closeError) position))
-      (.ok (.Err ⟨error⟩)) (scan a b c d generation position .nil true) := by
+      (.ok (.Err (.os error))) (scan a b c d generation position .nil true) := by
   apply (before_close a b c d generation validGeneration position error inside closeError).trans
   simp only [cleanup,NativeOwnedDrop.drop,close,Result.wait_bind]
   apply Result.ReadyPrefix.wait _ _ _ _ _ _ _
@@ -65,7 +65,7 @@ theorem cleanup_prefix (position error : Nat) (inside : position < 4)
       residual (cleanupState a b c d generation position closeError closed) := by
   cases closed
   · exact ⟨cleanup generation error,before_close a b c d generation validGeneration position error inside closeError⟩
-  · exact ⟨.ok (.Err ⟨error⟩),after_close a b c d generation validGeneration position error inside closeError⟩
+  · exact ⟨.ok (.Err (.os error)),after_close a b c d generation validGeneration position error inside closeError⟩
 
 omit validGeneration in
 /-- An admitted crash before or after failed-read destruction composes with

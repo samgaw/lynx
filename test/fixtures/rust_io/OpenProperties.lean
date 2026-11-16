@@ -87,9 +87,9 @@ theorem distinct_handles (state : State) (firstScript secondScript rest : Term)
 theorem core_open_error_next {α : Type} (state : State) (error : Nat) (rest : Term)
     (next : core.result.Result NativeFile NativeIoError → NativeM α) :
     (io_core.open_readonly path >>= next).run (initial state (choice false error .nil rest)) =
-      (next (.Err ⟨error⟩)).run (initial state rest) := by
+      (next (.Err (.os error))).run (initial state rest) := by
   have poll : pollOpenReadOnly path (initial state (choice false error .nil rest)) =
-      some (.ok (.Err ⟨error⟩), initial state rest) := by
+      some (.ok (.Err (.os error)), initial state rest) := by
     have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
     simp [pollOpenReadOnly, supportedOpenPath, path_bytes, valid_name, not_directory, initial, namespaceCell, nodeCell,
       namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
@@ -101,7 +101,7 @@ theorem core_open_error_next {α : Type} (state : State) (error : Nat) (rest : T
 
 theorem open_error (state : State) (error : Nat) (rest : Term) :
     open_readonly path (initial state (choice false error .nil rest)) =
-      (.ok (.Err ⟨error⟩), initial state rest) := by
+      (.ok (.Err (.os error)), initial state rest) := by
   have returned := core_open_error_next state error rest Result.ok
   simpa [open_readonly, monadLift_self, Result.bind_ok, Result.ok_apply] using returned
 
@@ -109,7 +109,7 @@ theorem open_error (state : State) (error : Nat) (rest : Term) :
 without opening a second handle or consuming a second host outcome. -/
 theorem pair_first_error (state : State) (error : Nat) (rest : Term) :
     open_pair path (initial state (choice false error .nil rest)) =
-      (.ok (.Err ⟨error⟩), initial state rest) := by
+      (.ok (.Err (.os error)), initial state rest) := by
   simp only [open_pair, monadLift_self]
   rw [core_open_error_next state error rest]
   simp [core.result.Result.Insts.CoreOpsTry.branch,
@@ -153,10 +153,10 @@ theorem core_open_again_error_next {α : Type} (state : State) (firstScript : Te
     (next : core.result.Result NativeFile NativeIoError → NativeM α) :
     (io_core.open_readonly path >>= next).run
       (opened state firstScript (choice false error .nil rest)) =
-      (next (.Err ⟨error⟩)).run (opened state firstScript rest) := by
+      (next (.Err (.os error))).run (opened state firstScript rest) := by
   have poll : pollOpenReadOnly path
       (opened state firstScript (choice false error .nil rest)) =
-      some (.ok (.Err ⟨error⟩), opened state firstScript rest) := by
+      some (.ok (.Err (.os error)), opened state firstScript rest) := by
     have nonnegative : ¬ (error : Int) < 0 := not_lt.mpr (Int.natCast_nonneg error)
     simp [pollOpenReadOnly, supportedOpenPath, path_bytes, valid_name, not_directory, opened, namespaceCell, nodeCell,
       namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
@@ -174,7 +174,7 @@ theorem pair_second_error (state after : State) (firstScript : Term) (error : Na
     (step : closeStep {state with position := 0, script := firstScript} = some after) :
     open_pair path
       (initial state (choice true 0 firstScript (choice false error .nil rest))) =
-      (.ok (.Err ⟨error⟩), retire ⟨2⟩ after (opened state firstScript rest)) := by
+      (.ok (.Err (.os error)), retire ⟨2⟩ after (opened state firstScript rest)) := by
   have before : lookup ⟨2⟩ (opened state firstScript rest) =
       some {state with position := 0, script := firstScript} := by
     simp only [limit] at visible durable

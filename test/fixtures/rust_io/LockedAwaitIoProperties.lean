@@ -64,7 +64,7 @@ set_option maxHeartbeats 4000000 in
 theorem error_prefix (resume poisoned : Bool) :
     Result.ReadyPrefix (poll_locked_write ⟨1⟩ data resume) (before false poisoned)
       (.ok (if resume then some (.Err 1#u8) else none)) (released false poisoned) := by
-  apply caller_error_prefix (acquired := acquisition false poisoned) (error := ⟨3⟩)
+  apply caller_error_prefix (acquired := acquisition false poisoned) (error := .os 3)
     (locked := acquired false poisoned) (written := written false poisoned)
     (cleaned := cleaned poisoned) (file := ⟨2⟩)
   · cases poisoned <;> cbv
