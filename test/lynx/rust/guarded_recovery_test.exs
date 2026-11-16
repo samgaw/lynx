@@ -27,16 +27,24 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
 
     for {source, target} <- [
           {"GuardedRecoveryProperties.lean", "Properties.lean"},
-          {"GuardedRecoveryWriterProperties.lean", "Writer.lean"}
+          {"GuardedRecoveryWriterProperties.lean", "Writer.lean"},
+          {"GuardedReadTraceProperties.lean", "ReadTrace.lean"}
         ],
         do:
-          File.cp!(Path.join(@fixture, source), Path.join(project, "GuardedRecovery/" <> target))
+          File.write!(
+            Path.join(project, "GuardedRecovery/" <> target),
+            File.read!(Path.join(@fixture, source))
+            |> String.replace("io_native io_native.io_protocol", "io_protocol")
+          )
 
     properties =
       ~w(GuardedRecovery.Properties.recovery_after_restart
       GuardedRecovery.Properties.every_recovery GuardedRecovery.Writer.writer_transitions
       GuardedRecovery.Writer.failed_sync_can_lose_writes GuardedRecovery.Writer.acknowledged_recovery
-      GuardedRecovery.Writer.every_acknowledged_recovery)
+      GuardedRecovery.Writer.every_acknowledged_recovery
+      GuardedRecovery.ReadTrace.Reads.ready GuardedRecovery.ReadTrace.locked_contract
+      GuardedRecovery.ReadTrace.locked_ready GuardedRecovery.ReadTrace.locked_every_run
+      GuardedRecovery.ReadTrace.admitted_locked GuardedRecovery.ReadTrace.missing_error_exhausts)
 
     options = [
       roots: ~w(io_protocol::reopen_words io_protocol::poll_locked_sync),
@@ -49,7 +57,11 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
       lean_project: project,
       module_prefix: "GuardedRecovery.Extraction",
       build_dir: Path.join(tmp, "build"),
-      proof_modules: ["GuardedRecovery.Properties", "GuardedRecovery.Writer"],
+      proof_modules: [
+        "GuardedRecovery.Properties",
+        "GuardedRecovery.Writer",
+        "GuardedRecovery.ReadTrace"
+      ],
       required_properties: properties
     ]
 
@@ -76,6 +88,8 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
 
     for {marker, from, to} <- [
           {"pub fn reopen_words(", "locked_word(&mutex, 2)", "locked_word(&mutex, 0)"},
+          {"pub fn read_word(", "from_le_bytes([low, high])", "from_le_bytes([high, low])"},
+          {"pub fn locked_word(", "Err(1)", "Err(2)"},
           {"fn synchronize_written(", "        Ok(count) => match",
            "        Ok(2) => Ok(2),\n        Ok(count) => match"}
         ] do
@@ -84,15 +98,24 @@ defmodule Lynx.Rust.GuardedRecoveryTest do
       refute body == changed
       File.write!(source, prefix <> marker <> changed)
 
-      assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-        Lynx.Rust.verify!(workspace, "io-protocol", options)
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rust.verify!(workspace, "io-protocol", options)
+        end
+
+      if marker in ["pub fn read_word(", "pub fn locked_word("] do
+        assert error.message =~ "ReadTrace.lean"
+        assert error.message =~ ~r/unsolved goals|Type mismatch|Tactic|rfl/
       end
+
+      label = String.replace(marker, ~r/[^a-z0-9]/i, "_")
+      File.write!(Path.join(tmp, "mutation-" <> label <> ".log"), error.message)
 
       File.write!(source, valid)
       assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "io-protocol", options).reports
     end
 
-    proof = Path.join(project, "GuardedRecovery/Writer.lean")
+    proof = Path.join(project, "GuardedRecovery/ReadTrace.lean")
     valid_proof = File.read!(proof)
 
     for extra <- [
