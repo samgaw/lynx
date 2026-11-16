@@ -20,6 +20,17 @@ trusted. Existing resource contents and other runtime state are preserved. -/
       computation { env with nativeResourceTypes := (env.nativeResourceTypes ++ types).eraseDups } := by
   simp [withResourceTypes]
 
+/-- The registration step preserves the actual native execution prefix.
+The supplied trace starts after registration in the updated registry. -/
+theorem withResourceTypes_readyPrefix {computation residual : Result α}
+    {before after : Environment} (types : List String)
+    (trace : Result.ReadyPrefix computation
+      {before with nativeResourceTypes := (before.nativeResourceTypes ++ types).eraseDups}
+      residual after) :
+    Result.ReadyPrefix (withResourceTypes types computation) before residual after := by
+  unfold withResourceTypes
+  exact .nativeModify _ _ () _ _ _ _ rfl trace
+
 theorem registered_resource_type (types : List String) (env : Environment)
     (name : String) (member : name ∈ types) :
     name ∈ (env.nativeResourceTypes ++ types).eraseDups := by

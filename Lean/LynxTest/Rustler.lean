@@ -14,6 +14,15 @@ theorem otherAtomIsNotBool (name : String) (ht : name ≠ "true") (hf : name ≠
     Lynx.Rustler.decodeBool (.atom name) = .error (.error (.atom "badarg")) := by
   simp [Lynx.Rustler.decodeBool, ht, hf]
 
+/-- Registration precedes the native body and preserves the complete environment. -/
+theorem registrationPrefix (names : List String) (env : Lynx.Environment) :
+    Lynx.Result.ReadyPrefix (Lynx.Rustler.withResourceTypes names
+      (.nativeGet fun loaded => .ok loaded.nativeResourceTypes)) env
+      (.ok (env.nativeResourceTypes ++ names).eraseDups)
+      {env with nativeResourceTypes := (env.nativeResourceTypes ++ names).eraseDups} := by
+  apply Lynx.Rustler.withResourceTypes_readyPrefix
+  exact .nativeGet _ _ _ _ (.refl _ _)
+
 /-- Loader capabilities do not allocate or modify resource cells. -/
 theorem registrationKeepsHeap (names : List String) (env : Lynx.Environment) :
     Lynx.Rustler.withResourceTypes names

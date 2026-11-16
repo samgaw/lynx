@@ -61,6 +61,12 @@ example (counter : Nat) (positive : 1 ≤ counter) :
     (Nat.ble 1 counter && !(Nat.beq 0 counter)) = true := by cbv
 end
 
+-- Registration prefix proofs are usable through the public Rustler import.
+example (types : List String) (env : Lynx.Environment) :
+    Lynx.Result.ReadyPrefix (Lynx.Rustler.withResourceTypes types (Lynx.Result.ok ())) env (.ok ())
+      {env with nativeResourceTypes := (env.nativeResourceTypes ++ types).eraseDups} :=
+  Lynx.Rustler.withResourceTypes_readyPrefix types (.refl _ _)
+
 -- Native prefix checking exposes its soundness through the public API.
 example (accept : Lynx.Environment → Bool) (computation : Lynx.Result α)
     (env : Lynx.Environment) (fuel : Nat)
