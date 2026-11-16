@@ -43,7 +43,7 @@ theorem release_next {α : Type} (value : U64) (counter : Nat) (notified : Bool)
           (live env value counter notified)) = next (reclaimed env counter notified) := by
     intro next
     simp [NativeResourceArc.retiredState, NativeResourceCleanup.cleanup, CounterResource.drop_owned,
-      NativeOwnedDrop.drop, NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeM.ok,
+      NativeOwnedDrop.drop, NativeMutexDrop.drop, NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeM.ok,
       live, reclaimed, cell, NativeCodec.roundtrip, List.filter]
   have result := NativeResourceArc.releaseOwned_last_run_next
     (⟨2,3⟩ : NativeResourceArc CounterResource) ⟨⟨1⟩⟩ next

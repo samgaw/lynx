@@ -242,11 +242,14 @@ defmodule Lynx.Rust.GuardFutureTest do
     refute panicking == source
     File.write!(native, panicking)
 
-    assert_raise CompileError,
-                 ~r/native owner lifetime|borrowed native guard|unwind|native drop/,
-                 fn ->
-                   Lynx.Rust.verify!(workspace, "effects-native", options)
-                 end
+    error =
+      assert_raise CompileError,
+                   ~r/native owner lifetime|borrowed native guard|unwind|native drop|structural drop erasure rejected: inconsistent structural drop place type/,
+                   fn ->
+                     Lynx.Rust.verify!(workspace, "effects-native", options)
+                   end
+
+    assert error.file =~ "native/src/lib.rs"
 
     File.write!(native, source)
     assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "effects-native", options).reports
