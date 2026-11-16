@@ -216,7 +216,8 @@ inductive Scenario where
   .cons (.tuple #[.atom "open",.bitstring fileName 0,
     .atom (match scenario with | .openError => "error" | _ => "ok"),
     .integer (match scenario with | .openError => 2 | _ => 0),script scenario]) .nil
-@[expose] def initial (counter : Nat) (scenario : Scenario) : Environment := {
+@[expose] def initial (registry : List String) (counter : Nat) (scenario : Scenario) : Environment := {
+  nativeResourceTypes := registry
   nativeRefCounter := counter
   nativeHeap := [
     (0,NativeFile.namespaceTypeName,NativeFile.encodeNamespace ⟨names,names,[],opening scenario⟩),
@@ -230,17 +231,19 @@ inductive Scenario where
   (1,NativeFile.inodeTypeName,NativeFile.encode ⟨data scenario,data scenario,0,.nil⟩)]
 @[expose] def errorHeap (live : Bool) : List (Nat × String × Term) :=
   if live then [(2,NativeIoError.typeName,.atom "live")] else []
-@[expose] def opened (counter : Nat) (scenario : Scenario) : Environment := {
+@[expose] def opened (registry : List String) (counter : Nat) (scenario : Scenario) : Environment := {
+  nativeResourceTypes := registry
   nativeRefCounter := counter+1
   nativeHeap := (counter+1,NativeFile.handleTypeName,NativeFile.encodeHandle ⟨1,0,script scenario⟩) ::
     baseHeap scenario ++ errorHeap (hasError scenario) }
-@[expose] def allocated (counter : Nat) (scenario : Scenario) : Environment :=
-  initialized (file counter) (opened counter scenario)
+@[expose] def allocated (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  initialized (file counter) (opened registry counter scenario)
 @[expose] def guard (counter : Nat) (second : Bool) : NativeGuard NativeFile :=
   ⟨mutex counter,counter+(if second then 4 else 3),({} : Environment).currentPid,file counter⟩
 /-- Flat witness states. Every boundary is justified below by its executable poll. -/
-@[expose] def world (counter : Nat) (scenario : Scenario) (used : Nat) (held : Bool)
+@[expose] def world (registry : List String) (counter : Nat) (scenario : Scenario) (used : Nat) (held : Bool)
     (position : Nat) (rest : Term) (errorLive closed : Bool := false) : Environment := {
+  nativeResourceTypes := registry
   nativeRefCounter := counter+used
   nativeHeap := [
     (counter+2,NativeMutex.typeName NativeFile,
@@ -251,8 +254,8 @@ inductive Scenario where
 @[expose] def firstPosition : Scenario → Nat
   | .empty | .firstError => 0
   | _ => 2
-@[expose] def firstAcquired (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 3 true 0 (script scenario) (hasError scenario)
+@[expose] def firstAcquired (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 3 true 0 (script scenario) (hasError scenario)
 @[expose] def output : Scenario → Reply
   | .empty => .Ok (none,none)
   | .tail => .Ok (some (GuardedRecovery.ReadTrace.word 7#u8 8#u8),none)
@@ -261,12 +264,12 @@ inductive Scenario where
   | _ => .Ok (some (GuardedRecovery.ReadTrace.word 7#u8 8#u8),
       some (GuardedRecovery.ReadTrace.word 9#u8 10#u8))
 
-@[expose] def firstSought (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 3 true 0 (firstReads scenario) (hasError scenario)
-@[expose] def firstReadAfter (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 3 true (firstPosition scenario) (firstAfterScript scenario) (hasError scenario)
-@[expose] def firstMiddle (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 3 true 1 (action scenario "read" true 1 (secondScript scenario)) (hasError scenario)
+@[expose] def firstSought (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 3 true 0 (firstReads scenario) (hasError scenario)
+@[expose] def firstReadAfter (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 3 true (firstPosition scenario) (firstAfterScript scenario) (hasError scenario)
+@[expose] def firstMiddle (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 3 true 1 (action scenario "read" true 1 (secondScript scenario)) (hasError scenario)
 @[expose] def firstReply : Scenario → core.result.Result (Option U16) U8
   | .firstError => .Err 1#u8
   | .empty => .Ok none
@@ -275,41 +278,41 @@ inductive Scenario where
   | .firstError => .Err ⟨2⟩
   | .empty => .Ok none
   | _ => .Ok (some (GuardedRecovery.ReadTrace.word 7#u8 8#u8))
-@[expose] def firstUnlocked (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 3 false (firstPosition scenario) (firstAfterScript scenario)
+@[expose] def firstUnlocked (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 3 false (firstPosition scenario) (firstAfterScript scenario)
     (match scenario with | .secondError => true | _ => false)
 
 open scoped Lynx.NativeArithmetic
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
-theorem first_reads (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem first_reads (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) :
-    GuardedRecovery.ReadTrace.Reads (file counter) (firstSought counter scenario)
-      (firstNativeReply scenario) (firstReadAfter counter scenario) := by
+    GuardedRecovery.ReadTrace.Reads (file counter) (firstSought registry counter scenario)
+      (firstNativeReply scenario) (firstReadAfter registry counter scenario) := by
   cases scenario with
   | openError => exact False.elim (opening rfl)
   | empty => apply GuardedRecovery.ReadTrace.Reads.firstEof; cbv
   | firstError => apply GuardedRecovery.ReadTrace.Reads.firstError ⟨2⟩; cbv
   | complete =>
     apply GuardedRecovery.ReadTrace.Reads.complete
-      (middle := firstMiddle counter .complete) 7#u8 8#u8 <;> cbv
+      (middle := firstMiddle registry counter .complete) 7#u8 8#u8 <;> cbv
   | tail =>
     apply GuardedRecovery.ReadTrace.Reads.complete
-      (middle := firstMiddle counter .tail) 7#u8 8#u8 <;> cbv
+      (middle := firstMiddle registry counter .tail) 7#u8 8#u8 <;> cbv
   | secondError =>
     apply GuardedRecovery.ReadTrace.Reads.complete
-      (middle := firstMiddle counter .secondError) 7#u8 8#u8 <;> cbv
+      (middle := firstMiddle registry counter .secondError) 7#u8 8#u8 <;> cbv
   | closeError =>
     apply GuardedRecovery.ReadTrace.Reads.complete
-      (middle := firstMiddle counter .closeError) 7#u8 8#u8 <;> cbv
+      (middle := firstMiddle registry counter .closeError) 7#u8 8#u8 <;> cbv
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
-theorem first_finish (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem first_finish (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) :
     GuardedRecovery.ReadTrace.Finished (guard counter false) (firstNativeReply scenario)
-      (firstReadAfter counter scenario) (firstReply scenario) (firstUnlocked counter scenario) := by
+      (firstReadAfter registry counter scenario) (firstReply scenario) (firstUnlocked registry counter scenario) := by
   cases scenario with
   | openError => exact False.elim (opening rfl)
   | firstError =>
@@ -325,19 +328,19 @@ theorem first_finish (counter : Nat) (scenario : Scenario) (positive : 2 ≤ cou
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
-theorem first_locked (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem first_locked (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) :
-    Locked (mutex counter) 0#u64 (allocated counter scenario)
-      (firstReply scenario) (firstUnlocked counter scenario) := by
-  refine ⟨firstAcquired counter scenario,.Ok (guard counter false),?_,?_⟩
+    Locked (mutex counter) 0#u64 (allocated registry counter scenario)
+      (firstReply scenario) (firstUnlocked registry counter scenario) := by
+  refine ⟨firstAcquired registry counter scenario,.Ok (guard counter false),?_,?_⟩
   · cases scenario <;> try contradiction
     all_goals cbv
-  · apply GuardedRecovery.ReadTrace.Critical.read (sought := firstSought counter scenario)
-      (readAfter := firstReadAfter counter scenario) 0#u64 (firstNativeReply scenario) (firstReply scenario)
+  · apply GuardedRecovery.ReadTrace.Critical.read (sought := firstSought registry counter scenario)
+      (readAfter := firstReadAfter registry counter scenario) 0#u64 (firstNativeReply scenario) (firstReply scenario)
     · cases scenario <;> try contradiction
       all_goals cbv
-    · exact first_reads counter scenario positive opening
-    · exact first_finish counter scenario positive opening
+    · exact first_reads registry counter scenario positive opening
+    · exact first_finish registry counter scenario positive opening
 
 @[expose] def secondReads (scenario : Scenario) : Term :=
   match scenario with
@@ -345,21 +348,21 @@ theorem first_locked (counter : Nat) (scenario : Scenario) (positive : 2 ≤ cou
   | .tail => action scenario "read" true 1 (action scenario "read" true 0 (closing scenario))
   | .secondError => action scenario "read" false 2 (closing scenario)
   | _ => action scenario "read" true 1 (action scenario "read" true 1 (closing scenario))
-@[expose] def secondAcquired (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 4 true (firstPosition scenario) (secondScript scenario)
+@[expose] def secondAcquired (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 4 true (firstPosition scenario) (secondScript scenario)
     (match scenario with | .secondError => true | _ => false)
-@[expose] def secondSought (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 4 true 2 (secondReads scenario)
+@[expose] def secondSought (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 4 true 2 (secondReads scenario)
     (match scenario with | .secondError => true | _ => false)
 @[expose] def secondPosition : Scenario → Nat
   | .empty | .secondError => 2
   | .tail => 3
   | _ => 4
-@[expose] def secondReadAfter (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 4 true (secondPosition scenario) (closing scenario)
+@[expose] def secondReadAfter (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 4 true (secondPosition scenario) (closing scenario)
     (match scenario with | .secondError => true | _ => false)
-@[expose] def secondMiddle (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 4 true 3
+@[expose] def secondMiddle (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 4 true 3
     (action scenario "read" true (match scenario with | .tail => 0 | _ => 1) (closing scenario))
 @[expose] def secondReply : Scenario → core.result.Result (Option U16) U8
   | .empty | .tail => .Ok none
@@ -369,33 +372,33 @@ theorem first_locked (counter : Nat) (scenario : Scenario) (positive : 2 ≤ cou
   | .empty | .tail => .Ok none
   | .secondError => .Err ⟨2⟩
   | _ => .Ok (some (GuardedRecovery.ReadTrace.word 9#u8 10#u8))
-@[expose] def secondUnlocked (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario 4 false (secondPosition scenario) (closing scenario)
+@[expose] def secondUnlocked (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario 4 false (secondPosition scenario) (closing scenario)
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
-theorem second_reads (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem second_reads (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) (first : scenario ≠ .firstError) :
-    GuardedRecovery.ReadTrace.Reads (file counter) (secondSought counter scenario)
-      (secondNativeReply scenario) (secondReadAfter counter scenario) := by
+    GuardedRecovery.ReadTrace.Reads (file counter) (secondSought registry counter scenario)
+      (secondNativeReply scenario) (secondReadAfter registry counter scenario) := by
   cases scenario with
   | openError => exact False.elim (opening rfl)
   | firstError => exact False.elim (first rfl)
   | empty => apply GuardedRecovery.ReadTrace.Reads.firstEof; cbv
   | tail =>
-    apply GuardedRecovery.ReadTrace.Reads.secondEof (middle := secondMiddle counter .tail) 9#u8 <;> cbv
+    apply GuardedRecovery.ReadTrace.Reads.secondEof (middle := secondMiddle registry counter .tail) 9#u8 <;> cbv
   | secondError => apply GuardedRecovery.ReadTrace.Reads.firstError ⟨2⟩; cbv
   | complete =>
-    apply GuardedRecovery.ReadTrace.Reads.complete (middle := secondMiddle counter .complete) 9#u8 10#u8 <;> cbv
+    apply GuardedRecovery.ReadTrace.Reads.complete (middle := secondMiddle registry counter .complete) 9#u8 10#u8 <;> cbv
   | closeError =>
-    apply GuardedRecovery.ReadTrace.Reads.complete (middle := secondMiddle counter .closeError) 9#u8 10#u8 <;> cbv
+    apply GuardedRecovery.ReadTrace.Reads.complete (middle := secondMiddle registry counter .closeError) 9#u8 10#u8 <;> cbv
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
-theorem second_finish (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem second_finish (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) (first : scenario ≠ .firstError) :
     GuardedRecovery.ReadTrace.Finished (guard counter true) (secondNativeReply scenario)
-      (secondReadAfter counter scenario) (secondReply scenario) (secondUnlocked counter scenario) := by
+      (secondReadAfter registry counter scenario) (secondReply scenario) (secondUnlocked registry counter scenario) := by
   cases scenario with
   | openError => exact False.elim (opening rfl)
   | firstError => exact False.elim (first rfl)
@@ -412,40 +415,40 @@ theorem second_finish (counter : Nat) (scenario : Scenario) (positive : 2 ≤ co
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
-theorem second_locked (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem second_locked (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) (first : scenario ≠ .firstError) :
-    Locked (mutex counter) 2#u64 (firstUnlocked counter scenario)
-      (secondReply scenario) (secondUnlocked counter scenario) := by
-  refine ⟨secondAcquired counter scenario,.Ok (guard counter true),?_,?_⟩
+    Locked (mutex counter) 2#u64 (firstUnlocked registry counter scenario)
+      (secondReply scenario) (secondUnlocked registry counter scenario) := by
+  refine ⟨secondAcquired registry counter scenario,.Ok (guard counter true),?_,?_⟩
   · cases scenario <;> try contradiction
     all_goals cbv
-  · apply GuardedRecovery.ReadTrace.Critical.read (sought := secondSought counter scenario)
-      (readAfter := secondReadAfter counter scenario) 2#u64 (secondNativeReply scenario) (secondReply scenario)
+  · apply GuardedRecovery.ReadTrace.Critical.read (sought := secondSought registry counter scenario)
+      (readAfter := secondReadAfter registry counter scenario) 2#u64 (secondNativeReply scenario) (secondReply scenario)
     · cases scenario <;> try contradiction
       all_goals cbv
-    · exact second_reads counter scenario positive opening first
-    · exact second_finish counter scenario positive opening first
+    · exact second_reads registry counter scenario positive opening first
+    · exact second_finish registry counter scenario positive opening first
 
-@[expose] def readEnd (counter : Nat) (scenario : Scenario) : Environment :=
-  match scenario with | .firstError => firstUnlocked counter scenario | _ => secondUnlocked counter scenario
+@[expose] def readEnd (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  match scenario with | .firstError => firstUnlocked registry counter scenario | _ => secondUnlocked registry counter scenario
 @[expose] def used : Scenario → Nat
   | .firstError => 3
   | _ => 4
 @[expose] def endPosition : Scenario → Nat
   | .firstError => 0
   | other => secondPosition other
-@[expose] def closed (counter : Nat) (scenario : Scenario) : Environment :=
-  world counter scenario (used scenario) false (endPosition scenario) .nil false true
-@[expose] def done (counter : Nat) (scenario : Scenario) : Environment := {
-  closed counter scenario with
-  nativeHeap := (closed counter scenario).nativeHeap.filter (fun cell => cell.1 != (mutex counter).id) }
+@[expose] def closed (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  world registry counter scenario (used scenario) false (endPosition scenario) .nil false true
+@[expose] def done (registry : List String) (counter : Nat) (scenario : Scenario) : Environment := {
+  closed registry counter scenario with
+  nativeHeap := (closed registry counter scenario).nativeHeap.filter (fun cell => cell.1 != (mutex counter).id) }
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
-theorem owning_cleanup (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem owning_cleanup (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) :
-    Cleanup (mutex counter) (readEnd counter scenario) (done counter scenario) := by
-  apply Cleanup.close (file counter) false _ (closed counter scenario)
+    Cleanup (mutex counter) (readEnd registry counter scenario) (done registry counter scenario) := by
+  apply Cleanup.close (file counter) false _ (closed registry counter scenario)
   all_goals cases scenario <;> try contradiction
   all_goals cbv
 
@@ -453,13 +456,13 @@ theorem owning_cleanup (counter : Nat) (scenario : Scenario) (positive : 2 ≤ c
   | .empty => none
   | _ => some (GuardedRecovery.ReadTrace.word 7#u8 8#u8)
 
-theorem admitted_body (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem admitted_body (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (opening : scenario ≠ .openError) :
-    Body (mutex counter) (allocated counter scenario) (output scenario) (done counter scenario) := by
+    Body (mutex counter) (allocated registry counter scenario) (output scenario) (done registry counter scenario) := by
   by_cases first : scenario = .firstError
   · subst scenario
-    exact .firstError 1#u8 (first_locked counter .firstError positive (by decide))
-      (owning_cleanup counter .firstError positive (by decide))
+    exact .firstError 1#u8 (first_locked registry counter .firstError positive (by decide))
+      (owning_cleanup registry counter .firstError positive (by decide))
   · have firstOk : firstReply scenario = .Ok (firstValue scenario) := by
       cases scenario <;> try contradiction
       all_goals rfl
@@ -468,57 +471,62 @@ theorem admitted_body (counter : Nat) (scenario : Scenario) (positive : 2 ≤ co
       all_goals rfl
     rw [← returned]
     apply Body.second (firstValue scenario) (secondReply scenario)
-    · simpa only [firstOk] using first_locked counter scenario positive opening
-    · exact second_locked counter scenario positive opening first
-    · have finish := owning_cleanup counter scenario positive opening
+    · simpa only [firstOk] using first_locked registry counter scenario positive opening
+    · exact second_locked registry counter scenario positive opening first
+    · have finish := owning_cleanup registry counter scenario positive opening
       cases scenario <;> try contradiction
       all_goals exact finish
 
-@[expose] def failedOpen (counter : Nat) : Environment := {
+@[expose] def failedOpen (registry : List String) (counter : Nat) : Environment := {
+  nativeResourceTypes := registry
   nativeRefCounter := counter
   nativeHeap := baseHeap .openError ++ errorHeap true }
-@[expose] def finalState (counter : Nat) (scenario : Scenario) : Environment :=
-  if scenario = .openError then {nativeRefCounter := counter,nativeHeap := baseHeap .openError}
-  else done counter scenario
+@[expose] def finalState (registry : List String) (counter : Nat) (scenario : Scenario) : Environment :=
+  if scenario = .openError then {nativeResourceTypes := registry,nativeRefCounter := counter,nativeHeap := baseHeap .openError}
+  else done registry counter scenario
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 8000000 in
 /-- Concrete witnesses cover every recovery control-flow branch, including
 truncation and ignored close errors, without enumerating freshness counters. -/
-theorem admitted_recovery (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter) :
-    Reopens path (initial counter scenario) (output scenario) (finalState counter scenario) := by
+theorem admitted_recovery (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter) :
+    Reopens path (initial registry counter scenario) (output scenario) (finalState registry counter scenario) := by
   by_cases failure : scenario = .openError
   · subst scenario
-    change Reopens path (initial counter .openError) (.Err 3#u8)
-      {nativeRefCounter := counter,nativeHeap := baseHeap .openError}
-    apply Reopens.openError (opened := failedOpen counter) ⟨2⟩
+    change Reopens path (initial registry counter .openError) (.Err 3#u8)
+      {nativeResourceTypes := registry,nativeRefCounter := counter,nativeHeap := baseHeap .openError}
+    apply Reopens.openError (opened := failedOpen registry counter) ⟨2⟩
     · cbv
     · decide
     · exact positive
     · cbv
   · simp only [finalState,failure,↓reduceIte]
-    apply Reopens.opened (opened := opened counter scenario) (file counter) (output scenario)
+    apply Reopens.opened (opened := opened registry counter scenario) (file counter) (output scenario)
     · cases scenario <;> try contradiction
       all_goals cbv
     · cases scenario <;> try contradiction
       all_goals cbv
-    · simpa only [opened,allocated,mutex] using admitted_body counter scenario positive failure
+    · simpa only [opened,allocated,mutex] using admitted_body registry counter scenario positive failure
 
 /-- The witnessed traces give a direct implementation-linked execution theorem,
 so reporting need not treat a trace predicate as a verified Rust implementation. -/
-theorem admitted_execution (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter) :
-    Result.ReadyPrefix (reopen_words path) (initial counter scenario)
-      (.ok (output scenario)) (finalState counter scenario) :=
-  (admitted_recovery counter scenario positive).ready
+theorem admitted_execution (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter) :
+    Result.ReadyPrefix (reopen_words path) (initial registry counter scenario)
+      (.ok (output scenario)) (finalState registry counter scenario) :=
+  (admitted_recovery registry counter scenario positive).ready
 
 /-- Every terminal native run in each witnessed scenario has the exact owner,
 error-capability, namespace, inode and descriptor poststate. -/
-theorem admitted_every_run (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
+theorem admitted_every_run (registry : List String) (counter : Nat) (scenario : Scenario) (positive : 2 ≤ counter)
     (elapsed : PID → Nat → Nat)
-    (run : Concurrent.Run (.start (initial counter scenario) (reopen_words path) elapsed) events last)
+    (run : Concurrent.Run (.start (initial registry counter scenario) (reopen_words path) elapsed) events last)
     (terminal : Concurrent.Terminal last outcome) :
-    last = .start (finalState counter scenario) (.ok (output scenario)) elapsed ∧
+    last = .start (finalState registry counter scenario) (.ok (output scenario)) elapsed ∧
       outcome = .ok (output scenario) :=
-  (admitted_recovery counter scenario positive).every_final_state elapsed run terminal
+  (admitted_recovery registry counter scenario positive).every_final_state elapsed run terminal
+
+@[expose] def firstFailureBoot : Environment := initial [] 12 .firstError
+@[expose] def secondFailureBoot : Environment := initial [] 12 .secondError
+@[expose] def tailBoot : Environment := initial [] 12 .tail
 
 end GuardedRecovery.RecoveryTrace

@@ -36,7 +36,9 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
     for {source, target} <- [
           {"GuardedRecoveryProperties.lean", "Properties.lean"},
           {"GuardedRecoveryWriterProperties.lean", "Writer.lean"},
-          {"GuardedSyncProperties.lean", "Sync.lean"}
+          {"GuardedSyncProperties.lean", "Sync.lean"},
+          {"GuardedReadTraceProperties.lean", "ReadTrace.lean"},
+          {"RecoveryTraceProperties.lean", "RecoveryTrace.lean"}
         ] do
       contents =
         File.read!(Path.join(@fixture, source))
@@ -67,10 +69,15 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
       proof_modules: [
         "GuardedRecovery.Properties",
         "GuardedRecovery.Writer",
-        "GuardedRecovery.Sync"
+        "GuardedRecovery.Sync",
+        "GuardedRecovery.ReadTrace",
+        "GuardedRecovery.RecoveryTrace"
       ],
       required_properties: ~w(GuardedRecovery.Properties.recovery_after_restart
-        GuardedRecovery.Writer.every_acknowledged_recovery),
+        GuardedRecovery.Writer.every_acknowledged_recovery
+        GuardedRecovery.RecoveryTrace.reopen_contract
+        GuardedRecovery.RecoveryTrace.admitted_execution
+        GuardedRecovery.RecoveryTrace.admitted_every_run),
       nonpanicking: [{"io_protocol::poll_locked_sync", "GuardedRecovery.SyncProperties.no_panic"}]
     ]
 
@@ -100,16 +107,19 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
 
     adapter = adapter_proof(checked)
     file = prefix_proof(adapter)
+    faults = recovery_proof(adapter)
     export = Path.join(tmp, "composition.export")
 
     reports =
-      Lynx.Commands.verify!(project, verification_files(checked, [adapter, file]), export: export)
+      Lynx.Commands.verify!(project, verification_files(checked, [adapter, file, faults]),
+        export: export
+      )
 
     assert_ok(reports)
     check_export(project, export)
 
     assert Enum.all?(
-             Lynx.Commands.verify!(project, verification_files(checked, [adapter, file])),
+             Lynx.Commands.verify!(project, verification_files(checked, [adapter, file, faults])),
              &(&1.status == :ok and &1.cached)
            )
 
@@ -117,8 +127,11 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
           "private axiom assumed_restart : False",
           "private theorem unfinished_recovery : True := by sorry"
         ] do
-      injected = update_in(file, ["preludes", Access.at(0), "source"], &(&1 <> "\n" <> extra))
-      reports = Lynx.Commands.verify!(project, verification_files(checked, [adapter, injected]))
+      injected = update_in(faults, ["preludes", Access.at(0), "source"], &(&1 <> "\n" <> extra))
+
+      reports =
+        Lynx.Commands.verify!(project, verification_files(checked, [adapter, file, injected]))
+
       assert Enum.any?(reports, &(&1.status == :error))
 
       assert Enum.any?(
@@ -133,7 +146,10 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
       end)
 
     refute wrong_bound == file
-    rejected = Lynx.Commands.verify!(project, verification_files(checked, [adapter, wrong_bound]))
+
+    rejected =
+      Lynx.Commands.verify!(project, verification_files(checked, [adapter, wrong_bound, faults]))
+
     assert Enum.any?(rejected, &(&1.status == :error))
 
     assert Enum.any?(
@@ -149,7 +165,10 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
     refute wrong_retry_growth == file
 
     rejected =
-      Lynx.Commands.verify!(project, verification_files(checked, [adapter, wrong_retry_growth]))
+      Lynx.Commands.verify!(
+        project,
+        verification_files(checked, [adapter, wrong_retry_growth, faults])
+      )
 
     assert Enum.any?(rejected, &(&1.status == :error))
 
@@ -157,6 +176,25 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
              Enum.flat_map(rejected, & &1.diagnostics),
              &(String.contains?(&1.message, "omega") or
                  String.contains?(&1.message, "unsolved goals"))
+           )
+
+    wrong_encoding =
+      update_in(faults, ["preludes", Access.at(0), "source"], fn source ->
+        String.replace(source, "Rustler.encodeUnsigned value.2", "Rustler.encodeUnsigned value.1",
+          global: false
+        )
+      end)
+
+    refute wrong_encoding == faults
+
+    rejected =
+      Lynx.Commands.verify!(project, verification_files(checked, [adapter, file, wrong_encoding]))
+
+    assert Enum.any?(rejected, &(&1.status == :error))
+
+    assert Enum.any?(
+             Enum.flat_map(rejected, & &1.diagnostics),
+             &String.contains?(&1.message, "rfl")
            )
 
     library = Path.join(tmp, "librecovery")
@@ -178,7 +216,10 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
     end
     """)
 
-    beams = Code.compile_file(Path.join(@fixture, "GuardedRecoveryLaws.exs"))
+    beams =
+      Code.compile_file(Path.join(@fixture, "GuardedRecoveryLaws.exs")) ++
+        Code.compile_file(Path.join(@fixture, "RecoveryFaultLaws.exs"))
+
     runtime = Path.join(tmp, "runtime")
     File.mkdir_p!(runtime)
 
@@ -188,6 +229,8 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
       assert apply(LynxGuardedRecoveryFixture.CompleteLaws, :recover_acknowledged_words, [])
       File.write!("journal", <<1>>)
       assert apply(LynxGuardedRecoveryFixture.TruncatedLaws, :reject_truncated_words, [])
+      File.write!("journal", <<7, 8, 9>>)
+      assert apply(LynxGuardedRecoveryFixture.TailLaws, :recover_partial_final_word, [])
       File.rm!("journal")
       assert apply(LynxGuardedRecoveryFixture.DeniedLaws, :report_open_failure, [])
     end)
@@ -206,6 +249,15 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
 
           LynxGuardedRecoveryFixture.DeniedLaws ->
             "GuardedRecovery.NifProperties.denied"
+
+          LynxGuardedRecoveryFixture.FirstFailureLaws ->
+            "GuardedRecovery.RecoveryTrace.firstFailureBoot"
+
+          LynxGuardedRecoveryFixture.SecondFailureLaws ->
+            "GuardedRecovery.RecoveryTrace.secondFailureBoot"
+
+          LynxGuardedRecoveryFixture.TailLaws ->
+            "GuardedRecovery.RecoveryTrace.tailBoot"
         end
 
       laws = [
@@ -235,16 +287,24 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
 
     source = Path.join(workspace, "protocol/src/lib.rs")
     valid = File.read!(source)
-    [prefix, recovery] = String.split(valid, "pub fn reopen_words(", parts: 2)
 
-    wrong =
-      String.replace(recovery, "locked_word(&mutex, 2)", "locked_word(&mutex, 0)", global: false)
+    for {from, to, proof} <- [
+          {"locked_word(&mutex, 2)", "locked_word(&mutex, 0)", nil},
+          {"Err(3)", "Err(4)", "RecoveryTrace.lean"}
+        ] do
+      [prefix, recovery] = String.split(valid, "pub fn reopen_words(", parts: 2)
+      wrong = String.replace(recovery, from, to, global: false)
+      refute recovery == wrong
+      File.write!(source, prefix <> "pub fn reopen_words(" <> wrong)
 
-    refute recovery == wrong
-    File.write!(source, prefix <> "pub fn reopen_words(" <> wrong)
+      error =
+        assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+          Lynx.Rustler.prepare!(options)
+        end
 
-    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Rustler.prepare!(options)
+      if proof, do: assert(error.message =~ proof)
+      File.write!(source, valid)
+      assert Enum.all?(Lynx.Rustler.prepare!(options).reports, &(&1.status == :ok))
     end
 
     File.write!(source, valid)
@@ -256,7 +316,8 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
         project,
         verification_files(restored, [
           adapter_proof(restored),
-          prefix_proof(adapter_proof(restored))
+          prefix_proof(adapter_proof(restored)),
+          recovery_proof(adapter_proof(restored))
         ])
       )
     )
@@ -311,6 +372,26 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
       "preludes" => [
         %{
           "source" => File.read!(Path.join(@fixture, "GuardedRecoveryPrefixProperties.lean")),
+          "file" => name <> ".lean",
+          "span" => [1],
+          "indentation" => 0
+        }
+      ]
+    }
+  end
+
+  defp recovery_proof(adapter) do
+    name = "GuardedRecovery.RecoveryAdapter"
+
+    %{
+      "module" => name,
+      "file" => name <> ".lean",
+      "imports" => [adapter["module"]],
+      "contents" => [],
+      "audit_modules" => Enum.uniq([name, "Lynx.Rustler" | adapter["audit_modules"]]),
+      "preludes" => [
+        %{
+          "source" => File.read!(Path.join(@fixture, "RecoveryAdapterProperties.lean")),
           "file" => name <> ".lean",
           "span" => [1],
           "indentation" => 0
