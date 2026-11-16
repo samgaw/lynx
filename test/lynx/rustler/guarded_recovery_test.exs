@@ -141,6 +141,24 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
              &String.contains?(&1.message, "unsolved goals")
            )
 
+    wrong_retry_growth =
+      update_in(file, ["preludes", Access.at(0), "source"], fn source ->
+        String.replace(source, "counter + 4 * worlds.length", "counter + 3 * worlds.length")
+      end)
+
+    refute wrong_retry_growth == file
+
+    rejected =
+      Lynx.Commands.verify!(project, verification_files(checked, [adapter, wrong_retry_growth]))
+
+    assert Enum.any?(rejected, &(&1.status == :error))
+
+    assert Enum.any?(
+             Enum.flat_map(rejected, & &1.diagnostics),
+             &(String.contains?(&1.message, "omega") or
+                 String.contains?(&1.message, "unsolved goals"))
+           )
+
     library = Path.join(tmp, "librecovery")
     File.cp!(checked.library, library <> ".so")
     [{module, exports}] = Map.to_list(checked.external.native_exports)
@@ -285,7 +303,11 @@ defmodule Lynx.Rustler.GuardedRecoveryTest do
       "imports" => [adapter["module"]],
       "contents" => [],
       "audit_modules" =>
-        Enum.uniq([name, "Lynx.Term.NativeInvariant" | adapter["audit_modules"]]),
+        Enum.uniq([
+          name,
+          "Lynx.Term.NativeInvariant",
+          "Lynx.Runner.NativeArithmetic" | adapter["audit_modules"]
+        ]),
       "preludes" => [
         %{
           "source" => File.read!(Path.join(@fixture, "GuardedRecoveryPrefixProperties.lean")),

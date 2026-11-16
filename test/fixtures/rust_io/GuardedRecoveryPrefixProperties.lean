@@ -1,9 +1,10 @@
 module
 public import GuardedRecovery.AdapterProof
-public import Mathlib.Tactic.IntervalCases
+public import Lynx.Runner.NativeArithmetic
 public section
 open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol
 namespace GuardedRecovery.Interrupted
+open scoped Lynx.NativeArithmetic
 open GuardedRecovery.Properties GuardedRecovery.NifProperties
 
 @[expose] def inodeFrame (heap : List (Nat × String × Term)) : Concurrent.NativeState :=
@@ -26,30 +27,30 @@ open GuardedRecovery.Properties GuardedRecovery.NifProperties
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 32000000 in
 theorem recovery_prefix_checked (complete : Bool) (highWater : Nat)
-    (lower : 12 ≤ highWater) (upper : highWater ≤ 16) :
+    (positive : 1 ≤ highWater) :
     Result.NativeInvariant.check (stable complete highWater) 256 AdapterProof.recovery
       (bootAt highWater complete) = true := by
   set_option cbv.maxSteps 64000000 in
-  interval_cases highWater <;> cases complete <;> cbv
+  cases complete <;> cbv
 
 theorem every_recovery_prefix (complete : Bool) (highWater : Nat)
-    (lower : 12 ≤ highWater) (upper : highWater ≤ 16)
+    (positive : 1 ≤ highWater)
     (trace : Result.ReadyPrefix AdapterProof.recovery (bootAt highWater complete) residual world) :
     stable complete highWater world = true :=
   ((Result.NativeInvariant.of_check
-    (recovery_prefix_checked complete highWater lower upper)) _ _ trace).1
+    (recovery_prefix_checked complete highWater positive)) _ _ trace).1
 
 /-- Native runtime prefixes retain a concrete stable image even while an IO
 operation is blocked. No completed-recovery witness is inferred here. -/
 theorem every_runtime_prefix (complete : Bool) (highWater : Nat)
-    (lower : 12 ≤ highWater) (upper : highWater ≤ 16) (elapsed : PID → Nat → Nat)
+    (positive : 1 ≤ highWater) (elapsed : PID → Nat → Nat)
     (run : Concurrent.Run (.start (bootAt highWater complete) AdapterProof.recovery elapsed) events last) :
     ∃ world, stable complete highWater world = true ∧
       ((∃ residual, last = .start world residual elapsed) ∨
         ∃ residual, last = .running (Concurrent.State.initial world elapsed)
           [(world.currentPid,Concurrent.Task.root residual)] none false) :=
   (Result.NativeInvariant.of_check
-    (recovery_prefix_checked complete highWater lower upper)).run elapsed run
+    (recovery_prefix_checked complete highWater positive)).run elapsed run
 
 private theorem names_equal (left right : NativeFile.Names)
     (equal : NativeFile.tablesEqual left right = true) : left = right := by
@@ -113,10 +114,10 @@ theorem crash_during_recovery (complete : Bool) (highWater : Nat) (world : Envir
 
 set_option maxRecDepth 16384 in
 set_option maxHeartbeats 32000000 in
-/-- Retrying from any first-recovery allocation prefix uses a fresh descriptor,
+/-- Retrying from any positive freshness counter uses a fresh descriptor,
 returns the actual encoded words and closes the new owning mutex/file. -/
 theorem retry_completes (complete : Bool) (highWater : Nat)
-    (lower : 12 ≤ highWater) (upper : highWater ≤ 20) :
+    (positive : 1 ≤ highWater) :
     NativeFile.restartFilesystem (imageAt highWater complete) (opening complete) =
       some (bootAt highWater complete) ∧
     Concurrent.checkPost (fun config =>
@@ -127,7 +128,7 @@ theorem retry_completes (complete : Bool) (highWater : Nat)
         (Concurrent.nativeEnvironment {afterAt highWater complete with nativeResourceTypes := registered}))
       1024 (.start (bootAt highWater complete) AdapterProof.recovery) = true := by
   set_option cbv.maxSteps 64000000 in
-  interval_cases highWater <;> cases complete <;> constructor <;> cbv
+  cases complete <;> constructor <;> cbv
 
 private theorem stable_counter (complete : Bool) (highWater : Nat) (world : Environment)
     (kept : stable complete highWater world = true) :
@@ -135,41 +136,75 @@ private theorem stable_counter (complete : Bool) (highWater : Nat) (world : Envi
   simp only [stable,Bool.and_eq_true,decide_eq_true_eq] at kept
   exact kept.1.1.1
 
-/-- Two crashes may interrupt either recovery at any modelled native prefix.
-Each restart discards old owners, and the final fresh retry completes with the
-same decoded data. This is bounded repetition, not an unbounded retry claim. -/
-theorem two_interrupted_recoveries (complete : Bool)
-    (first : Result.ReadyPrefix AdapterProof.recovery (bootAt 12 complete) residual1 world1)
-    (second : Result.ReadyPrefix AdapterProof.recovery
-      (bootAt world1.nativeRefCounter complete) residual2 world2)
-    (choice1 saved1 choice2 saved2 : ByteArray)
-    (admitted1 : NativeFile.persist (bytes complete) (bytes complete) choice1 = some saved1)
-    (admitted2 : NativeFile.persist (bytes complete) (bytes complete) choice2 = some saved2) :
-    NativeFile.filesystemCrashImage names [(1,choice1)] world1 =
-      some (imageAt world1.nativeRefCounter complete) ∧
-    NativeFile.restartFilesystem (imageAt world1.nativeRefCounter complete) (opening complete) =
-      some (bootAt world1.nativeRefCounter complete) ∧
-    NativeFile.filesystemCrashImage names [(1,choice2)] world2 =
-      some (imageAt world2.nativeRefCounter complete) ∧
-    NativeFile.restartFilesystem (imageAt world2.nativeRefCounter complete) (opening complete) =
-      some (bootAt world2.nativeRefCounter complete) ∧
+/-- Actual recovery prefixes chained through fresh restarts. Each prefix may
+stop at any native operation, independently of the other interruptions. -/
+inductive InterruptedAttempts (complete : Bool) : Nat → List Environment → Nat → Prop where
+  | nil (counter : Nat) : InterruptedAttempts complete counter [] counter
+  | cons {counter final : Nat} {world : Environment} {worlds : List Environment}
+      {residual : Result Term}
+      (prefixTrace : Result.ReadyPrefix AdapterProof.recovery
+        (bootAt counter complete) residual world)
+      (tail : InterruptedAttempts complete world.nativeRefCounter worlds final) :
+      InterruptedAttempts complete counter (world :: worlds) final
+
+/-- Interrupting before the first IO operation is admitted at every finite
+retry count, so the repeated-recovery relation is inhabited independently of fuel. -/
+theorem interrupt_before_io (complete : Bool) (counter count : Nat) :
+    InterruptedAttempts complete counter (List.replicate count (bootAt counter complete)) counter := by
+  induction count with
+  | zero => exact .nil _
+  | succ count ih =>
+    simpa only [List.replicate_succ] using InterruptedAttempts.cons (Result.ReadyPrefix.refl _ _) ih
+
+/-- Every admitted persistence choice at an interrupted recovery produces the
+same synchronized bytes and stable name, with fresh volatile state on restart. -/
+@[expose] def crashSafe (complete : Bool) (world : Environment) : Prop :=
+  ∀ choice saved, NativeFile.persist (bytes complete) (bytes complete) choice = some saved →
+    NativeFile.filesystemCrashImage names [(1,choice)] world =
+      some (imageAt world.nativeRefCounter complete) ∧
+    NativeFile.restartFilesystem (imageAt world.nativeRefCounter complete) (opening complete) =
+      some (bootAt world.nativeRefCounter complete)
+
+theorem interrupted_attempts_safe (complete : Bool) (counter final : Nat)
+    (worlds : List Environment) (positive : 1 ≤ counter)
+    (attempts : InterruptedAttempts complete counter worlds final) :
+    counter ≤ final ∧ final ≤ counter + 4 * worlds.length ∧
+      ∀ world ∈ worlds, crashSafe complete world := by
+  induction attempts with
+  | nil => simp
+  | @cons counter final world worlds residual head tail ih =>
+    have kept := every_recovery_prefix complete counter positive head
+    obtain ⟨lower,upper⟩ := stable_counter complete counter world kept
+    obtain ⟨tailLower,tailUpper,tailSafe⟩ := ih (by omega)
+    refine ⟨by omega, ?_, ?_⟩
+    · simp only [List.length_cons]
+      omega
+    · intro candidate member
+      rcases List.mem_cons.mp member with equal | member
+      · subst candidate
+        intro choice saved admitted
+        exact ⟨crash_during_recovery complete counter world kept choice saved admitted,
+          (retry_completes complete world.nativeRefCounter (by omega)).1⟩
+      · exact tailSafe candidate member
+
+/-- Any finite number of interrupted actual adapter executions preserves every
+admitted crash image. The final fresh recovery completes and closes its owners.
+The number of interruptions and the initial freshness counter have no fixed bound;
+the declared ready IO scripts and stable namespace remain explicit preconditions. -/
+theorem every_finite_retry (complete : Bool) (counter final : Nat)
+    (worlds : List Environment) (positive : 1 ≤ counter)
+    (attempts : InterruptedAttempts complete counter worlds final) :
+    (∀ world ∈ worlds, crashSafe complete world) ∧
     Concurrent.checkPost (fun config =>
       (match config.outcome with
         | .ok value => value.identical (encodedWords complete)
         | _ => false) &&
       (Concurrent.nativeEnvironment (AdapterProof.snapshot config)).identical
-        (Concurrent.nativeEnvironment {afterAt world2.nativeRefCounter complete with
-          nativeResourceTypes := registered})) 1024
-      (.start (bootAt world2.nativeRefCounter complete) AdapterProof.recovery) = true := by
-  have kept1 := every_recovery_prefix complete 12 (by decide) (by decide) first
-  obtain ⟨lower1,upper1⟩ := stable_counter complete 12 world1 kept1
-  have kept2 := every_recovery_prefix complete world1.nativeRefCounter lower1 (by omega) second
-  obtain ⟨lower2,upper2⟩ := stable_counter complete world1.nativeRefCounter world2 kept2
-  exact ⟨crash_during_recovery complete 12 world1 kept1 choice1 saved1 admitted1,
-    (retry_completes complete world1.nativeRefCounter lower1 (by omega)).1,
-    crash_during_recovery complete world1.nativeRefCounter world2 kept2 choice2 saved2 admitted2,
-    retry_completes complete world2.nativeRefCounter (by omega) (by omega)⟩
+        (Concurrent.nativeEnvironment {afterAt final complete with nativeResourceTypes := registered}))
+      1024 (.start (bootAt final complete) AdapterProof.recovery) = true := by
+  obtain ⟨lower,_,safe⟩ := interrupted_attempts_safe complete counter final worlds positive attempts
+  exact ⟨safe,(retry_completes complete final (by omega)).2⟩
 
 end GuardedRecovery.Interrupted
 
-#check GuardedRecovery.Interrupted.two_interrupted_recoveries
+#check GuardedRecovery.Interrupted.every_finite_retry
