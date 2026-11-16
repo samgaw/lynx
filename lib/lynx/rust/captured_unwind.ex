@@ -431,7 +431,7 @@ defmodule Lynx.Rust.CapturedUnwind do
   end
 
   defp lower(%{"kind" => %{"Assign" => [_, value]}} = s, state, _) do
-    unless safe_value?(value),
+    unless safe_value?(value) or NativeBorrows.integer_cast?(value, state.refs),
       do:
         reject!(
           state,
