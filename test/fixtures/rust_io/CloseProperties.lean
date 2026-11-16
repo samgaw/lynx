@@ -36,7 +36,7 @@ theorem close_next (file : NativeFile) (before after : State) (valid : Valid bef
   have poll : pollClose file (live file before) = some (.ok (), closed file after) := by
     simp [pollClose, lookup, live, decode_valid before valid, ready, step, retire, closed]
   simp only [consume_file, monadLift_self, NativeDrop.drop, close, Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp [Result.ok_bind]
 
 /-- The implementation consumes the file on either OS close outcome. No sync is
@@ -102,7 +102,7 @@ theorem synchronize_close (file : NativeFile) (before middle after : State)
     simp [pollSync, lookup, live, decode_valid before initial, ready, sync, store]
   simp only [synchronize_then_close, io_core.synchronize, monadLift_self, syncAll,
     Result.wait_bind]
-  rw [Result.wait_ready_apply _ _ _ _ _ poll]
+  rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp only [Result.ok_bind]
   change (consume_file file >>= fun _ => NativeM.ok reply) (live file middle) = _
   rw [close_next file middle after intermediate closeReady finish]

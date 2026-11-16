@@ -107,12 +107,15 @@ defmodule Lynx.Rust.FileCloseTest do
     protocol = Path.join(workspace, "protocol/src/lib.rs")
     rust = File.read!(protocol)
 
+    target = "pub fn consume_file(file: File) {\n    drop(file);"
+
     for {changed, exception} <- [
-          {String.replace(rust, "    drop(file);", "    drop(file);\n    panic!();",
-             global: false
-           ), RuntimeError},
-          {String.replace(rust, "    drop(file);", "    std::mem::forget(file);", global: false),
-           CompileError}
+          {String.replace(rust, target, target <> "\n    panic!();"), RuntimeError},
+          {String.replace(
+             rust,
+             target,
+             "pub fn consume_file(file: File) {\n    std::mem::forget(file);"
+           ), CompileError}
         ] do
       refute changed == rust
       File.write!(protocol, changed)
@@ -136,7 +139,11 @@ defmodule Lynx.Rust.FileCloseTest do
     end
 
     before_close =
-      String.replace(rust, "    drop(file);", "    panic!();\n    drop(file);", global: false)
+      String.replace(
+        rust,
+        target,
+        "pub fn consume_file(file: File) {\n    panic!();\n    drop(file);"
+      )
 
     File.write!(protocol, before_close)
 
