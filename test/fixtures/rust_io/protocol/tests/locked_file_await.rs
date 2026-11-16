@@ -69,3 +69,27 @@ fn poisoned_guard_is_recovered_and_shared_reads_observe_both_writes() {
     drop(mutex);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn concurrent_cancelled_and_completed_writers_preserve_both_words() {
+    let (mutex, path) = shared_file();
+    let start = std::sync::Barrier::new(3);
+    std::thread::scope(|scope| {
+        let cancelled = scope.spawn(|| {
+            start.wait();
+            io_protocol::poll_locked_write(&mutex, [7, 8], false)
+        });
+        let completed = scope.spawn(|| {
+            start.wait();
+            io_protocol::poll_locked_write(&mutex, [9, 10], true)
+        });
+        start.wait();
+        assert_eq!(cancelled.join().unwrap(), None);
+        assert_eq!(completed.join().unwrap(), Some(Ok(2)));
+    });
+    let first = io_protocol::locked_word(&mutex, 0).unwrap().unwrap();
+    let second = io_protocol::locked_word(&mutex, 2).unwrap().unwrap();
+    assert!(matches!((first, second), (2055, 2569) | (2569, 2055)));
+    drop(mutex);
+    std::fs::remove_file(path).unwrap();
+}

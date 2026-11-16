@@ -124,6 +124,9 @@ defmodule Lynx.Rustler.LockedFileAwaitTest do
     {error_module, error_beam} =
       Enum.find(beams, &(elem(&1, 0) == LynxLockedAwaitFixture.ErrorLaws))
 
+    {concurrent_module, concurrent_beam} =
+      Enum.find(beams, &(elem(&1, 0) == LynxLockedAwaitFixture.ConcurrentLaws))
+
     runtime = Path.join(tmp, "runtime")
     File.mkdir_p!(runtime)
 
@@ -136,18 +139,23 @@ defmodule Lynx.Rustler.LockedFileAwaitTest do
 
       File.rm!("journal")
       assert apply(error_module, :opening_failure, [])
+
+      File.write!("journal", <<1>>)
+      assert apply(concurrent_module, :concurrent_cancel_and_resume, [])
+      assert File.read!("journal") in [<<7, 8, 9, 10>>, <<9, 10, 7, 8>>]
     end)
 
     for {beam, initial, count, filename} <- [
           {beam, "LockedAwait.NifProperties.namedInitial", 2, "success"},
-          {error_beam, "LockedAwait.NifProperties.rejected", 1, "error"}
+          {error_beam, "LockedAwait.NifProperties.rejected", 1, "error"},
+          {concurrent_beam, "LockedAwait.NifProperties.namedInitial", 1, "concurrent"}
         ] do
       export = Path.join(tmp, filename <> ".export")
 
       laws = [
         native: {Lynx.Rustler, options},
         initial_environment: initial,
-        options: [maxRecDepth: 32768, maxHeartbeats: 24_000_000]
+        options: [maxRecDepth: 32768, maxHeartbeats: 64_000_000]
       ]
 
       reports = Lynx.Laws.verify([beam], Keyword.put(laws, :export, export))
@@ -160,6 +168,44 @@ defmodule Lynx.Rustler.LockedFileAwaitTest do
 
       assert status == 0, output
       assert Enum.all?(Lynx.Laws.verify([beam], laws), &(&1.status == :ok and &1.cached))
+    end
+
+    [_, concurrent_source] =
+      @fixture
+      |> Path.join("LockedAwaitLaws.exs")
+      |> File.read!()
+      |> String.split("defmodule LynxLockedAwaitFixture.ConcurrentLaws", parts: 2)
+
+    concurrent_source = "defmodule LynxLockedAwaitFixture.ConcurrentLaws" <> concurrent_source
+
+    for {module, first} <- [{"CancelFirstLaws", 2055}, {"ResumeFirstLaws", 2569}] do
+      wrong_order =
+        concurrent_source
+        |> String.replace("ConcurrentLaws", module)
+        |> String.replace(
+          "completed == {:ok, 2} and",
+          "completed == {:ok, 2} and first == {:ok, #{first}} and"
+        )
+
+      assert wrong_order =~ "first == {:ok, #{first}} and"
+      [{_, beam}] = Code.compile_string(wrong_order)
+
+      rejected =
+        Lynx.Laws.verify([beam],
+          native: {Lynx.Rustler, options},
+          initial_environment: "LockedAwait.NifProperties.namedInitial",
+          options: [maxRecDepth: 32768, maxHeartbeats: 64_000_000]
+        )
+
+      assert [%{status: :error, diagnostics: diagnostics}] =
+               Enum.filter(rejected, &(&1.status != :ok))
+
+      assert Enum.any?(diagnostics, fn diagnostic ->
+               String.contains?(
+                 diagnostic.message,
+                 "postcondition rejected at a terminal configuration"
+               )
+             end)
     end
 
     for extra <- [
