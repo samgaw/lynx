@@ -78,7 +78,11 @@ defmodule Lynx.Rust.AllocatorLayout do
 
     %{
       global_vectors: true,
-      functions: declarations(normal, "fun_decls", first_party) |> Map.keys() |> Enum.sort(),
+      functions:
+        declarations(normal, "fun_decls", first_party)
+        |> Map.values()
+        |> Enum.map(&JSON.encode!(&1["item_meta"]["name"]))
+        |> Enum.sort(),
       source: :allocator_preserving_charon,
       configuration: :same_except_allocator_visibility
     }
@@ -106,7 +110,7 @@ defmodule Lynx.Rust.AllocatorLayout do
               [crate, _] -> crate in first_party
               _ -> false
             end),
-          do: {JSON.encode!(declaration["item_meta"]["name"]), declaration}
+          do: {JSON.encode!(name(declaration["item_meta"]["name"], context)), declaration}
 
     unless length(entries) == map_size(Map.new(entries)),
       do: raise(ArgumentError, "ambiguous first-party allocator metadata identity")
@@ -121,8 +125,36 @@ defmodule Lynx.Rust.AllocatorLayout do
       translated: translated,
       refs: LLBC.type_references!(document),
       preserved: preserved,
-      types: Map.new(for t <- translated["type_decls"], t != nil, do: {t["def_id"], t})
+      types: Map.new(for t <- translated["type_decls"], t != nil, do: {t["def_id"], t}),
+      traits: Map.new(for t <- translated["trait_decls"] || [], t != nil, do: {t["def_id"], t}),
+      implementations:
+        Map.new(for t <- translated["trait_impls"] || [], t != nil, do: {t["def_id"], t})
     }
+  end
+
+  # Allocator visibility can insert trait implementations before first-party
+  # DropGlue. Their table indices are not identities across the two extracts.
+  # Retain the actual trait, self arguments and implementation kind instead.
+  defp name(parts, context) do
+    Enum.map(parts, fn
+      %{"Impl" => %{"Trait" => id}} ->
+        implementation = Map.fetch!(context.implementations, id)
+        trait = Map.fetch!(context.traits, implementation["impl_trait"]["id"])
+
+        %{
+          "Impl" => %{
+            "Trait" => %{
+              "name" => name(trait["item_meta"]["name"], context),
+              "arguments" => shape(implementation["impl_trait"]["generics"], context),
+              "source" => implementation["src"],
+              "negative" => implementation["is_negative"]
+            }
+          }
+        }
+
+      part ->
+        part
+    end)
   end
 
   defp vector?(type, context),
@@ -136,7 +168,7 @@ defmodule Lynx.Rust.AllocatorLayout do
   defp shape(%{"Deduplicated" => id}, context), do: shape(Map.fetch!(context.refs, id), context)
 
   defp shape(%{"Adt" => %{"id" => id, "generics" => args} = adt}, context) do
-    name = context.types[id]["item_meta"]["name"]
+    name = name(context.types[id]["item_meta"]["name"], context)
 
     args =
       if context.preserved and name == @vec do

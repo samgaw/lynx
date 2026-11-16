@@ -100,6 +100,75 @@ defmodule Lynx.Rust.AllocatorLayoutTest do
     assert %{global_vectors: true} = AllocatorLayout.audit!(raw, normal, ["first_party"])
   end
 
+  test "matches destructor identities across allocator-induced trait table renumbering" do
+    assert %{global_vectors: true, functions: [name]} =
+             AllocatorLayout.audit!(drop_document(true, 7), drop_document(false, 19), [
+               "first_party"
+             ])
+
+    assert name =~ ~s("Trait":19)
+
+    for change <- [
+          fn raw ->
+            put_in(
+              raw,
+              ["translated", "trait_decls", Access.at(0), "item_meta", "name"],
+              path(~w(core fmt Debug))
+            )
+          end,
+          fn raw ->
+            put_in(
+              raw,
+              ["translated", "trait_impls", Access.at(0), "impl_trait", "generics"],
+              Lynx.Rust.ResourceModels.args([scalar()])
+            )
+          end
+        ] do
+      assert_raise ArgumentError, ~r/different first-party declarations/, fn ->
+        AllocatorLayout.audit!(change.(drop_document(true, 7)), drop_document(false, 19), [
+          "first_party"
+        ])
+      end
+    end
+  end
+
+  defp drop_document(preserved, impl) do
+    document = document(preserved)
+    trait = impl + 100
+
+    document
+    |> put_in(
+      ["translated", "fun_decls", Access.at(0), "item_meta", "name"],
+      path(~w(first_party Payload)) ++
+        [%{"Impl" => %{"Trait" => impl}}, %{"Builtin" => ["DropGlue", 0]}]
+    )
+    |> put_in(["translated", "trait_decls"], [
+      %{"def_id" => trait, "item_meta" => %{"name" => path(~w(core ops drop Destruct))}}
+    ])
+    |> put_in(["translated", "trait_impls"], [
+      %{
+        "def_id" => impl,
+        "src" => "Destruct",
+        "is_negative" => false,
+        "impl_trait" => %{
+          "id" => trait,
+          "generics" => Lynx.Rust.ResourceModels.args([adt(4, [])])
+        }
+      }
+    ])
+    |> update_in(
+      ["translated", "type_decls"],
+      &(&1 ++
+          [
+            %{
+              "def_id" => 4,
+              "item_meta" => %{"name" => path(~w(first_party Payload))},
+              "kind" => %{"Struct" => []}
+            }
+          ])
+    )
+  end
+
   defp document(preserved) do
     output = adt(1, [scalar()] ++ if(preserved, do: [adt(2, [])], else: []))
 
