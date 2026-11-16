@@ -124,6 +124,35 @@ defmodule Lynx.Rust.ConstantsTest do
     %{"Array" => [element, [%{"Integer" => %{"Unsigned" => ["Usize", length]}}, usize], nil]}
   end
 
+  test "fieldless enum constants retain initializer identities and reject opaque or generic layouts" do
+    enum = %{"Adt" => %{"id" => 7, "builtin" => nil, "generics" => arguments()}}
+
+    declaration = %{
+      "def_id" => 7,
+      "item_meta" => %{"name" => name("Kind")},
+      "generics" => parameters(),
+      "kind" => %{"Enum" => [%{"id" => 0, "name" => "Empty", "fields" => []}]}
+    }
+
+    document =
+      promoted(%{"Ref" => ["Erased", enum, "Shared"]})
+      |> put_in(["translated", "type_decls"], [declaration])
+
+    assert %{constant_initializers: [%{"def_id" => 11}], constants: %{10 => _}} =
+             LLBC.audit!(document, ["first_party"])
+
+    for types <- [
+          [],
+          [%{declaration | "kind" => "Opaque"}],
+          [put_in(declaration, ["kind", "Enum", Access.at(0), "fields"], [%{"ty" => scalar()}])],
+          [put_in(declaration, ["generics", "types"], [%{"index" => 0}])]
+        ] do
+      assert_raise ArgumentError, ~r/constant initializer/, fn ->
+        LLBC.audit!(put_in(document, ["translated", "type_decls"], types), ["first_party"])
+      end
+    end
+  end
+
   test "promoted shared scalar arrays retain checked initializer identities" do
     for element <- [scalar(), %{"Scalar" => "Bool"}], size <- ["0", "4"] do
       type = %{"Ref" => ["Erased", scalar_array(element, size), "Shared"]}

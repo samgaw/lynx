@@ -1,7 +1,7 @@
 defmodule Lynx.Rust.Constants do
   @moduledoc false
 
-  # Immutable scalar/array/slice constants, promoted shared borrows and string literals.
+  # Immutable scalar/array/fieldless-enum constants, shared promotions and strings.
   # Initializer bodies are checked by LLBC alongside ordinary implementations.
   def audit!(globals, initializers, refs, types) do
     declarations = Map.new(globals, &{&1["def_id"], &1})
@@ -23,7 +23,7 @@ defmodule Lynx.Rust.Constants do
         when kind in ["NamedConst", "AnonConst"] ->
           initializer = Enum.find(initializers, &(&1["def_id"] == id))
 
-          unless supported_initializer_type?(global, type, refs) and
+          unless supported_initializer_type?(global, type, refs, types) and
                    unwrap(value_type, refs) == type and identity_arguments?(global, args) and
                    initializer != nil and
                    get_in(initializer, ["src", "GlobalInitializer", "id"]) == global["def_id"] and
@@ -47,7 +47,7 @@ defmodule Lynx.Rust.Constants do
 
         _ ->
           raise ArgumentError,
-                "unsupported Rust global: only scalar/array/static-slice const initializers, promoted shared scalar/array borrows and string literals are supported (#{inspect(global["global_kind"])})"
+                "unsupported Rust global: only scalar/array/fieldless-enum/static-slice const initializers, promoted shared scalar/array/fieldless-enum borrows and string literals are supported (#{inspect(global["global_kind"])})"
       end
     end
 
@@ -122,7 +122,8 @@ defmodule Lynx.Rust.Constants do
   defp supported_initializer_type?(
          %{"global_kind" => "NamedConst"},
          %{"Ref" => ["Static", element, "Shared"]},
-         refs
+         refs,
+         _types
        ) do
     case unwrap(element, refs) do
       %{"Slice" => [scalar, nil]} -> scalar?(unwrap(scalar, refs))
@@ -130,21 +131,39 @@ defmodule Lynx.Rust.Constants do
     end
   end
 
-  defp supported_initializer_type?(%{"global_kind" => "NamedConst"}, type, refs),
-    do: scalar_or_array?(type, refs)
+  defp supported_initializer_type?(%{"global_kind" => "NamedConst"}, type, refs, types),
+    do: scalar_or_array?(type, refs) or fieldless_enum?(type, types)
 
   defp supported_initializer_type?(
          %{"global_kind" => "AnonConst", "item_meta" => %{"name" => name}},
          %{"Ref" => ["Erased", element, "Shared"]},
-         refs
+         refs,
+         types
        ) do
     match?(
       %{"Builtin" => ["PromotedConst", index]} when is_integer(index) and index >= 0,
       List.last(name)
-    ) and scalar_or_array?(unwrap(element, refs), refs)
+    ) and
+      (scalar_or_array?(unwrap(element, refs), refs) or
+         fieldless_enum?(unwrap(element, refs), types))
   end
 
-  defp supported_initializer_type?(_, _, _), do: false
+  defp supported_initializer_type?(_, _, _, _), do: false
+
+  defp fieldless_enum?(%{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}}, types) do
+    empty_arguments?(args) and
+      Enum.any?(types, fn
+        %{"def_id" => ^id, "generics" => params, "kind" => %{"Enum" => variants}}
+        when is_list(variants) ->
+          empty_parameters?(params) and variants != [] and
+            Enum.all?(variants, &(&1["fields"] == []))
+
+        _ ->
+          false
+      end)
+  end
+
+  defp fieldless_enum?(_, _), do: false
 
   defp scalar_or_array?(%{"Array" => [element, length, nil]}, refs) do
     usize = %{"Scalar" => %{"Integer" => %{"Unsigned" => "Usize"}}}
