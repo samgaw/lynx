@@ -49,6 +49,19 @@ example (computation : Lynx.Result Bool) (before after : Lynx.Environment) (enco
       Lynx.Result.ReadyPrefix computation before (.ok value) after :=
   Lynx.Rustler.executeNative_returns trace
 
+-- Completed native waits expose the actual reply and intermediate environment.
+example (poll : Lynx.Environment → Option (β × Lynx.Environment)) (next : β → Lynx.Result α)
+    (before after : Lynx.Environment) (value : α)
+    (trace : Lynx.Result.ReadyPrefix (.wait poll next) before (.ok value) after) :
+    ∃ reply middle, poll before = some (reply,middle) ∧
+      Lynx.Result.ReadyPrefix (next reply) middle (.ok value) after :=
+  trace.wait_returns
+
+example (input output : α) (before after : Lynx.Environment)
+    (trace : Lynx.Result.ReadyPrefix (.ok input) before (.ok output) after) :
+    input = output ∧ before = after :=
+  trace.ok_returns
+
 -- Native verification can recover exact heap identity through ordinary imports.
 example (first second : Lynx.Concurrent.NativeState)
     (same : first.identical second = true) : first = second :=

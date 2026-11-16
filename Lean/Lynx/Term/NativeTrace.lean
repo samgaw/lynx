@@ -42,6 +42,22 @@ inductive ReadyPrefix : Result α → Environment → Result α → Environment 
       (rest : ReadyPrefix (next reply) middle residual after) :
       ReadyPrefix (.wait poll next) before residual after
 
+/-- A completed wait took a real ready poll and then completed its continuation. -/
+theorem ReadyPrefix.wait_returns {poll : Environment → Option (β × Environment)}
+    {next : β → Result α} {before after : Environment} {value : α}
+    (trace : ReadyPrefix (.wait poll next) before (.ok value) after) :
+    ∃ reply middle, poll before = some (reply,middle) ∧
+      ReadyPrefix (next reply) middle (.ok value) after := by
+  cases trace with
+  | wait _ _ reply _ middle _ _ ready rest => exact ⟨reply,middle,ready,rest⟩
+
+/-- A returned value has no further native effects or different return value. -/
+theorem ReadyPrefix.ok_returns {input output : α} {before after : Environment}
+    (trace : ReadyPrefix (.ok input) before (.ok output) after) :
+    input = output ∧ before = after := by
+  cases trace
+  exact ⟨rfl,rfl⟩
+
 /-- Compose local prefixes at the same residual and environment. No assumption
 about completion or scheduling is introduced by concatenating their steps. -/
 theorem ReadyPrefix.trans {computation middle residual : Result α}

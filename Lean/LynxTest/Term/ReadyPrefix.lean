@@ -55,6 +55,25 @@ theorem prefix_preserves_execution (env : Environment) :
   rw [Result.wait_ready_apply _ _ _ _ _ (by rfl)]
   simp
 
+/-- Inversion retains the state immediately after the poll, even when the
+continuation subsequently changes it again. -/
+theorem completed_wait_keeps_intermediate_state (env after : Environment) (value : Nat)
+    (trace : Result.ReadyPrefix program env (.ok value) after) :
+    ∃ middle, middle = {env with nativeRefCounter := env.nativeRefCounter + 2} ∧
+      Result.ReadyPrefix (Result.wait (advance 3) fun second => .ok (2 + second))
+        middle (.ok value) after := by
+  simp only [program,Result.wait_bind,Result.ok_bind] at trace
+  obtain ⟨reply,middle,ready,rest⟩ := trace.wait_returns
+  simp only [advance,Option.some.injEq,Prod.mk.injEq] at ready
+  obtain ⟨rfl,rfl⟩ := ready
+  exact ⟨_,rfl,rest⟩
+
+theorem completed_value_keeps_state (env after : Environment) (value : Nat)
+    (trace : Result.ReadyPrefix (.ok 5) env (.ok value) after) :
+    value = 5 ∧ after = env := by
+  obtain ⟨rfl,rfl⟩ := trace.ok_returns
+  exact ⟨rfl,rfl⟩
+
 theorem blocked_cannot_advance (env after : Environment) (residual : Result Nat)
     (trace : Result.ReadyPrefix (.wait (β := Unit) (fun _ => none) (fun _ => .ok 1)) env residual after) :
     after = env := by
