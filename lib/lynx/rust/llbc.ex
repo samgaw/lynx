@@ -172,6 +172,7 @@ defmodule Lynx.Rust.LLBC do
         Lynx.Rust.CapturedUnwind.lower!(document, functions, refs,
           models: models,
           runtime: Keyword.get(opts, :execution, :pure) == :runtime,
+          first_party: first_party,
           allocator_layout: opts[:allocator_layout],
           nonpanicking: Keyword.get(opts, :nonpanicking, []),
           protected: Keyword.get(opts, :nonpanicking_protected, MapSet.new())

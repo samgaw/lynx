@@ -15,6 +15,7 @@ defmodule Lynx.Rust.CapturedUnwind do
       NativeBorrows.nonpanicking_calls(functions, models, %{
         translated: translated,
         references: refs,
+        first_party: Keyword.get(opts, :first_party, []),
         nonpanicking: Keyword.get(opts, :nonpanicking, []),
         allocator_layout: opts[:allocator_layout]
       })
@@ -105,6 +106,7 @@ defmodule Lynx.Rust.CapturedUnwind do
             function: function,
             translated: translated,
             refs: refs,
+            first_party: Keyword.get(opts, :first_party, []),
             safe: safe,
             models: models,
             runtime: runtime,
@@ -276,7 +278,8 @@ defmodule Lynx.Rust.CapturedUnwind do
          true <- Lynx.Rust.ResourceModels.type?(type),
          %{"types" => [payload]} <- args,
          true <- args == Lynx.Rust.ResourceModels.args([payload]) do
-      Lynx.Rust.NativeDrops.destructor_free?(payload, translated, refs)
+      Lynx.Rust.NativeDrops.destructor_free?(payload, translated, refs) or
+        Lynx.Rust.NativeOwnedDrops.function_for(payload, translated, refs) != nil
     else
       _ -> false
     end
@@ -408,7 +411,7 @@ defmodule Lynx.Rust.CapturedUnwind do
              state.function,
              state.translated,
              state.refs,
-             [],
+             state.first_party,
              state.allocator_layout
            ),
            do:

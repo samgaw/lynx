@@ -307,7 +307,7 @@ defmodule Lynx.Rust.NativeBorrows do
                 [],
                 expanded["translated"],
                 context.references,
-                [],
+                context[:first_party] || [],
                 context[:allocator_layout]
               )
             ],

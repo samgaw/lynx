@@ -213,6 +213,6 @@ printf '%s\n' "profile=$verification_profile" 'aeneas_branching=duplicate-v1' "a
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 if [ "$verification_profile" = runtime-captured ]; then
   printf '%s\n' 'charon_cleanup_edges=preserved-v1' >> "$install_dir/lynx-toolchain"
-  echo "Compiler cleanup and owning-drop extraction are qualified; Lynx still rejects captured owned_drops."
+  echo "Installed combined owning-drop and captured-cleanup extraction support."
 fi
 echo "Installed. Set LYNX_AENEAS_DIR to $install_dir"

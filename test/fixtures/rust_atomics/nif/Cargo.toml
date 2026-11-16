@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [features]
 captured-frames = []
+captured-resources = []
 
 [dependencies]
 atomic-core = { path = "../core" }

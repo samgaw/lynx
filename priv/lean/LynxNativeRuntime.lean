@@ -1415,12 +1415,13 @@ instance {ty : IScalarTy} : NativeMutexDrop (IScalar ty) where
 instance {α : Type} {n : Usize} [NativeCodec α] : NativeMutexDrop (Aeneas.Std.Array α n) where
   drop := NativeMutex.dispose
 
-/-- Unwind dispatch for no-drop resource payloads with owned logical cells. -/
+/-- Unwind dispatch for admitted resource payload cleanup. There is no fallback
+for an owning mutex without its concrete compiler-linked cleanup dictionary. -/
 class NativeResourceUnwindDrop (α : Type) where
   drop : α → NativeM Unit
 
-instance {α : Type} [NativeCodec α] : NativeResourceUnwindDrop (NativeMutex α) where
-  drop := NativeUnwindDrop.drop
+instance {α : Type} [NativeMutexDrop α] : NativeResourceUnwindDrop (NativeMutex α) where
+  drop := NativeMutexDrop.drop
 instance {α : Type} [NativeCodec α] : NativeResourceUnwindDrop (NativeGuard α) where
   drop := NativeUnwindDrop.drop
 instance {α : Type} [NativeCodec α] : NativeResourceUnwindDrop (NativeRwReadGuard α) where
@@ -1591,7 +1592,7 @@ Physical allocation success and the VM callback remain explicit FFI boundaries. 
       NativeResourceCleanup.cleanup value
       NativeM.fail .panic
 
-/-- Capture registration panic after retiring the moved no-drop payload's cells. -/
+/-- Capture registration panic after executing the admitted moved payload cleanup. -/
 @[expose] def newManagedCaptured {α : Type} [NativeCodec α] [NativeResourceCleanup α]
     (value : α) : NativeM (core.result.Result (NativeResourceArc α) Unit) :=
   NativeM.capturePanic (newOwned value)

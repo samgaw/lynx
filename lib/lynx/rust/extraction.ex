@@ -63,12 +63,13 @@ defmodule Lynx.Rust.Extraction do
     if unwind == :captured and
          {Keyword.get(opts, :execution, :pure), Keyword.get(opts, :owned_drops, false)} not in [
            {:pure, :explicit},
-           {:runtime, false}
+           {:runtime, false},
+           {:runtime, true}
          ],
        do:
          raise(
            ArgumentError,
-           "captured unwind requires pure explicit ownership or runtime execution without owned_drops"
+           "captured unwind requires pure explicit ownership or runtime execution"
          )
 
     Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools)

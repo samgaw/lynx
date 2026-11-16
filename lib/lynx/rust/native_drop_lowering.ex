@@ -89,12 +89,12 @@ defmodule Lynx.Rust.NativeDropLowering do
             )
 
         if cleanup and site.native_kind in [:mutex, :resource] and
-             not NativeDrops.destructor_free?(site.payload, ctx.translated, ctx.refs),
+             not unwind_payload?(site, ctx),
            do:
              LLBC.failure!(
                ctx.function,
                ctx.translated,
-               "captured unwind requires a destructor-free mutex or resource payload"
+               "captured unwind requires a destructor-free payload or linked nonpanicking owning cleanup"
              )
 
         mem_drop = if cleanup, do: ctx.unwind_drop, else: ctx.mem_drop
@@ -204,6 +204,20 @@ defmodule Lynx.Rust.NativeDropLowering do
   end
 
   defp walk(value, ctx, state, cleanup), do: walk_children(value, ctx, state, cleanup)
+
+  defp unwind_payload?(site, ctx) do
+    NativeDrops.destructor_free?(site.payload, ctx.translated, ctx.refs) or
+      (get_in(ctx.translated, ["options", "owned_drops"]) == true and
+         case site.native_kind do
+           :mutex ->
+             Lynx.Rust.NativeOwnedDrops.vector_cleanup_for(site.payload, ctx.translated, ctx.refs) !=
+               nil
+
+           :resource ->
+             Lynx.Rust.NativeOwnedDrops.function_for(site.payload, ctx.translated, ctx.refs) !=
+               nil
+         end)
+  end
 
   # Only a local and its owned fields may be consumed. Dereferencing a borrowed
   # aggregate would require reconstructing that borrow after failure or drop.

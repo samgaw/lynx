@@ -261,6 +261,7 @@ impl rustler::Resource for SharedBuffer {}
 #[rustler::nif(name = "shared_new", schedule = "DirtyCpu")]
 #[lynx::shared_buffer]
 #[lynx::shared_frames]
+#[lynx::captured_shared]
 fn shared_new() -> rustler::ResourceArc<SharedBuffer> {
     rustler::ResourceArc::new(SharedBuffer {
         state: std::sync::Mutex::new(atomic_analysis::ReceiveState {
@@ -272,6 +273,7 @@ fn shared_new() -> rustler::ResourceArc<SharedBuffer> {
 #[rustler::nif(name = "shared_append", schedule = "DirtyCpu")]
 #[lynx::shared_buffer]
 #[lynx::shared_frames]
+#[lynx::captured_shared]
 fn shared_append(buffer: rustler::ResourceArc<SharedBuffer>, input: rustler::Binary<'_>) -> u64 {
     atomic_analysis::append_state(&buffer.state, input.as_slice())
 }
@@ -279,6 +281,7 @@ fn shared_append(buffer: rustler::ResourceArc<SharedBuffer>, input: rustler::Bin
 #[rustler::nif(name = "shared_read", schedule = "DirtyCpu")]
 #[lynx::shared_buffer]
 #[lynx::shared_frames]
+#[lynx::captured_shared]
 fn shared_read(buffer: rustler::ResourceArc<SharedBuffer>) -> (u64, u8) {
     atomic_analysis::read_state(&buffer.state)
 }
@@ -306,4 +309,22 @@ fn shared_frame(buffer: rustler::ResourceArc<SharedBuffer>) -> (u8, u64, u64) {
 fn captured_frame_request(input: Vec<u8>, accepted: bool) -> Result<Option<Vec<u8>>, u8> {
     let mut input = input;
     atomic_analysis::checked_frame(&mut input, accepted)
+}
+
+/// Parses persistent state before accepting or rejecting the request.
+///
+/// # Panics
+/// Rejection panics after consuming a frame and poisons the buffer's mutex.
+#[cfg(feature = "captured-resources")]
+#[rustler::nif(name = "shared_checked_frame", schedule = "DirtyCpu")]
+#[lynx::captured_shared]
+fn checked_shared_frame_request(
+    buffer: rustler::ResourceArc<SharedBuffer>,
+    accepted: bool,
+) -> Result<Option<Vec<u8>>, u8> {
+    let guard = match buffer.state.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    atomic_analysis::guard_frame(guard, accepted)
 }

@@ -175,7 +175,7 @@ defmodule Lynx.Rust do
   nonpanicking, including acquisition of incoming guards; nested cleanup calls,
   acquisitions during cleanup, user destructors
   and double panics remain rejected. Standard locks, physical thread context and
-  native allocation remain explicitly reported external models. This mode selects
+  native allocation remain explicitly reported external models. Without `owned_drops`, this mode selects
   elaborated MIR without compiler-owned resource/future lowering.
 
   Captured runtime cleanup also releases destructor-free Rustler ResourceArc
@@ -190,6 +190,16 @@ defmodule Lynx.Rust do
   for Rustler encoding. The runtime backend retains extracted type annotations
   for fresh record payloads. Other owned return types remain unsupported and
   unselected exports are reported explicitly.
+
+  `execution: :runtime, unwind: :captured, owned_drops: true` uses optimized MIR
+  from the combined `--runtime-captured` toolchain. Mutex and default Resource
+  payloads can use their actual extracted, admitted nonpanicking structural owning
+  destructors. Guard updates and poisoning precede resource-owner release on panic.
+  Failed resource registration executes the moved payload cleanup before capture.
+  Final resource cleanup retains the explicit synchronous/deferred callback model;
+  unspecified observable finalizer timing exhausts verification. Panicking custom
+  destructors, nested cleanup calls and native unwinder/FFI correctness remain
+  unsupported or explicit trusted boundaries.
 
   Compiler temporaries that copy a mutable reference without retagging can be
   normalized when their only use is a dereference in the immediately following

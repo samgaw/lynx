@@ -80,8 +80,7 @@ defmodule Lynx.Rust.NativePanicCapture do
           model && model.resource_operation == "new",
           do: {f, model}
 
-    with false <- get_in(t, ["options", "owned_drops"]) == true,
-         [{source, model}] <- sources,
+    with [{source, model}] <- sources,
          "Opaque" <- helper["body"],
          "Normal" <- helper["src"],
          true <- helper["generics"] == source["generics"],
@@ -100,7 +99,9 @@ defmodule Lynx.Rust.NativePanicCapture do
       Map.merge(model, %{
         rust_name: "LynxCompilerCapture::resource_new",
         lean:
-          if(Lynx.Rust.ResourceLifetimes.enabled?(t),
+          if(
+            get_in(t, ["options", "owned_drops"]) == true or
+              Lynx.Rust.ResourceLifetimes.enabled?(t),
             do: "Lynx.NativeResourceArc.newManagedCaptured",
             else: "Lynx.NativeResourceArc.newCaptured"
           ),
@@ -108,7 +109,7 @@ defmodule Lynx.Rust.NativePanicCapture do
         native_captured_source: source["def_id"],
         native_captured_source_name: model.rust_name,
         label:
-          "Compiler capture adapter for the validated Rustler ResourceArc::new model: registration panic becomes an explicit exceptional result before caller cleanup; only destructor-free default Resource payloads admitted; exhaustion remains uncatchable; Rustler, allocation, native unwinding and FFI correctness unverified"
+          "Compiler capture adapter for the validated Rustler ResourceArc::new model: registration panic becomes an explicit exceptional result after admitted payload cleanup and before caller cleanup; only default Resource payloads with compiler-certified absence of destruction or linked nonpanicking owning cleanup admitted; exhaustion remains uncatchable; Rustler, allocation, native unwinding and FFI correctness unverified"
       })
     else
       _ -> nil
