@@ -177,3 +177,24 @@ fn checked_write_request(input: rustler::Binary<'_>, accepted: bool) -> Result<u
         Err(error) => Err(error),
     }
 }
+
+/// Writes before suspension, then cancels or resumes the actual owned-file future.
+///
+/// # Errors
+/// Returns two for opening failure and one for a write failure.
+#[cfg(feature = "async-write")]
+#[rustler::nif(name = "write_poll", schedule = "DirtyIo")]
+fn write_poll_request(first: u8, second: u8, resume: bool) -> Result<Option<u64>, u8> {
+    let file = match io_protocol::open_readwrite("journal") {
+        Ok(file) => file,
+        Err(error) => {
+            drop(error);
+            return Err(2);
+        }
+    };
+    match io_protocol::poll_write(file, [first, second], resume) {
+        Some(Ok(written)) => Ok(Some(written as u64)),
+        Some(Err(error)) => Err(error),
+        None => Ok(None),
+    }
+}

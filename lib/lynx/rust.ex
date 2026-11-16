@@ -390,7 +390,13 @@ defmodule Lynx.Rust do
   coroutine destruction body. Its self-pointer accesses become consuming accesses
   to the logical frame; pointer escapes are rejected. Saved storage can retain
   multiple supported native owners in separate fields across suspension, and
-  destruction consumes them through the checked destructor models. Slot removal uses Aeneas's existing mutable
+  destruction consumes them through the checked destructor models. With
+  `files: :regular, owned_drops: true`, an owned File may retain completed writes
+  across suspension and close on cancellation or completion, without implicit
+  synchronization or rollback. Compiler-created frame destructors retain invalid
+  states as verification exhaustion, distinct from catchable panic and success.
+  Ordinary functions and completed-state polling gain no such classification.
+  Slot removal uses Aeneas's existing mutable
   replacement primitive. Invalid state tags and missing saved owners exhaust
   verification. The owned-captures backend also retains one supported native
   capture in an optional initial slot, moves it into saved storage on suspension,

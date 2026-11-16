@@ -513,3 +513,46 @@ pub fn checked_file_mutex(file: File, accepted: bool) {
     io_core::require_write(accepted);
     drop(mutex);
 }
+
+/// Retains an owned file and a completed write across a cross-crate suspension.
+///
+/// # Errors
+/// Returns one for an operating-system write error, consuming its payload.
+/// Cancellation closes the file without undoing the completed write or syncing it.
+pub async fn suspended_write(mut file: File, bytes: [u8; 2]) -> Result<usize, u8> {
+    let reply = match io_core::write_once(&mut file, &bytes) {
+        Ok(written) => Ok(written),
+        Err(error) => {
+            drop(error);
+            Err(1)
+        }
+    };
+    io_core::yield_once().await;
+    drop(file);
+    reply
+}
+
+/// Polls the actual writer once, optionally resuming it, then consumes its frame.
+///
+/// Returns None for cancellation while Pending. Uses the standard no-op waker;
+/// this bounded caller does not claim to implement a general async executor.
+/// A returned write error is represented by one.
+pub fn poll_write(file: File, bytes: [u8; 2], resume: bool) -> Option<Result<usize, u8>> {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+    let mut context = Context::from_waker(Waker::noop());
+    let mut writer = std::pin::pin!(suspended_write(file, bytes));
+    match writer.as_mut().poll(&mut context) {
+        Poll::Ready(reply) => Some(reply),
+        Poll::Pending => {
+            if resume {
+                match writer.as_mut().poll(&mut context) {
+                    Poll::Ready(reply) => Some(reply),
+                    Poll::Pending => None,
+                }
+            } else {
+                None
+            }
+        }
+    }
+}

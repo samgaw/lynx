@@ -129,3 +129,33 @@ pub fn discard_io_error_implicit(_error: io::Error) {}
 pub fn require_write(accepted: bool) {
     assert!(accepted);
 }
+
+/// A first-party future that suspends and requests one wakeup before completing.
+#[derive(Debug)]
+pub struct YieldOnce {
+    /// Whether the next poll must suspend.
+    pub waiting: bool,
+}
+
+impl std::future::Future for YieldOnce {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        let this = self.get_mut();
+        if this.waiting {
+            this.waiting = false;
+            context.waker().wake_by_ref();
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    }
+}
+
+/// Constructs a future that suspends before returning.
+pub fn yield_once() -> YieldOnce {
+    YieldOnce { waiting: true }
+}
