@@ -3392,6 +3392,23 @@ This assumes bytewise old/new tearing, with no device corruption or namespace lo
       if choice == 1 then visible[index]! else old[index]!⟩
   else none
 
+/-- Every admitted crash mask preserves an image already synchronized in full. -/
+theorem persist_same (bytes mask result : ByteArray)
+    (accepted : persist bytes bytes mask = some result) : result = bytes := by
+  unfold persist at accepted
+  split at accepted
+  · rename_i conditions
+    have size : mask.size = bytes.size := by omega
+    cases accepted
+    apply ByteArray.ext
+    apply _root_.Array.ext
+    · simp [size]
+    · intro index validMask validBytes
+      have bounded : index < bytes.size := by simpa only [ByteArray.size_data] using validBytes
+      simp [getElem!_pos, bounded]
+      rfl
+  · contradiction
+
 @[expose] def bytes (data : Slice U8) : ByteArray :=
   ⟨data.val.toArray.map fun byte => UInt8.ofNat byte.val⟩
 

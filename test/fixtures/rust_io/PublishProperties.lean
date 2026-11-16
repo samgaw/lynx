@@ -149,20 +149,8 @@ theorem publish_contract : publish_file ⟨2⟩ source target initial = (.ok (.O
   simp []
 
 theorem persist_same (bytes mask result : ByteArray)
-    (accepted : persist bytes bytes mask = some result) : result = bytes := by
-  unfold persist at accepted
-  split at accepted
-  · rename_i conditions
-    have size : mask.size = bytes.size := by omega
-    cases accepted
-    apply ByteArray.ext
-    apply _root_.Array.ext
-    · simp [size]
-    · intro index validMask validBytes
-      have bounded : index < bytes.size := by simpa only [ByteArray.size_data] using validBytes
-      simp [getElem!_pos, bounded]
-      rfl
-  · contradiction
+    (accepted : persist bytes bytes mask = some result) : result = bytes :=
+  NativeFile.persist_same bytes mask result accepted
 
 /-- Every permitted post-sync byte mask gives the same saved data. -/
 theorem checkpoint_image_all (mask result : ByteArray)
