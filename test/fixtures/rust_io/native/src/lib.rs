@@ -258,6 +258,16 @@ mod async_log {
         }
     }
 
+    /// Recovers both words through fresh file and lock state.
+    ///
+    /// # Errors
+    /// Returns three for opening failure and one for seeking or reading failure.
+    #[cfg(feature = "async-recovery")]
+    #[rustler::nif(name = "async_log_recover", schedule = "DirtyIo")]
+    fn recover_request() -> Result<(Option<u16>, Option<u16>), u8> {
+        io_protocol::reopen_words("journal")
+    }
+
     /// Reads a word from the same shared file state used by the async writer.
     ///
     /// # Errors
