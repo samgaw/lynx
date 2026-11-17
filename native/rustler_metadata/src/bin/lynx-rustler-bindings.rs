@@ -85,17 +85,18 @@ fn single_literal(expression: &Expr) -> Result<Lit, String> {
     }
 }
 
-fn scalar_product(value: &Value) -> bool {
+fn vector_element_hint(value: &Value) -> bool {
     value.as_str().is_some_and(|name| {
         ["bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].contains(&name)
     }) || value.as_object().is_some_and(|object| {
         object.len() == 1
-            && object
-                .get("tuple")
-                .and_then(Value::as_array)
-                .is_some_and(|fields| {
-                    (1..=7).contains(&fields.len()) && fields.iter().all(scalar_product)
-                })
+            && (object.contains_key("native")
+                || object
+                    .get("tuple")
+                    .and_then(Value::as_array)
+                    .is_some_and(|fields| {
+                        (1..=7).contains(&fields.len()) && fields.iter().all(vector_element_hint)
+                    }))
     })
 }
 
@@ -204,7 +205,7 @@ fn supported_type(ty: &Type) -> Result<Value, String> {
                 if arguments.args.len() == 1 {
                     if let Some(syn::GenericArgument::Type(element)) = arguments.args.first() {
                         let element = supported_type(element)?;
-                        if scalar_product(&element) {
+                        if vector_element_hint(&element) {
                             return Ok(json!({"vec": element}));
                         }
                     }
@@ -277,7 +278,8 @@ fn supported_type(ty: &Type) -> Result<Value, String> {
             }
         }
         // This is a discovery hint, not an approved codec. The backend must
-        // resolve the compiled type and extract its actual Encoder or Decoder.
+        // resolve aliases to supported builtin codecs or extract the actual
+        // Encoder or Decoder for an admitted nominal type.
         if path.qself.is_none()
             && !names.is_empty()
             && !["f32", "f64", "i128", "u128", "isize", "usize", "str"]
@@ -676,7 +678,6 @@ mod tests {
             json!([{"vec":{"tuple":["u64","u64"]}}])
         );
         for signature in [
-            "fn native() -> Vec<(String, u64)> { todo!() }",
             "fn native() -> Vec<()> { todo!() }",
             "fn native() -> Vec<Vec<u64>> { todo!() }",
         ] {
@@ -688,6 +689,44 @@ mod tests {
                 "{signature}"
             );
         }
+    }
+
+    #[test]
+    fn discovers_vector_alias_hints_without_approving_their_codecs() {
+        let found = discover(
+            "fn native(input: Vec<domain::Record>) -> Vec<(domain::Field, u64)> { todo!() }",
+            1,
+        );
+        assert!(found.errors.is_empty(), "{:?}", found.errors);
+        assert_eq!(
+            found.entries[0]["arguments"],
+            json!([{"vec":{"native":["domain","Record"]}}])
+        );
+        assert_eq!(
+            found.entries[0]["result"],
+            json!({"vec":{"tuple":[{"native":["domain","Field"]},"u64"]}})
+        );
+        // String can be shadowed by an alias. Discovery retains the path;
+        // compiled-type validation must reject the actual standard String codec.
+        let strings = discover(
+            "fn native(input: Vec<String>) -> Vec<(String, u64)> { todo!() }",
+            1,
+        );
+        assert!(strings.errors.is_empty(), "{:?}", strings.errors);
+        assert_eq!(
+            strings.entries[0]["arguments"],
+            json!([{"vec":{"native":["String"]}}])
+        );
+        assert_eq!(
+            strings.entries[0]["result"],
+            json!({"vec":{"tuple":[{"native":["String"]},"u64"]}})
+        );
+        let batch = discover("fn native(input: RecordBatch) -> RecordBatch { input }", 1);
+        assert!(batch.errors.is_empty(), "{:?}", batch.errors);
+        assert_eq!(
+            batch.entries[0]["arguments"],
+            json!([{"native":["RecordBatch"]}])
+        );
     }
 
     #[test]
@@ -806,7 +845,6 @@ mod tests {
             json!({"tuple": ["bool", {"vec": "u8"}]})
         );
         for source in [
-            "fn native(value: Vec<String>) -> bool { true }",
             "fn native(value: Vec<u8, CustomAllocator>) -> bool { true }",
             "fn native(value: other::Vec<u8>) -> bool { true }",
         ] {

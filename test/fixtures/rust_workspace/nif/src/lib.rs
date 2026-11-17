@@ -502,6 +502,32 @@ fn replace_first_pair(input: Vec<(i64, u64)>, value: i64) -> (bool, Vec<(i64, u6
     experiment_analysis::replace_first_pair(input, value)
 }
 
+/// Uses a shared record alias and independently named scalar fields.
+#[cfg(feature = "tuple-vec")]
+#[rustler::nif(name = "alias_records")]
+fn replace_alias_records(
+    input: Vec<experiment_analysis::PairRecord>,
+    value: i64,
+) -> (
+    bool,
+    Vec<(
+        experiment_analysis::SignedField,
+        experiment_analysis::RecordTag,
+    )>,
+) {
+    experiment_analysis::replace_first_pair(input, value)
+}
+
+#[cfg(feature = "tuple-vec")]
+type RecordBatch = Vec<experiment_analysis::PairRecord>;
+
+/// Uses a whole-vector alias in both argument and return positions.
+#[cfg(feature = "tuple-vec")]
+#[rustler::nif(name = "alias_batch")]
+fn replace_alias_batch(input: RecordBatch, value: i64) -> (bool, RecordBatch) {
+    experiment_analysis::replace_first_pair(input, value)
+}
+
 /// A protocol tuple encoded by the actual Rustler derive implementation.
 #[cfg(feature = "derived-tuple")]
 #[derive(Debug, rustler::NifTuple)]
@@ -883,7 +909,7 @@ mod tests {
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
-                + usize::from(cfg!(feature = "tuple-vec"))
+                + 3 * usize::from(cfg!(feature = "tuple-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
                 + usize::from(cfg!(feature = "derived-tuple-decoder"))
                 + usize::from(cfg!(feature = "derived-map"))
@@ -999,6 +1025,9 @@ mod tests {
                 2,
                 rustler::SchedulerFlags::DirtyCpu as u32,
             ));
+            for name in ["alias_records", "alias_batch"] {
+                expected.push((name.to_owned(), 2, rustler::SchedulerFlags::Normal as u32));
+            }
         }
         if cfg!(feature = "checked-option") {
             expected.push((

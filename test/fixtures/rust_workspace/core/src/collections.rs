@@ -63,6 +63,13 @@ pub fn replace_first_i64(mut input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
     (changed, input)
 }
 
+/// A signed field shared by record aliases across workspace crates.
+pub type SignedField = i64;
+/// An unsigned field shared by record aliases across workspace crates.
+pub type RecordTag = u64;
+/// A transparent protocol record type, without custom codec behavior.
+pub type PairRecord = (SignedField, RecordTag);
+
 /// Replaces only the signed field in the first protocol record.
 pub fn replace_slice_first_pair(input: &mut [(i64, u64)], value: i64) -> bool {
     if input.is_empty() {

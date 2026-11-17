@@ -47,8 +47,9 @@ defmodule Lynx.Rustler do
   of Erlang tuples and the existing ordered field codecs. Arguments require exact
   compiler tuple-layout evidence and a native byte-size bound for the list budget;
   the generated adapter also kernel-checks this byte inequality. Missing or excessive
-  layouts are rejected. Vector element signatures currently require literal scalar
-  and tuple syntax; named or aliased element types are not resolved by this codec.
+  layouts are rejected. Monomorphic aliases and cross-crate re-exports resolve
+  against compiled scalar/tuple and standard Vec identities; nominal element types
+  and custom element codecs remain unsupported by this vector codec.
   Native decoding and allocation remain explicit boundaries.
 
   `Vec<u8>` arguments and results, including tuple/result fields, use proper-list

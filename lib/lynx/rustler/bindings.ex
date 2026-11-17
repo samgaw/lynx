@@ -296,10 +296,17 @@ defmodule Lynx.Rustler.Bindings do
     do: resource!(hint, type, audit, Map.get(audit, :nif_resource_types, []))
 
   defp result!(%{"native" => hint}, type, audit, mode, translation) do
-    if Lynx.Rust.OwnedStringModels.type?(type, audit.translated, audit.references) do
-      "string"
-    else
-      native_result!(hint, type, audit, mode, translation)
+    cond do
+      Lynx.Rust.OwnedStringModels.type?(type, audit.translated, audit.references) -> "string"
+      vector_type?(type, audit) -> LLBC.nif_type!(type, audit)
+      true -> native_result!(hint, type, audit, mode, translation)
+    end
+  end
+
+  defp result!(%{"vec" => hint}, type, audit, _mode, _translation) do
+    case LLBC.nif_type!(type, audit) do
+      %{"vec" => element} -> %{"vec" => vector_hint!(hint, element)}
+      _ -> raise ArgumentError, "Rustler vector is not the compiled standard Vec type"
     end
   end
 
@@ -385,6 +392,33 @@ defmodule Lynx.Rustler.Bindings do
       do: raise(ArgumentError, "Rustler and LLBC signatures differ: result type")
 
     schema
+  end
+
+  # Aliases have no executable codec implementation of their own. Their
+  # compiler-normalized element must still be an approved scalar product.
+  defp vector_hint!(%{"native" => _}, actual), do: actual
+
+  defp vector_hint!(%{"tuple" => fields}, %{"tuple" => actual})
+       when length(fields) == length(actual),
+       do: %{"tuple" => Enum.zip_with(fields, actual, &vector_hint!/2)}
+
+  defp vector_hint!(hint, actual) when hint == actual, do: actual
+
+  defp vector_hint!(_, _),
+    do: raise(ArgumentError, "Rustler and compiled vector element types differ")
+
+  defp vector_type?(type, audit) do
+    case Lynx.Rust.CallModels.expand(type, audit.references) do
+      %{"Adt" => %{"id" => id, "builtin" => nil}} ->
+        Enum.any?(audit.translated["type_decls"], fn declaration ->
+          declaration && declaration["def_id"] == id && declaration["kind"] == "Opaque" &&
+            declaration["item_meta"]["name"] ==
+              Enum.map(~w(alloc vec Vec), &%{"Ident" => [&1, 0]})
+        end)
+
+      _ ->
+        false
+    end
   end
 
   defp native_result!(hint, type, audit, mode, translation) do
