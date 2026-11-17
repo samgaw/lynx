@@ -415,6 +415,7 @@ defmodule Lynx.Rust.Extraction do
     audit = Lynx.Rust.SliceModels.scope(audit, module)
     audit = Lynx.Rust.OwnedStringModels.scope(audit, module)
     audit = Lynx.Rust.StringModels.scope(audit, module)
+    audit = Lynx.Rust.StringSliceModels.scope(audit, module)
     codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
@@ -439,6 +440,9 @@ defmodule Lynx.Rust.Extraction do
     # their scoped mappings take precedence over the unreferenced candidates.
     backend_calls =
       Lynx.Rust.SliceModels.backend_calls(audit.available_external_calls, audit.external_calls)
+      |> then(fn calls ->
+        Lynx.Rust.StringSliceModels.scope(%{external_calls: calls}, module).external_calls
+      end)
 
     {backend_document, slice_model_aliases, backend_calls} =
       Lynx.Rust.SliceModels.lower_names!(backend_document, backend_calls)
@@ -519,6 +523,7 @@ defmodule Lynx.Rust.Extraction do
                 ),
                 Lynx.Rust.ResourceModels.external_names(audit.external_calls),
                 Lynx.Rust.SliceModels.external_names(audit.external_calls, module),
+                Lynx.Rust.StringSliceModels.external_names(audit.external_calls, module),
                 Lynx.Rust.ResultModels.external_names(
                   audit,
                   Keyword.get(opts, :execution, :pure)
@@ -596,7 +601,8 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.CollectionModels.install!(audit, translation, output, module) ++
         Lynx.Rust.SliceModels.install!(audit, output, module) ++
         Lynx.Rust.OwnedStringModels.install!(audit, translation, output, module) ++
-        Lynx.Rust.StringModels.install!(audit, output, module)
+        Lynx.Rust.StringModels.install!(audit, output, module) ++
+        Lynx.Rust.StringSliceModels.install!(audit, output, module)
 
     Lynx.Rust.ExactRead.install!(audit, translation, output)
 

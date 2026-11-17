@@ -60,6 +60,7 @@ defmodule Lynx.Rust.CallModels do
             Lynx.Rust.IteratorModels.resolve(function, translated, refs) ||
             Lynx.Rust.EndianModels.resolve(function, translated, refs) ||
             Lynx.Rust.StringModels.resolve(function, translated, refs) ||
+            Lynx.Rust.StringSliceModels.resolve(function, translated, refs) ||
             Lynx.Rust.OwnedStringModels.resolve(function, translated, refs) ||
             Lynx.Rust.BytesModels.resolve(function, translated, refs) ||
             Lynx.Rust.FormatModels.resolve(function, translated, refs) ||

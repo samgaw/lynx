@@ -57,6 +57,9 @@ defmodule Lynx.Rust.IndexModels do
        ) do
     selected =
       case models[id] do
+        %{str_index_method: 0} ->
+          [Lynx.Rust.StringSliceModels.index_method!(args, models, translated, refs, traits)]
+
         %{slice_index_method: index} ->
           [index_method!(args, index, models, translated, refs, traits)]
 
