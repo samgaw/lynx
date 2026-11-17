@@ -7,10 +7,10 @@ defmodule Lynx.Rust.FileAppendTest do
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
                String.contains?(
                  File.read!(Path.join(@tools, "lynx-toolchain")),
-                 "native-loops-v1"
+                 "effectful-calls-v1"
                )
   unless @available,
-    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned native-loops backend")
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned effectful runtime backend")
 
   @tag :tmp_dir
   test "verifies actual append, multi-record native loops and crash recovery", %{tmp_dir: tmp} do

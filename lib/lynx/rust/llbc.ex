@@ -13,17 +13,21 @@ defmodule Lynx.Rust.LLBC do
   @discriminant_backend @effectful_backend <> "+partial-discriminants-v1"
   @record_backend @discriminant_backend <> "+lean-record-types-v1"
   @branch_backend @record_backend <> "+duplicate-branches-v1"
+  @effectful_backends [
+    @effectful_backend,
+    @discriminant_backend,
+    @record_backend,
+    @branch_backend,
+    String.replace(@branch_backend, "+native-loops-v1", "")
+  ]
   @unwind_backends [
     @unwind_backend,
     @global_backend,
     @future_backend,
     @workspace_backend,
     @undefined_backend,
-    @loop_backend,
-    @effectful_backend,
-    @discriminant_backend,
-    @record_backend,
-    @branch_backend
+    @loop_backend
+    | @effectful_backends
   ]
   @runtime_backends ["nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1" | @unwind_backends]
 
@@ -570,12 +574,7 @@ defmodule Lynx.Rust.LLBC do
         )
 
     if expected_monad != "RustM" and
-         (translation["aeneas_version"] not in [
-            @effectful_backend,
-            @discriminant_backend,
-            @record_backend,
-            @branch_backend
-          ] or
+         (translation["aeneas_version"] not in @effectful_backends or
             translation["effectful_calls_preserved"] != true),
        do:
          raise(
@@ -596,11 +595,8 @@ defmodule Lynx.Rust.LLBC do
                @future_backend,
                @workspace_backend,
                @undefined_backend,
-               @loop_backend,
-               @effectful_backend,
-               @discriminant_backend,
-               @record_backend,
-               @branch_backend
+               @loop_backend
+               | @effectful_backends
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
@@ -632,16 +628,6 @@ defmodule Lynx.Rust.LLBC do
         case matches do
           [%{"is_opaque" => false, "lean_name" => name} = mapping] when is_binary(name) ->
             validate_loops!(helpers, mapping)
-
-            if expected_monad == "Lynx.NativeM" and helpers != [] and
-                 translation["aeneas_version"] not in [
-                   @loop_backend,
-                   @effectful_backend,
-                   @discriminant_backend,
-                   @record_backend,
-                   @branch_backend
-                 ],
-               do: raise(ArgumentError, "native loops require the native-loops-v1 Aeneas backend")
 
             {function["def_id"],
              mapping |> Map.put("declaration", function) |> Map.put("loop_helpers", helpers)}

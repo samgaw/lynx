@@ -65,6 +65,29 @@ defmodule Lynx.Rust.Runtime do
   def configuration!(other, _output, _prefix),
     do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(other)}")
 
+  # Aeneas emits one fixed-point application at the entry of each rust_loop
+  # wrapper. Bind that operator without changing Rust identifiers or loop bodies.
+  def bind_loop_operator!("Lynx.NativeM", output, prefix, translation) do
+    path = Path.join(output, String.replace(prefix, ".", "/") <> "/Funs.lean")
+    source = File.read!(path)
+
+    wrappers =
+      Enum.count(translation["functions"], &match?(%{"loop" => %{"is_body" => false}}, &1))
+
+    # Cross-crate functions carry a rust_fun path alongside rust_loop. Its
+    # quoted Rust path may contain brackets, and the signature can span lines.
+    entry =
+      ~r/^(@\[rust_loop(?:,(?:[^"\]]|"(?:[^"\\]|\\.)*")*)?\]\ndef [^\n]*(?:\n [^\n]*)*? := do\n  monadLift \()(?:Lynx\.NativeM\.)?loop(?=\s)/m
+
+    unless length(Regex.scan(entry, source)) == wrappers,
+      do: raise(ArgumentError, "Aeneas native loop wrappers do not match translation metadata")
+
+    bound = Regex.replace(entry, source, "\\1Lynx.NativeM.loop")
+    if bound != source, do: File.write!(path, bound)
+  end
+
+  def bind_loop_operator!("RustM", _output, _prefix, _translation), do: :ok
+
   defp try!(output, prefix),
     do: install!(output, prefix, "NativeTry", @try_marker, @try_contents)
 
