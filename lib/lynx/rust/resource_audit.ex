@@ -94,11 +94,13 @@ defmodule Lynx.Rust.ResourceAudit do
            "src" => "Normal",
            "is_negative" => false,
            "is_unsafe" => false,
-           "methods" => [nil, nil],
+           "methods" => [_, _] = methods,
            "types" => [],
            "consts" => constants
          } <- impl,
          true <- impl["generics"] == empty,
+         true <-
+           default_methods?(methods, impl["def_id"], payload, trait, translated, refs, traits),
          true <-
            CallModels.expand(impl["impl_trait"], refs) == %{
              "id" => trait,
@@ -120,6 +122,63 @@ defmodule Lynx.Rust.ResourceAudit do
     else
       _ -> false
     end
+  end
+
+  # Full-MIR discovery can materialize inherited methods instead of recording
+  # nil. Require the foreign trait's exact default body and the concrete self
+  # dictionary; an override must never become a default by name alone.
+  defp default_methods?(methods, impl, payload, trait, t, refs, traits) do
+    declaration = find(t["trait_decls"], trait)
+
+    Enum.all?(Enum.with_index(methods), fn
+      {nil, _} ->
+        true
+
+      {%{
+         "kind" => %{"TraitMethod" => [^trait, index]},
+         "params" => params,
+         "skip_binder" => %{"id" => id, "generics" => args}
+       }, index} ->
+        with %{"params" => ^params, "skip_binder" => %{"default" => default}} <-
+               Enum.at(declaration["methods"], index),
+             true <- is_map(default) and default["id"] == id,
+             true <- args["regions"] == default["generics"]["regions"],
+             true <- args["const_generics"] == [],
+             true <- CallModels.expand(args["types"], refs) == [payload],
+             [dictionary] <- args["trait_refs"],
+             %{
+               "kind" => %{"TraitImpl" => %{"id" => ^impl, "generics" => actual}},
+               "trait_decl_ref" => declared
+             } <- ResourceModels.dictionary(dictionary, traits),
+             true <- actual == ResourceModels.args([]),
+             true <-
+               CallModels.expand(declared, refs) == %{
+                 "id" => trait,
+                 "generics" => ResourceModels.args([payload])
+               },
+             %{
+               "src" => %{"TraitDefault" => %{"item_id" => ^index, "trait_ref" => source}},
+               "item_meta" => %{"is_local" => false, "name" => name},
+               "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false}
+             } <- find(t["fun_decls"], id),
+             true <-
+               name ==
+                 path(
+                   ~w(rustler resource traits Resource) ++ [Enum.at(~w(destructor down), index)]
+                 ),
+             true <-
+               CallModels.expand(source, refs) == %{
+                 "id" => trait,
+                 "generics" => ResourceModels.args([%{"TypeVar" => %{"Free" => 0}}])
+               } do
+          true
+        else
+          _ -> false
+        end
+
+      _ ->
+        false
+    end)
   end
 
   # The two foreign default flags are explicit Rustler 0.39 models, not assumed

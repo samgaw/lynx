@@ -422,6 +422,8 @@ defmodule Lynx.Rust.Extraction do
 
     {document, comparison_projection} = Lynx.Rust.ComparisonInterfaces.project!(document, audit)
 
+    {document, resource_projection} = Lynx.Rust.ResourceInterfaces.project!(document, audit)
+
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
 
     backend_document =
@@ -466,7 +468,8 @@ defmodule Lynx.Rust.Extraction do
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
            native_model_aliases == [] and option_aliases == [] and slice_model_aliases == [] and
-           is_nil(string_pattern_projection) and is_nil(comparison_projection) do
+           is_nil(string_pattern_projection) and is_nil(comparison_projection) and
+           is_nil(resource_projection) do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -673,6 +676,7 @@ defmodule Lynx.Rust.Extraction do
       native_model_aliases: native_model_aliases,
       slice_model_aliases: slice_model_aliases,
       comparison_projection: comparison_projection,
+      resource_interface_projection: resource_projection,
       formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
       string_pattern_projection: string_pattern_projection,

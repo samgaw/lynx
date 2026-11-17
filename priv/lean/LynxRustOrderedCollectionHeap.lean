@@ -67,4 +67,12 @@ instance : Lynx.NativeCodec Set where
   encode values := encodeKeys values.toList
   decode term := (decodeKeys term).map (fun keys => (Std.ExtTreeSet.ofList keys : Set))
   decode_encode values := by simp [keys_roundtrip, set_rebuild]
+
+/-- Scalar collection elements have no observable destructor. The admitted
+standard Global allocation and physical reclamation remain external boundaries. -/
+instance : Lynx.NativeMutexDrop Map where
+  drop := Lynx.NativeMutex.disposeWith (fun _ => Lynx.NativeM.ok ())
+
+instance : Lynx.NativeMutexDrop Set where
+  drop := Lynx.NativeMutex.disposeWith (fun _ => Lynx.NativeM.ok ())
 end __PREFIX__.OrderedCollectionHeap

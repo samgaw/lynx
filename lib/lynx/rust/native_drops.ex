@@ -174,7 +174,7 @@ defmodule Lynx.Rust.NativeDrops do
             else
               _ ->
                 {:error,
-                 "unsupported native drop payload or inconsistent compiler destructor; only compiler-certified destructor-free payloads, owned File or linked first-party scalar-vector payload cleanup are supported"}
+                 "unsupported native drop payload or inconsistent compiler destructor; only compiler-certified destructor-free payloads, scalar ordered collections, owned File or linked first-party scalar-vector payload cleanup are supported"}
             end
 
           true ->
@@ -259,6 +259,11 @@ defmodule Lynx.Rust.NativeDrops do
                   ) and
                     ((translated[:native_file_drop] == true and
                         file_payload?(payload, translated, refs)) or
+                       Lynx.Rust.OrderedCollectionModels.supported_family(
+                         payload,
+                         translated,
+                         refs
+                       ) != nil or
                        Lynx.Rust.NativeOwnedDrops.vector_cleanup_for(payload, translated, refs) !=
                          nil)),
              %{"regions" => [], "outlives" => [], "skip_binder" => dictionary} <- dictionary,
@@ -276,7 +281,7 @@ defmodule Lynx.Rust.NativeDrops do
         else
           _ ->
             raise ArgumentError,
-                  "native destruction requires an explicitly admitted File or an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload, owned Mutex<File> or linked first-party scalar-vector cleanup; other custom payload destructors are unsupported"
+                  "native destruction requires an explicitly admitted File or an exact Mutex, MutexGuard or default ResourceArc Destruct implementation with a compiler-certified destructor-free payload, scalar ordered collection, owned Mutex<File> or linked first-party scalar-vector cleanup; other custom payload destructors are unsupported"
         end
       end
     end
@@ -431,6 +436,7 @@ defmodule Lynx.Rust.NativeDrops do
   defp owned_payload?(payload, translated, refs),
     do:
       file_payload?(payload, translated, refs) or
+        Lynx.Rust.OrderedCollectionModels.supported_family(payload, translated, refs) != nil or
         Lynx.Rust.NativeOwnedDrops.vector_cleanup_for(payload, translated, refs) != nil
 
   def supported_mutex_payload?(self, translated, refs) do

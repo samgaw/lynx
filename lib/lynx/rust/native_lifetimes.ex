@@ -118,10 +118,25 @@ defmodule Lynx.Rust.NativeLifetimes do
 
       owners = MapSet.union(owners, borrowed)
 
+      cleanup_fields = cleanup_fields(function, translated, refs, native_types, types)
+
       if MapSet.size(owners) > 0 do
         live = MapSet.filter(owners, &(&1 > 0 and &1 <= body["locals"]["arg_count"]))
 
+        live =
+          Enum.reduce(cleanup_fields, live, fn {root, fields}, live ->
+            if MapSet.member?(live, root),
+              do:
+                Enum.reduce(
+                  fields,
+                  MapSet.delete(live, root),
+                  &MapSet.put(&2, {:frame_field, root, &1})
+                ),
+              else: live
+          end)
+
         context = %{
+          cleanup_fields: cleanup_fields,
           owners: owners,
           borrowed: borrowed,
           erased_drops: MapSet.new((drop_audit && drop_audit.sites[function["def_id"]]) || []),
@@ -164,6 +179,32 @@ defmodule Lynx.Rust.NativeLifetimes do
   # A multi-owner compiler frame is one root while passed as a whole, but its
   # state-refined fields have separate obligations. Moving one saved field must
   # not discharge the resource/guard retained in another field.
+  # Only a separately validated, compiler-captured nonpanicking destructor may
+  # consume independent fields this way. Every owned field retains an obligation
+  # until its actual consuming call; moving one cannot discharge another.
+  defp cleanup_fields(function, translated, refs, native, types) do
+    with [input] <- function["signature"]["inputs"],
+         %{"def_id" => id} <- Lynx.Rust.NativeOwnedDrops.function_for(input, translated, refs),
+         true <- id == function["def_id"],
+         %{"Adt" => %{"id" => type, "generics" => args}} <- CallModels.expand(input, refs),
+         %{"Struct" => fields} <- types[type]["kind"],
+         counts =
+           Enum.map(fields, fn field ->
+             native_count(
+               CallModels.instantiate(CallModels.expand(field["ty"], refs), args),
+               native,
+               types,
+               refs,
+               []
+             )
+           end),
+         true <- Enum.sum(counts) > 1 and Enum.all?(counts, &(&1 in [0, 1])) do
+      %{1 => for({1, index} <- Enum.with_index(counts), do: index)}
+    else
+      _ -> %{}
+    end
+  end
+
   defp owner_root({:frame_field, root, _field}), do: root
   defp owner_root(root), do: root
 
@@ -1398,6 +1439,11 @@ defmodule Lynx.Rust.NativeLifetimes do
   defp moves!(%{"Move" => %{"kind" => %{"Local" => local}} = place}, live, ctx) do
     Lynx.Rust.NativeDropLowering.place_type!(place, ctx, true)
 
+    if fields = Map.get(ctx, :cleanup_fields, %{})[local] do
+      unless Enum.all?(fields, &MapSet.member?(live, {:frame_field, local, &1})),
+        do: reject!(ctx)
+    end
+
     if MapSet.member?(ctx.owners, local) and not live_root?(live, local) and
          ctx.known[{:empty, local}] != true,
        do: reject!(ctx)
@@ -1449,10 +1495,28 @@ defmodule Lynx.Rust.NativeLifetimes do
           (is_nil(container) or (not container.borrowed and path == container.prefix))
 
       cond do
-        whole_frame -> delete_root(live, root)
-        multi_frame?(root, ctx) -> take_frame_field!(live, root, path, ctx)
-        root_count == 1 -> delete_root(live, root)
-        true -> reject!(ctx)
+        whole_frame ->
+          delete_root(live, root)
+
+        Map.has_key?(Map.get(ctx, :cleanup_fields, %{}), root) ->
+          case path do
+            [{:field, nil, field}] ->
+              token = {:frame_field, root, field}
+              unless MapSet.member?(live, token), do: reject!(ctx)
+              MapSet.delete(live, token)
+
+            _ ->
+              reject!(ctx)
+          end
+
+        multi_frame?(root, ctx) ->
+          take_frame_field!(live, root, path, ctx)
+
+        root_count == 1 ->
+          delete_root(live, root)
+
+        true ->
+          reject!(ctx)
       end
     else
       live

@@ -128,9 +128,14 @@ defmodule Lynx.Rust do
   types and kernel-checked reconstruction; pure extraction retains its original
   representation. Actual locked first-party updates compose across crates,
   including explicit poison recovery and reconstruction before guard release.
-  This does not yet qualify Rustler resource creation/final-owner cleanup for
-  collection payloads, runtime collection iterators or arbitrary native threads.
-  Native lock/tree implementations, allocation and FFI remain external boundaries.
+  Rustler 0.39 resources can own multiple independently locked scalar collections
+  with `owned_drops: true` and full-MIR extraction. Their actual captured cleanup
+  retains a separate obligation for each independently owned field. Repeated NIF
+  calls preserve shared identity; final-owner cleanup follows the existing explicit
+  finalizer policy. General partial moves, custom/effectful destructors, runtime
+  collection iterators and arbitrary native thread behavior remain outside this
+  subset. Native lock/tree implementations, allocation, GC timing and FFI remain
+  external boundaries.
 
   Shared-slice `for item in slice` loops reuse Aeneas's existing `IntoIterator`
   conversion and `Iterator::next` models. Admission checks method forwarding,
