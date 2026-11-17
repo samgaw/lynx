@@ -256,6 +256,19 @@ defmodule Lynx.Rust.LLBC do
         {:error, function, message} -> failure!(function, translated, message)
       end
 
+    ordered_iterators =
+      case Lynx.Rust.OrderedIteratorModels.audit(
+             functions,
+             available_models,
+             translated,
+             refs,
+             first_party,
+             Keyword.get(opts, :execution, :pure)
+           ) do
+        {:ok, info} -> info
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
     Lynx.Rust.AtomicModels.audit!(functions, available_models, translated, refs)
 
     if :rustler_decoders in Keyword.get(opts, :external_calls, []) do
@@ -527,6 +540,7 @@ defmodule Lynx.Rust.LLBC do
       external_calls: modelled,
       available_external_calls: available_models,
       ordered_collections: ordered_collections,
+      ordered_iterators: ordered_iterators,
       crate: translated["crate_name"],
       first_party: first_party,
       references: refs,

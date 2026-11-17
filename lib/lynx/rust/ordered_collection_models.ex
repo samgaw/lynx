@@ -317,6 +317,9 @@ defmodule Lynx.Rust.OrderedCollectionModels do
     end
   end
 
+  def allocator_dictionary!(raw, t, refs),
+    do: dictionary!("AllocatorClone", raw, context(t, refs))
+
   defp dictionary!(name, raw, ctx) do
     expected = if name == "Ord", do: u64(), else: adt(ctx.global, [])
 
@@ -507,7 +510,8 @@ defmodule Lynx.Rust.OrderedCollectionModels do
   end
 
   def install!(audit, output, prefix) do
-    if audit.ordered_collections.families == [] do
+    if audit.ordered_collections.families == [] and
+         Map.get(audit, :ordered_iterators, %{families: []}).families == [] do
       []
     else
       name = prefix <> ".OrderedCollectionsModel"

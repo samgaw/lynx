@@ -143,10 +143,17 @@ defmodule Lynx.Rust.DropModels do
     end)
   end
 
-  defp site!(%{"kind" => "Conditional", "place" => %{"ty" => type}} = drop, ctx, _) do
-    if Lynx.Rust.OrderedCollectionModels.family(type, ctx.translated, ctx.refs),
-      do: ordered_site!(drop, ctx),
-      else: reject!("unsupported conditional drop without a nonobservable deallocation model")
+  defp site!(%{"kind" => "Conditional", "place" => %{"ty" => type}} = drop, ctx, seen) do
+    cond do
+      Lynx.Rust.OrderedCollectionModels.family(type, ctx.translated, ctx.refs) ->
+        ordered_site!(drop, ctx)
+
+      vector_type?(type, ctx) ->
+        vector_site!(drop, ctx, seen)
+
+      true ->
+        reject!("unsupported conditional drop without a nonobservable deallocation model")
+    end
   end
 
   defp site!(
@@ -266,9 +273,19 @@ defmodule Lynx.Rust.DropModels do
   # A recursion edge is admitted only through the finite owned vector's elements;
   # custom destructors and allocators remain excluded. Native deallocation and
   # stack exhaustion remain explicit boundaries.
+  defp vector_type?(type, ctx) do
+    case expand(type, ctx) do
+      %{"Adt" => %{"id" => id, "builtin" => nil}} ->
+        ctx.types[id] && ctx.types[id]["item_meta"]["name"] == path(~w(alloc vec Vec))
+
+      _ ->
+        false
+    end
+  end
+
   defp vector_site!(
          %{
-           "kind" => "Precise",
+           "kind" => kind,
            "place" => %{"ty" => annotation},
            "fn_ptr" => %{
              "kind" => %{"Fun" => id},
@@ -283,8 +300,15 @@ defmodule Lynx.Rust.DropModels do
          ctx,
          seen
        )
-       when is_integer(region) do
+       when kind in ["Precise", "Conditional"] and is_integer(region) do
     element_type = expand(element, ctx)
+
+    if kind == "Conditional" and is_nil(nondestructive_element(element_type, ctx)),
+      do:
+        reject!(
+          "conditional Vec drop requires a scalar or checked compiler Copy witness; observable element destruction cannot be erased"
+        )
+
     t = %{"TypeVar" => %{"Free" => 0}}
     a = %{"TypeVar" => %{"Free" => 1}}
     vector_name = path(~w(alloc vec Vec))
@@ -375,6 +399,12 @@ defmodule Lynx.Rust.DropModels do
          rust_name: render_name(function["item_meta"]["name"]),
          type: "alloc::vec::Vec<#{element_name}>",
          element_drop_basis: element_basis,
+         supported_drop_kinds:
+           if(
+             element_basis == :primitive_scalar or match?(%{kind: :compiler_copy}, element_basis),
+             do: ["Precise", "Conditional"],
+             else: ["Precise"]
+           ),
          self: self,
          first_party: false,
          status: :modelled,
@@ -385,7 +415,7 @@ defmodule Lynx.Rust.DropModels do
              do:
                "Logical heap Vec<#{element_name}>/Global deallocation model: checked compiler structural element glue; finite owned vector recursion only; native allocator effects, stack exhaustion and deallocation correctness unverified",
              else:
-               "Logical heap Vec<#{element_name}>/Global deallocation model: no element destructor; native allocator effects and deallocation correctness unverified"
+               "Logical heap Vec<#{element_name}>/Global deallocation model: no element destructor; conditional scalar/Copy drop/skip is nonobservable; native allocator effects and deallocation correctness unverified"
            )
        })}
     else

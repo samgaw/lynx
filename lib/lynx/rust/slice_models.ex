@@ -85,6 +85,18 @@ defmodule Lynx.Rust.SliceModels do
         range != nil ->
           range
 
+        inherent?(name, slice, refs, "first") and inputs == [shared] and
+          option_reference?(output, t, translated, refs) and function["src"] == "Normal" ->
+          model("core::slice::{[@T]}::first", "SliceModel.first")
+          |> Map.merge(%{
+            builtin: false,
+            can_fail: true,
+            lift: true,
+            slice_first: true,
+            label:
+              "Standard shared slice first model using the existing checked index-zero primitive; empty slices return None; native Rust implementation, pointer metadata/layout and borrowing correspondence remain unverified"
+          })
+
         inherent?(name, slice, refs, "is_empty") and inputs == [shared] and
           output == %{"Scalar" => "Bool"} and function["src"] == "Normal" ->
           model("core::slice::{[@T]}::is_empty", "Aeneas.Std.core.slice.Slice.is_empty")
@@ -341,9 +353,16 @@ defmodule Lynx.Rust.SliceModels do
       audit
       | external_calls:
           Map.new(audit.external_calls, fn {id, model} ->
-            if model[:slice_range_from_checked],
-              do: {id, %{model | lean: prefix <> ".SliceModel.indexFrom"}},
-              else: {id, model}
+            cond do
+              model[:slice_range_from_checked] ->
+                {id, %{model | lean: prefix <> ".SliceModel.indexFrom"}}
+
+              model[:slice_first] ->
+                {id, %{model | lean: prefix <> ".SliceModel.first"}}
+
+              true ->
+                {id, model}
+            end
           end)
     }
   end
@@ -354,7 +373,8 @@ defmodule Lynx.Rust.SliceModels do
   def backend_calls(available, called) do
     available
     |> Map.reject(fn {id, model} ->
-      model[:slice_range_from_checked] == true and not Map.has_key?(called, id)
+      (model[:slice_range_from_checked] == true or model[:slice_first] == true) and
+        not Map.has_key?(called, id)
     end)
     |> Map.merge(called)
   end
@@ -500,7 +520,9 @@ defmodule Lynx.Rust.SliceModels do
   end
 
   def install!(audit, output, prefix) do
-    if Enum.any?(audit.external_calls, fn {_, model} -> model[:slice_range_from_checked] end) do
+    if Enum.any?(audit.external_calls, fn {_, model} ->
+         model[:slice_range_from_checked] == true or model[:slice_first] == true
+       end) do
       module = prefix <> ".SliceModel"
       path = Path.join(output, String.replace(module, ".", "/") <> ".lean")
 
@@ -519,6 +541,10 @@ defmodule Lynx.Rust.SliceModels do
       public section
       open Aeneas Aeneas.Std
       namespace #{module}
+      @[expose] def first {T : Type} (input : Slice T) : RustM (Option T) :=
+        core.slice.index.Usize.get 0#usize input
+      theorem first_empty {T : Type} (input : Slice T) (empty : input.val = []) : first input = RustM.ok none := by
+        simp [first, core.slice.index.Usize.get, empty]
       @[expose] def indexFrom {T : Type} (range : core.ops.range.RangeFrom Usize) (input : Slice T) : RustM (Slice T) :=
         if range.start.val ≤ input.length then core.slice.index.SliceIndexRangeFromUsizeSlice.index range input
         else RustM.fail .panic

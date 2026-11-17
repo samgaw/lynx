@@ -58,7 +58,9 @@ defmodule Lynx.Rust.CallModels do
             Lynx.Rust.ComparisonModels.resolve(function, translated, refs) ||
             Lynx.Rust.CollectionModels.resolve(function, translated, refs) ||
             if(execution == :pure,
-              do: Lynx.Rust.OrderedCollectionModels.resolve(function, translated, refs)
+              do:
+                Lynx.Rust.OrderedCollectionModels.resolve(function, translated, refs) ||
+                  Lynx.Rust.OrderedIteratorModels.resolve(function, translated, refs)
             ) ||
             Lynx.Rust.IteratorModels.resolve(function, translated, refs) ||
             Lynx.Rust.EndianModels.resolve(function, translated, refs) ||

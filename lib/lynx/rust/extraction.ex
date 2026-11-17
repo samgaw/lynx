@@ -442,7 +442,9 @@ defmodule Lynx.Rust.Extraction do
     # Supply their validated primitive names to prevent unnecessary axiom
     # templates. Only actual call dependencies belong in the verification report;
     # their scoped mappings take precedence over the unreferenced candidates.
-    audit = Lynx.Rust.OrderedCollectionModels.scope(audit, module)
+    audit =
+      Lynx.Rust.OrderedCollectionModels.scope(audit, module)
+      |> Lynx.Rust.OrderedIteratorModels.scope(module)
 
     backend_calls =
       Lynx.Rust.SliceModels.backend_calls(audit.available_external_calls, audit.external_calls)
@@ -473,7 +475,9 @@ defmodule Lynx.Rust.Extraction do
         path
       end
 
-    ordered_modules = Lynx.Rust.OrderedCollectionModels.install!(audit, output, module)
+    ordered_modules =
+      Lynx.Rust.OrderedCollectionModels.install!(audit, output, module) ++
+        Lynx.Rust.OrderedIteratorModels.install!(audit, output, module)
 
     constructor_modules =
       Lynx.Rustler.ErrorConstructors.install!(rustler_constructors, output, module, models) ++
@@ -539,7 +543,8 @@ defmodule Lynx.Rust.Extraction do
                   Keyword.get(opts, :execution, :pure)
                 ),
                 Lynx.Rust.FormatModels.external_names(audit.external_calls),
-                Lynx.Rust.OrderedCollectionModels.external_names(audit, module)
+                Lynx.Rust.OrderedCollectionModels.external_names(audit, module),
+                Lynx.Rust.OrderedIteratorModels.external_names(audit, module)
               ]
               |> Enum.reduce(%{}, fn names, combined ->
                 Map.merge(combined, names, fn _key, left, right -> left ++ right end)

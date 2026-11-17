@@ -114,6 +114,15 @@ defmodule Lynx.Rust do
   The actual shared-reference `Option::copied` helper also remains extracted,
   allowing idiomatic copied lookup without assuming a first-party implementation.
 
+  Shared `for` loops over these maps and sets preserve ordered, unique entries
+  through reported standard iterator models. The actual first-party loop and
+  cross-crate callers remain extracted. Iteration is bounded by 262144 entries;
+  map keys and values, and set members, must be u64. Explicit iterator methods,
+  owning/mutable or double-ended iteration, custom allocators and runtime heap
+  iterators remain rejected. Native iterator pointers, lifetimes and tree layout
+  remain unverified. Safe shared-slice `first` uses a reported model of checked
+  index zero; its native pointer-metadata implementation is not verified.
+
   Shared-slice `for item in slice` loops reuse Aeneas's existing `IntoIterator`
   conversion and `Iterator::next` models. Admission checks method forwarding,
   shared item lifetimes, the matching iterator dictionary and Option layout.
@@ -137,7 +146,8 @@ defmodule Lynx.Rust do
   Unwind cleanup behind these validated nonpanicking calls is unreachable;
   ordinary drops and cleanup behind other calls are still audited separately.
   Scalar vectors support logical deallocation including compiler-emitted cleanup
-  paths. Growth beyond
+  paths. Conditional cleanup also admits concrete elements with a validated
+  compiler Copy witness and nonobservable destruction. Growth beyond
   262144 elements exhausts verification. A kernel-checked model theorem rules
   out catchable overflow panics within that bound. Structural destruction also
   supports monomorphic first-party structs/enums containing scalar/Copy data,
