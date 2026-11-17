@@ -14,6 +14,13 @@ open Aeneas Aeneas.Std Aeneas.Std.ScalarElab
 
 namespace Lynx.Rust.Scalar
 
+/-- Evaluate lossless byte-offset widening without unfolding platform-dependent
+bit-vector casts. The equation holds on both supported pointer widths. -/
+@[cbv_eval] theorem castU8ToUsize_eq (input : U8) :
+    UScalar.cast .Usize input = Usize.ofNat input.val (by scalar_tac) := by
+  apply UScalar.eq_of_val_eq
+  simp
+
 /-- Expose the upstream checked addition body through a kernel-checked equation.
 The existing constructor retains its precise bounds check and panic result. -/
 private theorem unsignedAdd_body {ty : UScalarTy} (left right : UScalar ty) :
