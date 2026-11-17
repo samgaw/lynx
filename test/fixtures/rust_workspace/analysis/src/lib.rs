@@ -483,3 +483,28 @@ pub fn table_stats(
     let previous = experiment_core::ordered::replace_value(&mut table, second_key, second_value);
     (previous, table.len() as u64)
 }
+
+/// Observes and consumes a stored value at most once across crate calls.
+pub fn table_take(
+    key: u64,
+    value: u64,
+    query: u64,
+) -> (Option<u64>, Option<u64>, Option<u64>, u64) {
+    let mut table = std::collections::BTreeMap::new();
+    experiment_core::ordered::replace_value(&mut table, key, value);
+    let before = experiment_core::ordered::peek(&table, query);
+    let first = experiment_core::ordered::take(&mut table, query);
+    let second = experiment_core::ordered::take(&mut table, query);
+    (before, first, second, table.len() as u64)
+}
+
+/// Checks release and repeated removal of a claimed key.
+pub fn set_release(key: u64, query: u64) -> (bool, bool, bool, bool, u64) {
+    let mut values = std::collections::BTreeSet::new();
+    experiment_core::ordered::claim(&mut values, key);
+    let before = experiment_core::ordered::contains(&values, query);
+    let first = experiment_core::ordered::release(&mut values, query);
+    let after = experiment_core::ordered::contains(&values, query);
+    let second = experiment_core::ordered::release(&mut values, query);
+    (before, first, after, second, values.len() as u64)
+}

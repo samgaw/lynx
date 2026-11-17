@@ -205,7 +205,6 @@ fn echo_borrowed_option(value: (Option<&str>, bool)) -> (Option<&str>, bool) {
     value
 }
 
-/// Borrows a UTF-8 field through both library crates.
 #[cfg(feature = "ordered-collections")]
 #[rustler::nif(name = "ordered_replace", schedule = "DirtyCpu")]
 fn ordered_replace_nif(key: u64, value: u64, replacement: u64) -> Option<u64> {
@@ -229,6 +228,23 @@ fn ordered_stats_nif(
     experiment_analysis::table_stats(first_key, first_value, second_key, second_value)
 }
 
+#[cfg(feature = "ordered-collections")]
+#[rustler::nif(name = "ordered_take", schedule = "DirtyCpu")]
+fn ordered_take_nif(
+    key: u64,
+    value: u64,
+    query: u64,
+) -> (Option<u64>, Option<u64>, Option<u64>, u64) {
+    experiment_analysis::table_take(key, value, query)
+}
+
+#[cfg(feature = "ordered-collections")]
+#[rustler::nif(name = "ordered_release", schedule = "DirtyCpu")]
+fn ordered_release_nif(key: u64, query: u64) -> (bool, bool, bool, bool, u64) {
+    experiment_analysis::set_release(key, query)
+}
+
+/// Borrows a UTF-8 field through both library crates.
 #[cfg(feature = "text-slices")]
 #[rustler::nif(name = "parse_text_record", schedule = "DirtyCpu")]
 fn parse_text_record_nif(
@@ -822,7 +838,7 @@ mod tests {
                 + 3 * usize::from(cfg!(feature = "text-input"))
                 + 3 * usize::from(cfg!(feature = "borrowed-text"))
                 + 7 * usize::from(cfg!(feature = "text-slices"))
-                + 3 * usize::from(cfg!(feature = "ordered-collections"))
+                + 5 * usize::from(cfg!(feature = "ordered-collections"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1142,6 +1158,16 @@ mod tests {
                 (
                     "ordered_stats".to_owned(),
                     4,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "ordered_take".to_owned(),
+                    3,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "ordered_release".to_owned(),
+                    2,
                     rustler::SchedulerFlags::DirtyCpu as u32,
                 ),
             ]);

@@ -26,11 +26,11 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
       module_prefix: "Tables.Extraction",
       build_dir: Path.join(tmp, "build"),
       roots:
-        ~w(experiment_analysis::table_replace experiment_analysis::set_insert_twice experiment_analysis::table_stats),
+        ~w(experiment_analysis::table_replace experiment_analysis::set_insert_twice experiment_analysis::table_stats experiment_analysis::table_take experiment_analysis::set_release),
       proof_modules: ["Tables.Properties"],
       required_properties:
         Enum.map(
-          ~w(internal_replace internal_claim replace duplicate stats),
+          ~w(internal_replace internal_claim replace duplicate stats borrow_identity internal_peek internal_take internal_contains internal_release take_preserves_other release_preserves_other take_once release_once),
           &("Tables.Properties." <> &1)
         )
     ]
@@ -94,7 +94,10 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
     for {relative, before, after_text} <- [
           {"core/src/ordered.rs", "table.insert(key, value)", "table.insert(key, key)"},
           {"core/src/ordered.rs", "values.insert(key)", "values.insert(0)"},
-          {"analysis/src/lib.rs", "(previous, table.len() as u64)", "(previous, 0)"}
+          {"analysis/src/lib.rs", "(previous, table.len() as u64)", "(previous, 0)"},
+          {"core/src/ordered.rs", "table.remove(&key)", "table.remove(&0)"},
+          {"core/src/ordered.rs", "values.remove(&key)", "values.remove(&0)"},
+          {"core/src/ordered.rs", "table.get(&key).copied()", "table.get(&0).copied()"}
         ] do
       source = Path.join(workspace, relative)
       original = File.read!(source)

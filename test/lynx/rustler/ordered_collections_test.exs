@@ -62,7 +62,13 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
         mir: :promoted,
         root_attribute: if(@unpatched, do: "verify::start_from"),
         cargo: [features: ["ordered-collections"]],
-        only: [ordered_replace: 3, ordered_claims: 1, ordered_stats: 4],
+        only: [
+          ordered_replace: 3,
+          ordered_claims: 1,
+          ordered_stats: 4,
+          ordered_take: 3,
+          ordered_release: 2
+        ],
         lean_project: project,
         module_prefix: "Tables.Extraction",
         build_dir: Path.join(tmp, "build")
@@ -91,6 +97,7 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
 
       properties =
         File.read!(Path.join(@proofs, "OrderedCollections.lean"))
+        |> String.replace("experiment_analysis.core.borrow", "experiment_nif.core.borrow")
         |> String.replace("experiment_analysis.experiment_core", "experiment_nif.experiment_core")
         |> String.replace("experiment_analysis.", "experiment_nif.experiment_analysis.")
 
@@ -101,6 +108,8 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
         |> String.replace("__REPLACE_NIF__", bindings["ordered_replace"]["lean_name"])
         |> String.replace("__CLAIMS_NIF__", bindings["ordered_claims"]["lean_name"])
         |> String.replace("__STATS_NIF__", bindings["ordered_stats"]["lean_name"])
+        |> String.replace("__TAKE_NIF__", bindings["ordered_take"]["lean_name"])
+        |> String.replace("__RELEASE_NIF__", bindings["ordered_release"]["lean_name"])
 
       File.write!(Path.join(project, "Tables/AdapterProperties.lean"), adapter)
 
@@ -110,9 +119,13 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
             proof_modules: ["Tables.Properties", "Tables.AdapterProperties"],
             required_properties:
               Enum.map(
-                ~w(internal_replace internal_claim replace duplicate stats),
+                ~w(internal_replace internal_claim replace duplicate stats borrow_identity internal_peek internal_take internal_contains internal_release take_preserves_other release_preserves_other take_once release_once),
                 &("Tables.Properties." <> &1)
-              ) ++ Enum.map(~w(replace duplicate stats), &("Tables.AdapterProperties." <> &1))
+              ) ++
+                Enum.map(
+                  ~w(replace duplicate stats take_once release_once),
+                  &("Tables.AdapterProperties." <> &1)
+                )
           ]
 
       prepared = Lynx.Rustler.prepare!(options)
@@ -134,6 +147,35 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
       end
       """)
 
+      assert %{
+               "arguments" => ["u64", "u64", "u64"],
+               "result" => %{
+                 "tuple" => [
+                   %{"option" => "u64"},
+                   %{"option" => "u64"},
+                   %{"option" => "u64"},
+                   "u64"
+                 ]
+               },
+               "flags" => 1
+             } = bindings["ordered_take"]
+
+      assert %{
+               "arguments" => ["u64", "u64"],
+               "result" => %{"tuple" => ["bool", "bool", "bool", "bool", "u64"]},
+               "flags" => 1
+             } = bindings["ordered_release"]
+
+      assert apply(native, :ordered_take, [7, 11, 7]) == {11, 11, nil, 0}
+      assert apply(native, :ordered_take, [7, 11, 8]) == {nil, nil, nil, 1}
+      assert apply(native, :ordered_release, [7, 7]) == {true, true, false, false, 0}
+      assert apply(native, :ordered_release, [7, 8]) == {false, false, false, false, 1}
+      assert_raise ArgumentError, fn -> apply(native, :ordered_take, [7, :bad, 7]) end
+
+      assert_raise ArgumentError, fn ->
+        apply(native, :ordered_release, [7, 18_446_744_073_709_551_616])
+      end
+
       assert apply(native, :ordered_replace, [7, 11, 42]) == 11
       assert apply(native, :ordered_claims, [7]) == {true, false, 1}
       assert apply(native, :ordered_stats, [7, 11, 7, 42]) == {11, 1}
@@ -145,6 +187,16 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
           do: assert_raise(ArgumentError, fn -> apply(native, :ordered_claims, args) end)
 
       cases = [
+        {"Take", "#{name}.ordered_take(7,11,7) == {11,11,nil,0}"},
+        {"MissingTake", "#{name}.ordered_take(7,11,8) == {nil,nil,nil,1}"},
+        {"MaximumTake",
+         "#{name}.ordered_take(18446744073709551615,18446744073709551615,18446744073709551615) == {18446744073709551615,18446744073709551615,nil,0}"},
+        {"Release", "#{name}.ordered_release(7,7) == {true,true,false,false,0}"},
+        {"MissingRelease", "#{name}.ordered_release(7,8) == {false,false,false,false,1}"},
+        {"WrongTakeType",
+         "try do #{name}.ordered_take(7,:bad,7); false catch :error, :badarg -> true end"},
+        {"ReleaseOverflow",
+         "try do #{name}.ordered_release(7,18446744073709551616); false catch :error, :badarg -> true end"},
         {"Replace", "#{name}.ordered_replace(7,11,42) == 11"},
         {"Claims", "#{name}.ordered_claims(7) == {true,false,1}"},
         {"SameKey", "#{name}.ordered_stats(7,11,7,42) == {11,1}"},
@@ -198,7 +250,9 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
         simp only [Lynx.apply, «ordered:ensures/0»,
           Elixir.#{native}.«ordered_replace/3», Elixir.#{native}.«ordered_replace:execution/3»,
           Elixir.#{native}.«ordered_claims/1», Elixir.#{native}.«ordered_claims:execution/1»,
-          Elixir.#{native}.«ordered_stats/4», Elixir.#{native}.«ordered_stats:execution/4»]
+          Elixir.#{native}.«ordered_stats/4», Elixir.#{native}.«ordered_stats:execution/4»,
+          Elixir.#{native}.«ordered_take/3», Elixir.#{native}.«ordered_take:execution/3»,
+          Elixir.#{native}.«ordered_release/2», Elixir.#{native}.«ordered_release:execution/2»]
         cbv
         \"\"\"
     end
