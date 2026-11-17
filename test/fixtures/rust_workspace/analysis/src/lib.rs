@@ -284,6 +284,16 @@ pub fn owned_nonempty(text: String) -> bool {
     experiment_core::protocol::owned_exceeds(text, 0)
 }
 
+/// Retains a core text borrow across the workspace boundary.
+pub fn borrowed_text(text: &str) -> &str {
+    experiment_core::protocol::borrowed_text(text)
+}
+
+/// Reads a network-order word from validated text's first four bytes.
+pub fn borrowed_text_header(text: &str) -> Option<u32> {
+    experiment_core::protocol::read_header(experiment_core::protocol::text_bytes(text))
+}
+
 #[cfg(test)]
 mod framing_tests {
     #[test]

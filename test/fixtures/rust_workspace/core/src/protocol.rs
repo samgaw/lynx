@@ -285,6 +285,11 @@ pub fn owned_exceeds(text: String, budget: usize) -> bool {
     bytes.len() > budget
 }
 
+/// Retains borrowed UTF-8 text without copying its bytes.
+pub fn borrowed_text(text: &str) -> &str {
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

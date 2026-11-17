@@ -1,6 +1,7 @@
 module
 public import TextInput.Extraction.Funs
 public import TextInput.RustlerBridge
+public import TextInput.BorrowedProperties
 public section
 open Aeneas Aeneas.Std experiment_nif
 namespace TextInput.Properties
@@ -44,4 +45,18 @@ theorem facade_unmarked (text : String) : __DECORATE__ text false = .ok text := 
   simp [__DECORATE__,unmarked]
 theorem facade_nonempty : __NONEMPTY__ "hé" = .ok true := by
   simpa [__NONEMPTY__] using nonempty_unicode
+theorem facade_borrowed_echo (text : Str) : __BORROWED_ECHO__ text = .ok text := by
+  rfl
+
+theorem facade_borrowed_short (text : Str) (short : text.val.length < 4) :
+    __TEXT_HEADER__ text = .ok none := by
+  exact TextInput.BorrowedProperties.borrowed_header_short text short
+
+theorem facade_borrowed_word : __TEXT_HEADER__ (toStr "LYNX!") = .ok (some 1280921176#u32) := by
+  exact TextInput.BorrowedProperties.borrowed_network_order
+
+theorem facade_borrowed_option (value : Option Str × Bool) :
+    __BORROWED_OPTION__ value = .ok value := by
+  rfl
+
 end TextInput.Properties

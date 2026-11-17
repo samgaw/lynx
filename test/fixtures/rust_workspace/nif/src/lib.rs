@@ -184,6 +184,27 @@ fn echo_text_option(value: (Option<String>, bool)) -> (Option<String>, bool) {
     value
 }
 
+/// Returns the exact borrowed UTF-8 input through the library crates.
+#[cfg(feature = "borrowed-text")]
+#[rustler::nif(name = "echo_text", schedule = "DirtyCpu")]
+fn echo_text_nif(text: &str) -> &str {
+    experiment_analysis::borrowed_text(text)
+}
+
+/// Reads a byte-oriented header after Rustler validates the text argument.
+#[cfg(feature = "borrowed-text")]
+#[rustler::nif]
+fn text_header(text: &str) -> Option<u32> {
+    experiment_analysis::borrowed_text_header(text)
+}
+
+/// Preserves nested optional text borrows while encoding the result.
+#[cfg(feature = "borrowed-text")]
+#[rustler::nif]
+fn echo_borrowed_option(value: (Option<&str>, bool)) -> (Option<&str>, bool) {
+    value
+}
+
 /// Counts validated text payload bytes through a renamed dirty NIF export.
 #[cfg(feature = "text-views")]
 #[rustler::nif(name = "text_payload", schedule = "DirtyCpu")]
@@ -725,6 +746,7 @@ mod tests {
                 + usize::from(cfg!(feature = "text-views"))
                 + usize::from(cfg!(feature = "owned-text"))
                 + 3 * usize::from(cfg!(feature = "text-input"))
+                + 3 * usize::from(cfg!(feature = "borrowed-text"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1009,6 +1031,25 @@ mod tests {
                 3,
                 rustler::SchedulerFlags::DirtyCpu as u32,
             ));
+        }
+        if cfg!(feature = "borrowed-text") {
+            expected.extend([
+                (
+                    "echo_text".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "text_header".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+                (
+                    "echo_borrowed_option".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
         }
         if cfg!(feature = "text-input") {
             expected.extend([
