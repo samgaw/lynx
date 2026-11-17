@@ -15,6 +15,8 @@ defmodule Lynx.Rust.LibraryHelpers do
         do:
           [
             "core::str::traits::_::eq",
+            "core::borrow::_::borrow",
+            "core::option::_::copied",
             "core::str::_::split_at_checked",
             "core::slice::_::starts_with",
             "core::slice::_::strip_prefix",
@@ -29,6 +31,41 @@ defmodule Lynx.Rust.LibraryHelpers do
         else: []
       )
   end
+
+  def selected?(
+        %{
+          "src" => "Normal",
+          "body" => %{"Structured" => _},
+          "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["option", 0]},
+              %{"Impl" => %{"Ty" => _}},
+              %{"Ident" => ["copied", 0]}
+            ]
+          }
+        } = function,
+        translated
+      ),
+      do: Lynx.Rust.OptionModels.copied_helper?(function, translated)
+
+  def selected?(
+        %{
+          "src" => %{"TraitImpl" => %{"impl_ref" => %{"id" => _}}},
+          "body" => %{"Structured" => _},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["borrow", 0]},
+              _,
+              %{"Ident" => ["borrow", 0]}
+            ]
+          }
+        } = function,
+        translated
+      ),
+      do: Lynx.Rust.OrderedCollectionModels.borrow_helper?(function, translated)
 
   def selected?(
         %{

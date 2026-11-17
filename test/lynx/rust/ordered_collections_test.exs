@@ -153,11 +153,11 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
       String.replace(
         rust,
         "table.insert(key, value)",
-        "let previous = table.remove(&key); table.insert(key, value); previous"
+        "table.remove_entry(&key); table.insert(key, value)"
       )
     )
 
-    assert_raise CompileError, ~r/unverified external Rust call.*remove/, fn ->
+    assert_raise CompileError, ~r/unverified external Rust call.*remove_entry/, fn ->
       Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     end
 

@@ -20,7 +20,10 @@ defmodule Lynx.Rust.OrderedCollectionModelsTest do
           do: {m.ordered_collection, m.ordered_method, m}
 
     assert Enum.sort(for {f, m, _} <- supported, do: {f, m}) ==
-             for(f <- ~w(map set), m <- ~w(insert len new), do: {f, m})
+             Enum.sort(
+               for(f <- ~w(map set), m <- ~w(insert len new remove), do: {f, m}) ++
+                 [{"map", "get"}, {"set", "contains"}]
+             )
 
     assert Enum.all?(supported, fn {_, _, m} ->
              m.status == :modelled and not m.implementation_verified
@@ -87,6 +90,93 @@ defmodule Lynx.Rust.OrderedCollectionModelsTest do
         LLBC.audit!(doc, @crates)
       end
     end
+  end
+
+  test "validates identity Borrow and both lookup lifetimes", c do
+    ctx = OrderedCollectionModels.context(c.t, c.refs)
+    impl = Enum.find(c.t["trait_impls"], &(&1 && &1["impl_trait"]["id"] == ctx.traits["Borrow"]))
+    pointer = hd(impl["methods"])["skip_binder"]
+    helper = Enum.find(c.t["fun_decls"], &(&1 && &1["def_id"] == pointer["id"]))
+    assert Lynx.Rust.LibraryHelpers.selected?(helper, c.t)
+    refute Lynx.Rust.LibraryHelpers.selected?(%{helper | "src" => "Normal"}, c.t)
+
+    for doc <- [
+          update_declaration(c.doc, "trait_impls", impl["def_id"], &Map.put(&1, "methods", [])),
+          update_declaration(
+            c.doc,
+            "trait_impls",
+            impl["def_id"],
+            &Map.put(&1, "is_unsafe", true)
+          ),
+          update_declaration(
+            c.doc,
+            "fun_decls",
+            pointer["id"],
+            &put_in(&1, ["signature", "output"], %{"Scalar" => "Bool"})
+          ),
+          update_declaration(
+            c.doc,
+            "trait_impls",
+            impl["def_id"],
+            &put_in(&1, ["impl_trait", "generics", "types"], [])
+          )
+        ] do
+      assert_raise CompileError, ~r/ordered collection Borrow dictionary/, fn ->
+        LLBC.audit!(doc, @crates)
+      end
+    end
+
+    for {_, model} <- c.models, model[:ordered_method] in ~w(get contains remove) do
+      f = model.function
+      signature = CallModels.expand(f["signature"], c.refs)
+      [self, %{"Ref" => [region, query, mode]}] = signature["inputs"]
+      assert region == %{"Var" => %{"Free" => 1}}
+
+      changed =
+        put_in(f, ["signature", "inputs"], [
+          self,
+          %{"Ref" => [%{"Var" => %{"Free" => 0}}, query, mode]}
+        ])
+
+      refute OrderedCollectionModels.resolve(changed, c.t, c.refs)
+      refute OrderedCollectionModels.resolve(put_in(f, ["generics", "outlives"], []), c.t, c.refs)
+    end
+  end
+
+  test "retains only actual shared Option copied helper bodies", c do
+    helper =
+      Enum.find(c.t["fun_decls"], fn f ->
+        f && List.last(f["item_meta"]["name"]) == %{"Ident" => ["copied", 0]}
+      end)
+
+    assert Lynx.Rust.LibraryHelpers.selected?(helper, c.t)
+    refute Lynx.Rust.LibraryHelpers.selected?(%{helper | "body" => "Opaque"}, c.t)
+    sig = CallModels.expand(helper["signature"], c.refs)
+    [%{"Adt" => %{"id" => id, "generics" => args} = option}] = sig["inputs"]
+    [%{"Ref" => [region, item, "Shared"]}] = args["types"]
+
+    mutated =
+      put_in(helper, ["signature", "inputs"], [
+        %{
+          "Adt" => %{
+            option
+            | "generics" => %{args | "types" => [%{"Ref" => [region, item, "Mut"]}]}
+          }
+        }
+      ])
+
+    refute Lynx.Rust.OptionModels.copied_helper?(mutated, c.t)
+
+    t =
+      update_in(
+        c.t,
+        ["type_decls"],
+        &Enum.map(&1, fn d ->
+          if d && d["def_id"] == id, do: %{d | "kind" => "Opaque"}, else: d
+        end)
+      )
+
+    refute Lynx.Rust.OptionModels.copied_helper?(helper, t)
   end
 
   test "checks compiler drop signatures and forwarding dictionaries", c do

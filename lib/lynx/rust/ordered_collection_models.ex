@@ -24,21 +24,34 @@ defmodule Lynx.Rust.OrderedCollectionModels do
          ] <- f["item_meta"]["name"],
          true <- [a, b, c] == path(~w(alloc collections btree)),
          {_, count} <- @families[family],
-         true <- method in ~w(new insert len),
+         true <-
+           method in ~w(new insert len remove) or
+             {family, method} in [{"map", "get"}, {"set", "contains"}],
          ctx = context(t, refs),
          id when is_integer(id) <- ctx[family],
          true <- type?(find(t["type_decls"], id), family),
          true <- global?(ctx.global, t),
-         n = if(method == "new", do: count - 1, else: count),
+         query? = method in ~w(get contains remove),
+         n = if(method == "new", do: count - 1, else: count + if(query?, do: 1, else: 0)),
          p = free(CallModels.expand(parent, refs)),
          true <- p["kind"] == "InherentImplBlock",
-         true <- params?(p["params"], n, 0, if(method == "new", do: 0, else: 1)),
+         true <-
+           params?(
+             p["params"],
+             if(query?, do: count, else: n),
+             0,
+             if(method == "new", do: 0, else: 1)
+           ),
          true <-
            params?(
              CallModels.expand(f["generics"], refs),
              n,
-             if(method == "new", do: 0, else: 1),
-             if(method == "new", do: 0, else: if(method == "insert", do: 2, else: 1))
+             if(method == "new", do: 0, else: if(query?, do: 2, else: 1)),
+             if(method == "new",
+               do: 0,
+               else: if(query?, do: 4, else: if(method == "insert", do: 2, else: 1))
+             ),
+             query?
            ),
          self = adt(id, Enum.map(indices(count), &var/1)),
          self =
@@ -52,7 +65,7 @@ defmodule Lynx.Rust.OrderedCollectionModels do
              else: self
            ),
          true <- p["skip_binder"] == self,
-         true <- clauses?(p["params"], method, false, n, ctx),
+         true <- clauses?(p["params"], method, false, if(query?, do: count, else: n), ctx),
          true <- clauses?(CallModels.expand(f["generics"], refs), method, true, n, ctx),
          true <- signature?(CallModels.expand(sig, refs), family, method, self, t, refs) do
       operation = family <> String.capitalize(method)
@@ -70,7 +83,7 @@ defmodule Lynx.Rust.OrderedCollectionModels do
         native_cutoff_only: method != "new",
         model_digest: Lynx.Rust.Fingerprint.digest(@contents),
         label:
-          "Ordered #{family} semantic model: only u64 keys/values and the resolved standard u64 Ord/Global allocator are admitted; at most 262144 distinct entries; exceeding the bound exhausts verification, not Rust rejection; std tree implementation, layout, allocation/failure and deallocation remain unverified"
+          "Ordered #{family} semantic model: only u64 keys/values and the resolved standard u64 Ord/identity Borrow/Global allocator are admitted; at most 262144 distinct entries; exceeding the bound exhausts verification, not Rust rejection; std tree implementation, layout, allocation/failure and deallocation remain unverified"
       }
     else
       _ -> nil
@@ -97,8 +110,14 @@ defmodule Lynx.Rust.OrderedCollectionModels do
       )
 
     traits =
-      Map.new(~w(Ord AllocatorClone), fn name ->
-        p = if name == "Ord", do: ~w(core cmp Ord), else: ~w(core alloc AllocatorClone)
+      Map.new(~w(Ord AllocatorClone Borrow), fn name ->
+        p =
+          case name do
+            "Ord" -> ~w(core cmp Ord)
+            "Borrow" -> ~w(core borrow Borrow)
+            "AllocatorClone" -> ~w(core alloc AllocatorClone)
+          end
+
         d = Enum.find(t["trait_decls"] || [], &(&1 && &1["item_meta"]["name"] == path(p)))
         {name, if(d, do: d["def_id"])}
       end)
@@ -143,8 +162,12 @@ defmodule Lynx.Rust.OrderedCollectionModels do
       expected =
         if model.ordered_method == "new", do: expected, else: expected ++ [adt(ctx.global, [])]
 
+      query? = model.ordered_method in ~w(get contains remove)
+      expected = if query?, do: expected ++ [u64()], else: expected
+
       unless CallModels.expand(g["types"], ctx.refs) == expected and g["const_generics"] == [] and
-               length(g["regions"]) == if(model.ordered_method == "new", do: 0, else: 1),
+               length(g["regions"]) ==
+                 if(model.ordered_method == "new", do: 0, else: if(query?, do: 2, else: 1)),
              do:
                raise(
                  ArgumentError,
@@ -155,15 +178,21 @@ defmodule Lynx.Rust.OrderedCollectionModels do
         if model.ordered_method == "new",
           do: [],
           else:
-            if(model.ordered_method == "insert",
-              do: ~w(AllocatorClone Ord),
-              else: ~w(AllocatorClone)
+            if(query?,
+              do: ~w(AllocatorClone Borrow Ord Ord),
+              else:
+                if(model.ordered_method == "insert",
+                  do: ~w(AllocatorClone Ord),
+                  else: ~w(AllocatorClone)
+                )
             )
 
       unless length(g["trait_refs"]) == length(names),
         do: raise(ArgumentError, "missing ordered collection dictionaries")
 
-      for {name, raw} <- Enum.zip(names, g["trait_refs"]), do: dictionary!(name, raw, ctx)
+      for {name, raw} <- Enum.zip(names, g["trait_refs"]) do
+        if name == "Borrow", do: borrow_dictionary!(raw, ctx), else: dictionary!(name, raw, ctx)
+      end
     end
   end
 
@@ -172,6 +201,121 @@ defmodule Lynx.Rust.OrderedCollectionModels do
 
   defp calls!(l, f, models, ctx) when is_list(l), do: Enum.each(l, &calls!(&1, f, models, ctx))
   defp calls!(_, _, _, _), do: :ok
+
+  def borrow_helper?(f, t) do
+    ctx = context(t, Lynx.Rust.LLBC.type_references!(t))
+    id = f["src"]["TraitImpl"]["impl_ref"]["id"]
+    impl = find(t["trait_impls"], id)
+
+    if impl && Enum.any?(impl["methods"], &(&1["skip_binder"]["id"] == f["def_id"])) do
+      raw = %{
+        "regions" => [],
+        "outlives" => [],
+        "skip_binder" => %{
+          "Value" => [
+            0,
+            %{
+              "kind" => %{"TraitImpl" => %{"id" => id, "generics" => args([u64()])}},
+              "trait_decl_ref" => %{
+                "id" => ctx.traits["Borrow"],
+                "generics" => args([u64(), u64()])
+              }
+            }
+          ]
+        }
+      }
+
+      try do
+        borrow_dictionary!(raw, ctx)
+        true
+      rescue
+        ArgumentError -> false
+      end
+    else
+      false
+    end
+  end
+
+  defp borrow_dictionary!(raw, ctx) do
+    trait = ctx.traits["Borrow"]
+
+    with %{
+           "kind" => %{"TraitImpl" => %{"id" => id, "generics" => g}},
+           "trait_decl_ref" => declared
+         } <-
+           ResourceModels.dictionary(raw, ResourceModels.trait_references(ctx.t)),
+         true <- CallModels.expand(g, ctx.refs) == args([u64()]),
+         true <-
+           CallModels.expand(declared, ctx.refs) == %{
+             "id" => trait,
+             "generics" => args([u64(), u64()])
+           },
+         %{"src" => "Normal", "is_unsafe" => false, "is_negative" => false} = impl <-
+           find(ctx.t["trait_impls"], id),
+         true <-
+           impl["item_meta"]["name"] == path(~w(core borrow)) ++ [%{"Impl" => %{"Trait" => id}}],
+         true <- params?(impl["generics"], 1, 0, 0),
+         true <-
+           CallModels.expand(impl["impl_trait"], ctx.refs) == %{
+             "id" => trait,
+             "generics" => args([var(0), var(0)])
+           },
+         true <- impl["types"] == [] and impl["consts"] == [] and impl["implied_trait_refs"] == [],
+         %{"src" => "Normal", "is_unsafe" => false} = d <- find(ctx.t["trait_decls"], trait),
+         true <- params?(d["generics"], 2, 0, 0),
+         [declared_method] <- d["methods"],
+         true <- declared_method["kind"] == %{"TraitMethod" => [trait, 0]},
+         true <- params?(declared_method["params"], 0, 1, 0),
+         true <- declared_method["skip_binder"]["name"] == "borrow",
+         true <- is_nil(declared_method["skip_binder"]["default"]),
+         true <-
+           CallModels.expand(declared_method["skip_binder"]["signature"], ctx.refs) == %{
+             "abi" => "Rust",
+             "is_unsafe" => false,
+             "is_variadic" => false,
+             "inputs" => [%{"Ref" => [%{"Var" => %{"Bound" => [0, 0]}}, var(0), "Shared"]}],
+             "output" => %{"Ref" => [%{"Var" => %{"Bound" => [0, 0]}}, var(1), "Shared"]}
+           },
+         [
+           %{
+             "kind" => %{"TraitMethod" => [^trait, 0]},
+             "params" => params,
+             "skip_binder" => pointer
+           }
+         ] <- impl["methods"],
+         true <- params?(params, 0, 1, 0),
+         true <-
+           CallModels.expand(pointer["generics"], ctx.refs) ==
+             Map.put(args([var(0)]), "regions", [%{"Var" => %{"Bound" => [0, 0]}}]),
+         f when is_map(f) <- find(ctx.t["fun_decls"], pointer["id"]),
+         true <- f["item_meta"]["name"] == impl["item_meta"]["name"] ++ path(["borrow"]),
+         true <-
+           f["src"]["TraitImpl"]["impl_ref"]["id"] == id and f["src"]["TraitImpl"]["item_id"] == 0,
+         true <-
+           CallModels.expand(f["src"]["TraitImpl"]["impl_ref"]["generics"], ctx.refs) ==
+             args([var(0)]),
+         true <-
+           CallModels.expand(f["src"]["TraitImpl"]["trait_ref"], ctx.refs) == %{
+             "id" => trait,
+             "generics" => args([var(0), var(0)])
+           },
+         true <- f["src"]["TraitImpl"]["reuses_default"] == false,
+         true <- params?(CallModels.expand(f["generics"], ctx.refs), 1, 1, 0),
+         true <-
+           CallModels.expand(f["signature"], ctx.refs) == %{
+             "abi" => "Rust",
+             "is_unsafe" => false,
+             "is_variadic" => false,
+             "inputs" => [ref(var(0), "Shared")],
+             "output" => ref(var(0), "Shared")
+           } do
+      :ok
+    else
+      _ ->
+        raise ArgumentError,
+              "unsupported ordered collection Borrow dictionary; only the standard identity borrow of u64 is modelled"
+    end
+  end
 
   defp dictionary!(name, raw, ctx) do
     expected = if name == "Ord", do: u64(), else: adt(ctx.global, [])
@@ -513,20 +657,34 @@ defmodule Lynx.Rust.OrderedCollectionModels do
   defp clauses?(p, "new", _, _, _), do: p["trait_clauses"] == []
 
   defp clauses?(p, method, function?, n, ctx) do
-    names =
-      if function? and method == "insert", do: ~w(AllocatorClone Ord), else: ~w(AllocatorClone)
+    clauses =
+      cond do
+        function? and method in ~w(get contains remove) ->
+          [
+            {"AllocatorClone", [var(n - 2)]},
+            {"Borrow", [var(0), var(n - 1)]},
+            {"Ord", [var(0)]},
+            {"Ord", [var(n - 1)]}
+          ]
+
+        function? and method == "insert" ->
+          [{"AllocatorClone", [var(n - 1)]}, {"Ord", [var(0)]}]
+
+        true ->
+          [{"AllocatorClone", [var(n - 1)]}]
+      end
 
     Enum.map(p["trait_clauses"], fn clause ->
       if Map.take(clause["trait_"], ~w(regions outlives)) == %{"regions" => [], "outlives" => []},
         do: {clause["clause_id"], get_in(clause, ["trait_", "skip_binder"])},
         else: :unsupported_binder
     end) ==
-      for {name, i} <- Enum.with_index(names),
+      for {{name, types}, i} <- Enum.with_index(clauses),
           do:
             {i,
              %{
                "id" => ctx.traits[name],
-               "generics" => args([var(if(name == "Ord", do: 0, else: n - 1))])
+               "generics" => args(types)
              }}
   end
 
@@ -541,6 +699,22 @@ defmodule Lynx.Rust.OrderedCollectionModels do
         do: option?(s["output"], var(1), t, refs),
         else: s["output"] == %{"Scalar" => "Bool"}
       )
+  end
+
+  defp signature?(s, family, method, self, t, refs) when method in ~w(get contains remove) do
+    count = elem(@families[family], 1)
+    mode = if method == "remove", do: "Mut", else: "Shared"
+    input = %{"Ref" => [%{"Var" => %{"Free" => 1}}, var(count), "Shared"]}
+
+    output? =
+      if family == "map" do
+        item = if method == "get", do: ref(var(1), "Shared"), else: var(1)
+        option?(s["output"], item, t, refs)
+      else
+        s["output"] == %{"Scalar" => "Bool"}
+      end
+
+    s["inputs"] == [ref(self, mode), input] and output?
   end
 
   defp signature?(s, _, "len", self, _, _),
@@ -583,7 +757,9 @@ defmodule Lynx.Rust.OrderedCollectionModels do
     ) and params?(find(t["type_decls"], id)["generics"], 0, 0, 0)
   end
 
-  defp params?(p, n, r, c) when is_map(p) do
+  defp params?(p, n, r, c, query? \\ false)
+
+  defp params?(p, n, r, c, query?) when is_map(p) do
     Enum.map(p["types"], & &1["index"]) == indices(n) and
       Enum.map(p["regions"], & &1["index"]) == indices(r) and
       p["const_generics"] == [] and p["trait_type_constraints"] == [] and
@@ -597,13 +773,16 @@ defmodule Lynx.Rust.OrderedCollectionModels do
               &%{
                 "regions" => [],
                 "outlives" => [],
-                "skip_binder" => [%{"Lub" => var(&1)}, %{"Var" => %{"Free" => 0}}]
+                "skip_binder" => [
+                  %{"Lub" => var(&1)},
+                  %{"Var" => %{"Free" => if(query? and &1 == n - 1, do: 1, else: 0)}}
+                ]
               }
             )
         )
   end
 
-  defp params?(_, _, _, _), do: false
+  defp params?(_, _, _, _, _), do: false
 
   defp local?(%{"item_meta" => %{"name" => [%{"Ident" => [name, 0]} | _]}}, crates),
     do: name in crates

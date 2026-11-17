@@ -94,10 +94,11 @@ defmodule Lynx.Rust do
   rejected; callback panics remain Rust failures.
 
   Pure `BTreeMap<u64, u64>` and `BTreeSet<u64>` support standard Global
-  construction, insertion and length. Actual first-party mutable-borrow helpers
+  construction, insertion and length, plus map lookup/removal and set membership/removal.
+  Actual first-party mutable-borrow helpers
   compose across workspace crates. The standard tree operations remain explicit
   external models using Lean Std trees with numeric key ordering. Custom entry
-  types, comparators, allocators, lookup/removal/iteration APIs and shared runtime
+  types, comparators, allocators, other collection APIs and shared runtime
   heap collections are outside this subset. At most 262144 distinct entries are
   admitted; updating an existing key at capacity is allowed, while exceeding the
   bound exhausts verification. Validated scalar tree drops model nonobservable
@@ -105,6 +106,13 @@ defmodule Lynx.Rust do
   unverified. Unobserved opaque standard comparison helpers absent from the pinned
   Lean library are omitted only after reference and implementation-preservation
   checks; observed omitted methods are rejected.
+  Lookup admission validates both lifetimes, both standard Ord dictionaries and
+  the canonical identity Borrow dictionary. Its actual generic standard helper
+  body is retained and may itself be proved; lookup cannot silently substitute
+  a custom conversion. Shared lookup returns a copied scalar in the pure model,
+  retaining missing-key results and the removal update through mutable borrows.
+  The actual shared-reference `Option::copied` helper also remains extracted,
+  allowing idiomatic copied lookup without assuming a first-party implementation.
 
   Shared-slice `for item in slice` loops reuse Aeneas's existing `IntoIterator`
   conversion and `Iterator::next` models. Admission checks method forwarding,

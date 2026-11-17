@@ -26,6 +26,26 @@ abbrev Set := Std.TreeSet Nat
   if bounded : table.size ≤ 262144 then
     .ok (Usize.ofNatCore table.size (by scalar_tac))
   else .fail .undef
+@[expose] def mapGet (table : Map) (key : U64) : RustM (Option U64) :=
+  if table.size ≤ 262144 then .ok table[key.val]? else .fail .undef
+@[expose] def mapRemove (table : Map) (key : U64) : RustM (Option U64 × Map) :=
+  if table.size ≤ 262144 then .ok (table[key.val]?, table.erase key.val) else .fail .undef
+@[expose] def setContains (values : Set) (key : U64) : RustM Bool :=
+  if values.size ≤ 262144 then .ok (values.contains key.val) else .fail .undef
+@[expose] def setRemove (values : Set) (key : U64) : RustM (Bool × Set) :=
+  if values.size ≤ 262144 then .ok (values.contains key.val, values.erase key.val) else .fail .undef
+theorem mapGet_cutoff (table : Map) (key : U64) (outside : 262144 < table.size) :
+    mapGet table key = .fail .undef := by
+  simp [mapGet, Nat.not_le_of_gt outside]
+theorem mapRemove_cutoff (table : Map) (key : U64) (outside : 262144 < table.size) :
+    mapRemove table key = .fail .undef := by
+  simp [mapRemove, Nat.not_le_of_gt outside]
+theorem setContains_cutoff (values : Set) (key : U64) (outside : 262144 < values.size) :
+    setContains values key = .fail .undef := by
+  simp [setContains, Nat.not_le_of_gt outside]
+theorem setRemove_cutoff (values : Set) (key : U64) (outside : 262144 < values.size) :
+    setRemove values key = .fail .undef := by
+  simp [setRemove, Nat.not_le_of_gt outside]
 theorem mapInsert_cutoff (table : Map) (key value : U64) (outside : 262144 < table.size) :
     mapInsert table key value = .fail .undef := by
   simp [mapInsert, Nat.not_le_of_gt outside]
