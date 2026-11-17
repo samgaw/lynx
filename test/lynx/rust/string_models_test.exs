@@ -5,7 +5,7 @@ defmodule Lynx.Rust.StringModelsTest do
 
   test "admits compiler-linked shared text views using existing Lean definitions" do
     %{"functions" => functions, "translated" => translated} = snapshot()
-    assert length(functions) == 3
+    assert length(functions) == 4
 
     for f <- functions do
       method = List.last(f["item_meta"]["name"])["Ident"] |> hd()
@@ -19,7 +19,8 @@ defmodule Lynx.Rust.StringModelsTest do
                %{
                  "as_bytes" => "id",
                  "len" => "Aeneas.Std.Slice.len",
-                 "is_empty" => "Aeneas.Std.core.slice.Slice.is_empty"
+                 "is_empty" => "Aeneas.Std.core.slice.Slice.is_empty",
+                 "is_char_boundary" => "StringViews.isCharBoundary"
                }[method]
     end
   end
@@ -28,7 +29,7 @@ defmodule Lynx.Rust.StringModelsTest do
     %{"functions" => functions, "translated" => translated} = snapshot()
 
     for f <- functions do
-      [input] = f["signature"]["inputs"]
+      [input | _] = f["signature"]["inputs"]
       [region, str, _] = input["Ref"]
 
       for changed <- [
@@ -82,4 +83,16 @@ defmodule Lynx.Rust.StringModelsTest do
   end
 
   defp snapshot, do: JSON.decode!(File.read!(@snapshot))
+
+  test "boundary offsets must be unsigned machine-size integers" do
+    %{"functions" => functions, "translated" => translated} = snapshot()
+    f = Enum.find(functions, &StringModels.resolve(&1, translated, %{})[:string_boundary])
+    [text, offset] = f["signature"]["inputs"]
+
+    for inputs <- [[text], [offset, text], [text, %{"Scalar" => "Bool"}], [text, text]],
+        do:
+          refute(
+            StringModels.resolve(put_in(f, ["signature", "inputs"], inputs), translated, %{})
+          )
+  end
 end

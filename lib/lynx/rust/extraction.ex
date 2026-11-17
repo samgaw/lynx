@@ -414,6 +414,7 @@ defmodule Lynx.Rust.Extraction do
     audit = Lynx.Rust.CollectionModels.scope(audit, module)
     audit = Lynx.Rust.SliceModels.scope(audit, module)
     audit = Lynx.Rust.OwnedStringModels.scope(audit, module)
+    audit = Lynx.Rust.StringModels.scope(audit, module)
     codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
@@ -594,7 +595,8 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.IoErrorModels.install!(audit, translation, output, module) ++
         Lynx.Rust.CollectionModels.install!(audit, translation, output, module) ++
         Lynx.Rust.SliceModels.install!(audit, output, module) ++
-        Lynx.Rust.OwnedStringModels.install!(audit, translation, output, module)
+        Lynx.Rust.OwnedStringModels.install!(audit, translation, output, module) ++
+        Lynx.Rust.StringModels.install!(audit, output, module)
 
     Lynx.Rust.ExactRead.install!(audit, translation, output)
 
