@@ -89,3 +89,49 @@ pub fn members(values: &BTreeSet<u64>) -> Vec<u64> {
     }
     output
 }
+
+/// Replaces one entry while holding the registry lock, recovering poison.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside the supported model.
+pub fn locked_replace(
+    table: &std::sync::Mutex<BTreeMap<u64, u64>>,
+    key: u64,
+    value: u64,
+) -> Option<u64> {
+    let mut guard = match table.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let previous = replace_value(&mut guard, key, value);
+    drop(guard);
+    previous
+}
+
+/// Removes one entry while holding the registry lock, recovering poison.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside the supported model.
+pub fn locked_take(table: &std::sync::Mutex<BTreeMap<u64, u64>>, key: u64) -> Option<u64> {
+    let mut guard = match table.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let previous = take(&mut guard, key);
+    drop(guard);
+    previous
+}
+
+/// Claims one key while holding the set lock, recovering poison.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside the supported model.
+pub fn locked_claim(values: &std::sync::Mutex<BTreeSet<u64>>, key: u64) -> bool {
+    let mut guard = match values.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let claimed = claim(&mut guard, key);
+    drop(guard);
+    claimed
+}

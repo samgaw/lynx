@@ -543,3 +543,37 @@ pub fn ordered_members(first: u64, second: u64) -> (Option<u64>, Option<u64>, u6
         members.len() as u64,
     )
 }
+
+/// Updates shared map state through the lower-level workspace crate.
+///
+/// # Panics
+/// Shares the recursive-acquisition restriction of the core helper.
+pub fn registry_replace(
+    table: &std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+    key: u64,
+    value: u64,
+) -> Option<u64> {
+    experiment_core::ordered::locked_replace(table, key, value)
+}
+
+/// Consumes a shared map entry through the lower-level workspace crate.
+///
+/// # Panics
+/// Shares the recursive-acquisition restriction of the core helper.
+pub fn registry_take(
+    table: &std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+    key: u64,
+) -> Option<u64> {
+    experiment_core::ordered::locked_take(table, key)
+}
+
+/// Claims a shared key through the lower-level workspace crate.
+///
+/// # Panics
+/// Shares the recursive-acquisition restriction of the core helper.
+pub fn registry_claim(
+    values: &std::sync::Mutex<std::collections::BTreeSet<u64>>,
+    key: u64,
+) -> bool {
+    experiment_core::ordered::locked_claim(values, key)
+}
