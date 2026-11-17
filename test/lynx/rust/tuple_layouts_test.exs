@@ -75,6 +75,70 @@ defmodule Lynx.Rust.TupleLayoutsTest do
     end
   end
 
+  test "vector arguments require unique matching layout and signed byte bounds", c do
+    target = c.probe["translated"]["target_information"]
+
+    translated = %{
+      "target_information" => target,
+      "type_decls" => [
+        %{
+          "def_id" => 1,
+          "item_meta" => %{
+            "name" => Enum.map(~w(alloc vec Vec), &%{"Ident" => [&1, 0]})
+          }
+        }
+      ]
+    }
+
+    args = put_in(c.type, ["Adt", "generics", "types"], [c.type])["Adt"]["generics"]
+    input = %{"Adt" => %{"id" => 1, "builtin" => nil, "generics" => args}}
+    evidence = %{queries: [%{type: c.type, bytes: 16}], targets: target}
+    refs = LLBC.type_references!(c.probe["translated"])
+
+    assert [%{"bytes" => 16, "maximum" => 9_223_372_036_854_775_807}] =
+             TupleLayouts.input_bounds!([input], translated, refs, evidence, 1_048_576)
+
+    assert TupleLayouts.input_bounds!([], translated, refs, nil, 1_048_576) == []
+
+    wide = %{evidence | queries: [%{type: c.type, bytes: 4096}]}
+
+    assert [%{"bytes" => 4096, "maximum" => 9_223_372_036_854_775_807}] =
+             TupleLayouts.input_bounds!([input], translated, refs, wide, 1_048_576)
+
+    refute TupleLayouts.allowed?(c.type, wide, target)
+
+    for missing <- [
+          nil,
+          %{evidence | queries: []},
+          %{evidence | targets: []},
+          %{evidence | queries: evidence.queries ++ evidence.queries}
+        ] do
+      assert_raise ArgumentError, ~r/tuple vector argument requires/, fn ->
+        TupleLayouts.input_bounds!([input], translated, refs, missing, 1_048_576)
+      end
+    end
+
+    narrow =
+      put_in(translated, ["target_information", Access.at(0), "value", "target_pointer_size"], 4)
+
+    for {bytes, accepted} <- [{2047, true}, {2048, false}] do
+      evidence = %{
+        evidence
+        | queries: [%{type: c.type, bytes: bytes}],
+          targets: narrow["target_information"]
+      }
+
+      if accepted do
+        assert [%{"bytes" => ^bytes, "maximum" => 2_147_483_647}] =
+                 TupleLayouts.input_bounds!([input], narrow, refs, evidence, 1_048_576)
+      else
+        assert_raise ArgumentError, ~r/native byte budget/, fn ->
+          TupleLayouts.input_bounds!([input], narrow, refs, evidence, 1_048_576)
+        end
+      end
+    end
+  end
+
   test "scalar tuple vector cleanup is explicit and rejects borrowed fields" do
     doc = @drop |> File.read!() |> JSON.decode!()
     t = doc["translated"]

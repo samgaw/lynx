@@ -23,7 +23,8 @@ defmodule Lynx.Rust.TupleLayouts do
           f,
           [%{"Ident" => [crate, _]} | _] = f["item_meta"]["name"],
           crate in first_party,
-          type <- candidates(f["body"], pushes, refs),
+          type <-
+            candidates(f["body"], pushes, refs) ++ input_tuples(f["signature"]["inputs"], t, refs),
           render(type) != nil,
           uniq: true,
           do: type
@@ -87,6 +88,66 @@ defmodule Lynx.Rust.TupleLayouts do
   end
 
   def allowed?(_, _, _), do: false
+
+  # Bound a batch allocation using the compiler's concrete tuple element size.
+  def input_bounds!(inputs, translated, refs, evidence, count)
+      when is_integer(count) and count >= 0 do
+    types = input_tuples(inputs, translated, refs) |> Enum.uniq()
+
+    Enum.map(types, fn type ->
+      targets = translated["target_information"]
+
+      with true <- is_map(evidence) and evidence.targets == targets,
+           true <- render(type) != nil,
+           [%{bytes: bytes}] <- Enum.filter(evidence.queries, &(&1.type == type)),
+           true <- is_integer(bytes) and bytes >= 0,
+           [%{"value" => %{"target_pointer_size" => pointer}}] <- targets,
+           true <- pointer in [4, 8],
+           maximum = Integer.pow(2, 8 * pointer - 1) - 1,
+           true <- count * bytes <= maximum do
+        %{"bytes" => bytes, "maximum" => maximum}
+      else
+        _ ->
+          raise ArgumentError,
+                "tuple vector argument requires exact compiler layout evidence within the native byte budget"
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp input_tuples(inputs, translated, refs) do
+    vectors =
+      for type <- translated["type_decls"],
+          type,
+          type["item_meta"]["name"] ==
+            Enum.map(~w(alloc vec Vec), &%{"Ident" => [&1, 0]}),
+          into: MapSet.new(),
+          do: type["def_id"]
+
+    vector_tuples(CallModels.expand(inputs, refs), vectors)
+  end
+
+  defp vector_tuples(%{"Adt" => %{"id" => id, "generics" => g}} = node, vectors) do
+    own =
+      if MapSet.member?(vectors, id) do
+        case g["types"] do
+          [%{"Adt" => %{"id" => 0, "builtin" => "Tuple"}} = type | _] -> [type]
+          _ -> []
+        end
+      else
+        []
+      end
+
+    own ++ vector_tuples(Map.values(node), vectors)
+  end
+
+  defp vector_tuples(node, vectors) when is_map(node),
+    do: vector_tuples(Map.values(node), vectors)
+
+  defp vector_tuples(nodes, vectors) when is_list(nodes),
+    do: Enum.flat_map(nodes, &vector_tuples(&1, vectors))
+
+  defp vector_tuples(_, _), do: []
 
   def validate!(probe, original, type) do
     t = probe["translated"]
