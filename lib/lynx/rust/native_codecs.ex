@@ -131,9 +131,30 @@ defmodule Lynx.Rust.NativeCodecs do
       when width in ~w(I8 I16 I32 I64 I128 Isize) ->
         found
 
+      %{"Adt" => %{"generics" => %{"types" => [_, _, _]}}} = collection ->
+        unless Lynx.Rust.OrderedCollectionModels.supported_family(
+                 collection,
+                 audit.translated,
+                 audit.references
+               ) == "map",
+               do: raise(ArgumentError, "unsupported native ordered map representation")
+
+        found
+
       %{"Adt" => %{"generics" => %{"types" => [_, _]}}} = atomic ->
-        unless Lynx.Rust.AtomicModels.supported?(atomic, audit.translated, audit.references),
-          do: raise(ArgumentError, "unsupported atomic heap handle identity")
+        unless not is_nil(
+                 Lynx.Rust.AtomicModels.supported?(atomic, audit.translated, audit.references)
+               ) or
+                 Lynx.Rust.OrderedCollectionModels.supported_family(
+                   atomic,
+                   audit.translated,
+                   audit.references
+                 ) == "set",
+               do:
+                 raise(
+                   ArgumentError,
+                   "unsupported atomic heap handle identity or ordered set representation"
+                 )
 
         found
 
@@ -490,11 +511,32 @@ defmodule Lynx.Rust.NativeCodecs do
       when width in ~w(I8 I16 I32 I64 I128 Isize) ->
         String.downcase(width)
 
-      %{"Adt" => %{"generics" => %{"types" => [_, _]}}} = atomic ->
-        unless Lynx.Rust.AtomicModels.supported?(atomic, audit.translated, audit.references),
-          do: raise(ArgumentError, "unsupported atomic heap handle schema")
+      %{"Adt" => %{"generics" => %{"types" => [_, _, _]}}} = collection ->
+        unless Lynx.Rust.OrderedCollectionModels.supported_family(
+                 collection,
+                 audit.translated,
+                 audit.references
+               ) == "map",
+               do: raise(ArgumentError, "unsupported ordered map heap schema")
 
-        "core::sync::atomic::AtomicU64:seqcst-v1"
+        "alloc::collections::BTreeMap<u64,u64>:ordered-v1"
+
+      %{"Adt" => %{"generics" => %{"types" => [_, _]}}} = atomic ->
+        cond do
+          Lynx.Rust.AtomicModels.supported?(atomic, audit.translated, audit.references) ->
+            "core::sync::atomic::AtomicU64:seqcst-v1"
+
+          Lynx.Rust.OrderedCollectionModels.supported_family(
+            atomic,
+            audit.translated,
+            audit.references
+          ) == "set" ->
+            "alloc::collections::BTreeSet<u64>:ordered-v1"
+
+          true ->
+            raise ArgumentError,
+                  "unsupported atomic heap handle schema or ordered set representation"
+        end
 
       %{"Adt" => %{"id" => id, "generics" => %{"types" => [payload]}}} = self ->
         declaration = Enum.find(audit.translated["type_decls"], &(&1 && &1["def_id"] == id))

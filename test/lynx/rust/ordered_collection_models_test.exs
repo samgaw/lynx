@@ -266,8 +266,8 @@ defmodule Lynx.Rust.OrderedCollectionModelsTest do
     end
   end
 
-  test "does not admit runtime heap semantics or symbolic key types", c do
-    assert {:error, _, message} =
+  test "admits runtime collection operations while rejecting symbolic key types", c do
+    assert {:ok, %{families: families}} =
              OrderedCollectionModels.audit(
                c.audit.functions,
                c.models,
@@ -277,7 +277,7 @@ defmodule Lynx.Rust.OrderedCollectionModelsTest do
                :runtime
              )
 
-    assert message =~ "pure Rust extraction"
+    assert Enum.sort(families) == ~w(map set)
     model = Enum.find_value(c.models, fn {_, m} -> if m[:ordered_method] == "insert", do: m end)
     owner = hd(c.audit.functions)
 

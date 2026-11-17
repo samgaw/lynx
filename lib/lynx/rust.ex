@@ -123,6 +123,15 @@ defmodule Lynx.Rust do
   remain unverified. Safe shared-slice `first` uses a reported model of checked
   index zero; its native pointer-metadata implementation is not verified.
 
+  With `execution: :runtime`, these scalar collections also support borrowed
+  Mutex payloads. Lossless logical heap codecs use Lean Std's extensional map/set
+  types and kernel-checked reconstruction; pure extraction retains its original
+  representation. Actual locked first-party updates compose across crates,
+  including explicit poison recovery and reconstruction before guard release.
+  This does not yet qualify Rustler resource creation/final-owner cleanup for
+  collection payloads, runtime collection iterators or arbitrary native threads.
+  Native lock/tree implementations, allocation and FFI remain external boundaries.
+
   Shared-slice `for item in slice` loops reuse Aeneas's existing `IntoIterator`
   conversion and `Iterator::next` models. Admission checks method forwarding,
   shared item lifetimes, the matching iterator dictionary and Option layout.

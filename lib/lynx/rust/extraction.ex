@@ -476,7 +476,18 @@ defmodule Lynx.Rust.Extraction do
       end
 
     ordered_modules =
-      Lynx.Rust.OrderedCollectionModels.install!(audit, output, module) ++
+      Lynx.Rust.OrderedCollectionModels.install!(
+        audit,
+        output,
+        module,
+        Keyword.get(opts, :execution, :pure)
+      ) ++
+        Lynx.Rust.OrderedCollectionHeap.install!(
+          audit,
+          output,
+          module,
+          Keyword.get(opts, :execution, :pure)
+        ) ++
         Lynx.Rust.OrderedIteratorModels.install!(audit, output, module)
 
     constructor_modules =

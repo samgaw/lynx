@@ -125,7 +125,7 @@ defmodule Lynx.Rust.OrderedCollectionModels do
     Map.merge(ids, %{global: if(global, do: global["def_id"]), traits: traits, t: t, refs: refs})
   end
 
-  def audit(functions, models, t, refs, first_party, execution) do
+  def audit(functions, models, t, refs, first_party, _execution) do
     ctx = context(t, refs)
     data = functions ++ Enum.filter(t["type_decls"] || [], &(&1 && local?(&1, first_party)))
 
@@ -135,9 +135,6 @@ defmodule Lynx.Rust.OrderedCollectionModels do
       Enum.reduce_while(data, {:ok, []}, fn item, {:ok, used} ->
         try do
           found = type_uses(item, ctx)
-
-          if found != [] and execution != :pure,
-            do: raise(ArgumentError, "ordered collections currently require pure Rust extraction")
 
           if Map.has_key?(item, "body"), do: calls!(item["body"], item, models, ctx)
           {:cont, {:ok, Enum.uniq(used ++ found)}}
@@ -490,7 +487,7 @@ defmodule Lynx.Rust.OrderedCollectionModels do
 
   def boundaries(audit) do
     for family <- Map.get(audit, :ordered_collections, %{families: []}).families do
-      "Ordered #{family} representation model: concrete u64 keys/values mapped to Lean Std.TreeMap/TreeSet with numeric ordering; native std tree structure, allocator, layout and lifetime correspondence are unverified; mutating/length operations enforce the explicit entry bound"
+      "Ordered #{family} representation model: concrete u64 keys/values mapped to Lean Std ordered map/set contents with numeric ordering; native std tree structure, allocator, layout and lifetime correspondence are unverified; mutating/length operations enforce the explicit entry bound"
     end
   end
 
@@ -509,7 +506,7 @@ defmodule Lynx.Rust.OrderedCollectionModels do
     if types == [], do: %{}, else: %{"types" => types}
   end
 
-  def install!(audit, output, prefix) do
+  def install!(audit, output, prefix, execution \\ :pure) do
     if audit.ordered_collections.families == [] and
          Map.get(audit, :ordered_iterators, %{families: []}).families == [] do
       []
@@ -517,9 +514,29 @@ defmodule Lynx.Rust.OrderedCollectionModels do
       name = prefix <> ".OrderedCollectionsModel"
       path = Path.join(output, String.replace(name, ".", "/") <> ".lean")
       File.mkdir_p!(Path.dirname(path))
-      File.write!(path, String.replace(@contents, "__PREFIX__", prefix))
+
+      contents =
+        if execution == :runtime,
+          do:
+            @contents
+            |> String.replace("Std.Data.Tree", "Std.Data.ExtTree")
+            |> String.replace("Std.Tree", "Std.ExtTree"),
+          else: @contents
+
+      File.write!(path, String.replace(contents, "__PREFIX__", prefix))
       [name]
     end
+  end
+
+  def supported_family(type, t, refs) do
+    with family when is_binary(family) <- family(type, t, refs),
+         [^family] <- type_uses(CallModels.expand(type, refs), context(t, refs)) do
+      family
+    else
+      _ -> nil
+    end
+  rescue
+    ArgumentError -> nil
   end
 
   def family(type, t, refs) do
