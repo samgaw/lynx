@@ -34,7 +34,7 @@ defmodule Lynx.Rust.TextSlicesTest do
 
     required =
       Enum.map(
-        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode),
+        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8),
         &("TextSlices.Properties." <> &1)
       )
 
@@ -65,6 +65,24 @@ defmodule Lynx.Rust.TextSlicesTest do
 
     model = Path.join(project, "TextSlices/Extraction/StringSlicesModel.lean")
     original_model = File.read!(model)
+
+    bypassed =
+      String.replace(
+        original_model,
+        "if TextSlices.Extraction.StringViews.isCharBoundary text range.start &&\n" <>
+          "      TextSlices.Extraction.StringViews.isCharBoundary text range.end then",
+        "if true then"
+      )
+
+    assert bypassed != original_model
+    File.write!(model, bypassed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.Project.build!(project, ["TextSlices.Properties"])
+    end
+
+    File.write!(model, original_model)
+    Lynx.Rust.Project.build!(project, ["TextSlices.Properties"])
 
     for extra <- [
           "private axiom hidden_dictionary : False",

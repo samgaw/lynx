@@ -58,4 +58,33 @@ theorem windows_unicode :
      .ok (some (toStr "")), .ok (some (toStr "")), .ok none, .ok none] := by
   cbv
 
+theorem window_utf8 (text field : Str) (start stop : Usize)
+    (valid : (Extraction.StringSlices.bytes text).IsValidUTF8)
+    (returned : experiment_analysis.text_window text start stop = .ok (some field)) :
+    (Extraction.StringSlices.bytes field).IsValidUTF8 := by
+  apply Extraction.StringSlices.rangeGet_valid_utf8 ⟨start, stop⟩ text field valid
+  exact returned
+
+theorem split_utf8 (text left right : Str) (position : Usize)
+    (valid : (Extraction.StringSlices.bytes text).IsValidUTF8)
+    (returned : experiment_analysis.split_text text position = .ok (some (left, right))) :
+    (Extraction.StringSlices.bytes left).IsValidUTF8 ∧
+      (Extraction.StringSlices.bytes right).IsValidUTF8 := by
+  obtain ⟨leftResult, hp⟩ := Extraction.StringSlices.rangeGet_returns ⟨0#usize, position⟩ text
+  obtain ⟨rightResult, hs⟩ := Extraction.StringSlices.rangeGet_returns ⟨position, Slice.len text⟩ text
+  have pre : experiment_analysis.experiment_core.protocol.text_prefix text position = .ok leftResult := hp
+  have suf : experiment_analysis.experiment_core.protocol.text_suffix text position = .ok rightResult := hs
+  simp only [experiment_analysis.split_text, pre, suf, bind_ok, Lynx.Rust.Try.optionBranch, lift] at returned
+  cases leftResult with
+  | none => simp [Lynx.Rust.Try.optionFromResidual] at returned
+  | some first =>
+    cases rightResult with
+    | none => simp [Lynx.Rust.Try.optionFromResidual] at returned
+    | some second =>
+      simp only [RustM.ok.injEq, Option.some.injEq, Prod.mk.injEq] at returned
+      rcases returned with ⟨rfl, rfl⟩
+      exact ⟨Extraction.StringSlices.rangeGet_valid_utf8 _ _ _ valid hp,
+        Extraction.StringSlices.rangeGet_valid_utf8 _ _ _ valid hs⟩
+
+
 end TextSlices.Properties
