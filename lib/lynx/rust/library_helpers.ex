@@ -23,10 +23,43 @@ defmodule Lynx.Rust.LibraryHelpers do
             "core::slice::SlicePattern",
             "core::io::error::ErrorKind",
             "core::io::error::_::eq"
-          ] ++ Lynx.Rust.ExactRead.includes() ++ ["alloc::io::impls::_::read_exact"],
+          ] ++
+            Lynx.Rust.StringPatterns.includes() ++
+            Lynx.Rust.ExactRead.includes() ++ ["alloc::io::impls::_::read_exact"],
         else: []
       )
   end
+
+  def selected?(
+        %{
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["str", 0]},
+              _,
+              %{"Ident" => ["starts_with", 0]}
+            ]
+          }
+        } = f,
+        t
+      ),
+      do: Lynx.Rust.StringPatterns.selected?(f, t)
+
+  def selected?(
+        %{
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["str", 0]},
+              %{"Ident" => ["pattern", 0]},
+              _,
+              %{"Ident" => ["is_prefix_of", 0]}
+            ]
+          }
+        } = f,
+        t
+      ),
+      do: Lynx.Rust.StringPatterns.selected?(f, t)
 
   def selected?(
         %{

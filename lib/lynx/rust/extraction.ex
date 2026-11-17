@@ -418,6 +418,8 @@ defmodule Lynx.Rust.Extraction do
     audit = Lynx.Rust.StringSliceModels.scope(audit, module)
     codec_plan = Lynx.Rust.NativeCodecs.plan!(audit)
 
+    {document, string_pattern_projection} = Lynx.Rust.StringPatterns.project!(document, audit)
+
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
 
     backend_document =
@@ -457,7 +459,8 @@ defmodule Lynx.Rust.Extraction do
 
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
-           native_model_aliases == [] and option_aliases == [] and slice_model_aliases == [] do
+           native_model_aliases == [] and option_aliases == [] and slice_model_aliases == [] and
+           is_nil(string_pattern_projection) do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -543,7 +546,10 @@ defmodule Lynx.Rust.Extraction do
             do: [],
             else: [
               "-extra-includes",
-              Enum.join(Enum.map(models, & &1.import) ++ constructor_modules, ",")
+              Enum.join(
+                Enum.map(models, & &1.import) ++ constructor_modules,
+                ","
+              )
             ]
           )
       end
@@ -644,6 +650,7 @@ defmodule Lynx.Rust.Extraction do
       slice_model_aliases: slice_model_aliases,
       formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
+      string_pattern_projection: string_pattern_projection,
       option_aliases: option_aliases,
       owned_drops: Keyword.get(opts, :owned_drops, false),
       resource_cleanup:
@@ -846,6 +853,10 @@ defmodule Lynx.Rust.Extraction do
         includes ++
         Enum.flat_map(Lynx.Rustler.EncoderModels.metadata_includes(models), &["--include", &1]) ++
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(context), &["--include", &1]) ++
+        if(context[:sysroot],
+          do: ["--opaque", "core::str::pattern::Pattern::is_prefix_of"],
+          else: []
+        ) ++
         if(context[:sysroot], do: ["--exclude", "alloc::io::read::Read::read"], else: []) ++
         Enum.flat_map(models, &["--opaque", &1.rust]) ++
         Enum.flat_map(opaque, &["--opaque", &1]) ++

@@ -317,6 +317,17 @@ defmodule Lynx.Rust.LLBC do
         Enum.uniq(a ++ b)
       end)
 
+    string_pattern_dispatch =
+      case Lynx.Rust.StringPatterns.audit(functions, translated, refs) do
+        {:ok, dispatch} -> dispatch
+        {:error, function, message} -> failure!(function, translated, message)
+      end
+
+    trait_dependencies =
+      Map.merge(trait_dependencies, string_pattern_dispatch.dependencies, fn _, a, b ->
+        Enum.uniq(a ++ b)
+      end)
+
     read_dispatch =
       case Lynx.Rust.ExactRead.audit(functions, available_models, translated, refs) do
         {:ok, dispatch} -> dispatch
@@ -393,6 +404,7 @@ defmodule Lynx.Rust.LLBC do
           Enum.uniq(left ++ right)
         end)
         |> Map.merge(pattern_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
+        |> Map.merge(string_pattern_dispatch.calls, fn _, a, b -> Enum.uniq(a ++ b) end)
         |> Map.merge(read_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
     }
 
