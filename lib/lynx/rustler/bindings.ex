@@ -38,8 +38,18 @@ defmodule Lynx.Rustler.Bindings do
       ]
     else
       []
-    end
+    end ++
+      if string_arguments?(manifest) do
+        [
+          "Rustler #{version} String Decoder model: binary-only strict UTF-8, invalid input BadArg and native slice-size bounds; successful copy/allocation assumed; native Decoder, FFI and reclamation unverified; oversized slices exhaust verification"
+        ]
+      else
+        []
+      end
   end
+
+  def string_arguments?(manifest),
+    do: Enum.any?(manifest.bindings, &string_schema?(&1["arguments"]))
 
   def string_result?(manifest), do: Enum.any?(manifest.bindings, &string_schema?(&1["result"]))
 
@@ -79,26 +89,17 @@ defmodule Lynx.Rustler.Bindings do
           do: raise(ArgumentError, "Rustler and compiled argument counts differ")
 
         arguments =
-          Enum.zip_with(binding["arguments"], signature["inputs"], fn
-            %{"native" => hint}, type ->
-              {_id, path} = native!(hint, type, audit, :discover)
-              %{"native" => path}
+          Enum.zip_with(binding["arguments"], signature["inputs"], fn hint, type ->
+            resolved = result!(hint, type, audit, :discover, nil)
 
-            %{"resource" => _}, type ->
-              discover_resource!(type, audit)
+            if custom?(resolved) and not match?(%{"native" => _}, resolved),
+              do:
+                raise(
+                  ArgumentError,
+                  "nested custom input codecs require an extracted top-level Decoder"
+                )
 
-            hint, type ->
-              if custom?(hint),
-                do:
-                  raise(
-                    ArgumentError,
-                    "nested custom input codecs require an extracted top-level Decoder"
-                  )
-
-              unless LLBC.nif_type!(type, audit) == hint,
-                do: raise(ArgumentError, "Rustler and compiled argument signatures differ")
-
-              hint
+            resolved
           end)
 
         Map.merge(binding, %{

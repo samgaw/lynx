@@ -374,12 +374,11 @@ defmodule Lynx.Rustler.Adapter do
   defp type!("bool"),
     do: %{lean: "Bool", decode: "Lynx.Rustler.decodeBool", encode: "Lynx.Rustler.encodeBool"}
 
-  # String result identity is checked against rustc's canonical alloc String.
-  # Input String decoding remains unsupported at this typed boundary.
+  # String identity is checked against rustc's canonical alloc String.
   defp type!("string"),
     do: %{
       lean: "String",
-      decode: nil,
+      decode: "Lynx.Rustler.decodeString",
       encode: nil,
       encode_m: "(fun value => Lynx.Rustler.Encoding.string value ())"
     }

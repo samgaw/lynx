@@ -137,6 +137,34 @@ not the native pointer/term representation or unsafe runtime implementation. -/
     if lastBits = 0 then .ok bytes else .error (.error (.atom "badarg"))
   | _ => .error (.error (.atom "badarg"))
 
+/-- Rustler String decoding first inspects a binary, validates UTF-8, and then
+copies the borrowed text. Native inspection, allocation and reclamation are FFI
+assumptions. Impossible native slice sizes exhaust verification, never BadArg. -/
+@[expose] def decodeString (input : Term) : Except Exception String := do
+  let bytes ← decodeBinary input
+  if bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat then
+    match String.fromUTF8? bytes with
+    | some text => .ok text
+    | none => .error (.error (.atom "badarg"))
+  else .error .exhausted
+
+theorem decodeString_valid (bytes : ByteArray) (text : String)
+    (bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat)
+    (valid : String.fromUTF8? bytes = some text) :
+    decodeString (.bitstring bytes 0) = .ok text := by
+  simp [decodeString,decodeBinary,bounds,valid]
+
+theorem decodeString_invalid (bytes : ByteArray)
+    (bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat)
+    (invalid : String.fromUTF8? bytes = none) :
+    decodeString (.bitstring bytes 0) = .error (.error (.atom "badarg")) := by
+  simp [decodeString,decodeBinary,bounds,invalid]
+
+theorem decodeString_exhausted (bytes : ByteArray)
+    (large : ¬(bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat)) :
+    decodeString (.bitstring bytes 0) = .error .exhausted := by
+  simp [decodeString,decodeBinary,large]
+
 @[expose] def encodeBinary (bytes : Binary) : Term := .bitstring bytes 0
 
 @[simp] theorem decodeBinary_encodeBinary (bytes : Binary) :

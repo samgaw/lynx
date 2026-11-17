@@ -4,11 +4,13 @@ defmodule Lynx.Rustler do
 
   The adapter supports booleans, signed/unsigned fixed-width integers through
   64 bits, tuples of zero through seven fields, and ordinary `Option<T>`/`Result<T, E>`
-  values composed from those types. Canonical standard String results, including
-  nested results, reuse the SDK UTF-8 binary Encoder model with successful allocation
-  assumed and an explicit size cutoff. Actual compiler type identity is checked;
-  typed String argument decoding remains unsupported. Pure String results default
-  to elaborated MIR so rustc resolves intermediate owner cleanup before auditing.
+  values composed from those types. Canonical standard String arguments and
+  results, including supported tuple and option fields, use explicit SDK UTF-8
+  binary codec models with successful allocation assumed. String decoding rejects
+  malformed UTF-8, charlists and partial-byte bitstrings with BadArg; impossible
+  native slice sizes exhaust verification. Actual compiler type identity is checked.
+  String result encoding retains its explicit size cutoff. Pure String bindings
+  default to elaborated MIR so rustc resolves intermediate cleanup before auditing.
   Options try the payload decoder first, then
   recognize `nil`; nested options therefore do not have an injective encoding.
   Return values can also contain monomorphic
@@ -491,14 +493,16 @@ defmodule Lynx.Rustler do
       end
 
     custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
+    decoders? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["arguments"]))
     returns? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.nif_result?(&1["result"]))
-    # Owned String results can allocate intermediate vectors. Let rustc resolve
+    # Owned String bindings can allocate intermediate vectors. Let rustc resolve
     # their conditional generic cleanup before the ordinary destructor audit.
     mir =
       opts[:mir] ||
         if(
           execution == :pure and
-            (decoders? or returns? or Lynx.Rustler.Bindings.string_result?(discovered)),
+            (decoders? or returns? or Lynx.Rustler.Bindings.string_result?(discovered) or
+               Lynx.Rustler.Bindings.string_arguments?(discovered)),
           do: :elaborated
         )
 
