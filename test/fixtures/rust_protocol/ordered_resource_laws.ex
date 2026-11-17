@@ -15,6 +15,20 @@ defmodule LynxRegistryFixture.Laws do
       cbv
   """
 
+  @concurrent_proof ~LEAN"""
+  set_option maxHeartbeats 24000000 in
+  set_option maxRecDepth 8192 in
+  set_option cbv.maxSteps 2000000 in
+  refine ⟨2, ?_⟩
+  intro depth enough elapsed events last outcome run terminal
+  obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' enough
+  apply Lynx.Outcome.eq_of_isTrue
+  apply Lynx.Concurrent.check_sound (depth := 1024)
+    (accept := fun outcome => outcome.isTrue) ?_ run terminal
+  clear events last outcome run terminal
+  cbv
+  """
+
   law empty,
     expects:
       LynxRegistryFixture.Native.registry_take(LynxRegistryFixture.Native.registry_new(), 7) ==
@@ -97,19 +111,7 @@ defmodule LynxRegistryFixture.Laws do
 
         mine != theirs
       ),
-    proof: ~LEAN"""
-    set_option maxHeartbeats 24000000 in
-    set_option maxRecDepth 8192 in
-    set_option cbv.maxSteps 2000000 in
-    refine ⟨2, ?_⟩
-    intro depth enough elapsed events last outcome run terminal
-    obtain ⟨depth, rfl⟩ := Nat.exists_eq_add_of_le' enough
-    apply Lynx.Outcome.eq_of_isTrue
-    apply Lynx.Concurrent.check_sound (depth := 1024)
-      (accept := fun outcome => outcome.isTrue) ?_ run terminal
-    clear events last outcome run terminal
-    cbv
-    """
+    proof: @concurrent_proof
 
   law first_key_empty,
     expects:
@@ -172,4 +174,52 @@ defmodule LynxRegistryFixture.Laws do
           LynxRegistryFixture.Native.registry_pairs(registry) == [{20, 1}]
       ),
     proof: @proof
+
+  law snapshot_replace_race,
+    expects:
+      (
+        registry = LynxRegistryFixture.Native.registry_new()
+        LynxRegistryFixture.Native.registry_replace(registry, 7, 11)
+        parent = self()
+
+        spawn(fn ->
+          send(parent, LynxRegistryFixture.Native.registry_replace(registry, 7, 42))
+        end)
+
+        snapshot = LynxRegistryFixture.Native.registry_pairs(registry)
+
+        previous =
+          receive do
+            value -> value
+          end
+
+        previous == 11 and (snapshot == [{7, 11}] or snapshot == [{7, 42}]) and
+          LynxRegistryFixture.Native.registry_pairs(registry) == [{7, 42}]
+      ),
+    proof: @concurrent_proof
+
+  law concurrent_replacements,
+    expects:
+      (
+        registry = LynxRegistryFixture.Native.registry_new()
+        LynxRegistryFixture.Native.registry_replace(registry, 7, 11)
+        parent = self()
+
+        spawn(fn ->
+          send(parent, LynxRegistryFixture.Native.registry_replace(registry, 7, 42))
+        end)
+
+        mine = LynxRegistryFixture.Native.registry_replace(registry, 7, 99)
+
+        theirs =
+          receive do
+            value -> value
+          end
+
+        final = LynxRegistryFixture.Native.registry_pairs(registry)
+
+        (mine == 11 and theirs == 99 and final == [{7, 42}]) or
+          (mine == 42 and theirs == 11 and final == [{7, 99}])
+      ),
+    proof: @concurrent_proof
 end

@@ -125,7 +125,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
               &("Registry.Properties." <> &1)
             ) ++
               Enum.map(
-                ~w(pairs_snapshot pairs_total pairs_contract pairs_run),
+                ~w(pairs_snapshot pairs_outcome pairs_total pairs_contract pairs_run),
                 &("Registry.Snapshots." <> &1)
               ) ++
               Enum.map(
@@ -262,7 +262,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
     [{module, beam}] = Code.compile_file(Path.join(@proofs, "ordered_resource_laws.ex"))
 
     for law <-
-          ~w(empty updates independent_fields alias_observes rejected_input_preserves invalid_handle concurrent_claims first_key_empty first_key_order first_key_after_remove snapshot_empty snapshot_order snapshot_replace_remove)a,
+          ~w(empty updates independent_fields alias_observes rejected_input_preserves invalid_handle concurrent_claims first_key_empty first_key_order first_key_after_remove snapshot_empty snapshot_order snapshot_replace_remove snapshot_replace_race concurrent_replacements)a,
         do: assert(apply(module, law, []))
 
     law_options = [
@@ -273,7 +273,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
     law_export = Path.join(tmp, "laws.export")
     reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, law_export))
     assert [] == for(r <- reports, r.status != :ok, do: {r.module, r.diagnostics})
-    assert length(Enum.flat_map(reports, & &1.theorems)) == 13
+    assert length(Enum.flat_map(reports, & &1.theorems)) == 15
 
     for kind <- [:rust_implementation, :cross_crate_contract, :nif_adapter, :elixir_law],
         do:
@@ -283,6 +283,41 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
 
     check_export(project, law_export)
     assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
+
+    # A reader can acquire the mutex before the writer: always-new is false.
+    source = File.read!(Path.join(@proofs, "ordered_resource_laws.ex"))
+    [header, _] = String.split(source, "  law empty,", parts: 2)
+    [_, race] = String.split(source, "  law snapshot_replace_race,", parts: 2)
+    [race, _] = String.split(race, "  law concurrent_replacements,", parts: 2)
+
+    wrong_race =
+      String.replace(
+        race,
+        "(snapshot == [{7, 11}] or snapshot == [{7, 42}])",
+        "snapshot == [{7, 42}]"
+      )
+
+    refute wrong_race == race
+
+    wrong_source =
+      String.replace(header, "LynxRegistryFixture.Laws", "LynxRegistryFixture.IncorrectRaceLaws") <>
+        "  law snapshot_replace_race," <> wrong_race <> "end\n"
+
+    [{_, wrong_beam}] = Code.compile_string(wrong_source)
+    wrong_reports = Lynx.Laws.verify([wrong_beam], law_options)
+
+    assert %{status: :error, diagnostics: diagnostics} =
+             Enum.find(
+               wrong_reports,
+               &(&1.module == "Elixir.LynxRegistryFixture.IncorrectRaceLaws.laws")
+             )
+
+    assert Enum.any?(
+             diagnostics,
+             &match?(%{severity: :error, declaration: "snapshot_replace_race/0"}, &1)
+           )
+
+    refute Enum.any?(diagnostics, &String.contains?(&1.message, "Unknown identifier"))
   end
 
   defp lifetime!(functions, translated, prepared) do
