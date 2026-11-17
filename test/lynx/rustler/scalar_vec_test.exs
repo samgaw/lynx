@@ -1,10 +1,16 @@
 defmodule Lynx.Rustler.ScalarVecTest do
   use ExUnit.Case
   @fixture Path.expand("../../fixtures/rust_workspace", __DIR__)
-  @tools System.get_env("LYNX_PURE_AENEAS_DIR") || System.get_env("LYNX_AENEAS_DIR")
+  @unpatched System.get_env("LYNX_UNPATCHED_AENEAS_DIR")
+  @tools @unpatched || System.get_env("LYNX_PURE_AENEAS_DIR") || System.get_env("LYNX_AENEAS_DIR")
+  @root_attribute if(@unpatched, do: "verify::start_from")
   @moduletag timeout: 1_200_000
   if is_nil(@tools),
-    do: @moduletag(skip: "set LYNX_PURE_AENEAS_DIR or LYNX_AENEAS_DIR for scalar-list proofs")
+    do:
+      @moduletag(
+        skip:
+          "set LYNX_UNPATCHED_AENEAS_DIR, LYNX_PURE_AENEAS_DIR or LYNX_AENEAS_DIR for scalar-list proofs"
+      )
 
   @tag :tmp_dir
   test "scalar lists retain element semantics through a cross-crate update", %{tmp_dir: tmp} do
@@ -21,6 +27,19 @@ defmodule Lynx.Rustler.ScalarVecTest do
       String.replace(File.read!(source), "LynxRustFixture.Native", "LynxScalarFixture.Native")
     )
 
+    if @unpatched do
+      rust =
+        Enum.reduce(
+          ~w(replace_first_i64 echo_flags echo_signed_bytes),
+          File.read!(source),
+          fn name, rust ->
+            String.replace(rust, "fn #{name}(", "#[verify::start_from]\nfn #{name}(")
+          end
+        )
+
+      File.write!(source, "#![feature(register_tool)]\n#![register_tool(verify)]\n" <> rust)
+    end
+
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "RustWorkspace"))
     property = Path.join(project, "RustWorkspace/ScalarVec.lean")
@@ -30,6 +49,7 @@ defmodule Lynx.Rustler.ScalarVecTest do
       workspace: workspace,
       package: "experiment-nif",
       tools: @tools,
+      root_attribute: @root_attribute,
       build_dir: Path.join(tmp, "build"),
       lean_project: project,
       module_prefix: "RustWorkspace.ScalarFacade",
