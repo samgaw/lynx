@@ -177,6 +177,11 @@ pub fn text_empty(text: &str) -> bool {
     text.is_empty()
 }
 
+/// Checks a byte offset before borrowing a UTF-8 protocol field.
+pub fn text_boundary(text: &str, position: usize) -> bool {
+    text.is_char_boundary(position)
+}
+
 /// Provides an immutable empty default without allocating a buffer.
 pub fn default_bytes() -> &'static [u8] {
     &[]
@@ -350,6 +355,21 @@ mod tests {
             Some(0x1234_5678)
         );
         assert_eq!(read_header(&[0xff; 4]), Some(u32::MAX));
+    }
+
+    #[test]
+    fn text_boundaries_use_byte_offsets() {
+        let text = "aé🙂z";
+        for position in 0..=text.len() + 1 {
+            assert_eq!(
+                super::text_boundary(text, position),
+                [0, 1, 3, 7, 8].contains(&position),
+                "byte offset {position}"
+            );
+        }
+        assert!(super::text_boundary("", 0));
+        assert!(!super::text_boundary("", 1));
+        assert!(!super::text_boundary(text, usize::MAX));
     }
 
     #[test]

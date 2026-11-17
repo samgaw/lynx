@@ -21,11 +21,17 @@ defmodule Lynx.Rust.StringViewsTest do
       lean_project: project,
       module_prefix: "TextCore.Extraction",
       roots:
-        Enum.map(~w(text_bytes text_length text_empty), &("experiment_core::protocol::" <> &1)),
+        Enum.map(
+          ~w(text_bytes text_length text_empty text_boundary),
+          &("experiment_core::protocol::" <> &1)
+        ),
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["TextCore.Properties"],
       required_properties:
-        Enum.map(~w(bytes_spec length_spec empty_spec), &("TextCore.Properties." <> &1))
+        Enum.map(
+          ~w(bytes_spec length_spec empty_spec boundary_spec boundary_zero boundary_end boundary_past_end boundary_unicode),
+          &("TextCore.Properties." <> &1)
+        )
     ]
 
     result = Lynx.Rust.verify!(workspace, "experiment-core", options)
@@ -42,6 +48,17 @@ defmodule Lynx.Rust.StringViewsTest do
     source = Path.join(workspace, "core/src/protocol.rs")
     original = File.read!(source)
     changed = String.replace(original, "text.len()", "0")
+    assert changed != original
+    File.write!(source, changed)
+
+    assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-core", options)
+    end
+
+    File.write!(source, original)
+    assert [%{status: :ok}] = Lynx.Rust.verify!(workspace, "experiment-core", options).reports
+
+    changed = String.replace(original, "text.is_char_boundary(position)", "position == 0")
     assert changed != original
     File.write!(source, changed)
 
