@@ -142,3 +142,29 @@ mod tests {
         replace_at(&mut [1, 2], 2, 9);
     }
 }
+
+/// Moves the final record out of a batch, preserving the exact preceding records.
+pub fn pop_last<T>(input: &mut Vec<T>) -> Option<T> {
+    input.pop()
+}
+
+#[cfg(test)]
+mod pop_tests {
+    use super::pop_last;
+
+    #[test]
+    fn removal_preserves_prefix_capacity_and_allocation() {
+        let mut records = vec![1_i64, 2, 3];
+        let pointer = records.as_ptr();
+        let capacity = records.capacity();
+        assert_eq!(pop_last(&mut records), Some(3));
+        assert_eq!(records, [1, 2]);
+        assert_eq!(records.as_ptr(), pointer);
+        assert_eq!(records.capacity(), capacity);
+        assert_eq!(pop_last(&mut records), Some(2));
+        assert_eq!(pop_last(&mut records), Some(1));
+        assert_eq!(pop_last(&mut records), None);
+        assert_eq!(records.as_ptr(), pointer);
+        assert_eq!(records.capacity(), capacity);
+    }
+}

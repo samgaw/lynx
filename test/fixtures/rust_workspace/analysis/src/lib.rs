@@ -605,3 +605,9 @@ pub fn registry_pairs(
 ) -> Vec<(u64, u64)> {
     experiment_core::ordered::locked_pairs(table)
 }
+
+/// Returns the last scalar record together with the unchanged preceding batch.
+pub fn pop_record(mut input: Vec<i64>) -> (Option<i64>, Vec<i64>) {
+    let record = experiment_core::collections::pop_last(&mut input);
+    (record, input)
+}

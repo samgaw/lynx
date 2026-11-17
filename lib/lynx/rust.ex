@@ -149,7 +149,13 @@ defmodule Lynx.Rust do
   Aeneas's value and borrow-update models. Shared `Vec::len` observations support
   arbitrary element types with the standard Global allocator; this does not admit
   element destruction on those types. Empty `Vec::new` is independent of element
-  layout. Bounded `push` supports primitive scalars and concrete struct/enum
+  layout. `Vec::pop` uses an explicitly reported standard-library move model:
+  empty vectors are unchanged, otherwise the exact last element and retained
+  prefix are returned. Generic first-party helpers and their cross-crate callers
+  remain extracted. Pop adds no growth cutoff or allocation; standard Global is
+  required, and element destruction elsewhere remains independently audited.
+  Native capacity, pointers and Rust std implementation correctness are unverified.
+  Bounded `push` supports primitive scalars and concrete struct/enum
   layouts of at most 4095 bytes on every selected 32/64-bit target, using the
   standard Global allocator. Closed builtin scalar tuples use an automatic
   compiler query with the recorded Cargo arguments and target; the containing

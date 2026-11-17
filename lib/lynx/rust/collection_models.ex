@@ -49,7 +49,7 @@ defmodule Lynx.Rust.CollectionModels do
              ]
            }
          } <- function,
-         true <- method in ~w(new len push),
+         true <- method in ~w(new len push pop),
          %{"Adt" => %{"builtin" => nil, "id" => id, "generics" => args}} = vector <-
            CallModels.expand(parent, refs) |> free(),
          true <- args == arguments([type_var(0)]),
@@ -67,16 +67,17 @@ defmodule Lynx.Rust.CollectionModels do
              refs
            ),
          true <-
-           owned_signature?(
-             method,
-             CallModels.expand(sig["inputs"], refs),
-             CallModels.expand(sig["output"], refs),
-             vector
-           ) do
+           pop_signature?(method, sig, vector, translated, refs) or
+             owned_signature?(
+               method,
+               CallModels.expand(sig["inputs"], refs),
+               CallModels.expand(sig["output"], refs),
+               vector
+             ) do
       model = %{
         rust_name: "alloc::vec::{alloc::vec::Vec<@T>}::#{method}",
         lean: "Aeneas.Std.alloc.vec.Vec.#{method}",
-        builtin: true,
+        builtin: method != "pop",
         vec_owned_method: method,
         can_fail: method == "push",
         lift: method == "push",
@@ -84,6 +85,15 @@ defmodule Lynx.Rust.CollectionModels do
         label:
           "Aeneas logical Vec::#{method} model; push verifies at most 262144 scalar elements or composite elements of at most 4095 bytes on selected 32/64-bit targets; exceeding this is verification exhaustion, not Rust rejection; element destruction is audited separately; capacity observation, allocation failures and native allocator correctness unverified"
       }
+
+      model =
+        if method == "pop",
+          do: %{
+            model
+            | label:
+                "Logical standard Vec::pop model: returns the last element and retains the exact prefix, including empty vectors; moves rather than drops the element, performs no allocation or callbacks; capacity, Rust std pointer/layout correctness and native reclamation remain unverified"
+          },
+          else: model
 
       if method == "new", do: model, else: Map.put(model, :keep_params, [true, false])
     else
@@ -96,7 +106,7 @@ defmodule Lynx.Rust.CollectionModels do
       audit
       | external_calls:
           Map.new(audit.external_calls, fn {id, model} ->
-            if model[:vec_owned_method] in ~w(push extend_from_slice split_off),
+            if model[:vec_owned_method] in ~w(push extend_from_slice split_off pop),
               do: {id, %{model | lean: prefix <> ".VectorModel." <> model.vec_owned_method}},
               else: {id, model}
           end)
@@ -106,7 +116,7 @@ defmodule Lynx.Rust.CollectionModels do
   def install!(audit, translation, output, prefix) do
     methods =
       for {_, model} <- audit.external_calls,
-          model[:vec_owned_method] in ~w(push extend_from_slice split_off),
+          model[:vec_owned_method] in ~w(push extend_from_slice split_off pop),
           do: model.vec_owned_method
 
     methods = Enum.uniq(methods)
@@ -167,6 +177,7 @@ defmodule Lynx.Rust.CollectionModels do
           _ < 2147483647 := by decide
       #{if "extend_from_slice" in methods, do: Lynx.Rust.VectorExtensions.lean(), else: ""}
       #{if "split_off" in methods, do: Lynx.Rust.VectorSplits.lean(), else: ""}
+      #{if "pop" in methods, do: pop_lean(), else: ""}
       end #{module}
       """)
 
@@ -389,7 +400,7 @@ defmodule Lynx.Rust.CollectionModels do
             global_allocator?(allocator, translated)
 
           {_, [element, allocator]} ->
-            (method == "len" or push_element?(element, translated, refs)) and
+            (method in ~w(len pop) or push_element?(element, translated, refs)) and
               global_allocator?(allocator, translated)
 
           _ ->
@@ -407,7 +418,7 @@ defmodule Lynx.Rust.CollectionModels do
               method == "extend_from_slice" ->
                 "unsupported Vec::extend_from_slice: requires concrete u8 elements, the audited standard Clone<u8> dictionary and the standard Global allocator"
 
-              method in ~w(len index) ->
+              method in ~w(len index pop) ->
                 "unsupported Vec::#{method}: only the standard Global allocator is admitted"
 
               true ->
@@ -516,6 +527,40 @@ defmodule Lynx.Rust.CollectionModels do
 
   defp small_literal_layout?(_, _), do: false
 
+  defp pop_signature?("pop", sig, vector, translated, refs) do
+    with [input] <- CallModels.expand(sig["inputs"], refs),
+         true <- input == reference(vector, "Mut"),
+         %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => args}} <-
+           CallModels.expand(sig["output"], refs) do
+      args == arguments([type_var(0)]) and
+        Lynx.Rust.LLBC.option_type?(id, %{translated: translated, references: refs})
+    else
+      _ -> false
+    end
+  end
+
+  defp pop_signature?(_, _, _, _, _), do: false
+
+  defp pop_lean do
+    ~S"""
+    @[expose] def pop {α : Type} (values : alloc.vec.Vec α) : Option α × alloc.vec.Vec α :=
+      (values.val.getLast?, alloc.vec.Vec.from values.val.dropLast (by
+        have bound := values.property
+        simp only [List.length_dropLast]
+        omega))
+    theorem pop_empty {α : Type} : pop (alloc.vec.Vec.new α) = (none, alloc.vec.Vec.new α) := by
+      simp [pop, alloc.vec.Vec.new, alloc.vec.Vec.from, alloc.vec.Vec.val]
+    theorem pop_append {α : Type} (initial : List α) (last : α)
+        (bounded : (initial ++ [last]).length ≤ Usize.max) :
+        pop (alloc.vec.Vec.from (initial ++ [last]) bounded) =
+          (some last, alloc.vec.Vec.from initial (by
+            have h := bounded
+            simp only [List.length_append, List.length_singleton] at h
+            omega)) := by
+      simp [pop]
+    """
+  end
+
   defp owned_signature?("new", [], output, vector), do: output == vector
 
   defp owned_signature?("len", [input], output, vector),
@@ -542,7 +587,7 @@ defmodule Lynx.Rust.CollectionModels do
   defp owned_params?("new", params, parent, _translated, _refs),
     do: type_parameters?(params) and type_parameters?(parent)
 
-  defp owned_params?("len", params, parent, _translated, _refs),
+  defp owned_params?(method, params, parent, _translated, _refs) when method in ~w(len pop),
     do: parameters?(params, 1) and parameters?(parent, 0)
 
   defp owned_params?("push", params, parent, translated, refs) do
