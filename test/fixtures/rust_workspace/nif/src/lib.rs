@@ -206,6 +206,29 @@ fn echo_borrowed_option(value: (Option<&str>, bool)) -> (Option<&str>, bool) {
 }
 
 /// Borrows a UTF-8 field through both library crates.
+#[cfg(feature = "ordered-collections")]
+#[rustler::nif(name = "ordered_replace", schedule = "DirtyCpu")]
+fn ordered_replace_nif(key: u64, value: u64, replacement: u64) -> Option<u64> {
+    experiment_analysis::table_replace(key, value, replacement)
+}
+
+#[cfg(feature = "ordered-collections")]
+#[rustler::nif(name = "ordered_claims", schedule = "DirtyCpu")]
+fn ordered_claims_nif(key: u64) -> (bool, bool, u64) {
+    experiment_analysis::set_insert_twice(key)
+}
+
+#[cfg(feature = "ordered-collections")]
+#[rustler::nif(name = "ordered_stats", schedule = "DirtyCpu")]
+fn ordered_stats_nif(
+    first_key: u64,
+    first_value: u64,
+    second_key: u64,
+    second_value: u64,
+) -> (Option<u64>, u64) {
+    experiment_analysis::table_stats(first_key, first_value, second_key, second_value)
+}
+
 #[cfg(feature = "text-slices")]
 #[rustler::nif(name = "parse_text_record", schedule = "DirtyCpu")]
 fn parse_text_record_nif(
@@ -799,6 +822,7 @@ mod tests {
                 + 3 * usize::from(cfg!(feature = "text-input"))
                 + 3 * usize::from(cfg!(feature = "borrowed-text"))
                 + 7 * usize::from(cfg!(feature = "text-slices"))
+                + 3 * usize::from(cfg!(feature = "ordered-collections"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1100,6 +1124,25 @@ mod tests {
                     "echo_borrowed_option".to_owned(),
                     1,
                     rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
+        }
+        if cfg!(feature = "ordered-collections") {
+            expected.extend([
+                (
+                    "ordered_replace".to_owned(),
+                    3,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "ordered_claims".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "ordered_stats".to_owned(),
+                    4,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
                 ),
             ]);
         }
