@@ -34,7 +34,7 @@ defmodule Lynx.Rust.TextSlicesTest do
 
     required =
       Enum.map(
-        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode),
+        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive),
         &("TextSlices.Properties." <> &1)
       )
 
@@ -47,7 +47,8 @@ defmodule Lynx.Rust.TextSlicesTest do
       roots: [
         "experiment_analysis::text_window",
         "experiment_analysis::split_text",
-        "experiment_analysis::checked_text_split"
+        "experiment_analysis::checked_text_split",
+        "experiment_analysis::text_equal"
       ],
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["TextSlices.Properties"],
@@ -114,6 +115,7 @@ defmodule Lynx.Rust.TextSlicesTest do
     for {relative, before, after_text} <- [
           {"core/src/protocol.rs", "text.get(start..end)", "text.get(0..end)"},
           {"core/src/protocol.rs", "text.split_at_checked(position)", "text.split_at_checked(0)"},
+          {"core/src/protocol.rs", "left == right", "left != right"},
           {"analysis/src/lib.rs", "Some((left, right))", "Some((right, left))"}
         ] do
       source = Path.join(workspace, relative)

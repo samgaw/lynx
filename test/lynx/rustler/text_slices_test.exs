@@ -63,7 +63,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         mir: :promoted,
         root_attribute: if(@unpatched, do: "verify::start_from"),
         cargo: [features: ["text-slices"]],
-        only: [slice_text: 3, split_text: 2, checked_split_text: 2],
+        only: [slice_text: 3, split_text: 2, checked_split_text: 2, equal_text: 2],
         lean_project: project,
         module_prefix: "TextSlices.Extraction",
         build_dir: Path.join(tmp, "build")
@@ -79,6 +79,9 @@ defmodule Lynx.Rustler.TextSlicesTest do
                "arguments" => ["str", "u8"],
                "result" => %{"option" => %{"tuple" => ["str", "str"]}}
              } = bindings["split_text"]
+
+      assert %{"arguments" => ["str", "str"], "result" => "bool", "flags" => 0} =
+               bindings["equal_text"]
 
       assert %{
                "arguments" => ["str", "u8"],
@@ -97,6 +100,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         File.read!(Path.join(Path.dirname(@proof), "TextSlicesAdapter.lean"))
         |> String.replace("__SLICE_NIF__", bindings["slice_text"]["lean_name"])
         |> String.replace("__CHECKED_NIF__", bindings["checked_split_text"]["lean_name"])
+        |> String.replace("__EQUAL_NIF__", bindings["equal_text"]["lean_name"])
 
       File.write!(Path.join(project, "TextSlices/AdapterProperties.lean"), adapter)
 
@@ -106,11 +110,12 @@ defmodule Lynx.Rustler.TextSlicesTest do
             proof_modules: ["TextSlices.Properties", "TextSlices.AdapterProperties"],
             required_properties:
               Enum.map(
-                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode),
+                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive),
                 &("TextSlices.Properties." <> &1)
               ) ++
                 [
                   "TextSlices.AdapterProperties.window_encoding",
+                  "TextSlices.AdapterProperties.equal_facade",
                   "TextSlices.AdapterProperties.checked_facade_utf8"
                 ]
           ]
@@ -164,7 +169,15 @@ defmodule Lynx.Rustler.TextSlicesTest do
 
       assert_raise ArgumentError, fn -> apply(native, :checked_split_text, [<<255>>, 0]) end
 
+      assert apply(native, :equal_text, ["aé🙂z", "aé🙂z"])
+      refute apply(native, :equal_text, ["é", "é"])
+      refute apply(native, :equal_text, ["field", "field" <> <<0>>])
+      assert_raise ArgumentError, fn -> apply(native, :equal_text, ["ok", <<255>>]) end
+
       cases = [
+        {"Equal", "#{native_name}.equal_text(\"aé🙂z\",\"aé🙂z\")"},
+        {"Different", "#{native_name}.equal_text(\"é\",\"é\") == false"},
+        {"Nul", "#{native_name}.equal_text(\"field\",<<102,105,101,108,100,0>>) == false"},
         {"Checked", "#{native_name}.checked_split_text(\"aé🙂z\",3) == {\"aé\",\"🙂z\"}"},
         {"CheckedInside", "#{native_name}.checked_split_text(\"aé🙂z\",2) == nil"},
         {"CheckedEnd", "#{native_name}.checked_split_text(\"aé🙂z\",8) == {\"aé🙂z\",\"\"}"},
@@ -219,6 +232,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         simp only [Lynx.apply,«slicing:ensures/0»,
           Elixir.#{native}.«slice_text/3», Elixir.#{native}.«slice_text:execution/3»,
           Elixir.#{native}.«split_text/2», Elixir.#{native}.«split_text:execution/2»,
+          Elixir.#{native}.«equal_text/2», Elixir.#{native}.«equal_text:execution/2»,
           Elixir.#{native}.«checked_split_text/2», Elixir.#{native}.«checked_split_text:execution/2»]
         cbv
         all_goals

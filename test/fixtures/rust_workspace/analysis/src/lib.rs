@@ -14,6 +14,11 @@ pub fn checked_text_split(text: &str, position: usize) -> Option<(&str, &str)> {
     experiment_core::protocol::checked_text_split(text, position)
 }
 
+/// Compares text through the workspace dependency.
+pub fn text_equal(left: &str, right: &str) -> bool {
+    experiment_core::protocol::text_equal(left, right)
+}
+
 /// Borrows a field through the workspace dependency.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     experiment_core::protocol::text_window(text, start, end)

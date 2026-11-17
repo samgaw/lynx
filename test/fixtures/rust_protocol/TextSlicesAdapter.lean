@@ -6,6 +6,10 @@ open Aeneas Aeneas.Std
 unseal RustM
 namespace TextSlices.AdapterProperties
 
+theorem equal_facade (left right : Str) :
+    __EQUAL_NIF__ left right = .ok (decide (left.val = right.val)) := by
+  simpa [__EQUAL_NIF__, lift] using TextSlices.Properties.text_equal_bytes left right
+
 /-- Every field returned by the actual facade after successful text decoding
 encodes as its exact UTF-8 binary, within the byte-offset output bound. -/
 theorem window_encoding (input : Lynx.Term) (text field : Str) (start stop : U8)

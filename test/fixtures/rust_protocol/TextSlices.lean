@@ -157,6 +157,31 @@ theorem checked_utf8 (text left right : Str) (position : Usize)
       core.slice.Slice.split_at, bounded, Slice.length,
       Slice.drop, List.splitAt_eq, pure]
 
+private theorem slice_equal (left right : Slice U8) :
+    core.slice.cmp.PartialEqSlice.eq core.cmp.PartialEqU8 left right =
+      RustM.ok (decide (left.val = right.val)) := by
+  have spec := core.slice.cmp.PartialEqSlice.eq_homo_spec core.cmp.PartialEqU8 left right
+    (by intro x y; simp [core.cmp.PartialEqU8])
+  cases computation : core.slice.cmp.PartialEqSlice.eq core.cmp.PartialEqU8 left right with
+  | ret value =>
+    simp only [computation, WP.spec_ok] at spec
+    have equality : value = decide (left.val = right.val) := by
+      apply Bool.eq_iff_iff.mpr
+      simpa only [decide_eq_true_eq, Slice.eq_iff] using spec
+    exact congrArg RustM.ok equality
+  | vis effect continuation => simp only [computation, WP.spec_vis] at spec
+  | div => simp only [computation, WP.spec_div] at spec
+
+
+@[cbv_eval] theorem text_equal_bytes (left right : Str) :
+    experiment_analysis.text_equal left right = .ok (decide (left.val = right.val)) := by
+  change core.slice.cmp.PartialEqSlice.eq core.cmp.PartialEqU8 left right = _
+  exact slice_equal left right
+
+theorem text_equal_reflexive (text : Str) :
+    experiment_analysis.text_equal text text = .ok true := by
+  simp [text_equal_bytes]
+
 attribute [local cbv_opaque] RustM.ok RustM.fail
 
 theorem checked_unicode :

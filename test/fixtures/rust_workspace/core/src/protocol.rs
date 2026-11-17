@@ -187,6 +187,11 @@ pub fn checked_text_split(text: &str, position: usize) -> Option<(&str, &str)> {
     text.split_at_checked(position)
 }
 
+/// Compares complete UTF-8 fields by their bytes, without normalization.
+pub fn text_equal(left: &str, right: &str) -> bool {
+    left == right
+}
+
 /// Borrows a field only when both byte offsets are UTF-8 character boundaries.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     text.get(start..end)
@@ -380,6 +385,9 @@ mod tests {
     #[test]
     fn string_fields_reject_partial_characters() {
         let text = "aé🙂z";
+        assert!(super::text_equal(text, text));
+        assert!(!super::text_equal("é", "e\u{301}"));
+        assert!(!super::text_equal("field", "field\0"));
         for position in 0..=text.len() + 1 {
             match super::checked_text_split(text, position) {
                 Some((left, right)) => {
