@@ -156,7 +156,7 @@ theorem reacquired_payload (guard : NativeGuard effects_core.Counter) (amount : 
     { env with nativeHeap := [(guard.mutex.id, NativeMutex.typeName effects_core.Counter,
       .tuple #[.atom "unlocked", .atom "unpoisoned", NativeCodec.encode updated])] }
     (by simp) (by simp [Ne.symm fresh])
-  rw [Result.wait_ready_apply _ _ _ _ _ ready]
+  rw [Result.wait_ready_run _ _ _ _ _ ready]
   simp [NativeMutex.lockedContents]
 
 
