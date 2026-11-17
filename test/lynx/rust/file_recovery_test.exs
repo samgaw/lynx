@@ -7,10 +7,10 @@ defmodule Lynx.Rust.FileRecoveryTest do
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
                String.contains?(
                  File.read!(Path.join(@tools, "lynx-toolchain")),
-                 "tuple-back-projections-v1"
+                 "effectful-calls-v1"
                )
   unless @available,
-    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned tuple-back-projections backend")
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned native runtime backend")
 
   @tag :tmp_dir
   test "composes actual write acknowledgement, crash images and recovery", %{tmp_dir: tmp} do

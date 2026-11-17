@@ -169,7 +169,6 @@ else
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-immediate-futures.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-workspace-roots.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-undefined-behavior.patch"
-  git -C "$aeneas_source" apply "$script_dir/patches/aeneas-lean-back-projections.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-effectful-calls.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-partial-discriminants.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-lean-record-types.patch"
@@ -186,7 +185,7 @@ opam install --root="$opam_root" --switch=lynx-aeneas \
 if [ "$verification_profile" = join-recovery ]; then
   aeneas_version=build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1+duplicate-branches-v1
 else
-  aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+effectful-calls-v1+partial-discriminants-v1+lean-record-types-v1+duplicate-branches-v1
+  aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+effectful-calls-v1+partial-discriminants-v1+lean-record-types-v1+duplicate-branches-v1+tuple-patterns-v1
 fi
 AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aeneas -- \
   dune build --root "$aeneas_source/src" main.exe
@@ -204,7 +203,6 @@ if [ "$verification_profile" = runtime-captured ]; then
 fi
 printf '%s\n' "profile=$verification_profile" 'aeneas_branching=duplicate-v1' "aeneas=$aeneas_version" \
   'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1+suspending-futures-v1+cancelling-futures-v1+owned-drops-v1+owned-captures-v1+safe-pin-new-v1+pin-macro-v1+pin-as-mut-v1'"$charon_cleanup_suffix" \
-  'aeneas_lean=tuple-back-projections-v1' \
   'aeneas_effects=effectful-calls-v1' \
   'aeneas_discriminants=partial-discriminants-v1' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"

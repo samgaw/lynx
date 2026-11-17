@@ -13,12 +13,14 @@ defmodule Lynx.Rust.LLBC do
   @discriminant_backend @effectful_backend <> "+partial-discriminants-v1"
   @record_backend @discriminant_backend <> "+lean-record-types-v1"
   @branch_backend @record_backend <> "+duplicate-branches-v1"
+  @branch_backend_without_loop_patch String.replace(@branch_backend, "+native-loops-v1", "")
   @effectful_backends [
     @effectful_backend,
     @discriminant_backend,
     @record_backend,
     @branch_backend,
-    String.replace(@branch_backend, "+native-loops-v1", "")
+    @branch_backend_without_loop_patch,
+    @branch_backend_without_loop_patch <> "+tuple-patterns-v1"
   ]
   @unwind_backends [
     @unwind_backend,
