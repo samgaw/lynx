@@ -68,7 +68,8 @@ defmodule Lynx.Rustler.TextSlicesTest do
           split_text: 2,
           checked_split_text: 2,
           equal_text: 2,
-          has_text_prefix: 2
+          has_text_prefix: 2,
+          consume_text_prefix: 2
         ],
         lean_project: project,
         module_prefix: "TextSlices.Extraction",
@@ -95,6 +96,9 @@ defmodule Lynx.Rustler.TextSlicesTest do
                "result" => %{"option" => %{"tuple" => ["str", "str"]}}
              } = bindings["checked_split_text"]
 
+      assert %{"arguments" => ["str", "str"], "result" => %{"option" => "str"}, "flags" => 0} =
+               bindings["consume_text_prefix"]
+
       properties =
         File.read!(@proof)
         |> String.replace("experiment_analysis.core.slice.", "experiment_nif.core.slice.")
@@ -109,6 +113,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         |> String.replace("__CHECKED_NIF__", bindings["checked_split_text"]["lean_name"])
         |> String.replace("__EQUAL_NIF__", bindings["equal_text"]["lean_name"])
         |> String.replace("__PREFIX_NIF__", bindings["has_text_prefix"]["lean_name"])
+        |> String.replace("__CONSUME_NIF__", bindings["consume_text_prefix"]["lean_name"])
 
       File.write!(Path.join(project, "TextSlices/AdapterProperties.lean"), adapter)
 
@@ -118,13 +123,15 @@ defmodule Lynx.Rustler.TextSlicesTest do
             proof_modules: ["TextSlices.Properties", "TextSlices.AdapterProperties"],
             required_properties:
               Enum.map(
-                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive text_prefix_bytes text_prefix_reflexive),
+                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive text_prefix_bytes text_prefix_reflexive consume_implementation consume_by_values consume_exact consume_utf8),
                 &("TextSlices.Properties." <> &1)
               ) ++
                 [
                   "TextSlices.AdapterProperties.window_encoding",
                   "TextSlices.AdapterProperties.equal_facade",
                   "TextSlices.AdapterProperties.prefix_facade",
+                  "TextSlices.AdapterProperties.consume_facade",
+                  "TextSlices.AdapterProperties.consume_encoding",
                   "TextSlices.AdapterProperties.checked_facade_utf8"
                 ]
           ]
@@ -193,7 +200,25 @@ defmodule Lynx.Rustler.TextSlicesTest do
 
       assert_raise ArgumentError, fn -> apply(native, :has_text_prefix, ["ok", <<195>>]) end
 
+      for {text, prefix, expected} <- [
+            {"aé🙂z", "aé", "🙂z"},
+            {"aé", "", "aé"},
+            {"aé", "aé", ""},
+            {"a", "aé", nil},
+            {"é", "é", nil}
+          ],
+          do: assert(apply(native, :consume_text_prefix, [text, prefix]) == expected)
+
+      assert_raise ArgumentError, fn -> apply(native, :consume_text_prefix, ["ok", <<195>>]) end
+
       cases = [
+        {"Consume", "#{native_name}.consume_text_prefix(\"aé🙂z\",\"aé\") == \"🙂z\""},
+        {"ConsumeEmpty", "#{native_name}.consume_text_prefix(\"aé\",\"\") == \"aé\""},
+        {"ConsumeAll", "#{native_name}.consume_text_prefix(\"aé\",\"aé\") == \"\""},
+        {"ConsumeLong", "#{native_name}.consume_text_prefix(\"a\",\"aé\") == nil"},
+        {"ConsumeDifferent", "#{native_name}.consume_text_prefix(\"é\",\"é\") == nil"},
+        {"ConsumeMalformed",
+         "try do #{native_name}.consume_text_prefix(\"ok\",<<195>>); false catch :error, :badarg -> true end"},
         {"Prefix", "#{native_name}.has_text_prefix(\"aé🙂z\",\"aé\")"},
         {"EmptyPrefix", "#{native_name}.has_text_prefix(\"aé\",\"\")"},
         {"LongPrefix", "#{native_name}.has_text_prefix(\"a\",\"aé\") == false"},
@@ -257,6 +282,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         simp only [Lynx.apply,«slicing:ensures/0»,
           Elixir.#{native}.«slice_text/3», Elixir.#{native}.«slice_text:execution/3»,
           Elixir.#{native}.«split_text/2», Elixir.#{native}.«split_text:execution/2»,
+          Elixir.#{native}.«consume_text_prefix/2», Elixir.#{native}.«consume_text_prefix:execution/2»,
           Elixir.#{native}.«has_text_prefix/2», Elixir.#{native}.«has_text_prefix:execution/2»,
           Elixir.#{native}.«equal_text/2», Elixir.#{native}.«equal_text:execution/2»,
           Elixir.#{native}.«checked_split_text/2», Elixir.#{native}.«checked_split_text:execution/2»]

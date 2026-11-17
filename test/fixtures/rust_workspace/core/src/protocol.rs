@@ -197,6 +197,11 @@ pub fn text_has_prefix(text: &str, prefix: &str) -> bool {
     text.starts_with(prefix)
 }
 
+/// Consumes a complete UTF-8 prefix and borrows the remaining protocol field.
+pub fn text_consume_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.strip_prefix(prefix)
+}
+
 /// Borrows a field only when both byte offsets are UTF-8 character boundaries.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     text.get(start..end)
@@ -393,6 +398,11 @@ mod tests {
         assert!(super::text_equal(text, text));
         assert!(!super::text_equal("é", "e\u{301}"));
         assert!(!super::text_equal("field", "field\0"));
+        assert_eq!(super::text_consume_prefix(text, "aé"), Some("🙂z"));
+        assert_eq!(super::text_consume_prefix(text, ""), Some(text));
+        assert_eq!(super::text_consume_prefix(text, text), Some(""));
+        assert_eq!(super::text_consume_prefix("a", text), None);
+        assert_eq!(super::text_consume_prefix("é", "e\u{301}"), None);
         assert!(super::text_has_prefix(text, "aé"));
         assert!(super::text_has_prefix(text, ""));
         assert!(!super::text_has_prefix("a", text));

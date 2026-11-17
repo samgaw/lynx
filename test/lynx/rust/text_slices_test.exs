@@ -34,7 +34,7 @@ defmodule Lynx.Rust.TextSlicesTest do
 
     required =
       Enum.map(
-        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive text_prefix_bytes text_prefix_reflexive),
+        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive text_prefix_bytes text_prefix_reflexive consume_implementation consume_by_values consume_exact consume_utf8),
         &("TextSlices.Properties." <> &1)
       )
 
@@ -49,7 +49,8 @@ defmodule Lynx.Rust.TextSlicesTest do
         "experiment_analysis::split_text",
         "experiment_analysis::checked_text_split",
         "experiment_analysis::text_equal",
-        "experiment_analysis::text_has_prefix"
+        "experiment_analysis::text_has_prefix",
+        "experiment_analysis::text_consume_prefix"
       ],
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["TextSlices.Properties"],
@@ -118,6 +119,7 @@ defmodule Lynx.Rust.TextSlicesTest do
           {"core/src/protocol.rs", "text.split_at_checked(position)", "text.split_at_checked(0)"},
           {"core/src/protocol.rs", "left == right", "left != right"},
           {"core/src/protocol.rs", "text.starts_with(prefix)", "prefix.starts_with(text)"},
+          {"core/src/protocol.rs", "text.strip_prefix(prefix)", "text.strip_prefix(\"\")"},
           {"analysis/src/lib.rs", "Some((left, right))", "Some((right, left))"}
         ] do
       source = Path.join(workspace, relative)
@@ -175,6 +177,22 @@ defmodule Lynx.Rust.TextSlicesTest do
     File.write!(source, changed)
 
     assert_raise CompileError, ~r/shared-str prefix/, fn ->
+      Lynx.Rust.verify!(workspace, "experiment-analysis", options)
+    end
+
+    File.write!(source, original)
+
+    changed =
+      String.replace(
+        original,
+        "text.strip_prefix(prefix)",
+        "Some(unsafe { text.get_unchecked(prefix.len()..) })"
+      )
+
+    assert changed != original
+    File.write!(source, changed)
+
+    assert_raise CompileError, ~r/unchecked string borrowing is restricted/, fn ->
       Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     end
 

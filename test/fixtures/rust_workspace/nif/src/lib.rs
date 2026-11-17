@@ -207,6 +207,12 @@ fn echo_borrowed_option(value: (Option<&str>, bool)) -> (Option<&str>, bool) {
 
 /// Borrows a UTF-8 field through both library crates.
 #[cfg(feature = "text-slices")]
+#[rustler::nif(name = "consume_text_prefix")]
+fn consume_text_prefix_nif<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    experiment_analysis::text_consume_prefix(text, prefix)
+}
+
+#[cfg(feature = "text-slices")]
 #[rustler::nif(name = "slice_text", schedule = "DirtyCpu")]
 fn slice_text_nif(text: &str, start: u8, end: u8) -> Option<&str> {
     experiment_analysis::text_window(text, start as usize, end as usize)
@@ -782,7 +788,7 @@ mod tests {
                 + usize::from(cfg!(feature = "owned-text"))
                 + 3 * usize::from(cfg!(feature = "text-input"))
                 + 3 * usize::from(cfg!(feature = "borrowed-text"))
-                + 5 * usize::from(cfg!(feature = "text-slices"))
+                + 6 * usize::from(cfg!(feature = "text-slices"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1089,6 +1095,11 @@ mod tests {
         }
         if cfg!(feature = "text-slices") {
             expected.extend([
+                (
+                    "consume_text_prefix".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
                 (
                     "has_text_prefix".to_owned(),
                     2,

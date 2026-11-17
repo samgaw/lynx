@@ -198,6 +198,86 @@ theorem text_prefix_reflexive (text : Str) :
     experiment_analysis.text_has_prefix text text = .ok true := by
   simp [text_prefix_bytes]
 
+theorem consume_implementation (text needle : Str) :
+    experiment_analysis.text_consume_prefix text needle =
+      (do let accepted ← experiment_analysis.text_has_prefix text needle
+          if accepted then
+            let field ← TextSlices.Extraction.StringSlices.uncheckedFrom text ⟨Slice.len needle⟩
+            pure (some field)
+          else .ok none) := by
+  rfl
+
+@[cbv_eval] theorem consume_by_values (text needle : Str) :
+    experiment_analysis.text_consume_prefix text needle =
+      if needle.val.length ≤ text.val.length ∧ needle.val = text.val.take needle.val.length then
+        if TextSlices.Extraction.StringViews.isCharBoundary text (Slice.len needle) then
+          .ok (some (text.drop (Slice.len needle)))
+        else .fail .undef
+      else .ok none := by
+  by_cases bounded : needle.val.length ≤ text.val.length
+  · by_cases matched : needle.val = text.val.take needle.val.length
+    · have ending : TextSlices.Extraction.StringViews.isCharBoundary text (Slice.len text) = true := by
+        simp [TextSlices.Extraction.StringViews.isCharBoundary, Slice.len]
+      rw [if_pos ⟨bounded, matched⟩, consume_implementation, text_prefix_bytes, if_pos bounded]
+      have accepted : decide (needle.val = text.val.take needle.val.length) = true := by simpa only [decide_eq_true_eq] using matched
+      simp only [accepted, bind_ok, ↓reduceIte]
+      cases boundary : TextSlices.Extraction.StringViews.isCharBoundary text (Slice.len needle) with
+      | false =>
+        simp [TextSlices.Extraction.StringSlices.uncheckedFrom, TextSlices.Extraction.StringSlices.fromGet,
+          TextSlices.Extraction.StringSlices.rangeGet, boundary]
+        rw [map_eq_pure_bind]
+        exact bind_tc_fail _ _
+      | true =>
+        simp [Str, bounded,
+          TextSlices.Extraction.StringSlices.uncheckedFrom, TextSlices.Extraction.StringSlices.fromGet,
+          TextSlices.Extraction.StringSlices.rangeGet, boundary, ending,
+          core.slice.index.SliceIndexRangeUsizeSlice.get, Slice.len, List.slice, Slice.drop]
+        simp only [← List.length_drop, List.take_length]
+        exact map_pure _ _
+    · simp [consume_implementation, text_prefix_bytes, bounded, matched]
+  · simp [consume_implementation, text_prefix_bytes, bounded]
+
+theorem consume_exact (text needle : Str)
+    (valid : (TextSlices.Extraction.StringSlices.bytes text).IsValidUTF8)
+    (needleValid : (TextSlices.Extraction.StringSlices.bytes needle).IsValidUTF8) :
+    experiment_analysis.text_consume_prefix text needle =
+      if needle.val.length ≤ text.val.length ∧ needle.val = text.val.take needle.val.length then
+        .ok (some (text.drop (Slice.len needle)))
+      else .ok none := by
+  rw [consume_by_values]
+  split
+  · rename_i matched
+    simp only [TextSlices.Extraction.StringSlices.prefix_boundary text needle valid needleValid matched.2 matched.1,
+      ↓reduceIte]
+  · rfl
+
+
+theorem consume_utf8 (text needle field : Str)
+    (valid : (TextSlices.Extraction.StringSlices.bytes text).IsValidUTF8)
+    (returned : experiment_analysis.text_consume_prefix text needle = .ok (some field)) :
+    (TextSlices.Extraction.StringSlices.bytes field).IsValidUTF8 := by
+  obtain ⟨accepted, recognized⟩ : ∃ accepted, experiment_analysis.text_has_prefix text needle = .ok accepted := by
+    rw [text_prefix_bytes]
+    split <;> exact ⟨_, rfl⟩
+  cases accepted with
+  | false => simp [consume_implementation, recognized] at returned
+  | true =>
+    obtain ⟨result, computation⟩ := TextSlices.Extraction.StringSlices.rangeGet_returns
+      ⟨Slice.len needle, Slice.len text⟩ text
+    have borrowed : TextSlices.Extraction.StringSlices.fromGet ⟨Slice.len needle⟩ text = .ok result := computation
+    cases result with
+    | none =>
+      have mapped : (some <$> (RustM.fail .undef : RustM Str)) = RustM.fail .undef := by
+        rw [map_eq_pure_bind]
+        exact bind_tc_fail _ _
+      simp [consume_implementation, recognized, TextSlices.Extraction.StringSlices.uncheckedFrom, borrowed, mapped] at returned
+    | some suffix =>
+      have mapped : (some <$> RustM.ok suffix) = RustM.ok (some suffix) := map_pure _ _
+      have equal : suffix = field := by
+        simpa [consume_implementation, recognized, TextSlices.Extraction.StringSlices.uncheckedFrom, borrowed, mapped] using returned
+      subst field
+      exact TextSlices.Extraction.StringSlices.rangeGet_valid_utf8 _ _ _ valid computation
+
 attribute [local cbv_opaque] RustM.ok RustM.fail
 
 theorem checked_unicode :

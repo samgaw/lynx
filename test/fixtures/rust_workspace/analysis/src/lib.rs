@@ -24,6 +24,11 @@ pub fn text_has_prefix(text: &str, prefix: &str) -> bool {
     experiment_core::protocol::text_has_prefix(text, prefix)
 }
 
+/// Consumes a text prefix through the workspace dependency.
+pub fn text_consume_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    experiment_core::protocol::text_consume_prefix(text, prefix)
+}
+
 /// Borrows a field through the workspace dependency.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     experiment_core::protocol::text_window(text, start, end)

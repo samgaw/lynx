@@ -17,6 +17,28 @@ theorem prefix_facade (text needle : Str) :
       else .ok false := by
   simpa [__PREFIX_NIF__, lift] using TextSlices.Properties.text_prefix_bytes text needle
 
+theorem consume_facade (text needle : Str)
+    (valid : (TextSlices.Extraction.StringSlices.bytes text).IsValidUTF8)
+    (needleValid : (TextSlices.Extraction.StringSlices.bytes needle).IsValidUTF8) :
+    __CONSUME_NIF__ text needle =
+      if needle.val.length ≤ text.val.length ∧ needle.val = text.val.take needle.val.length then
+        .ok (some (text.drop (Slice.len needle)))
+      else .ok none := by
+  simpa [__CONSUME_NIF__, lift] using TextSlices.Properties.consume_exact text needle valid needleValid
+
+theorem consume_encoding (input : Lynx.Term) (text needle field : Str)
+    (env : Lynx.Rustler.Env)
+    (decoded : Lynx.Rustler.decodeStr input = .ok text)
+    (returned : __CONSUME_NIF__ text needle = .ok (some field))
+    (bounded : field.val.length ≤ 4294967295) :
+    Lynx.Rustler.Encoding.str field env =
+      .ok (.bitstring (TextSlices.Extraction.StringSlices.bytes field) 0) := by
+  apply Lynx.Rustler.Encoding.str_valid
+  · apply TextSlices.Properties.consume_utf8 text needle field
+      (Lynx.Rustler.decodeStr_utf8 input text decoded)
+    simpa [__CONSUME_NIF__, lift] using returned
+  · exact bounded
+
 /-- Every field returned by the actual facade after successful text decoding
 encodes as its exact UTF-8 binary, within the byte-offset output bound. -/
 theorem window_encoding (input : Lynx.Term) (text field : Str) (start stop : U8)
