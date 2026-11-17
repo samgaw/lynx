@@ -31,6 +31,23 @@ defmodule Lynx.Rustler.Bindings do
   defp value_codec?(%{"option" => inner} = type) when map_size(type) == 1, do: value_codec?(inner)
   defp value_codec?(_), do: false
 
+  def codec_boundaries(manifest, version) do
+    if string_result?(manifest) do
+      [
+        "Rustler #{version} String Encoder model: canonical alloc String becomes its exact UTF-8 binary; successful allocation assumed; native Encoder, FFI and reclamation unverified; strings over 4294967295 bytes exhaust verification"
+      ]
+    else
+      []
+    end
+  end
+
+  def string_result?(manifest), do: Enum.any?(manifest.bindings, &string_schema?(&1["result"]))
+
+  defp string_schema?("string"), do: true
+  defp string_schema?(map) when is_map(map), do: Enum.any?(Map.values(map), &string_schema?/1)
+  defp string_schema?(list) when is_list(list), do: Enum.any?(list, &string_schema?/1)
+  defp string_schema?(_), do: false
+
   def custom?(%{"native" => _}), do: true
   def custom?(map) when is_map(map), do: Enum.any?(Map.values(map), &custom?/1)
   def custom?(list) when is_list(list), do: Enum.any?(list, &custom?/1)
@@ -222,15 +239,11 @@ defmodule Lynx.Rustler.Bindings do
     do: resource!(hint, type, audit, Map.get(audit, :nif_resource_types, []))
 
   defp result!(%{"native" => hint}, type, audit, mode, translation) do
-    {id, path} = native!(hint, type, audit, mode)
-
-    if mode == :discover,
-      do: %{"native" => path},
-      else:
-        Map.merge(
-          %{"native" => path},
-          Lynx.Rustler.EncoderModels.binding!(id, audit, translation)
-        )
+    if Lynx.Rust.OwnedStringModels.type?(type, audit.translated, audit.references) do
+      "string"
+    else
+      native_result!(hint, type, audit, mode, translation)
+    end
   end
 
   defp result!(%{"option" => inner}, type, audit, mode, translation) do
@@ -315,6 +328,18 @@ defmodule Lynx.Rustler.Bindings do
       do: raise(ArgumentError, "Rustler and LLBC signatures differ: result type")
 
     schema
+  end
+
+  defp native_result!(hint, type, audit, mode, translation) do
+    {id, path} = native!(hint, type, audit, mode)
+
+    if mode == :discover,
+      do: %{"native" => path},
+      else:
+        Map.merge(
+          %{"native" => path},
+          Lynx.Rustler.EncoderModels.binding!(id, audit, translation)
+        )
   end
 
   defp result_arguments(type, audit) do

@@ -4,7 +4,12 @@ defmodule Lynx.Rustler do
 
   The adapter supports booleans, signed/unsigned fixed-width integers through
   64 bits, tuples of zero through seven fields, and ordinary `Option<T>`/`Result<T, E>`
-  values composed from those types. Options try the payload decoder first, then
+  values composed from those types. Canonical standard String results, including
+  nested results, reuse the SDK UTF-8 binary Encoder model with successful allocation
+  assumed and an explicit size cutoff. Actual compiler type identity is checked;
+  typed String argument decoding remains unsupported. Pure String results default
+  to elaborated MIR so rustc resolves intermediate owner cleanup before auditing.
+  Options try the payload decoder first, then
   recognize `nil`; nested options therefore do not have an injective encoding.
   Return values can also contain monomorphic
   first-party structs/enums whose actual `Encoder` implementations can be
@@ -472,14 +477,30 @@ defmodule Lynx.Rustler do
          roots ++
            Lynx.Rustler.Bindings.encoder_roots(resolved) ++
            Lynx.Rustler.Bindings.decoder_roots(resolved),
-         Enum.uniq_by(models ++ codecs ++ errors, & &1.rust)}
+         if(
+           term? or
+             Enum.any?(resolved.bindings, fn binding ->
+               Lynx.Rustler.Bindings.custom?([binding["arguments"], binding["result"]]) or
+                 Lynx.Rustler.Bindings.nif_result?(binding["result"])
+             end),
+           do: Enum.uniq_by(models ++ codecs ++ errors, & &1.rust),
+           else: models
+         )}
       else
         {discovered, roots, models}
       end
 
     custom? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.custom?(&1["result"]))
     returns? = Enum.any?(discovered.bindings, &Lynx.Rustler.Bindings.nif_result?(&1["result"]))
-    mir = opts[:mir] || if(execution == :pure and (decoders? or returns?), do: :elaborated)
+    # Owned String results can allocate intermediate vectors. Let rustc resolve
+    # their conditional generic cleanup before the ordinary destructor audit.
+    mir =
+      opts[:mir] ||
+        if(
+          execution == :pure and
+            (decoders? or returns? or Lynx.Rustler.Bindings.string_result?(discovered)),
+          do: :elaborated
+        )
 
     extraction_context =
       Lynx.Rust.Sysroot.context!(context, workspace, package, build_dir, tools, opts)
@@ -596,7 +617,8 @@ defmodule Lynx.Rustler do
           "Lean kernel and standard logical axioms"
         ] ++
           if(registrations.boundary, do: [registrations.boundary], else: []) ++
-          Lynx.Rustler.ErrorConstructors.boundary(extraction.rustler_constructors)
+          Lynx.Rustler.ErrorConstructors.boundary(extraction.rustler_constructors) ++
+          Lynx.Rustler.Bindings.codec_boundaries(bindings, rustler_version)
     }
   end
 

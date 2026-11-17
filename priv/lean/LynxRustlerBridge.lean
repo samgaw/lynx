@@ -36,7 +36,7 @@ namespace Encoding
 /-- Rustler encodes strings as UTF-8 binaries. The size bound is a verification
 cutoff; successful allocation is assumed at this modelled FFI boundary. -/
 @[expose] def string (value : String) (_ : Env) : RustM NativeTerm :=
-  if value.toUTF8.size ≤ 4294967295 then .ok (.bitstring value.toUTF8 0) else .fail .undef
+  if value.toByteArray.size ≤ 4294967295 then .ok (.bitstring value.toByteArray 0) else .fail .undef
 
 @[expose] def str (value : Str) (env : Env) : RustM NativeTerm :=
   match String.fromUTF8? ⟨(value.val.map (fun byte => UInt8.ofNat byte.val)).toArray⟩ with

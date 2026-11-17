@@ -421,7 +421,8 @@ defmodule Lynx.Rust.Report do
             if(byte_vec?, do: [byte_vec_model], else: []) ++
             if(scalar_vec?, do: [scalar_vec_model], else: []) ++
             if(resource?, do: [resource_model], else: []) ++
-            if(option?, do: [option_model], else: []),
+            if(option?, do: [option_model], else: []) ++
+            Lynx.Rustler.Bindings.codec_boundaries(bindings, version),
         trusted_boundary:
           report.trusted_boundary ++
             [

@@ -952,6 +952,20 @@ defmodule Lynx.Rust.LLBC do
          audit
        ) do
     cond do
+      builtin == nil and types == [] and
+          Lynx.Rust.OwnedStringModels.type?(
+            %{
+              "Adt" => %{
+                "id" => id,
+                "builtin" => nil,
+                "generics" => Lynx.Rust.ResourceModels.args([])
+              }
+            },
+            audit.translated,
+            audit.references
+          ) ->
+        "string"
+
       builtin == "Tuple" and length(types) <= 7 ->
         %{"tuple" => Enum.map(types, &signature_type!(&1, audit))}
 

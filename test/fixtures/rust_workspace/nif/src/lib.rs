@@ -154,6 +154,15 @@ fn utf8_status(value: rustler::Binary<'_>) -> Result<u64, (u64, u8)> {
     experiment_analysis::utf8_status(value.as_slice())
 }
 
+/// Decodes owned UTF-8 bytes and retains the original bytes on rejection.
+#[cfg(feature = "owned-text")]
+#[rustler::nif]
+fn decode_owned(value: rustler::Binary<'_>) -> Result<String, Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(value.as_slice());
+    experiment_analysis::decode_owned(bytes)
+}
+
 /// Counts validated text payload bytes through a renamed dirty NIF export.
 #[cfg(feature = "text-views")]
 #[rustler::nif(name = "text_payload", schedule = "DirtyCpu")]
@@ -693,6 +702,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "binary"))
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "text-views"))
+                + usize::from(cfg!(feature = "owned-text"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -783,6 +793,7 @@ mod tests {
             (cfg!(feature = "binary"), "binary_length"),
             (cfg!(feature = "protocol"), "parse_frame"),
             (cfg!(feature = "protocol"), "utf8_status"),
+            (cfg!(feature = "owned-text"), "decode_owned"),
             (
                 cfg!(feature = "unsupported-binary-method"),
                 "binary_owned_length",
