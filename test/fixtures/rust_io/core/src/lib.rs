@@ -219,3 +219,6 @@ pub fn slice_word(input: &mut &[u8]) -> io::Result<u16> {
 pub fn slice_suffix(input: &[u8], start: usize) -> &[u8] {
     &input[start..]
 }
+
+#[cfg(unix)]
+pub mod positional;

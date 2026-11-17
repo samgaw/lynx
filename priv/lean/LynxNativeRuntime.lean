@@ -3538,10 +3538,10 @@ theorem persist_same (bytes mask result : ByteArray)
     else none
   | _ => none
 
-@[expose] def writeStep (state : State) (data : Slice U8) :
+@[expose] def writeStep (state : State) (data : Slice U8) (positional : Bool := false) :
     Option (core.result.Result Usize NativeIoError × State) := do
   if data.val.length > limit then none else do
-  let (success, value, mask, rest) ← action "write" state.script
+  let (success, value, mask, rest) ← action (if positional then "write_at" else "write") state.script
   if success then
     if bounded : value ≤ data.val.length then do
       if data.val.length > limit || state.position + value > limit then none else do
@@ -3573,10 +3573,10 @@ initialized bytes survive a short read. -/
 /-- A regular-file read may return a short prefix or EOF. Explicit error choices
 leave the initialized buffer and offset unchanged. Persistence may advance in
 both cases independently of the read. -/
-@[expose] def readStep (state : State) (buffer : Slice U8) :
+@[expose] def readStep (state : State) (buffer : Slice U8) (positional : Bool := false) :
     Option (core.result.Result Usize NativeIoError × State × Slice U8) := do
   if buffer.val.length > limit then none else do
-  let (success, value, mask, rest) ← action "read" state.script
+  let (success, value, mask, rest) ← action (if positional then "read_at" else "read") state.script
   let durable ← persist state.durable state.visible mask
   if success then
     if bounded : value ≤ buffer.val.length then
@@ -4106,39 +4106,61 @@ end OpenOptions
 
 /-- One atomic regular-file write, including partial results, errors and blocking.
 Write completion does not assert persistence. Invalid capabilities/choices cut off. -/
-@[expose] def pollWrite (file : NativeFile) (data : Slice U8) (env : Environment) :
+@[expose] def pollWrite (file : NativeFile) (data : Slice U8) (env : Environment)
+    (offset : Option U64 := none) :
     Option (Except Exception (core.result.Result Usize NativeIoError × NativeFile) × Environment) :=
   match lookup file env with
   | none => some (.error .exhausted, env)
   | some state =>
     if blocked state then none else
-    match writeStep state data with
+    if offset.any (fun value => value.val > limit) then some (.error .exhausted, env) else
+    let input := offset.elim state (fun value => {state with position := value.val})
+    match writeStep input data offset.isSome with
     | none => some (.error .exhausted, env)
     | some (reply, updated) =>
       match reply, getHandle file handleTypeName env with
       | .Ok _, some _ => some (.error .exhausted, env)
-      | _, _ => some (.ok (reply, file), store file updated env)
+      | _, _ => some (.ok (reply, file), store file (if offset.isSome then {updated with position := state.position} else updated) env)
 
 @[expose] def write (file : NativeFile) (data : Slice U8) :
     NativeM (core.result.Result Usize NativeIoError × NativeFile) :=
-  .wait (pollWrite file data) fun reply => match reply with
+  .wait (fun env => pollWrite file data env) fun reply => match reply with
     | .ok value => .ok value
     | .error exception => .error exception
 
-@[expose] def pollRead (file : NativeFile) (buffer : Slice U8) (env : Environment) :
+@[expose] def pollRead (file : NativeFile) (buffer : Slice U8) (env : Environment)
+    (offset : Option U64 := none) :
     Option (Except Exception (core.result.Result Usize NativeIoError × NativeFile × Slice U8) × Environment) :=
   match lookup file env with
   | none => some (.error .exhausted, env)
   | some state =>
     if blocked state then none else
-    match readStep state buffer with
+    if offset.any (fun value => value.val > limit) then some (.error .exhausted, env) else
+    let input := offset.elim state (fun value => {state with position := value.val})
+    match readStep input buffer offset.isSome with
     | none => some (.error .exhausted, env)
-    | some (reply, updated, buffer) => some (.ok (reply, file, buffer), store file updated env)
+    | some (reply, updated, buffer) => some (.ok (reply, file, buffer), store file (if offset.isSome then {updated with position := state.position} else updated) env)
 
 @[expose] def read (file : NativeFile) (buffer : Slice U8) :
     NativeM (core.result.Result Usize NativeIoError × NativeFile × Slice U8) :=
-  .wait (pollRead file buffer) fun reply => match reply with
+  .wait (fun env => pollRead file buffer env) fun reply => match reply with
     | .ok value => .ok value
+    | .error exception => .error exception
+
+/-- One positional write. Linux append capabilities are outside the admitted
+model. The mutable filesystem state is updated without moving the cursor. -/
+@[expose] def writeAt (file : NativeFile) (data : Slice U8) (offset : U64) :
+    NativeM (core.result.Result Usize NativeIoError) :=
+  .wait (fun env => pollWrite file data env (some offset)) fun reply => match reply with
+    | .ok (value, _) => .ok value
+    | .error exception => .error exception
+
+/-- One positional read returns the mutable buffer separately from the result.
+It observes the file at the requested position without moving the cursor. -/
+@[expose] def readAt (file : NativeFile) (buffer : Slice U8) (offset : U64) :
+    NativeM (core.result.Result Usize NativeIoError × Slice U8) :=
+  .wait (fun env => pollRead file buffer env (some offset)) fun reply => match reply with
+    | .ok (value, _, buffer) => .ok (value, buffer)
     | .error exception => .error exception
 
 @[expose] def pollSeek (file : NativeFile) (origin : SeekFrom) (env : Environment) :

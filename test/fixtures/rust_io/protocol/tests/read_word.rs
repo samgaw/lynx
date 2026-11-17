@@ -34,3 +34,34 @@ fn words_require_two_bytes_and_preserve_the_following_suffix() -> io::Result<()>
     assert_eq!(unreadable.stream_position()?, 0);
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn positional_patch_and_observation_preserve_the_sequential_cursor() -> io::Result<()> {
+    use std::io::SeekFrom;
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("test clock must be after the Unix epoch")
+        .as_nanos();
+    let directory = Scratch(
+        std::env::temp_dir().join(format!("lynx-positional-{}-{nonce}", std::process::id())),
+    );
+    fs::create_dir(&directory.0)?;
+    let path = directory.0.join("input");
+    fs::write(&path, [1, 2, 3])?;
+    let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
+    file.seek(SeekFrom::Start(1))?;
+
+    assert_eq!(io_protocol::positional::patch(&file, 5, &[8, 9])?, 2);
+    assert_eq!(fs::read(&path)?, [1, 2, 3, 0, 0, 8, 9]);
+    assert_eq!(file.stream_position()?, 1);
+
+    let mut buffer = [0xff; 3];
+    assert_eq!(io_protocol::positional::observe(&file, 6, &mut buffer)?, 1);
+    assert_eq!(buffer, [9, 0xff, 0xff]);
+    assert_eq!(io_protocol::positional::observe(&file, 7, &mut buffer)?, 0);
+    assert_eq!(buffer, [9, 0xff, 0xff]);
+    assert_eq!(file.stream_position()?, 1);
+    Ok(())
+}

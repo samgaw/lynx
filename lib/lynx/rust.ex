@@ -299,6 +299,11 @@ defmodule Lynx.Rust do
 
   `files: :regular, execution: :runtime` admits checked standard `File::read`, `File::write`,
   `File::sync_all`, `File::sync_data`, `File::set_len` and `Seek<File>::seek` calls over registered regular-file capabilities.
+  Linux and macOS also admit Unix `FileExt::read_at` and `FileExt::write_at` for
+  non-append file capabilities. They retain the descriptor cursor and use the
+  distinct `read_at` and `write_at` script outcomes. Offsets beyond the modeled
+  byte limit exhaust verification. An accepted positional write may be short and
+  remains subject to the same crash-persistence choices as a sequential write.
   Explicit and compiler-inserted destruction of an owned `File` is admitted after
   validating the compiler destructor dictionary. A `close` outcome consumes the
   capability on success or error and retains its disk state for crash reasoning.

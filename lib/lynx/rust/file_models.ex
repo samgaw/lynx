@@ -2,6 +2,7 @@ defmodule Lynx.Rust.FileModels do
   @moduledoc false
   alias Lynx.Rust.{CallModels, LLBC}
   @file_path ~w(std fs File)
+  @file_ext ~w(std os unix fs FileExt)
   @error ~w(core io error Error)
   @seek ~w(core io seek SeekFrom)
   @sync_methods [{"sync_all", "syncAll"}, {"sync_data", "syncData"}]
@@ -54,6 +55,24 @@ defmodule Lynx.Rust.FileModels do
               io_method?(function, f, translated, refs, "read", ~w(alloc io read Read)) ->
             {"std::fs::{alloc::io::read::Read<std::fs::File>}::read", "read"}
 
+          length(regions) == 2 and
+            match?([_, _, %{"Scalar" => %{"Integer" => %{"Unsigned" => "U64"}}}], input) and
+            linux_or_macos?(translated) and
+              result?(output, scalar("Usize"), e, translated, refs) ->
+            Enum.find_value(
+              [{"read_at", "readAt", "Mut"}, {"write_at", "writeAt", "Shared"}],
+              fn {method, lean, borrow} ->
+                if input == [
+                     reference(0, f, "Shared"),
+                     reference(1, %{"Slice" => [scalar("U8"), nil]}, borrow),
+                     scalar("U64")
+                   ] and io_method?(function, f, translated, refs, method, @file_ext) do
+                  {"std::os::unix::fs::{std::os::unix::fs::FileExt<std::fs::File>}::" <> method,
+                   lean}
+                end
+              end
+            )
+
           length(params["regions"]) == 1 and seek_type?(translated, refs) and
             input == [reference(0, f, "Mut"), adt(seek_id(translated))] and
             result?(output, scalar("U64"), e, translated, refs) and
@@ -70,7 +89,7 @@ defmodule Lynx.Rust.FileModels do
               ) ->
             Enum.find_value(@sync_methods, fn {method, lean} ->
               if inherent?(function, f, refs, method) and
-                   (method == "sync_all" or data_sync_target?(translated)) do
+                   (method == "sync_all" or linux_or_macos?(translated)) do
                 {"std::fs::{std::fs::File}::" <> method, lean}
               end
             end)
@@ -101,13 +120,7 @@ defmodule Lynx.Rust.FileModels do
           native_cutoff_only: true,
           native_file_types: {file["def_id"], error["def_id"]},
           file_seek_type: if(lean == "seek", do: seek_id(translated), else: nil),
-          label:
-            if(lean == "syncData",
-              do:
-                "Bounded regular-file File::sync_data model (1048576 bytes, Linux/macOS): success persists visible file bytes and length; error may persist an allowed torn image; preserves the offset and directory checkpoint; directory handles exhaust verification; other inode metadata and std, OS, filesystem/device and native descriptor correspondence are external boundaries",
-              else:
-                "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; write errors preserve visible bytes and offset while retaining permitted background persistence (std/OS model assumption); reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); regular-file sync_all success persists visible contents and length; admitted root-directory sync_all success commits visible namespace names without synchronizing inode bytes, with filesystem/device correspondence assumed; directory sync errors retain the last guaranteed checkpoint; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); single-file and bounded flat-filesystem crash-image/restart host admission, per-path metadata-version choices, std, OS, filesystem/device and native descriptor correspondence unverified; open/append modes and unrestricted concurrent file access unsupported; owned File destruction requires the separately validated close model; synchronized callers may be verified against these per-operation transitions"
-            )
+          label: label(lean)
         }
       end
     else
@@ -115,11 +128,23 @@ defmodule Lynx.Rust.FileModels do
     end
   end
 
-  defp data_sync_target?(%{"target_information" => [_ | _] = targets}) do
+  defp label(operation) when operation in ["readAt", "writeAt"],
+    do:
+      "Bounded regular-file FileExt::#{Macro.underscore(operation)} model (1048576 bytes, Linux/macOS): explicit unsigned offset, partial/error outcomes and unchanged descriptor cursor; reads preserve buffer bytes outside the returned prefix; writes preserve bytes outside the accepted prefix and zero-fill gaps, with old/new crash persistence; requires non-append capabilities; std, OS, filesystem/device and native descriptor correspondence are external assumptions"
+
+  defp label("syncData"),
+    do:
+      "Bounded regular-file File::sync_data model (1048576 bytes, Linux/macOS): success persists visible file bytes and length; error may persist an allowed torn image; preserves the offset and directory checkpoint; directory handles exhaust verification; other inode metadata and std, OS, filesystem/device and native descriptor correspondence are external boundaries"
+
+  defp label(lean),
+    do:
+      "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; write errors preserve visible bytes and offset while retaining permitted background persistence (std/OS model assumption); reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); regular-file sync_all success persists visible contents and length; admitted root-directory sync_all success commits visible namespace names without synchronizing inode bytes, with filesystem/device correspondence assumed; directory sync errors retain the last guaranteed checkpoint; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); single-file and bounded flat-filesystem crash-image/restart host admission, per-path metadata-version choices, std, OS, filesystem/device and native descriptor correspondence unverified; open/append modes and unrestricted concurrent file access unsupported; owned File destruction requires the separately validated close model; synchronized callers may be verified against these per-operation transitions"
+
+  defp linux_or_macos?(%{"target_information" => [_ | _] = targets}) do
     Enum.all?(targets, &match?(%{"value" => %{"os" => os}} when os in ["Linux", "MacOs"], &1))
   end
 
-  defp data_sync_target?(_), do: false
+  defp linux_or_macos?(_), do: false
 
   # Write for &File mutably borrows the reference slot, not an owned File.
   # Validate its inherited lifetime and actual trait-method substitution; the
@@ -365,19 +390,12 @@ defmodule Lynx.Rust.FileModels do
   defp io_method?(
          %{
            "def_id" => id,
-           "item_meta" => %{
-             "name" => [
-               %{"Ident" => ["std", 0]},
-               %{"Ident" => ["fs", 0]},
-               %{"Impl" => %{"Trait" => impl}},
-               %{"Ident" => [method, 0]}
-             ]
-           },
+           "item_meta" => %{"name" => method_name},
            "src" => %{
              "TraitImpl" => %{
                "impl_ref" => %{"id" => impl},
                "trait_ref" => %{"id" => trait},
-               "item_id" => 0,
+               "item_id" => item,
                "reuses_default" => false
              }
            }
@@ -388,7 +406,17 @@ defmodule Lynx.Rust.FileModels do
          method,
          trait_path
        ) do
-    with %{
+    {module, slot} =
+      case {trait_path, method} do
+        {@file_ext, "read_at"} -> {Enum.drop(@file_ext, -1), 0}
+        {@file_ext, "write_at"} -> {Enum.drop(@file_ext, -1), 5}
+        _ -> {~w(std fs), 0}
+      end
+
+    expected = name(module) ++ [%{"Impl" => %{"Trait" => impl}}, %{"Ident" => [method, 0]}]
+
+    with true <- item == slot and method_name == expected,
+         %{
            "src" => "Normal",
            "is_negative" => false,
            "is_unsafe" => false,
@@ -402,8 +430,11 @@ defmodule Lynx.Rust.FileModels do
            Enum.find(translated["trait_decls"], &(&1 && &1["def_id"] == trait)) do
       trait_name == name(trait_path) and
         Enum.any?(methods, fn
-          %{"kind" => %{"TraitMethod" => [^trait, 0]}, "skip_binder" => %{"id" => ^id}} -> true
-          _ -> false
+          %{"kind" => %{"TraitMethod" => [^trait, ^slot]}, "skip_binder" => %{"id" => ^id}} ->
+            true
+
+          _ ->
+            false
         end)
     else
       _ -> false
