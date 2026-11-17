@@ -86,7 +86,7 @@ theorem torn_rollback_stalls (data : ByteArray) (first second : U16)
   have result := Result.two_wait_blocked_orders
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
-    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩))
+    (.ok (.Ok ⟨⟨1⟩, 3, [], ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, [1], ⟨2⟩⟩))
     (shared 2 free (input data position amount writeMask resizeMask rest))
     (shared 3 (owned [] 3) (input data position amount writeMask resizeMask rest))
     (shared 3 (owned [] 3) (pending data firstResized amount rest))

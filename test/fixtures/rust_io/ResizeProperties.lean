@@ -172,9 +172,9 @@ theorem resize_failure (file : NativeFile) (length : U64) (env : Environment)
     (script : before.script = outcome "set_len" false identity mask rest)
     (accepted : persist before.durable before.visible mask = some durable) :
     resize_then_sync file length (fileEnv env file before frame) =
-      (.ok (.Err ⟨identity⟩), fileEnv env file {before with durable := durable, script := rest} frame) := by
+      (.ok (.Err (.os identity)), fileEnv env file {before with durable := durable, script := rest} frame) := by
   simp only [resize_then_sync, monadLift_self]
-  rw [resize_next file length env frame before {before with durable := durable, script := rest} (.Err ⟨identity⟩) separate valid
+  rw [resize_next file length env frame before {before with durable := durable, script := rest} (.Err (.os identity)) separate valid
     (by simp [blocked, script, outcome])
     (by simp [setLenStep, script, not_lt.mpr bounded, action_outcome, accepted])]
   simp [NativeM.ok]
@@ -329,7 +329,7 @@ theorem resize_sync_failure (file : NativeFile) (length : U64) (env : Environmen
     (accepted : persist before.durable (resize before.visible length.val) mask = some durable)
     (failed : persist durable (resize before.visible length.val) failureMask = some durableAfter) :
     resize_then_sync file length (fileEnv env file before frame) =
-      (.ok (.Err ⟨identity⟩), fileEnv env file
+      (.ok (.Err (.os identity)), fileEnv env file
         ⟨resize before.visible length.val, durableAfter, before.position, rest⟩ frame) := by
   let middle : State := ⟨resize before.visible length.val, durable, before.position,
     outcome "sync_all" false identity failureMask rest⟩
@@ -338,7 +338,7 @@ theorem resize_sync_failure (file : NativeFile) (length : U64) (env : Environmen
     (by simp [blocked, script, outcome])
     (by simp [setLenStep, script, not_lt.mpr bounded, action_outcome, accepted, middle])]
   simpa [NativeM.ok] using sync_next file env frame middle
-    ⟨resize before.visible length.val, durableAfter, before.position, rest⟩ (.Err ⟨identity⟩)
+    ⟨resize before.visible length.val, durableAfter, before.position, rest⟩ (.Err (.os identity))
     separate (resize_admitted before length mask durable _ valid bounded accepted)
     (by simp [middle, blocked, outcome]) (by simp [syncStep, middle, action_outcome, failed])
     (fun reply => NativeM.ok reply)

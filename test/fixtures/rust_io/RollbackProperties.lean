@@ -561,14 +561,14 @@ theorem rollback_failure_effects (syncFailure : Bool) (errorId : Nat) (rest : Te
     cases selected : syncFailure with
     | false =>
       apply rollback_resize_failure [] 2 before seeked written (rollbackErrorEnd false rest)
-        1#u16 0#u64 2#usize ⟨errorId⟩ (by decide) (by decide)
+        1#u16 0#u64 2#usize (.os errorId) (by decide) (by decide)
         initial soughtValid writtenValid ready0 ready1 ready2 seek write
       simp [written, selected, rollbackErrorEnd, setLenStep, action_outcome, tail, zeroMask,
         persist, limit, ← ByteArray.size_data]
       decide
     | true =>
       apply rollback_sync_failure [] 2 before seeked written resized (rollbackErrorEnd true rest)
-        1#u16 0#u64 2#usize ⟨errorId⟩ (by decide) (by decide)
+        1#u16 0#u64 2#usize (.os errorId) (by decide) (by decide)
         initial soughtValid writtenValid (by simp [resized, tail, Admitted, limit, ← ByteArray.size_data])
         ready0 ready1 ready2 (by simp [resized, blocked, outcome]) seek write
       · simp [written, selected, resized, setLenStep, action_outcome, tail, zeroMask,

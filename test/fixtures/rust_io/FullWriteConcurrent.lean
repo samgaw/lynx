@@ -76,7 +76,7 @@ theorem full_write_stalls (data : ByteArray) (first second : U16) (position : Na
   have result := Result.two_wait_blocked_orders
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
-    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩))
+    (.ok (.Ok ⟨⟨1⟩, 3, [], ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, [1], ⟨2⟩⟩))
     (shared 2 free (input data position mask rest))
     (shared 3 (owned [] 3) (input data position mask rest)) (shared 3 (owned [] 3) (pending data first firstDurable rest))
     (shared 3 (owned [1] 3) (input data position mask rest)) (shared 3 (owned [1] 3) (pending data second secondDurable rest))

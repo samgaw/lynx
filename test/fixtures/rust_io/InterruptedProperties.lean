@@ -135,7 +135,7 @@ theorem concurrent_rollback_stalls (data : ByteArray) (first second : U16)
   have result := Result.two_wait_blocked_orders
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire first)
     (NativeMutex.pollLock (α := NativeFile) ⟨1⟩) (postAcquire second)
-    (.ok (.Ok ⟨⟨1⟩, 3, 1, ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, 2, ⟨2⟩⟩))
+    (.ok (.Ok ⟨⟨1⟩, 3, [], ⟨2⟩⟩)) (.ok (.Ok ⟨⟨1⟩, 3, [1], ⟨2⟩⟩))
     (shared 2 free (interruptInput data position amount rest))
     (shared 3 (owned [] 3) (interruptInput data position amount rest))
     (shared 3 (owned [] 3) (stopped data amount rest))
@@ -186,7 +186,7 @@ private theorem crash_stopped (env : Environment) (pid : PID) (data : ByteArray)
   change (persist data data mask).bind (fun bytes => some (⟨bytes, env.nativeRefCounter⟩ : Image)) = some image at captured
   obtain ⟨bytes, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj record
-  exact persist_same data mask bytes accepted
+  exact RecoveryProperties.persist_same data mask bytes accepted
 
 /-- Crash a stalled two-caller execution and discard its still-held mutex.
 Every admitted power-loss mask retains the acknowledged complete prefix;

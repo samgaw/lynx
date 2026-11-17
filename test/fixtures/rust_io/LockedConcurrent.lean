@@ -397,7 +397,7 @@ private theorem append_error_exclusive (pid peer : PID) (token counter : Nat) (d
   have valid1 : Valid afterSeek := ⟨bound, Nat.le_refl _, bound⟩
   refine critical_error_exclusive pid peer token counter different before afterSeek
     (appendInput data data.size rest) value
-    (U64.ofNatCore data.size (by simp only [limit] at bound; scalar_tac)) ⟨errorId⟩
+    (U64.ofNatCore data.size (by simp only [limit] at bound; scalar_tac)) (.os errorId)
     fresh valid0 valid1 (by simp [before, errorInput, blocked, outcome])
     (by simp [afterSeek, sought, blocked, outcome]) ?_ ?_
   · simpa only [afterSeek, before, errorInput] using seek_end_step before valid0 (zeroMask data) data _
