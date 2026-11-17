@@ -35,4 +35,13 @@ theorem claim_contract (owner : NativeResourceArc RegistryState) (key : U64) :
       NativeResourceArc.releaseOwned owner
       .ok claimed) := by
   simp [__CLAIM__, NativeOwnedDrop.drop, NativeM.ok]
+
+theorem first_key_contract (owner : NativeResourceArc RegistryState) :
+    __FIRST__ owner = (do
+      let state ← NativeResourceArc.deref owner
+      let first ← experiment_analysis.registry_first_key state.table
+      NativeResourceArc.releaseOwned owner
+      .ok first) := by
+  simp [__FIRST__, NativeOwnedDrop.drop, NativeM.ok]
+
 end __PREFIX__.NifProperties

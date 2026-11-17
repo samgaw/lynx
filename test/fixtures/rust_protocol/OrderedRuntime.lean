@@ -4,6 +4,8 @@ public section
 open Aeneas Aeneas.Std Lynx
 open __PREFIX__.Extraction.OrderedCollections
 
+open __PREFIX__.Extraction.OrderedIterators
+
 namespace __PREFIX__.Properties
 
 theorem replace_eq (table : Map) (key value : U64)
@@ -114,4 +116,61 @@ theorem claim_run (values : Set) (key : U64) (poisoned : Bool)
     simp [__ANALYSIS__.registry_claim, claim_contract, setState, NativeMutex.lock,
       NativeMutex.pollLock, NativeCodec.roundtrip, claimed, NativeGuard.release,
       NativeGuard.pollRelease, NativeM.ok, Result.wait_run, Result.wait_bind]
+
+theorem first_key_eq (table : Map) (bounded : table.size ≤ 262144)
+    (valid : table.toList.all (fun row => decide (row.1 < 2^64)) = true) :
+    __CORE__.first_key table = NativeM.ok (table.toList.head?.map (fun row => keyScalar row.1)) := by
+  have created : mapIntoIter table = RustM.ok
+      (table.toList.map (fun row => (keyScalar row.1, row.2))) := by
+    unfold mapIntoIter
+    exact if_pos ⟨bounded, valid⟩
+  have length : table.toList.length ≤ 262144 := by simpa using bounded
+  simp only [__CORE__.first_key, created, NativeM.monadLift_eq, NativeM.fromRust_ok,
+    Result.ok_bind]
+  unfold mapNext
+  rw [if_pos (by simpa using length)]
+  cases rows : table.toList with
+  | nil => simp [rows, NativeCallbacks.map, NativeM.ok]
+  | cons row tail =>
+    simp [rows, NativeCallbacks.map, NativeM.ok,
+      __CORE__.first_key.closure.Insts.Lynx_nativeFnOnceTuplePairShared0U64Shared1U64U64,
+      __CORE__.first_key.closure.Insts.Lynx_nativeFnOnceTuplePairShared0U64Shared1U64U64.call_once]
+
+theorem first_key_no_panic (table : Map) :
+    NativeM.NoPanic (__CORE__.first_key table) := by
+  by_cases admitted : table.size ≤ 262144 ∧
+      table.toList.all (fun row => decide (row.1 < 2^64)) = true
+  · rw [first_key_eq table admitted.1 admitted.2]
+    exact .ok _
+  · have exhausted : mapIntoIter table = RustM.fail .undef := by
+      unfold mapIntoIter
+      exact if_neg admitted
+    simp [__CORE__.first_key, exhausted]
+    exact .exhausted
+
+theorem first_key_contract (table : NativeMutex Map) :
+    __CORE__.locked_first_key table = (do
+      let acquired ← NativeMutex.lock table
+      let guard := match acquired with | .Ok guard => guard | .Err error => error.value
+      let first ← __CORE__.first_key guard.value
+      NativeGuard.release guard
+      .ok first) := by
+  simp [__CORE__.locked_first_key, NativeGuard.deref, NativeDrop.drop, NativeOwnedDrop.drop,
+    NativeM.lift, NativeM.ok]
+  congr 1
+  funext acquired
+  cases acquired <;> simp [NativePoisonError.into_inner]
+
+theorem first_key_run (table : Map) (poisoned : Bool) (bounded : table.size ≤ 262144)
+    (valid : table.toList.all (fun row => decide (row.1 < 2^64)) = true)
+    (env : Environment) (schedule : List ScheduleChoice) :
+    (__ANALYSIS__.registry_first_key ⟨1⟩).run (state table poisoned env) schedule =
+      (.ok (table.toList.head?.map (fun row => keyScalar row.1)),
+        {state table poisoned env with nativeRefCounter := 2}) := by
+  have observed := first_key_eq table bounded valid
+  cases poisoned <;>
+    simp [__ANALYSIS__.registry_first_key, first_key_contract, state, NativeMutex.lock,
+      NativeMutex.pollLock, NativeCodec.roundtrip, observed, NativeGuard.release,
+      NativeGuard.pollRelease, NativeM.ok, Result.wait_run, Result.wait_bind]
+
 end __PREFIX__.Properties

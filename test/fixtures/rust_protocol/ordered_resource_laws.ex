@@ -110,4 +110,33 @@ defmodule LynxRegistryFixture.Laws do
     clear events last outcome run terminal
     cbv
     """
+
+  law first_key_empty,
+    expects:
+      LynxRegistryFixture.Native.registry_first_key(LynxRegistryFixture.Native.registry_new()) ==
+        nil,
+    proof: @proof
+
+  law first_key_order,
+    expects:
+      (
+        registry = LynxRegistryFixture.Native.registry_new()
+        LynxRegistryFixture.Native.registry_replace(registry, 20, 1)
+        LynxRegistryFixture.Native.registry_replace(registry, 3, 99)
+        first = LynxRegistryFixture.Native.registry_first_key(registry)
+        again = LynxRegistryFixture.Native.registry_first_key(registry)
+        first == 3 and again == 3 and LynxRegistryFixture.Native.registry_take(registry, 3) == 99
+      ),
+    proof: @proof
+
+  law first_key_after_remove,
+    expects:
+      (
+        registry = LynxRegistryFixture.Native.registry_new()
+        LynxRegistryFixture.Native.registry_replace(registry, 20, 1)
+        LynxRegistryFixture.Native.registry_replace(registry, 3, 99)
+        LynxRegistryFixture.Native.registry_take(registry, 3)
+        LynxRegistryFixture.Native.registry_first_key(registry) == 20
+      ),
+    proof: @proof
 end

@@ -857,7 +857,7 @@ mod tests {
                 + 7 * usize::from(cfg!(feature = "text-slices"))
                 + 5 * usize::from(cfg!(feature = "ordered-collections"))
                 + 2 * usize::from(cfg!(feature = "ordered-iteration"))
-                + 4 * usize::from(cfg!(feature = "ordered-resources"))
+                + 5 * usize::from(cfg!(feature = "ordered-resources"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1167,6 +1167,7 @@ mod tests {
                 ("registry_new", 0),
                 ("registry_replace", 3),
                 ("registry_take", 2),
+                ("registry_first_key", 1),
                 ("registry_claim", 2),
             ] {
                 expected.push((
@@ -1469,4 +1470,11 @@ fn registry_claim(resource: rustler::ResourceArc<RegistryState>, key: u64) -> bo
 /// Internal proof root for final Rust-owner cleanup; not exported as a NIF.
 pub fn registry_release(resource: rustler::ResourceArc<RegistryState>) {
     drop(resource);
+}
+
+#[cfg(feature = "ordered-resources")]
+#[rustler::nif(schedule = "DirtyCpu")]
+/// Observes the first key of shared map state through both workspace crates.
+fn registry_first_key(resource: rustler::ResourceArc<RegistryState>) -> Option<u64> {
+    experiment_analysis::registry_first_key(&resource.table)
 }

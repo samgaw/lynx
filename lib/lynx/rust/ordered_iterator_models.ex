@@ -213,7 +213,7 @@ defmodule Lynx.Rust.OrderedIteratorModels do
     })
   end
 
-  def audit(functions, models, t, refs, first_party, execution) do
+  def audit(functions, models, t, refs, first_party, _execution) do
     ctx = context(t, refs)
 
     if Enum.all?(Map.values(ctx.iterators), &is_nil/1) do
@@ -224,9 +224,6 @@ defmodule Lynx.Rust.OrderedIteratorModels do
       Enum.reduce_while(data, {:ok, []}, fn owner, {:ok, used} ->
         try do
           types = types!(owner, ctx)
-
-          if types != [] and execution != :pure,
-            do: raise(ArgumentError, "ordered iterators currently require pure Rust extraction")
 
           calls!(owner["body"], models, ctx)
           {:cont, {:ok, Enum.uniq(used ++ types)}}

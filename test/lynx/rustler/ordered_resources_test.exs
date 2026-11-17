@@ -45,17 +45,24 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
       package: "experiment-nif",
       tools: @tools,
       execution: :runtime,
+      nonpanicking: [
+        {"experiment_core::ordered::first_key", "Registry.Properties.first_key_no_panic"}
+      ],
       owned_drops: true,
       sysroot: :full_mir,
       root_attribute: "verify::start_from",
       cargo: [features: ["ordered-resources"]],
-      only: [registry_new: 0, registry_replace: 3, registry_take: 2, registry_claim: 2],
+      only: [
+        registry_new: 0,
+        registry_replace: 3,
+        registry_take: 2,
+        registry_claim: 2,
+        registry_first_key: 1
+      ],
       lean_project: project,
       module_prefix: "Registry.Extraction",
       build_dir: Path.join(tmp, "build")
     ]
-
-    discovered = Lynx.Rustler.prepare!(base)
 
     properties =
       File.read!(Path.join(@proofs, "OrderedRuntime.lean"))
@@ -71,13 +78,19 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
       |> String.replace("__PREFIX__", "Registry")
     )
 
+    discovered =
+      Lynx.Rustler.prepare!(
+        base ++ [proof_modules: ~w(Registry.Properties Registry.ResourceProperties)]
+      )
+
     adapter =
       Enum.reduce(
         [
           {"NEW", "registry_new"},
           {"REPLACE", "registry_replace"},
           {"TAKE", "registry_take"},
-          {"CLAIM", "registry_claim"}
+          {"CLAIM", "registry_claim"},
+          {"FIRST", "registry_first_key"}
         ],
         File.read!(Path.join(@proofs, "OrderedResourceAdapter.lean"))
         |> String.replace("__PREFIX__", "Registry"),
@@ -97,7 +110,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
             ~w(Registry.Properties Registry.ResourceProperties Registry.NifProperties),
           required_properties:
             Enum.map(
-              ~w(replace_eq locked_contract replace_run replace_preserves_other take_eq take_contract take_run claim_eq claim_contract claim_run),
+              ~w(replace_eq locked_contract replace_run replace_preserves_other take_eq take_contract take_run claim_eq claim_contract claim_run first_key_eq first_key_no_panic first_key_contract first_key_run),
               &("Registry.Properties." <> &1)
             ) ++
               Enum.map(
@@ -105,7 +118,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
                 &("Registry.ResourceProperties." <> &1)
               ) ++
               Enum.map(
-                ~w(create_contract replace_contract take_contract claim_contract),
+                ~w(create_contract replace_contract take_contract claim_contract first_key_contract),
                 &("Registry.NifProperties." <> &1)
               )
         ]
@@ -161,17 +174,17 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
     core = Path.join(workspace, "core/src/ordered.rs")
     original = File.read!(core)
 
-    changed =
-      String.replace(
-        original,
-        "replace_value(&mut guard, key, value)",
-        "replace_value(&mut guard, 0, value)"
-      )
+    for {before, after_text} <- [
+          {"replace_value(&mut guard, key, value)", "replace_value(&mut guard, 0, value)"},
+          {".map(|(key, _)| *key)", ".map(|(_key, _)| 0)"}
+        ] do
+      changed = String.replace(original, before, after_text)
+      refute changed == original
+      File.write!(core, changed)
+      assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+      File.write!(core, original)
+    end
 
-    refute changed == original
-    File.write!(core, changed)
-    assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
-    File.write!(core, original)
     wrong = String.replace(adapter, ".ok previous) := by", ".ok none) := by")
     refute wrong == adapter
     File.write!(nif_properties, wrong)
@@ -233,7 +246,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
     [{module, beam}] = Code.compile_file(Path.join(@proofs, "ordered_resource_laws.ex"))
 
     for law <-
-          ~w(empty updates independent_fields alias_observes rejected_input_preserves invalid_handle concurrent_claims)a,
+          ~w(empty updates independent_fields alias_observes rejected_input_preserves invalid_handle concurrent_claims first_key_empty first_key_order first_key_after_remove)a,
         do: assert(apply(module, law, []))
 
     law_options = [
@@ -244,7 +257,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
     law_export = Path.join(tmp, "laws.export")
     reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, law_export))
     assert [] == for(r <- reports, r.status != :ok, do: {r.module, r.diagnostics})
-    assert length(Enum.flat_map(reports, & &1.theorems)) == 7
+    assert length(Enum.flat_map(reports, & &1.theorems)) == 10
 
     for kind <- [:rust_implementation, :cross_crate_contract, :nif_adapter, :elixir_law],
         do:
@@ -265,7 +278,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
       translated,
       audit.references,
       audit.drops,
-      [],
+      Enum.map(prepared.extraction.nonpanicking, & &1.id),
       prepared.extraction.allocator_layout
     )
   end

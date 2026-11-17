@@ -161,8 +161,8 @@ defmodule Lynx.Rust.OrderedIteratorModelsTest do
     refute Lynx.Rust.SliceModels.resolve(put_in(f, ["signature", "is_unsafe"], true), c.t, c.refs)
   end
 
-  test "does not admit ordered iterator cursors into the shared runtime heap", c do
-    assert {:error, _, message} =
+  test "admits validated shared cursors in runtime computations", c do
+    assert {:ok, %{families: families}} =
              OrderedIteratorModels.audit(
                c.audit.functions,
                c.models,
@@ -172,7 +172,7 @@ defmodule Lynx.Rust.OrderedIteratorModelsTest do
                :runtime
              )
 
-    assert message =~ "pure Rust extraction"
+    assert Enum.sort(families) == ~w(map set)
   end
 
   defp update(doc, key, id, change) do

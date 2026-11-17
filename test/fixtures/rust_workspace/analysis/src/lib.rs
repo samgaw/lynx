@@ -577,3 +577,13 @@ pub fn registry_claim(
 ) -> bool {
     experiment_core::ordered::locked_claim(values, key)
 }
+
+/// Reads the first shared map key through the lower-level workspace crate.
+///
+/// # Panics
+/// Shares the recursive-acquisition restriction of the core helper.
+pub fn registry_first_key(
+    table: &std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+) -> Option<u64> {
+    experiment_core::ordered::locked_first_key(table)
+}

@@ -117,9 +117,10 @@ defmodule Lynx.Rust do
   Shared `for` loops over these maps and sets preserve ordered, unique entries
   through reported standard iterator models. The actual first-party loop and
   cross-crate callers remain extracted. Iteration is bounded by 262144 entries;
-  map keys and values, and set members, must be u64. Explicit iterator methods,
-  owning/mutable or double-ended iteration, custom allocators and runtime heap
-  iterators remain rejected. Native iterator pointers, lifetimes and tree layout
+  map keys and values, and set members, must be u64. The validated shared
+  IntoIterator/next cursor also supports local runtime computations and locked
+  collection observations. Owning/mutable or double-ended iteration, custom
+  allocators and storing borrowed cursors in the runtime heap remain rejected. Native iterator pointers, lifetimes and tree layout
   remain unverified. Safe shared-slice `first` uses a reported model of checked
   index zero; its native pointer-metadata implementation is not verified.
 

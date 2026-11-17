@@ -47,12 +47,18 @@ mod tests {
         assert!(claim(&mut values, 2));
         assert!(!claim(&mut values, 1));
         assert_eq!(values.len(), 2);
+        assert_eq!(first_key(&table), Some(1));
         assert_eq!(peek(&table, 1), Some(30));
         assert_eq!(peek(&table, 3), None);
         assert_eq!(take(&mut table, 3), None);
         assert_eq!(take(&mut table, 1), Some(30));
         assert_eq!(take(&mut table, 1), None);
         assert_eq!(peek(&table, 2), Some(20));
+        assert_eq!(first_key(&table), Some(2));
+        assert_eq!(first_key(&BTreeMap::new()), None);
+        let mutex = std::sync::Mutex::new(table.clone());
+        assert_eq!(locked_first_key(&mutex), Some(2));
+        assert_eq!(*mutex.lock().unwrap(), table);
         assert!(contains(&values, 1));
         assert!(!release(&mut values, 3));
         assert!(release(&mut values, 1));
@@ -134,4 +140,23 @@ pub fn locked_claim(values: &std::sync::Mutex<BTreeSet<u64>>, key: u64) -> bool 
     let claimed = claim(&mut guard, key);
     drop(guard);
     claimed
+}
+
+/// Copies the first key in the map's ascending iteration order.
+pub fn first_key(table: &BTreeMap<u64, u64>) -> Option<u64> {
+    IntoIterator::into_iter(table).next().map(|(key, _)| *key)
+}
+
+/// Observes the first key while holding the map lock, recovering poison.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside the supported model.
+pub fn locked_first_key(table: &std::sync::Mutex<BTreeMap<u64, u64>>) -> Option<u64> {
+    let guard = match table.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let first = first_key(&guard);
+    drop(guard);
+    first
 }
