@@ -5,6 +5,13 @@ open Aeneas Aeneas.Std
 unseal RustM
 namespace __PREFIX__.StringSlices
 
+/-- The caller must establish the shared-borrow precondition. Invalid positions
+exhaust verification; they are not modelled Rust outcomes. -/
+@[expose] def splitUnchecked (text : Str) (position : Usize) : RustM (Str × Str) :=
+  if __PREFIX__.StringViews.isCharBoundary text position then
+    core.slice.Slice.split_at text position
+  else .fail .undef
+
 @[expose] def get {I Output : Type}
     (inst : core.slice.index.SliceIndex I Str Output) (text : Str) (index : I) :
     RustM (Option Output) := inst.get index text

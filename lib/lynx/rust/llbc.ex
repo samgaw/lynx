@@ -418,6 +418,16 @@ defmodule Lynx.Rust.LLBC do
       end
 
       check_calls!(function["body"], allowed, function, translated)
+
+      for callee <- calls(function["body"]),
+          available_models[callee][:str_split_unchecked],
+          not Lynx.Rust.StringSplits.checked_body?(function, translated, refs) do
+        failure!(
+          function,
+          translated,
+          "unchecked string splitting is restricted to the extracted standard checked helper"
+        )
+      end
     end
 
     case Lynx.Rust.CollectionModels.audit(functions, modelled, translated, refs) do

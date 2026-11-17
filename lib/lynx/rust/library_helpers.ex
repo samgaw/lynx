@@ -14,6 +14,7 @@ defmodule Lynx.Rust.LibraryHelpers do
       if(context[:sysroot],
         do:
           [
+            "core::str::_::split_at_checked",
             "core::slice::_::starts_with",
             "core::slice::_::strip_prefix",
             "core::slice::_::strip_suffix",
@@ -24,6 +25,27 @@ defmodule Lynx.Rust.LibraryHelpers do
           ] ++ Lynx.Rust.ExactRead.includes() ++ ["alloc::io::impls::_::read_exact"],
         else: []
       )
+  end
+
+  def selected?(
+        %{
+          "body" => %{"Structured" => _},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["str", 0]},
+              _,
+              %{"Ident" => ["split_at_checked", 0]}
+            ]
+          }
+        } = function,
+        translated
+      ) do
+    Lynx.Rust.StringSplits.checked_body?(
+      function,
+      translated,
+      Lynx.Rust.LLBC.type_references!(translated)
+    )
   end
 
   # Keep the actual derived comparison body, including its discriminant reads.
