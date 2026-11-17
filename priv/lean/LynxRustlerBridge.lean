@@ -504,8 +504,9 @@ def decodeByteVec (input : Term) : Except Exception (alloc.vec.Vec U8) :=
   else .fail .undef
 
 /-- Scalar vectors share the byte codec's element budget. Admitted elements
-are booleans or fixed-width integers of at most eight bytes. Allocation and
-Rustler/BEAM correspondence remain external assumptions. -/
+are booleans, fixed-width integers, or closed scalar products with separately
+validated compiler byte bounds. Allocation and Rustler/BEAM correspondence
+remain external assumptions. -/
 private def decodeScalarList {α : Type} (decode : Term → Except Exception α) :
     Nat → Term → Except Exception (List α)
   | _, .nil => .ok []
@@ -525,6 +526,12 @@ def decodeScalarVec {α : Type} (decode : Term → Except Exception α)
       .ok (alloc.vec.Vec.from values bounds.1)
     else .error .exhausted
   | _ => .error (.error (.atom "badarg"))
+
+/-- Non-list input is rejected before any element decoder executes. -/
+theorem decodeScalarVec_notList {α : Type} (decode : Term → Except Exception α)
+    (input : Term) (notNil : input ≠ .nil) (notCons : ∀ head tail, input ≠ .cons head tail) :
+    decodeScalarVec decode input = .error (.error (.atom "badarg")) := by
+  cases input <;> simp_all [decodeScalarVec]
 
 @[expose] def encodeScalarVec {α : Type} (encode : α → Term)
     (value : alloc.vec.Vec α) : RustM Term :=
@@ -552,6 +559,21 @@ private theorem decodeScalarList_values {α : Type} (decode : Term → Except Ex
       rw [ih fuel (by simpa using bound)]
       rfl
 
+private theorem decodeScalarList_exhausted {α : Type} (decode : Term → Except Exception α)
+    {inputs : List Term} {values : List α}
+    (decoded : List.Forall₂ (fun input value => decode input = .ok value) inputs values)
+    (fuel : Nat) (large : fuel < values.length) :
+    decodeScalarList decode fuel (Term.list inputs) = .error .exhausted := by
+  induction decoded generalizing fuel with
+  | nil => simp at large
+  | @cons head value tail values paired remaining ih =>
+    cases fuel with
+    | zero => rfl
+    | succ fuel =>
+      simp only [decodeScalarList, paired]
+      rw [ih fuel (by simpa using large)]
+      rfl
+
 theorem decodeScalarVec_values {α : Type} (decode : Term → Except Exception α)
     {inputs : List Term} {values : List α}
     (decoded : List.Forall₂ (fun input value => decode input = .ok value) inputs values)
@@ -576,6 +598,18 @@ theorem decodeScalarVec_values {α : Type} (decode : Term → Except Exception �
 @[simp] theorem decodeScalarVec_nil {α : Type} (decode : Term → Except Exception α) :
     decodeScalarVec decode .nil = .ok (alloc.vec.Vec.from [] (by simp)) := by
   simp [decodeScalarVec, decodeScalarList, alloc.vec.Vec.from, byteVecLimit]
+
+theorem decodeScalarVec_exhausted {α : Type} (decode : Term → Except Exception α)
+    {inputs : List Term} {values : List α}
+    (decoded : List.Forall₂ (fun input value => decode input = .ok value) inputs values)
+    (large : byteVecLimit < values.length) :
+    decodeScalarVec decode (Term.list inputs) = .error .exhausted := by
+  cases decoded with
+  | nil => simp at large
+  | @cons head value tail values paired remaining =>
+    simp only [decodeScalarVec]
+    rw [decodeScalarList_exhausted decode (.cons paired remaining) byteVecLimit large]
+    rfl
 
 theorem decodeScalarVec_headError {α : Type} (decode : Term → Except Exception α)
     (head tail : Term) (error : Exception) (h : decode head = .error error) :

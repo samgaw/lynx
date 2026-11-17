@@ -57,6 +57,16 @@ defmodule Lynx.Rustler.Adapter do
     declarations =
       Enum.map_join(manifest.bindings, "\n", &declaration!(&1, execution, resources, release))
 
+    tuple_input_bounds =
+      manifest.bindings
+      |> Enum.flat_map(&Map.get(&1, "tuple_input_bounds", []))
+      |> Enum.uniq()
+      |> Enum.with_index()
+      |> Enum.map_join("\n", fn {%{"bytes" => bytes, "maximum" => maximum}, index} ->
+        "private theorem tupleVectorInputBound#{index} : " <>
+          "Lynx.Rustler.byteVecLimit * #{bytes} ≤ #{maximum} := by norm_num [Lynx.Rustler.byteVecLimit]"
+      end)
+
     source = """
     module
     public import Lynx.Rustler
@@ -64,6 +74,7 @@ defmodule Lynx.Rustler.Adapter do
     open Aeneas Aeneas.Std
     public section
     namespace #{module_name}
+    #{tuple_input_bounds}
     #{declarations}
     end #{module_name}
     """
@@ -421,11 +432,11 @@ defmodule Lynx.Rustler.Adapter do
     tuple = type!(element)
 
     unless tuple[:encode] && not monadic?(tuple),
-      do: raise(ArgumentError, "tuple vector returns require pure scalar field encoders")
+      do: raise(ArgumentError, "tuple vectors require pure scalar field codecs")
 
     %{
       lean: "(alloc.vec.Vec #{tuple.lean})",
-      decode: nil,
+      decode: "Lynx.Rustler.decodeScalarVec (#{tuple.decode})",
       encode: nil,
       encode_m: "Lynx.Rustler.encodeScalarVec (#{tuple.encode})"
     }

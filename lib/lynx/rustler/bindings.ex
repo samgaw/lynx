@@ -196,6 +196,24 @@ defmodule Lynx.Rustler.Bindings do
 
         implementation = Map.fetch!(implementations, function["def_id"])
 
+        tuple_input_bounds =
+          try do
+            Lynx.Rust.TupleLayouts.input_bounds!(
+              signature["inputs"],
+              audit.translated,
+              audit.references,
+              opts[:tuple_layouts],
+              1_048_576
+            )
+          rescue
+            error in ArgumentError ->
+              LLBC.failure!(
+                function,
+                audit.translated,
+                "Rustler #{binding["name"]}/#{binding["arity"]}: #{Exception.message(error)}"
+              )
+          end
+
         Map.merge(binding, %{
           "arguments" => arguments,
           "result" =>
@@ -214,6 +232,11 @@ defmodule Lynx.Rustler.Bindings do
           "lean_file" => implementation["lean_file"],
           "captured_unwind" => captured != nil
         })
+        |> then(fn resolved ->
+          if tuple_input_bounds == [],
+            do: resolved,
+            else: Map.put(resolved, "tuple_input_bounds", tuple_input_bounds)
+        end)
       end
 
     %{manifest | bindings: bindings}

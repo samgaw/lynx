@@ -85,12 +85,6 @@ fn single_literal(expression: &Expr) -> Result<Lit, String> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum TypePosition {
-    Argument,
-    Return,
-}
-
 fn scalar_product(value: &Value) -> bool {
     value.as_str().is_some_and(|name| {
         ["bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"].contains(&name)
@@ -105,7 +99,7 @@ fn scalar_product(value: &Value) -> bool {
     })
 }
 
-fn supported_type(ty: &Type, position: TypePosition) -> Result<Value, String> {
+fn supported_type(ty: &Type) -> Result<Value, String> {
     if let Type::Reference(reference) = ty {
         if reference.mutability.is_none()
             && reference
@@ -120,11 +114,7 @@ fn supported_type(ty: &Type, position: TypePosition) -> Result<Value, String> {
     }
     if let Type::Tuple(tuple) = ty {
         if tuple.elems.len() <= 7 {
-            let fields: Result<Vec<_>, _> = tuple
-                .elems
-                .iter()
-                .map(|field| supported_type(field, position))
-                .collect();
+            let fields: Result<Vec<_>, _> = tuple.elems.iter().map(supported_type).collect();
             return Ok(json!({"tuple": fields?}));
         }
     }
@@ -145,7 +135,7 @@ fn supported_type(ty: &Type, position: TypePosition) -> Result<Value, String> {
                 if let [syn::GenericArgument::Type(inner)] =
                     arguments.args.iter().collect::<Vec<_>>().as_slice()
                 {
-                    return Ok(json!({"nif_result": supported_type(inner, position)?}));
+                    return Ok(json!({"nif_result": supported_type(inner)?}));
                 }
             }
             return Err("Rustler NifResult requires one supported return type".into());
@@ -213,21 +203,14 @@ fn supported_type(ty: &Type, position: TypePosition) -> Result<Value, String> {
             if let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments {
                 if arguments.args.len() == 1 {
                     if let Some(syn::GenericArgument::Type(element)) = arguments.args.first() {
-                        let element = supported_type(element, position)?;
-                        if element.as_str().is_some_and(|name| {
-                            ["bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"]
-                                .contains(&name)
-                        }) || (matches!(position, TypePosition::Return)
-                            && scalar_product(&element))
-                        {
+                        let element = supported_type(element)?;
+                        if scalar_product(&element) {
                             return Ok(json!({"vec": element}));
                         }
                     }
                 }
             }
-            return Err(
-                "Rustler Vec requires a scalar element, or a scalar tuple for return values".into(),
-            );
+            return Err("Rustler Vec requires a scalar element or a closed scalar tuple".into());
         }
         if path.qself.is_none()
             && (names == ["Binary"]
@@ -257,7 +240,7 @@ fn supported_type(ty: &Type, position: TypePosition) -> Result<Value, String> {
                 if let [syn::GenericArgument::Type(inner)] =
                     arguments.args.iter().collect::<Vec<_>>().as_slice()
                 {
-                    return Ok(json!({"option": supported_type(inner, position)?}));
+                    return Ok(json!({"option": supported_type(inner)?}));
                 }
             }
             return Err("Rustler Option requires one supported value type".into());
@@ -274,7 +257,7 @@ fn supported_type(ty: &Type, position: TypePosition) -> Result<Value, String> {
                         .args
                         .iter()
                         .map(|argument| match argument {
-                            syn::GenericArgument::Type(ty) => supported_type(ty, position),
+                            syn::GenericArgument::Type(ty) => supported_type(ty),
                             _ => Err("unsupported Rustler Result argument".into()),
                         })
                         .collect();
@@ -392,7 +375,7 @@ impl Bindings {
             .inputs
             .iter()
             .map(|arg| match arg {
-                FnArg::Typed(typed) => supported_type(&typed.ty, TypePosition::Argument),
+                FnArg::Typed(typed) => supported_type(&typed.ty),
                 _ => Err("Rustler receiver parameters are unsupported".into()),
             })
             .collect();
@@ -401,7 +384,7 @@ impl Bindings {
             return Err("Rustler export arity differs from its computation signature".into());
         }
         let result = match &function.sig.output {
-            ReturnType::Type(_, result) => supported_type(result, TypePosition::Return)?,
+            ReturnType::Type(_, result) => supported_type(result)?,
             ReturnType::Default => json!({"tuple": []}),
         };
         Ok(json!({"name": name, "arity": arity, "flags": flags,
@@ -679,15 +662,20 @@ mod tests {
     }
 
     #[test]
-    fn discovers_scalar_tuple_vector_returns_without_admitting_tuple_vector_arguments() {
+    fn discovers_scalar_tuple_vectors_in_arguments_and_results() {
         let found = discover("fn native() -> Vec<(u64, u64)> { todo!() }", 0);
         assert!(found.errors.is_empty(), "{:?}", found.errors);
         assert_eq!(
             found.entries[0]["result"],
             json!({"vec":{"tuple":["u64","u64"]}})
         );
+        let input = discover("fn native(value: Vec<(u64, u64)>) -> bool { true }", 1);
+        assert!(input.errors.is_empty(), "{:?}", input.errors);
+        assert_eq!(
+            input.entries[0]["arguments"],
+            json!([{"vec":{"tuple":["u64","u64"]}}])
+        );
         for signature in [
-            "fn native(value: Vec<(u64, u64)>) -> bool { true }",
             "fn native() -> Vec<(String, u64)> { todo!() }",
             "fn native() -> Vec<()> { todo!() }",
             "fn native() -> Vec<Vec<u64>> { todo!() }",

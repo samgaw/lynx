@@ -495,6 +495,13 @@ fn echo_signed_bytes(input: Vec<i8>) -> Vec<i8> {
     input
 }
 
+/// Updates records through both workspace crates with compiled codec metadata.
+#[cfg(feature = "tuple-vec")]
+#[rustler::nif(name = "update_records", schedule = "DirtyCpu")]
+fn replace_first_pair(input: Vec<(i64, u64)>, value: i64) -> (bool, Vec<(i64, u64)>) {
+    experiment_analysis::replace_first_pair(input, value)
+}
+
 /// A protocol tuple encoded by the actual Rustler derive implementation.
 #[cfg(feature = "derived-tuple")]
 #[derive(Debug, rustler::NifTuple)]
@@ -876,6 +883,7 @@ mod tests {
                 + usize::from(cfg!(feature = "collections"))
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
+                + usize::from(cfg!(feature = "tuple-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
                 + usize::from(cfg!(feature = "derived-tuple-decoder"))
                 + usize::from(cfg!(feature = "derived-map"))
@@ -984,6 +992,13 @@ mod tests {
             for name in ["echo_flags", "echo_signed_bytes"] {
                 expected.push((name.to_owned(), 1, rustler::SchedulerFlags::Normal as u32));
             }
+        }
+        if cfg!(feature = "tuple-vec") {
+            expected.push((
+                "update_records".to_owned(),
+                2,
+                rustler::SchedulerFlags::DirtyCpu as u32,
+            ));
         }
         if cfg!(feature = "checked-option") {
             expected.push((

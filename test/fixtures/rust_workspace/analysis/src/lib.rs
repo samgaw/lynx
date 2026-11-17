@@ -130,6 +130,11 @@ pub fn replace_first_i64(input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
     experiment_core::collections::replace_first_i64(input, value)
 }
 
+/// Applies the core field update while preserving every other record field.
+pub fn replace_first_pair(input: Vec<(i64, u64)>, value: i64) -> (bool, Vec<(i64, u64)>) {
+    experiment_core::collections::replace_first_pair(input, value)
+}
+
 /// Uses the core ordering policy across the workspace boundary.
 pub fn order_pair(left: u64, right: u64) -> (u64, u64) {
     experiment_core::order_pair(left, right)

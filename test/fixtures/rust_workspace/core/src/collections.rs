@@ -63,6 +63,22 @@ pub fn replace_first_i64(mut input: Vec<i64>, value: i64) -> (bool, Vec<i64>) {
     (changed, input)
 }
 
+/// Replaces only the signed field in the first protocol record.
+pub fn replace_slice_first_pair(input: &mut [(i64, u64)], value: i64) -> bool {
+    if input.is_empty() {
+        false
+    } else {
+        input[0].0 = value;
+        true
+    }
+}
+
+/// Updates a record batch without allocating or replacing its unsigned fields.
+pub fn replace_first_pair(mut input: Vec<(i64, u64)>, value: i64) -> (bool, Vec<(i64, u64)>) {
+    let changed = replace_slice_first_pair(input.as_mut_slice(), value);
+    (changed, input)
+}
+
 /// Borrows an indexed element, returning None beyond the slice boundary.
 pub fn lookup<T>(input: &[T], position: usize) -> Option<&T> {
     input.get(position)
@@ -80,6 +96,22 @@ pub fn vector_at<T>(input: &Vec<T>, position: usize) -> &T {
 #[cfg(test)]
 mod tests {
     use super::{replace_at, replace_first, slice_length};
+
+    #[test]
+    fn pair_update_preserves_other_fields_and_allocation() {
+        let input = vec![(11, 7), (42, 9)];
+        let pointer = input.as_ptr();
+        let capacity = input.capacity();
+        let (changed, input) = super::replace_first_pair(input, -5);
+        assert!(changed);
+        assert_eq!(input, [(-5, 7), (42, 9)]);
+        assert_eq!(input.as_ptr(), pointer);
+        assert_eq!(input.capacity(), capacity);
+        assert_eq!(
+            super::replace_first_pair(Vec::new(), -5),
+            (false, Vec::new())
+        );
+    }
 
     #[test]
     fn mutation_preserves_tail_length_and_allocation() {

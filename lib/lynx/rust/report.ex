@@ -363,7 +363,7 @@ defmodule Lynx.Rust.Report do
     byte_vec? = Enum.any?(bindings.bindings, &byte_vector?([&1["arguments"], &1["result"]]))
 
     scalar_vec_model =
-      "Rustler #{version} scalar Vec codec model: sequential element decoding, proper-list encoding and improper-tail panic; bool and fixed-width integers through 64 bits; 1048576-element verification bound; allocation and FFI correctness unverified"
+      "Rustler #{version} scalar Vec codec model: sequential element decoding, proper-list encoding and improper-tail panic; bool, fixed-width integers through 64 bits and closed scalar tuples; compiler byte bounds for tuple-vector arguments; 1048576-element verification bound; allocation and FFI correctness unverified"
 
     scalar_vec? = Enum.any?(bindings.bindings, &scalar_vector?([&1["arguments"], &1["result"]]))
 
@@ -390,6 +390,7 @@ defmodule Lynx.Rust.Report do
           execution: Map.get(report, :execution, :pure),
           arguments: binding["arguments"],
           result: binding["result"],
+          tuple_input_bounds: Map.get(binding, "tuple_input_bounds", []),
           codec_models:
             if(byte_vector?([binding["arguments"], binding["result"]]),
               do: [byte_vec_model],
@@ -456,6 +457,8 @@ defmodule Lynx.Rust.Report do
 
   defp scalar_vector?(%{"vec" => element}) when element in ~w(bool i8 i16 i32 i64 u16 u32 u64),
     do: true
+
+  defp scalar_vector?(%{"vec" => %{"tuple" => _}}), do: true
 
   defp scalar_vector?(map) when is_map(map), do: Enum.any?(Map.values(map), &scalar_vector?/1)
   defp scalar_vector?(list) when is_list(list), do: Enum.any?(list, &scalar_vector?/1)
