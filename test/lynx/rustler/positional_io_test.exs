@@ -7,48 +7,21 @@ defmodule Lynx.Rustler.PositionalIoTest do
            String.contains?(File.read!(Path.join(@tools, "lynx-toolchain")), "+owned-drops-v1"),
          do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned owned-drops backend")
 
+  @proof_sources [
+    {"Properties.lean", "Base"},
+    {"PositionalProperties.lean", "Properties"},
+    {"PositionalNifProperties.lean", "Nif"},
+    {"PositionalOpenedProperties.lean", "Opened"}
+  ]
+
   @tag :tmp_dir
   test "compiled positional calls preserve resource ownership and share the named inode",
        %{
          tmp_dir: tmp
        } do
-    workspace = Path.join(tmp, "workspace")
-    File.mkdir_p!(workspace)
-
-    for entry <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol native),
-        do: File.cp_r!(Path.join(@fixture, entry), Path.join(workspace, entry))
-
-    facade = Path.join(workspace, "native/src/lib.rs")
-
-    File.write!(
-      facade,
-      String.replace(File.read!(facade), "LynxIoFixture", "LynxPositionalFixture")
-    )
-
-    project = Path.join(tmp, "proofs")
-    File.mkdir_p!(Path.join(project, "Positional"))
-    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
-
-    if File.dir?(packages) do
-      File.mkdir_p!(Path.join(project, ".lake"))
-      File.ln_s!(packages, Path.join(project, ".lake/packages"))
-    end
-
-    base = [
-      workspace: workspace,
-      package: "io-native",
-      tools: @tools,
-      cargo: [features: ["positional-file"]],
-      only: [open_slots: 0, patch_at: 3, observe_at: 2],
-      execution: :runtime,
-      files: :regular,
-      owned_drops: true,
-      proof_roots: ["io_protocol::write_then_sync"],
-      module_prefix: "Positional.Extraction",
-      lean_project: project,
-      build_dir: Path.join(tmp, "build")
-    ]
-
+    base = fixture!(tmp)
+    workspace = base[:workspace]
+    project = base[:lean_project]
     prepared = Lynx.Rustler.prepare!(base)
     bindings = Map.new(prepared.bindings.bindings, &{&1["name"], &1})
 
@@ -83,27 +56,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
              types: [%{rust_name: "io_native::offset_file::OffsetFile"}]
            } = prepared.resource_registration
 
-    for {source, module} <- [
-          {"Properties.lean", "Base"},
-          {"PositionalProperties.lean", "Properties"},
-          {"PositionalNifProperties.lean", "Nif"},
-          {"PositionalOpenedProperties.lean", "Opened"}
-        ] do
-      content =
-        File.read!(Path.join(@fixture, source))
-        |> String.replace("Disk", "Positional")
-        |> String.replace(
-          "open Aeneas Aeneas.Std Lynx io_protocol",
-          "open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol"
-        )
-        |> String.replace("io_protocol.io_core.", "io_native.io_core.")
-        |> String.replace("io_protocol.positional.", "io_native.io_protocol.positional.")
-        |> String.replace("__OPEN__", bindings["open_slots"]["lean_name"])
-        |> String.replace("__PATCH__", bindings["patch_at"]["lean_name"])
-        |> String.replace("__OBSERVE__", bindings["observe_at"]["lean_name"])
-
-      File.write!(Path.join(project, "Positional/#{module}.lean"), content)
-    end
+    write_proofs!(project, bindings, @proof_sources)
 
     options =
       base ++
@@ -239,6 +192,133 @@ defmodule Lynx.Rustler.PositionalIoTest do
     File.write!(source, rust)
   end
 
+  @tag :tmp_dir
+  test "two compiled positional writers preserve a serial image across modeled interleavings", %{
+    tmp_dir: tmp
+  } do
+    base = fixture!(tmp)
+    project = base[:lean_project]
+    prepared = Lynx.Rustler.prepare!(base)
+    bindings = Map.new(prepared.bindings.bindings, &{&1["name"], &1})
+    sources = @proof_sources ++ [{"PositionalConcurrentProperties.lean", "Concurrent"}]
+    write_proofs!(project, bindings, sources)
+
+    properties =
+      Enum.map(
+        ~w(patches_agree_with_serial_image peer_byte_reachable writer_byte_reachable),
+        &("Positional.Concurrent." <> &1)
+      )
+
+    options =
+      base ++
+        [
+          proof_modules: Enum.map(sources, fn {_, module} -> "Positional." <> module end),
+          required_properties: properties
+        ]
+
+    load_and_calibrate(prepared, tmp)
+
+    [{_, beam}] = Code.compile_file(Path.join(@fixture, "positional_concurrent_laws.ex"))
+    export = Path.join(tmp, "concurrent-positional.export")
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      initial_environment: "Positional.Concurrent.ready",
+      options: [maxHeartbeats: 64_000_000, maxRecDepth: 8192]
+    ]
+
+    reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+
+    assert [%{name: "concurrent_patches/0"}] = Enum.flat_map(reports, & &1.theorems)
+
+    assert Enum.all?(
+             Lynx.Laws.verify([beam], law_options),
+             &(&1.status == :ok and &1.cached)
+           )
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    source = Path.join(base[:workspace], "native/src/offset_file.rs")
+    rust = File.read!(source)
+
+    mutation =
+      String.replace(
+        rust,
+        "    let reply = io_protocol::positional::patch",
+        "    let offset = if offset == 0 { 1 } else { offset };\n" <>
+          "    let reply = io_protocol::positional::patch"
+      )
+
+    refute mutation == rust
+    File.write!(source, mutation)
+
+    error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+    assert error.message =~ "Positional/Concurrent.lean:"
+    assert error.message =~ "postcondition rejected at a terminal configuration"
+    File.write!(source, rust)
+  end
+
+  defp fixture!(tmp) do
+    workspace = Path.join(tmp, "workspace")
+    File.mkdir_p!(workspace)
+
+    for entry <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol native),
+        do: File.cp_r!(Path.join(@fixture, entry), Path.join(workspace, entry))
+
+    facade = Path.join(workspace, "native/src/lib.rs")
+
+    File.write!(
+      facade,
+      String.replace(File.read!(facade), "LynxIoFixture", "LynxPositionalFixture")
+    )
+
+    project = Path.join(tmp, "proofs")
+    File.mkdir_p!(Path.join(project, "Positional"))
+    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
+
+    if File.dir?(packages) do
+      File.mkdir_p!(Path.join(project, ".lake"))
+      File.ln_s!(packages, Path.join(project, ".lake/packages"))
+    end
+
+    [
+      workspace: workspace,
+      package: "io-native",
+      tools: @tools,
+      cargo: [features: ["positional-file"]],
+      only: [open_slots: 0, patch_at: 3, observe_at: 2],
+      execution: :runtime,
+      files: :regular,
+      owned_drops: true,
+      proof_roots: ["io_protocol::write_then_sync"],
+      module_prefix: "Positional.Extraction",
+      lean_project: project,
+      build_dir: Path.join(tmp, "build")
+    ]
+  end
+
+  defp write_proofs!(project, bindings, sources) do
+    for {source, module} <- sources do
+      content =
+        File.read!(Path.join(@fixture, source))
+        |> String.replace("Disk", "Positional")
+        |> String.replace(
+          "open Aeneas Aeneas.Std Lynx io_protocol",
+          "open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol"
+        )
+        |> String.replace("io_protocol.io_core.", "io_native.io_core.")
+        |> String.replace("io_protocol.positional.", "io_native.io_protocol.positional.")
+        |> String.replace("__OPEN__", bindings["open_slots"]["lean_name"])
+        |> String.replace("__PATCH__", bindings["patch_at"]["lean_name"])
+        |> String.replace("__OBSERVE__", bindings["observe_at"]["lean_name"])
+
+      File.write!(Path.join(project, "Positional/#{module}.lean"), content)
+    end
+  end
+
   defp load_and_calibrate(prepared, tmp) do
     library = Path.join(tmp, "positional-native")
     File.cp!(prepared.library, library <> ".so")
@@ -291,6 +371,14 @@ defmodule Lynx.Rustler.PositionalIoTest do
       :error, :badarg -> true
     end
     <<1, 2, 0, 0, 9>> = File.read!("slots")
+
+    File.write!("slots", <<1, 2>>)
+    peer = Task.async(fn -> Native.patch_at(reader, 0, 7) end)
+    true = Native.patch_at(file, 0, 9)
+    true = Task.await(peer)
+    observed = Native.observe_at(file, 0)
+    true = observed in [7, 9]
+    <<^observed, 2>> = File.read!("slots")
     """)
 
     {output, status} =
