@@ -468,7 +468,13 @@ defmodule Lynx.Rust.LLBC do
       end
     end
 
-    case Lynx.Rust.CollectionModels.audit(functions, modelled, translated, refs) do
+    case Lynx.Rust.CollectionModels.audit(
+           functions,
+           modelled,
+           translated,
+           refs,
+           opts[:tuple_layouts]
+         ) do
       :ok -> :ok
       {:error, function, message} -> failure!(function, translated, message)
     end
@@ -1093,6 +1099,15 @@ defmodule Lynx.Rust.LLBC do
 
   defp scalar_vector_element?(%{"Scalar" => %{"Integer" => %{"Unsigned" => width}}})
        when width in ~w(U8 U16 U32 U64), do: true
+
+  defp scalar_vector_element?(%{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args}}) do
+    with %{"regions" => [], "types" => fields, "const_generics" => [], "trait_refs" => []} <- args,
+         true <- length(fields) in 1..7 do
+      Enum.all?(fields, &scalar_vector_element?/1)
+    else
+      _ -> false
+    end
+  end
 
   defp scalar_vector_element?(_), do: false
 

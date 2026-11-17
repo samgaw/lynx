@@ -173,6 +173,9 @@ defmodule Lynx.Rust.Extraction do
 
     discovery = %{discovery | document: document}
 
+    tuple_layouts =
+      Lynx.Rust.TupleLayouts.prepare!(context, tools, document, output, module, first_party)
+
     {document, rustler_constructors} =
       if :rustler_decoders in Keyword.get(opts, :external_calls, []) and
            Lynx.Rustler.ErrorConstructors.needed?(document, first_party) do
@@ -291,7 +294,12 @@ defmodule Lynx.Rust.Extraction do
     {document, collection_cleanup} =
       if Keyword.get(opts, :execution, :pure) == :pure and
            Keyword.get(opts, :owned_drops, false) != :explicit and unwind == :reject,
-         do: Lynx.Rust.CollectionModels.prune_nonpanicking_calls!(document, first_party),
+         do:
+           Lynx.Rust.CollectionModels.prune_nonpanicking_calls!(
+             document,
+             first_party,
+             tuple_layouts
+           ),
          else: {document, []}
 
     native_unwind =
@@ -358,6 +366,7 @@ defmodule Lynx.Rust.Extraction do
     audit =
       Lynx.Rust.LLBC.audit!(document, first_party,
         external_calls: requested_calls,
+        tuple_layouts: tuple_layouts,
         unwind: unwind,
         execution: Keyword.get(opts, :execution, :pure),
         rustler_atom_caches: {caches, module},
@@ -669,6 +678,7 @@ defmodule Lynx.Rust.Extraction do
     %{
       audit: audit,
       allocator_layout: discovery.allocator_layout,
+      tuple_layouts: tuple_layouts,
       nonpanicking: Lynx.Rust.NoPanic.link!(no_panic, implementations),
       encoder_disposals: encoder_disposals,
       explicit_ownership: audit.explicit_ownership,
@@ -716,6 +726,7 @@ defmodule Lynx.Rust.Extraction do
                Lynx.Rustler.ErrorConstructors.cache_inputs(rustler_constructors),
                Lynx.Rust.Fingerprint.file!(backend_llbc), unwind, native_unwind, models,
                requested_calls, no_panic.contracts, discovery.allocator_layout,
+               tuple_layouts.fingerprint,
                audit.external_calls
                |> Map.values()
                |> Enum.map(&Map.drop(&1, [:function, :definition_id]))

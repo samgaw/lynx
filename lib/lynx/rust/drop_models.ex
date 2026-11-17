@@ -401,7 +401,8 @@ defmodule Lynx.Rust.DropModels do
          element_drop_basis: element_basis,
          supported_drop_kinds:
            if(
-             element_basis == :primitive_scalar or match?(%{kind: :compiler_copy}, element_basis),
+             element_basis in [:primitive_scalar, :scalar_tuple] or
+               match?(%{kind: :compiler_copy}, element_basis),
              do: ["Precise", "Conditional"],
              else: ["Precise"]
            ),
@@ -803,6 +804,23 @@ defmodule Lynx.Rust.DropModels do
   # Rust's builtin Copy trait cannot coexist with Drop. This validates the
   # compiler trait/implementation identities and an unconditional, lifetime-only
   # instantiation; Clone is never invoked or modelled as a pure operation.
+  # Builtin tuples cannot implement a custom Drop. A closed product of scalar
+  # fields has no observable element cleanup; references and named types do not
+  # receive this permission. Vec/Global deallocation still has its own audit.
+  defp nondestructive_element(
+         %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args}},
+         _ctx
+       ) do
+    with true <- args == arguments(args["types"]),
+         types when is_list(types) and types != [] <- args["types"],
+         names when is_list(names) <- scalar_product_names(types),
+         true <- Enum.all?(names, &is_binary/1) do
+      {"(" <> Enum.join(names, ",") <> ",)", :scalar_tuple}
+    else
+      _ -> nil
+    end
+  end
+
   defp nondestructive_element(element, ctx) do
     if primitive_scalar?(element) do
       {scalar_name(element), :primitive_scalar}
@@ -845,6 +863,24 @@ defmodule Lynx.Rust.DropModels do
         _ -> nil
       end
     end
+  end
+
+  defp scalar_product_names(types) do
+    Enum.map(types, fn type ->
+      cond do
+        primitive_scalar?(type) ->
+          scalar_name(type)
+
+        match?(%{"Adt" => %{"id" => 0, "builtin" => "Tuple"}}, type) ->
+          case nondestructive_element(type, nil) do
+            {name, :scalar_tuple} -> name
+            _ -> nil
+          end
+
+        true ->
+          nil
+      end
+    end)
   end
 
   defp vector_outlives?(outlives, t, a),

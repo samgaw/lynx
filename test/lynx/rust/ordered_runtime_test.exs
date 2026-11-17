@@ -34,6 +34,14 @@ defmodule Lynx.Rust.OrderedRuntimeTest do
 
     File.write!(properties, proof)
 
+    snapshot =
+      File.read!(Path.join(Path.dirname(@properties), "OrderedSnapshot.lean"))
+      |> String.replace("__PREFIX__", "Registry")
+      |> String.replace("__CORE__", "experiment_analysis.experiment_core.ordered")
+      |> String.replace("__ANALYSIS__", "experiment_analysis")
+
+    File.write!(Path.join(project, "Registry/Snapshots.lean"), snapshot)
+
     options = [
       tools: @tools,
       execution: :runtime,
@@ -45,17 +53,22 @@ defmodule Lynx.Rust.OrderedRuntimeTest do
       module_prefix: "Registry.Extraction",
       build_dir: Path.join(tmp, "build"),
       roots:
-        ~w(experiment_analysis::registry_replace experiment_analysis::registry_take experiment_analysis::registry_claim experiment_analysis::registry_first_key),
-      proof_modules: ["Registry.Properties"],
+        ~w(experiment_analysis::registry_replace experiment_analysis::registry_take experiment_analysis::registry_claim experiment_analysis::registry_first_key experiment_analysis::registry_pairs),
+      proof_modules: ["Registry.Properties", "Registry.Snapshots"],
       required_properties:
         Enum.map(
           ~w(replace_eq locked_contract replace_run replace_preserves_other take_eq take_contract take_run claim_eq claim_contract claim_run first_key_eq first_key_no_panic first_key_contract first_key_run),
           &("Registry.Properties." <> &1)
-        )
+        ) ++
+          Enum.map(
+            ~w(pairs_snapshot pairs_total pairs_contract pairs_run),
+            &("Registry.Snapshots." <> &1)
+          )
     ]
 
     result = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     assert Enum.all?(result.reports, &(&1.status == :ok))
+    assert [%{bytes: 16}] = result.extraction.tuple_layouts.queries
 
     assert Enum.all?(
              Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports,
@@ -81,7 +94,8 @@ defmodule Lynx.Rust.OrderedRuntimeTest do
           {"replace_value(&mut guard, key, value)", "replace_value(&mut guard, 0, value)"},
           {"take(&mut guard, key)", "take(&mut guard, 0)"},
           {"claim(&mut guard, key)", "claim(&mut guard, 0)"},
-          {".map(|(key, _)| *key)", ".map(|(_key, _)| 0)"}
+          {".map(|(key, _)| *key)", ".map(|(_key, _)| 0)"},
+          {"output.push((*key, *value))", "output.push((*value, *key))"}
         ] do
       changed = String.replace(original, before, after_text)
       refute changed == original

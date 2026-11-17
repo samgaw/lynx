@@ -239,6 +239,12 @@ defmodule Lynx.Rust.Report do
             ],
             else: []
           ) ++
+          if(get_in(extraction, [:tuple_layouts, :queries]) not in [nil, []],
+            do: [
+              "Compiler-query bounds for closed builtin tuple vector elements; exact field types, containing layouts and target identities validated; native compiler and allocator correctness remain trusted"
+            ],
+            else: []
+          ) ++
           if(Map.get(extraction, :native_unwind, []) != [],
             do: [
               "Lynx validated native cleanup, constant drop-flag lowering and nonpanicking-call analysis"
@@ -262,6 +268,7 @@ defmodule Lynx.Rust.Report do
           ),
       compiler_primitives: primitive_models,
       explicit_ownership: Map.get(extraction, :explicit_ownership),
+      compiler_tuple_layouts: Map.get(extraction, :tuple_layouts),
       compiler_drop_queries: Map.get(extraction, :compiler_drop_queries, []),
       native_drop_lowering: Map.get(extraction, :native_drops, []),
       native_guard_storage: Map.get(extraction, :native_guard_storage, []),

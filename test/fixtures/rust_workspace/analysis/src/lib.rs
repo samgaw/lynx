@@ -587,3 +587,13 @@ pub fn registry_first_key(
 ) -> Option<u64> {
     experiment_core::ordered::locked_first_key(table)
 }
+
+/// Copies a shared map snapshot through the lower-level workspace crate.
+///
+/// # Panics
+/// Shares the recursive-acquisition restriction of the core helper.
+pub fn registry_pairs(
+    table: &std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+) -> Vec<(u64, u64)> {
+    experiment_core::ordered::locked_pairs(table)
+}

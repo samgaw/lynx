@@ -151,7 +151,12 @@ defmodule Lynx.Rust do
   element destruction on those types. Empty `Vec::new` is independent of element
   layout. Bounded `push` supports primitive scalars and concrete struct/enum
   layouts of at most 4095 bytes on every selected 32/64-bit target, using the
-  standard Global allocator. Generic or symbolic composite layouts are rejected.
+  standard Global allocator. Closed builtin scalar tuples use an automatic
+  compiler query with the recorded Cargo arguments and target; the containing
+  repr(C) layout supplies the same conservative byte bound without replacing an
+  application body. Tuple field types and target identities are checked, and
+  query contents participate in proof fingerprints. Generic, borrowed, named-field
+  or floating-point tuple queries and symbolic composite layouts are rejected.
   `Vec<u8>::extend_from_slice` additionally copies borrowed bytes while preserving
   the existing prefix. It requires the exact standard primitive byte Clone
   dictionary and Global allocator, with a total length at most 262144. Generic,

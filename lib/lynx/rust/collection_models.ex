@@ -224,7 +224,9 @@ defmodule Lynx.Rust.CollectionModels do
     end
   end
 
-  def audit(functions, models, translated, refs) do
+  def audit(functions, models, translated, refs, tuple_layouts \\ nil) do
+    translated = Map.put(translated, :tuple_layouts, tuple_layouts)
+
     Enum.reduce_while(functions, :ok, fn function, :ok ->
       try do
         audit_node(function["body"], models, translated, refs)
@@ -239,7 +241,7 @@ defmodule Lynx.Rust.CollectionModels do
   # unwind. Validate every concrete element/allocator before removing cleanup
   # behind those calls. Normal-path drops and cleanup behind all other calls
   # remain subject to the independent destruction audit.
-  def prune_nonpanicking_calls!(document, first_party) do
+  def prune_nonpanicking_calls!(document, first_party, tuple_layouts \\ nil) do
     original = document
     translated = document["translated"]
     refs = Lynx.Rust.LLBC.type_references!(document)
@@ -261,7 +263,7 @@ defmodule Lynx.Rust.CollectionModels do
         end
       end)
 
-    case audit(selected, models, translated, refs) do
+    case audit(selected, models, translated, refs, tuple_layouts) do
       :ok -> :ok
       {:error, function, message} -> Lynx.Rust.LLBC.failure!(function, translated, message)
     end
@@ -471,6 +473,14 @@ defmodule Lynx.Rust.CollectionModels do
     else
       _ -> false
     end
+  end
+
+  defp composite_layout?(%{"Adt" => %{"builtin" => "Tuple"}} = type, translated, _refs) do
+    Lynx.Rust.TupleLayouts.allowed?(
+      type,
+      translated[:tuple_layouts],
+      translated["target_information"]
+    )
   end
 
   defp composite_layout?(_, _, _), do: false

@@ -47,6 +47,8 @@ mod tests {
         assert!(claim(&mut values, 2));
         assert!(!claim(&mut values, 1));
         assert_eq!(values.len(), 2);
+        assert_eq!(pairs(&table), vec![(1, 30), (2, 20)]);
+        assert_eq!(pairs(&BTreeMap::new()), Vec::<(u64, u64)>::new());
         assert_eq!(first_key(&table), Some(1));
         assert_eq!(peek(&table, 1), Some(30));
         assert_eq!(peek(&table, 3), None);
@@ -58,6 +60,7 @@ mod tests {
         assert_eq!(first_key(&BTreeMap::new()), None);
         let mutex = std::sync::Mutex::new(table.clone());
         assert_eq!(locked_first_key(&mutex), Some(2));
+        assert_eq!(locked_pairs(&mutex), vec![(2, 20)]);
         assert_eq!(*mutex.lock().unwrap(), table);
         assert!(contains(&values, 1));
         assert!(!release(&mut values, 3));
@@ -159,4 +162,27 @@ pub fn locked_first_key(table: &std::sync::Mutex<BTreeMap<u64, u64>>) -> Option<
     let first = first_key(&guard);
     drop(guard);
     first
+}
+
+/// Copies every map pair in ascending key order into an ordinary owned snapshot.
+pub fn pairs(table: &BTreeMap<u64, u64>) -> Vec<(u64, u64)> {
+    let mut output = Vec::new();
+    for (key, value) in table {
+        output.push((*key, *value));
+    }
+    output
+}
+
+/// Copies all map pairs while holding the map lock, recovering poison.
+///
+/// # Panics
+/// Recursive acquisition may panic or block and is outside the supported model.
+pub fn locked_pairs(table: &std::sync::Mutex<BTreeMap<u64, u64>>) -> Vec<(u64, u64)> {
+    let guard = match table.lock() {
+        Ok(guard) => guard,
+        Err(error) => error.into_inner(),
+    };
+    let snapshot = pairs(&guard);
+    drop(guard);
+    snapshot
 }
