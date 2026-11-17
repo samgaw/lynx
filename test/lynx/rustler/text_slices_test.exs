@@ -85,15 +85,21 @@ defmodule Lynx.Rustler.TextSlicesTest do
 
       File.write!(Path.join(project, "TextSlices/Properties.lean"), properties)
 
+      adapter =
+        File.read!(Path.join(Path.dirname(@proof), "TextSlicesAdapter.lean"))
+        |> String.replace("__SLICE_NIF__", bindings["slice_text"]["lean_name"])
+
+      File.write!(Path.join(project, "TextSlices/AdapterProperties.lean"), adapter)
+
       options =
         base ++
           [
-            proof_modules: ["TextSlices.Properties"],
+            proof_modules: ["TextSlices.Properties", "TextSlices.AdapterProperties"],
             required_properties:
               Enum.map(
-                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode),
+                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8),
                 &("TextSlices.Properties." <> &1)
-              )
+              ) ++ ["TextSlices.AdapterProperties.window_encoding"]
           ]
 
       prepared = Lynx.Rustler.prepare!(options)
