@@ -182,6 +182,21 @@ pub fn text_boundary(text: &str, position: usize) -> bool {
     text.is_char_boundary(position)
 }
 
+/// Borrows a field only when both byte offsets are UTF-8 character boundaries.
+pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
+    text.get(start..end)
+}
+
+/// Borrows a suffix at a UTF-8 character boundary.
+pub fn text_suffix(text: &str, start: usize) -> Option<&str> {
+    text.get(start..)
+}
+
+/// Borrows a prefix ending at a UTF-8 character boundary.
+pub fn text_prefix(text: &str, end: usize) -> Option<&str> {
+    text.get(..end)
+}
+
 /// Provides an immutable empty default without allocating a buffer.
 pub fn default_bytes() -> &'static [u8] {
     &[]
@@ -355,6 +370,32 @@ mod tests {
             Some(0x1234_5678)
         );
         assert_eq!(read_header(&[0xff; 4]), Some(u32::MAX));
+    }
+
+    #[test]
+    fn string_fields_reject_partial_characters() {
+        let text = "aé🙂z";
+        for (start, end, expected) in [
+            (1, 3, Some("é")),
+            (3, 7, Some("🙂")),
+            (2, 2, None),
+            (1, 1, Some("")),
+            (8, 8, Some("")),
+            (9, 9, None),
+            (7, 3, None),
+            (0, usize::MAX, None),
+        ] {
+            assert_eq!(
+                super::text_window(text, start, end),
+                expected,
+                "{start}..{end}"
+            );
+        }
+        assert_eq!(super::text_suffix(text, 3), Some("🙂z"));
+        assert_eq!(super::text_suffix(text, 2), None);
+        assert_eq!(super::text_prefix(text, 3), Some("aé"));
+        assert_eq!(super::text_prefix(text, 2), None);
+        assert_eq!(super::text_window("", 0, 0), Some(""));
     }
 
     #[test]

@@ -2,6 +2,18 @@ pub fn analyse(value: i64) -> Option<i64> {
     experiment_core::evaluate(value)?.checked_add(1)
 }
 
+/// Splits a UTF-8 protocol field without accepting partial characters.
+pub fn split_text(text: &str, position: usize) -> Option<(&str, &str)> {
+    let left = experiment_core::protocol::text_prefix(text, position)?;
+    let right = experiment_core::protocol::text_suffix(text, position)?;
+    Some((left, right))
+}
+
+/// Borrows a field through the workspace dependency.
+pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
+    experiment_core::protocol::text_window(text, start, end)
+}
+
 /// Composes two calls to the first-party core crate.
 pub fn restore(value: bool) -> bool {
     experiment_core::invert(experiment_core::invert(value))
