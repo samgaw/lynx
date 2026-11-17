@@ -556,7 +556,8 @@ defmodule Lynx.Rustler do
       Lynx.Rustler.Bindings.link!(discovered, extraction.audit, extraction.translation,
         resource_types: registrations.types,
         result_monad: if(execution == :runtime, do: "Lynx.NativeM", else: "RustM"),
-        assertion_unwind_input: Keyword.get(opts, :unwind, :reject) == :assertions
+        unwind: Keyword.get(opts, :unwind, :reject),
+        unwind_input: extraction.unwind_input
       )
 
     Lynx.Rust.Project.build!(project, [bridge, prefix <> ".Funs" | proofs])

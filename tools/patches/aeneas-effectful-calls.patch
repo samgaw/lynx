@@ -37,19 +37,17 @@
                  (e.e, used)
 --- a/src/EmitJson.ml
 +++ b/src/EmitJson.ml
-@@ -106,6 +106,7 @@
+@@ -106,5 +106,6 @@
  
  type envelope = {
    result_monad : string;
 +  effectful_calls_preserved : bool;
-   assertion_unwind_input : bool;
    aeneas_version : string;
    charon_version : string;
-@@ -387,6 +388,7 @@
+@@ -387,5 +388,6 @@
          charon_version = Charon.CharonVersion.supported_charon_version;
          crate_name;
          result_monad = Config.lean_result_name ();
 +        effectful_calls_preserved = Config.effectful_result_monad ();
-         assertion_unwind_input = !Config.assertion_unwind_input;
          functions = List.rev state.function_entries;
          types = List.rev state.type_entries;

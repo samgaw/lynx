@@ -265,6 +265,7 @@ defmodule Lynx.Rust.Report do
       compiler_drop_queries: Map.get(extraction, :compiler_drop_queries, []),
       native_drop_lowering: Map.get(extraction, :native_drops, []),
       native_guard_storage: Map.get(extraction, :native_guard_storage, []),
+      unwind_input: Map.get(extraction, :unwind_input),
       native_unwind_lowering: Map.get(extraction, :native_unwind, []),
       captured_unwind: Map.get(extraction, :captured_unwind, []),
       reference_copies: Map.get(extraction, :reference_copies, []),

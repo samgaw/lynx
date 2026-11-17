@@ -465,11 +465,13 @@ defmodule Lynx.Rust.Extraction do
 
     {backend_document, option_aliases} = Lynx.Rust.OptionModels.lower_names!(backend_document)
 
+    {backend_document, unwind_input} = Lynx.Rust.NativeUnwind.input!(backend_document, unwind)
+
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
            native_model_aliases == [] and option_aliases == [] and slice_model_aliases == [] and
            is_nil(string_pattern_projection) and is_nil(comparison_projection) and
-           is_nil(resource_projection) do
+           is_nil(resource_projection) and is_nil(unwind_input) do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -621,7 +623,8 @@ defmodule Lynx.Rust.Extraction do
     implementations =
       Lynx.Rust.LLBC.link!(audit, translation,
         result_monad: result_monad,
-        assertion_unwind_input: unwind == :assertions
+        unwind: unwind,
+        unwind_input: unwind_input
       )
 
     Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)
@@ -694,6 +697,7 @@ defmodule Lynx.Rust.Extraction do
         ),
       native_drops: native_drops,
       native_unwind: native_unwind,
+      unwind_input: unwind_input,
       files: Keyword.get(opts, :files, :reject),
       futures: Keyword.get(opts, :futures, :reject),
       unwind: unwind,

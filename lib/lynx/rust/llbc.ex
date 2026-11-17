@@ -3,7 +3,7 @@ defmodule Lynx.Rust.LLBC do
 
   @library_kinds ~w(lib rlib dylib cdylib staticlib)
   @standard_crates ~w(core alloc std proc_macro test)
-  @unwind_backend "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1"
+  @unwind_backend "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1"
   @global_backend @unwind_backend <> "+global-names-v1"
   @future_backend @global_backend <> "+immediate-futures-v1"
   @workspace_backend @future_backend <> "+workspace-roots-v1"
@@ -598,11 +598,14 @@ defmodule Lynx.Rust.LLBC do
              ],
            do: raise(ArgumentError, "Aeneas translation does not match the LLBC crate/version")
 
-    unwind = Keyword.get(opts, :assertion_unwind_input, false)
+    Lynx.Rust.NativeUnwind.validate_input!(
+      audit.document,
+      Keyword.get(opts, :unwind, :reject),
+      Keyword.get(opts, :unwind_input)
+    )
 
-    unless Map.get(translation, "assertion_unwind_input", false) == unwind and
-             (not unwind or translation["aeneas_version"] in @unwind_backends),
-           do: raise(ArgumentError, "Aeneas assertion unwind input does not match extraction")
+    unless Map.get(translation, "assertion_unwind_input", false) == false,
+      do: raise(ArgumentError, "unexpected Aeneas assertion unwind input override")
 
     for id <- Map.keys(audit.external_calls),
         Enum.any?(translation["functions"], &(&1["def_id"] == id)),

@@ -6,10 +6,10 @@ defmodule Lynx.Rust.NativeUnwindTest do
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
                String.contains?(
                  File.read!(Path.join(@tools, "lynx-toolchain")),
-                 "assertion-unwind-v1"
+                 "effectful-calls-v1"
                )
   unless @available,
-    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned assertion-unwind backend")
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned runtime backend")
 
   @tag :tmp_dir
   test "checks actual local and cross-crate assertion unwind cleanup", %{tmp_dir: tmp} do
@@ -54,7 +54,12 @@ defmodule Lynx.Rust.NativeUnwindTest do
     result = Lynx.Rust.verify!(workspace, "effects-native", options)
     assert [%{status: :ok}] = result.reports
     assert %{unwind: :assertions, native_unwind_lowering: [_ | _]} = result.verification
-    assert result.extraction.translation["assertion_unwind_input"] == true
+    assert %{kind: :validated_assertion_options} = result.verification.unwind_input
+    refute result.extraction.translation["assertion_unwind_input"]
+    raw = result.extraction.llbc |> File.read!() |> JSON.decode!()
+    backend = result.extraction.backend_llbc |> File.read!() |> JSON.decode!()
+    assert raw["translated"]["options"]["preset"] == nil
+    assert backend["translated"]["options"]["preset"] == "Aeneas"
     assert Enum.any?(result.verification.native_unwind_lowering, &(&1.kind == :panic_cleanup))
 
     assert Enum.any?(
@@ -89,19 +94,10 @@ defmodule Lynx.Rust.NativeUnwindTest do
            } = raw
 
     bad_flags = put_in(raw, ["translated", "options", "reconstruct_asserts"], true)
-    {bad_flags, _queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(bad_flags)
-    bad_file = Path.join(tmp, "resugared.llbc")
-    File.write!(bad_file, Lynx.Rust.LLBCJson.encode_like!(bad_flags, result.extraction.llbc))
 
-    {output, status} =
-      System.cmd(
-        Path.join(@tools, "aeneas"),
-        ["-backend", "lean", "-assertion-unwind-input", "-dest", project, bad_file],
-        stderr_to_stdout: true
-      )
-
-    assert status != 0
-    assert output =~ "Invalid extraction options"
+    assert_raise ArgumentError, ~r/invalid assertion unwind extraction options/, fn ->
+      Lynx.Rust.NativeUnwind.input!(bad_flags, :assertions)
+    end
 
     # Cleanup can contain compiler boolean drop flags, but arbitrary effectful
     # statements must never be mistaken for administrative destruction.

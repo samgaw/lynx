@@ -2,7 +2,7 @@ defmodule Lynx.Rust.LLBCTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.LLBC
 
-  @effectful_backend "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+native-loops-v1+effectful-calls-v1"
+  @effectful_backend "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+native-loops-v1+effectful-calls-v1"
 
   test "Cargo dependencies cannot masquerade as standard model crates" do
     library = fn name -> %{"name" => name, "kind" => ["lib"]} end
@@ -179,41 +179,12 @@ defmodule Lynx.Rust.LLBCTest do
     end
   end
 
-  test "binds assertion unwind provenance to the explicit extraction mode" do
+  test "rejects extractor-side unwind admission overrides" do
     audit = LLBC.audit!(document([function()]), ["first_party"])
 
-    native =
-      translation()
-      |> Map.put(
-        "aeneas_version",
-        @effectful_backend
-      )
-      |> Map.put("effectful_calls_preserved", true)
-      |> Map.put("result_monad", "Lynx.NativeM")
-      |> Map.put("assertion_unwind_input", true)
-
-    assert %{0 => _} =
-             LLBC.link!(audit, native, result_monad: "Lynx.NativeM", assertion_unwind_input: true)
-
-    global_names = native
-
-    assert %{0 => _} =
-             LLBC.link!(audit, global_names,
-               result_monad: "Lynx.NativeM",
-               assertion_unwind_input: true
-             )
-
-    assert_raise ArgumentError, ~r/assertion unwind input/, fn ->
-      LLBC.link!(audit, global_names, result_monad: "Lynx.NativeM", assertion_unwind_input: false)
-    end
-
-    for {model, expected} <- [
-          {native, false},
-          {Map.delete(native, "assertion_unwind_input"), true},
-          {Map.put(native, "assertion_unwind_input", "true"), true}
-        ] do
-      assert_raise ArgumentError, ~r/assertion unwind input/, fn ->
-        LLBC.link!(audit, model, result_monad: "Lynx.NativeM", assertion_unwind_input: expected)
+    for value <- [true, "true"] do
+      assert_raise ArgumentError, ~r/assertion unwind input override/, fn ->
+        LLBC.link!(audit, Map.put(translation(), "assertion_unwind_input", value))
       end
     end
   end
@@ -568,7 +539,7 @@ defmodule Lynx.Rust.LLBCTest do
       |> Map.put("result_monad", "Lynx.NativeM")
       |> Map.put(
         "aeneas_version",
-        "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+assertion-unwind-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1"
+        "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1"
       )
 
     assert_raise ArgumentError, ~r/effectful-calls-v1/, fn ->

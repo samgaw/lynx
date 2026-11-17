@@ -683,7 +683,8 @@ defmodule Lynx.Rust do
 
   `unwind: :assertions` additionally preserves compiler assertion cleanup for
   local owned mutexes with the same destructor-free payload subset. It requires `execution: :runtime`
-  and the pinned assertion-unwind backend. The default `:reject` retains the
+  and the runtime backend. Lynx validates the explicit extraction flags before
+  adapting Aeneas's preset admission label; this changes no implementation body. The default `:reject` retains the
   conservative lifetime boundary. In assertion mode, compiler cleanup is checked
   and lowered before propagating panic. Boolean drop flags are preserved; custom
   payload destructors and projected cleanup remain unsupported. Cleanup behind

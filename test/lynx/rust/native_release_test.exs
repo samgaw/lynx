@@ -6,10 +6,10 @@ defmodule Lynx.Rust.NativeReleaseTest do
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
                String.contains?(
                  File.read!(Path.join(@tools, "lynx-toolchain")),
-                 "assertion-unwind-v1"
+                 "effectful-calls-v1"
                )
   unless @available,
-    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned assertion-unwind backend")
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned runtime backend")
 
   @tag :tmp_dir
   test "checks owning guard updates, release and reacquisition against compiled implementations",

@@ -42,11 +42,47 @@ defmodule Lynx.Rust.NativeUnwind do
     []
   end
 
-  def backend_arguments!(:assertions, tools) do
-    unless File.read!(Path.join(tools, "lynx-toolchain")) =~ "assertion-unwind-v1",
-      do: raise(ArgumentError, "assertion unwind requires the pinned assertion-unwind backend")
+  def backend_arguments!(:assertions, _tools), do: []
 
-    ["-assertion-unwind-input"]
+  @assertion_options Map.merge(
+                       Map.new(
+                         ~w(treat_box_as_builtin ops_to_function_calls index_to_function_calls
+                            reconstruct_panic_calls reconstruct_matches hide_marker_traits
+                            hide_allocator remove_unused_self_clauses remove_adt_clauses
+                            unbind_item_vars deallocate_all_locals no_gen_tuple_structs),
+                         &{&1, true}
+                       ),
+                       Map.new(
+                         ~w(reconstruct_asserts reconstruct_fallible_operations no_typecheck
+                            no_normalize inline_anon_consts desugar_drops),
+                         &{&1, false}
+                       )
+                     )
+                     |> Map.merge(%{"preset" => nil, "lift_associated_types" => ["*"]})
+
+  # Aeneas uses `preset` only as an admission check, not to transform LLBC.
+  # Validate the explicit compatibility flags before changing that label.
+  # No executable body is changed.
+  def input!(document, :assertions) do
+    options = get_in(document, ["translated", "options"]) || %{}
+    checked = Map.take(options, Map.keys(@assertion_options))
+
+    unless checked == @assertion_options,
+      do: raise(ArgumentError, "invalid assertion unwind extraction options")
+
+    record = %{kind: :validated_assertion_options, options: checked, backend_preset: "Aeneas"}
+    {put_in(document, ["translated", "options", "preset"], "Aeneas"), record}
+  end
+
+  def input!(document, mode) when mode in [:reject, :captured], do: {document, nil}
+
+  def validate_input!(document, mode, record) do
+    {_, expected} = input!(document, mode)
+
+    unless expected == record,
+      do: raise(ArgumentError, "assertion unwind input does not match extraction")
+
+    :ok
   end
 
   def lower!(document, first_party) do
