@@ -17,6 +17,24 @@ allocation and term-handle correctness remain unverified FFI assumptions. -/
 @[expose] abbrev Env := Unit
 @[expose] abbrev NativeTerm := Term
 
+/-- Exact logical UTF-8 bytes of a borrowed Rust string. -/
+@[expose] def strBytes (value : Str) : ByteArray :=
+  ⟨(value.val.map (fun byte => UInt8.ofNat byte.val)).toArray⟩
+
+@[simp] theorem strBytes_size (value : Str) : (strBytes value).size = value.val.length := by
+  simp [strBytes, ByteArray.size]
+
+theorem strBytes_values (data : ByteArray)
+    (bound : (data.data.toList.map (fun byte => (⟨byte.toBitVec⟩ : U8))).length ≤ Usize.max) :
+    strBytes (Slice.from (data.data.toList.map (fun byte => (⟨byte.toBitVec⟩ : U8))) bound) = data := by
+  apply ByteArray.ext
+  apply Array.toList_inj.mp
+  have roundtrip (byte : UInt8) : UInt8.ofNat (⟨byte.toBitVec⟩ : U8).val = byte := by
+    change UInt8.ofNat byte.toNat = byte
+    exact UInt8.ofNat_toNat
+  simp [strBytes, Slice.from_val, List.map_map, Function.comp_def, roundtrip]
+
+
 /-- Copying SDK term handles does not retain a Rust-owned ResourceArc token. -/
 @[expose] def copyTermHandle (term : NativeTerm) : RustM NativeTerm := .ok term
 @[expose] def copyAtomHandle (atom : Atom) : RustM Atom := .ok atom
@@ -39,9 +57,16 @@ cutoff; successful allocation is assumed at this modelled FFI boundary. -/
   if value.toByteArray.size ≤ 4294967295 then .ok (.bitstring value.toByteArray 0) else .fail .undef
 
 @[expose] def str (value : Str) (env : Env) : RustM NativeTerm :=
-  match String.fromUTF8? ⟨(value.val.map (fun byte => UInt8.ofNat byte.val)).toArray⟩ with
+  match String.fromUTF8? (strBytes value) with
   | some text => string text env
   | none => .fail .undef
+
+/-- Valid borrowed text within the encoding budget produces its exact binary.
+Native allocation and term-handle correctness remain FFI assumptions. -/
+theorem str_valid (value : Str) (env : Env) (valid : (strBytes value).IsValidUTF8)
+    (bounded : value.val.length ≤ 4294967295) :
+    str value env = .ok (.bitstring (strBytes value) 0) := by
+  simp [str, String.fromUTF8?, valid, string, String.fromUTF8, bounded]
 
 @[expose] def shared {T : Type} (encoder : Encoder T) (value : T) (env : Env) :
     RustM NativeTerm := encoder.encode value env
@@ -209,6 +234,25 @@ theorem decodeStr_values (bytes : ByteArray)
   have utf8 : bytes.IsValidUTF8 := by simpa using valid
   simp [decodeStr, decodeBinary, bounds, utf8]
   exact ⟨_, rfl, by simp⟩
+
+/-- Successful decoding establishes the Rust shared-string UTF-8 invariant. -/
+theorem decodeStr_utf8 (input : Term) (value : Str) (decoded : decodeStr input = .ok value) :
+    (strBytes value).IsValidUTF8 := by
+  unfold decodeStr at decoded
+  obtain ⟨data, _binary, success⟩ :=
+    (Lynx.Except.bind_eq_ok (α := Binary) (β := Str) (decodeBinary input) _ value).mp decoded
+  dsimp only at success
+  unfold Str at *
+  split at success
+  · split at success
+    · rename_i utf8
+      simp only [Except.ok.injEq] at success
+      subst value
+      rw [strBytes_values]
+      exact ByteArray.validateUTF8_eq_true_iff.mp utf8
+    · simp at success
+  · simp at success
+
 
 theorem decodeStr_invalid (bytes : ByteArray)
     (bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat)
