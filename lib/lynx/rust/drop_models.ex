@@ -143,6 +143,23 @@ defmodule Lynx.Rust.DropModels do
     end)
   end
 
+  defp site!(%{"kind" => "Conditional", "place" => %{"ty" => type}} = drop, ctx, _) do
+    if Lynx.Rust.OrderedCollectionModels.family(type, ctx.translated, ctx.refs),
+      do: ordered_site!(drop, ctx),
+      else: reject!("unsupported conditional drop without a nonobservable deallocation model")
+  end
+
+  defp site!(
+         %{
+           "kind" => "Precise",
+           "fn_ptr" => %{"kind" => %{"Fun" => _}, "generics" => %{"types" => [_, _, _]}}
+         } = drop,
+         ctx,
+         _
+       ) do
+    ordered_site!(drop, ctx)
+  end
+
   defp site!(
          %{
            "kind" => "Precise",
@@ -160,6 +177,15 @@ defmodule Lynx.Rust.DropModels do
 
           [%{"Ident" => ["alloc", 0]}, %{"Ident" => ["vec", 0]}, %{"Ident" => ["Vec", 0]}] ->
             vector_site!(drop, ctx, seen)
+
+          [
+            %{"Ident" => ["alloc", 0]},
+            %{"Ident" => ["collections", 0]},
+            %{"Ident" => ["btree", 0]},
+            %{"Ident" => ["set", 0]},
+            %{"Ident" => ["BTreeSet", 0]}
+          ] ->
+            ordered_site!(drop, ctx)
 
           name ->
             reject!("unsupported generic drop for #{inspect(name)}")
@@ -222,6 +248,16 @@ defmodule Lynx.Rust.DropModels do
     else
       _ -> reject!("unsupported or inconsistent Rust drop site")
     end
+  end
+
+  defp ordered_site!(drop, ctx) do
+    {trait, id, entry} =
+      Lynx.Rust.OrderedCollectionModels.drop_site!(drop, ctx.translated, ctx.refs)
+
+    unless destruct_trait?(trait, ctx),
+      do: reject!("inconsistent ordered collection Destruct identity")
+
+    {id, %{id => entry}}
   end
 
   # Charon preserves both the element and allocator parameters on Vec's

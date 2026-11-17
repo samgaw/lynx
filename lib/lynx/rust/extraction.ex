@@ -420,6 +420,8 @@ defmodule Lynx.Rust.Extraction do
 
     {document, string_pattern_projection} = Lynx.Rust.StringPatterns.project!(document, audit)
 
+    {document, comparison_projection} = Lynx.Rust.ComparisonInterfaces.project!(document, audit)
+
     {backend_document, compiler_drop_queries} = Lynx.Rust.LLBCJson.drop_query_metadata!(document)
 
     backend_document =
@@ -440,6 +442,8 @@ defmodule Lynx.Rust.Extraction do
     # Supply their validated primitive names to prevent unnecessary axiom
     # templates. Only actual call dependencies belong in the verification report;
     # their scoped mappings take precedence over the unreferenced candidates.
+    audit = Lynx.Rust.OrderedCollectionModels.scope(audit, module)
+
     backend_calls =
       Lynx.Rust.SliceModels.backend_calls(audit.available_external_calls, audit.external_calls)
       |> then(fn calls ->
@@ -460,7 +464,7 @@ defmodule Lynx.Rust.Extraction do
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
            native_model_aliases == [] and option_aliases == [] and slice_model_aliases == [] and
-           is_nil(string_pattern_projection) do
+           is_nil(string_pattern_projection) and is_nil(comparison_projection) do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -469,11 +473,14 @@ defmodule Lynx.Rust.Extraction do
         path
       end
 
+    ordered_modules = Lynx.Rust.OrderedCollectionModels.install!(audit, output, module)
+
     constructor_modules =
-      Lynx.Rustler.ErrorConstructors.install!(rustler_constructors, output, module, models)
+      Lynx.Rustler.ErrorConstructors.install!(rustler_constructors, output, module, models) ++
+        ordered_modules
 
     model_args =
-      if models == [] and map_size(backend_calls) == 0 do
+      if models == [] and map_size(backend_calls) == 0 and ordered_modules == [] do
         []
       else
         path = Path.join(output, String.replace(module, ".", "_") <> ".external-types.json")
@@ -531,7 +538,8 @@ defmodule Lynx.Rust.Extraction do
                   audit,
                   Keyword.get(opts, :execution, :pure)
                 ),
-                Lynx.Rust.FormatModels.external_names(audit.external_calls)
+                Lynx.Rust.FormatModels.external_names(audit.external_calls),
+                Lynx.Rust.OrderedCollectionModels.external_names(audit, module)
               ]
               |> Enum.reduce(%{}, fn names, combined ->
                 Map.merge(combined, names, fn _key, left, right -> left ++ right end)
@@ -648,6 +656,7 @@ defmodule Lynx.Rust.Extraction do
       rustler_constructors: rustler_constructors,
       native_model_aliases: native_model_aliases,
       slice_model_aliases: slice_model_aliases,
+      comparison_projection: comparison_projection,
       formatting_aliases: formatting_aliases,
       native_guard_storage: native_guard_storage,
       string_pattern_projection: string_pattern_projection,

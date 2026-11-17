@@ -93,6 +93,19 @@ defmodule Lynx.Rust do
   owned aggregates, generic captures and arbitrary FnOnce implementations remain
   rejected; callback panics remain Rust failures.
 
+  Pure `BTreeMap<u64, u64>` and `BTreeSet<u64>` support standard Global
+  construction, insertion and length. Actual first-party mutable-borrow helpers
+  compose across workspace crates. The standard tree operations remain explicit
+  external models using Lean Std trees with numeric key ordering. Custom entry
+  types, comparators, allocators, lookup/removal/iteration APIs and shared runtime
+  heap collections are outside this subset. At most 262144 distinct entries are
+  admitted; updating an existing key at capacity is allowed, while exceeding the
+  bound exhausts verification. Validated scalar tree drops model nonobservable
+  deallocation only. Native allocation, failure, layout and reclamation remain
+  unverified. Unobserved opaque standard comparison helpers absent from the pinned
+  Lean library are omitted only after reference and implementation-preservation
+  checks; observed omitted methods are rejected.
+
   Shared-slice `for item in slice` loops reuse Aeneas's existing `IntoIterator`
   conversion and `Iterator::next` models. Admission checks method forwarding,
   shared item lifetimes, the matching iterator dictionary and Option layout.

@@ -314,6 +314,7 @@ defmodule Lynx.Rust.Report do
             else: []
           ) ++
           Enum.map(Map.get(extraction, :external_types, []), & &1.label) ++
+          Lynx.Rust.OrderedCollectionModels.boundaries(extraction.audit) ++
           (constants |> Map.values() |> Enum.filter(& &1["modelled"]) |> Enum.map(& &1["label"])) ++
           Enum.map(Map.values(external), & &1.label) ++
           Enum.map(Lynx.Rust.DropModels.report(extraction.audit.drops), & &1.label) ++
