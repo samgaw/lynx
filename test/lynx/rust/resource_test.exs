@@ -6,10 +6,10 @@ defmodule Lynx.Rust.ResourceTest do
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
                String.contains?(
                  File.read!(Path.join(@tools, "lynx-toolchain")),
-                 "global-names-v1"
+                 "effectful-calls-v1"
                )
   unless @available,
-    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned resource/global-names backend")
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned native runtime backend")
 
   @tag :tmp_dir
   test "verifies extracted resource aliasing, final destruction and cross-crate reads", %{

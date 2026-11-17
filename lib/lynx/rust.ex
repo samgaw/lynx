@@ -673,8 +673,8 @@ defmodule Lynx.Rust do
   Reference counts have a 1024-owner verification bound. The runtime models
   aggregate VM pins, stable resource-term identities and fresh Rust ownership on
   decoding. Collection, owner death, serialization and custom callbacks remain
-  unsupported. Resource extraction
-  requires the pinned `global-names-v1` backend. Rustler adapters can supply
+  unsupported. Resource extraction requires the pinned native runtime backend.
+  Rustler adapters can supply
   registration capabilities for facade-declared resources after checking the
   generated default loader, inventory constructors and compiler-resolved types.
   Custom loaders, named registrations and dependency-crate registrations remain

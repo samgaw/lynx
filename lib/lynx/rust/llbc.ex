@@ -14,13 +14,17 @@ defmodule Lynx.Rust.LLBC do
   @record_backend @discriminant_backend <> "+lean-record-types-v1"
   @branch_backend @record_backend <> "+duplicate-branches-v1"
   @branch_backend_without_loop_patch String.replace(@branch_backend, "+native-loops-v1", "")
+  @tuple_pattern_backend @branch_backend_without_loop_patch <> "+tuple-patterns-v1"
+  @local_defaults_backend String.replace(@tuple_pattern_backend, "+global-names-v1", "") <>
+                            "+local-resource-defaults-v1"
   @effectful_backends [
     @effectful_backend,
     @discriminant_backend,
     @record_backend,
     @branch_backend,
     @branch_backend_without_loop_patch,
-    @branch_backend_without_loop_patch <> "+tuple-patterns-v1"
+    @tuple_pattern_backend,
+    @local_defaults_backend
   ]
   @unwind_backends [
     @unwind_backend,

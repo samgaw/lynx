@@ -113,6 +113,16 @@ defmodule Lynx.Rust.ResourceModels do
     end
   end
 
+  # The pinned printer suppresses these external globals but spells the two
+  # inherited dictionary fields' references with its default names. Bind
+  # those spellings to the same admitted models within the generated file.
+  def default_notation(calls) do
+    Enum.map_join(Map.get(external_names(calls), "globals", []), "", fn model ->
+      name = String.replace(model["rust_pattern"], "::", ".") <> ".default"
+      "local notation \"#{name}\" => #{model["extract_name"]}\n"
+    end)
+  end
+
   defp identity?(f, "new", self, trait, _t, refs) do
     case f["item_meta"]["name"] do
       [

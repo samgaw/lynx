@@ -404,10 +404,6 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.FormatModels.type_models(audit.external_calls, module)
 
     if Enum.any?(audit.external_calls, fn {_, m} -> m[:native_resource_type] end) do
-      unless File.read!(Path.join(tools, "lynx-toolchain")) =~ "global-names-v1",
-        do:
-          raise(ArgumentError, "resource extraction requires the pinned global-names-v1 backend")
-
       unless Lynx.Rustler.require_rustler!(context) == "0.39.0",
         do: raise(ArgumentError, "resource models require Rustler 0.39.0")
     end
@@ -636,7 +632,13 @@ defmodule Lynx.Rust.Extraction do
         unwind_input: unwind_input
       )
 
-    Lynx.Rust.Runtime.elaborate_tuple_bindings!(output, module, translation)
+    Lynx.Rust.Runtime.install_extracted_notation!(
+      output,
+      module,
+      translation,
+      audit.external_calls
+    )
+
     Lynx.Rust.Runtime.bind_loop_operator!(result_monad, output, module, translation)
 
     Lynx.Rustler.AtomCaches.install!(cache_models, translation, output, module)

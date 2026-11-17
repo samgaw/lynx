@@ -165,7 +165,6 @@ if [ "$verification_profile" = join-recovery ]; then
 else
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-static-shared-loans.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-lean-result-monad.patch"
-  git -C "$aeneas_source" apply "$script_dir/patches/aeneas-external-global-names.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-immediate-futures.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-workspace-roots.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-undefined-behavior.patch"
@@ -185,7 +184,7 @@ opam install --root="$opam_root" --switch=lynx-aeneas \
 if [ "$verification_profile" = join-recovery ]; then
   aeneas_version=build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1+duplicate-branches-v1
 else
-  aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+global-names-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+effectful-calls-v1+partial-discriminants-v1+lean-record-types-v1+duplicate-branches-v1+tuple-patterns-v1
+  aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+effectful-calls-v1+partial-discriminants-v1+lean-record-types-v1+duplicate-branches-v1+tuple-patterns-v1+local-resource-defaults-v1
 fi
 AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aeneas -- \
   dune build --root "$aeneas_source/src" main.exe

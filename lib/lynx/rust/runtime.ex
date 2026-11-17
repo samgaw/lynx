@@ -70,19 +70,29 @@ defmodule Lynx.Rust.Runtime do
   def configuration!(other, _output, _prefix),
     do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(other)}")
 
-  def elaborate_tuple_bindings!(output, prefix, %{"aeneas_version" => version}) do
-    if String.ends_with?(version, "+tuple-patterns-v1") do
+  def install_extracted_notation!(output, prefix, %{"aeneas_version" => version}, calls) do
+    features = String.split(version, "+")
+
+    # Lean 4.35 must know the length in a borrowed array's back-function
+    # type before it elaborates a tuple pattern. The standard #usize notation
+    # defers its bound proof. A closed numeral can prove the same bound by
+    # reduction, without changing the extracted tuple or its continuation.
+    notation =
+      if "tuple-patterns-v1" in features, do: @usize_literal, else: ""
+
+    notation =
+      if "local-resource-defaults-v1" in features,
+        do: notation <> Lynx.Rust.ResourceModels.default_notation(calls),
+        else: notation
+
+    if notation != "" do
       path = Path.join(output, String.replace(prefix, ".", "/") <> "/Funs.lean")
       source = File.read!(path)
       header = "open Aeneas Aeneas.Std RustM ControlFlow Error\n"
 
-      # Lean 4.35 must know the length in a borrowed array's back-function
-      # type before it elaborates a tuple pattern. The standard #usize notation
-      # defers its bound proof. A closed numeral can prove the same bound by
-      # reduction, without changing the extracted tuple or its continuation.
       case String.split(source, header, parts: 2) do
         [before, after_header] ->
-          File.write!(path, before <> header <> @usize_literal <> after_header)
+          File.write!(path, before <> header <> notation <> after_header)
 
         [_] ->
           raise ArgumentError, "unexpected Aeneas function header in #{path}"
