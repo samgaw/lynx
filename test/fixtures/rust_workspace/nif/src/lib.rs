@@ -502,6 +502,13 @@ fn replace_first_pair(input: Vec<(i64, u64)>, value: i64) -> (bool, Vec<(i64, u6
     experiment_analysis::replace_first_pair(input, value)
 }
 
+/// Removes the last record without reversing or changing the retained prefix.
+#[cfg(feature = "pop-vec")]
+#[rustler::nif(name = "pop_record")]
+fn take_record(input: Vec<i64>) -> (Option<i64>, Vec<i64>) {
+    experiment_analysis::pop_record(input)
+}
+
 /// Uses a shared record alias and independently named scalar fields.
 #[cfg(feature = "tuple-vec")]
 #[rustler::nif(name = "alias_records")]
@@ -910,6 +917,7 @@ mod tests {
                 + 4 * usize::from(cfg!(feature = "optional"))
                 + 3 * usize::from(cfg!(feature = "scalar-vec"))
                 + 3 * usize::from(cfg!(feature = "tuple-vec"))
+                + usize::from(cfg!(feature = "pop-vec"))
                 + usize::from(cfg!(feature = "derived-tuple"))
                 + usize::from(cfg!(feature = "derived-tuple-decoder"))
                 + usize::from(cfg!(feature = "derived-map"))
@@ -1028,6 +1036,13 @@ mod tests {
             for name in ["alias_records", "alias_batch"] {
                 expected.push((name.to_owned(), 2, rustler::SchedulerFlags::Normal as u32));
             }
+        }
+        if cfg!(feature = "pop-vec") {
+            expected.push((
+                "pop_record".to_owned(),
+                1,
+                rustler::SchedulerFlags::Normal as u32,
+            ));
         }
         if cfg!(feature = "checked-option") {
             expected.push((
