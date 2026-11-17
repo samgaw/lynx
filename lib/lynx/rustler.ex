@@ -42,6 +42,11 @@ defmodule Lynx.Rustler do
   using an explicit FFI type model. The immutable `as_slice` accessor and standard
   slice length have explicitly reported external models; other Binary methods
   remain rejected.
+  `Vec` return values can also contain nonempty tuples of the supported fixed-width
+  scalars (tuple arity up to seven), recursively. They encode as proper lists of
+  Erlang tuples using the existing checked tuple field encoders. Tuple-vector
+  arguments remain unsupported; metadata discovery rejects them before extraction.
+
   `Vec<u8>` arguments and results, including tuple/result fields, use proper-list
   encoding and sequential element decoding through Rustler's u32-to-u8 narrowing
   conversion. Improper tails panic after preceding elements decode; an earlier

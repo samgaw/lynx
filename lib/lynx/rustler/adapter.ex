@@ -417,6 +417,20 @@ defmodule Lynx.Rustler.Adapter do
     }
   end
 
+  defp type!(%{"vec" => %{"tuple" => _} = element}) do
+    tuple = type!(element)
+
+    unless tuple[:encode] && not monadic?(tuple),
+      do: raise(ArgumentError, "tuple vector returns require pure scalar field encoders")
+
+    %{
+      lean: "(alloc.vec.Vec #{tuple.lean})",
+      decode: nil,
+      encode: nil,
+      encode_m: "Lynx.Rustler.encodeScalarVec (#{tuple.encode})"
+    }
+  end
+
   defp type!(<<sign, width::binary>> = type)
        when sign in [?i, ?u] and width in ["8", "16", "32", "64"] do
     signed = sign == ?i

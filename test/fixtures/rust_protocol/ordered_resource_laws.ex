@@ -139,4 +139,37 @@ defmodule LynxRegistryFixture.Laws do
         LynxRegistryFixture.Native.registry_first_key(registry) == 20
       ),
     proof: @proof
+
+  law snapshot_empty,
+    expects:
+      LynxRegistryFixture.Native.registry_pairs(LynxRegistryFixture.Native.registry_new()) == [],
+    proof: @proof
+
+  law snapshot_order,
+    expects:
+      (
+        registry = LynxRegistryFixture.Native.registry_new()
+        LynxRegistryFixture.Native.registry_replace(registry, 20, 1)
+        LynxRegistryFixture.Native.registry_replace(registry, 3, 99)
+        first = LynxRegistryFixture.Native.registry_pairs(registry)
+
+        first == [{3, 99}, {20, 1}] and
+          LynxRegistryFixture.Native.registry_pairs(registry) == first
+      ),
+    proof: @proof
+
+  law snapshot_replace_remove,
+    expects:
+      (
+        registry = LynxRegistryFixture.Native.registry_new()
+        LynxRegistryFixture.Native.registry_replace(registry, 20, 1)
+        LynxRegistryFixture.Native.registry_replace(registry, 3, 99)
+        LynxRegistryFixture.Native.registry_replace(registry, 3, 42)
+        snapshot = LynxRegistryFixture.Native.registry_pairs(registry)
+        LynxRegistryFixture.Native.registry_take(registry, 3)
+
+        snapshot == [{3, 42}, {20, 1}] and
+          LynxRegistryFixture.Native.registry_pairs(registry) == [{20, 1}]
+      ),
+    proof: @proof
 end

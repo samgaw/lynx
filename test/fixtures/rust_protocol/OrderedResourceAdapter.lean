@@ -1,6 +1,7 @@
 module
 public import __PREFIX__.Properties
 public import __PREFIX__.ResourceProperties
+public import __PREFIX__.Snapshots
 public section
 open Aeneas Aeneas.Std Lynx experiment_nif
 open __PREFIX__.Extraction.OrderedCollections
@@ -43,5 +44,13 @@ theorem first_key_contract (owner : NativeResourceArc RegistryState) :
       NativeResourceArc.releaseOwned owner
       .ok first) := by
   simp [__FIRST__, NativeOwnedDrop.drop, NativeM.ok]
+
+theorem pairs_contract (owner : NativeResourceArc RegistryState) :
+    __PAIRS__ owner = (do
+      let state ← NativeResourceArc.deref owner
+      let snapshot ← experiment_analysis.registry_pairs state.table
+      NativeResourceArc.releaseOwned owner
+      .ok snapshot) := by
+  simp [__PAIRS__, NativeOwnedDrop.drop, NativeM.ok]
 
 end __PREFIX__.NifProperties

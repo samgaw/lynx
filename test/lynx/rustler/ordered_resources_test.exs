@@ -57,7 +57,8 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
         registry_replace: 3,
         registry_take: 2,
         registry_claim: 2,
-        registry_first_key: 1
+        registry_first_key: 1,
+        registry_pairs: 1
       ],
       lean_project: project,
       module_prefix: "Registry.Extraction",
@@ -78,9 +79,18 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
       |> String.replace("__PREFIX__", "Registry")
     )
 
+    File.write!(
+      Path.join(project, "Registry/Snapshots.lean"),
+      File.read!(Path.join(@proofs, "OrderedSnapshot.lean"))
+      |> String.replace("__PREFIX__", "Registry")
+      |> String.replace("__CORE__", "experiment_nif.experiment_core.ordered")
+      |> String.replace("__ANALYSIS__", "experiment_nif.experiment_analysis")
+    )
+
     discovered =
       Lynx.Rustler.prepare!(
-        base ++ [proof_modules: ~w(Registry.Properties Registry.ResourceProperties)]
+        base ++
+          [proof_modules: ~w(Registry.Properties Registry.ResourceProperties Registry.Snapshots)]
       )
 
     adapter =
@@ -90,7 +100,8 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
           {"REPLACE", "registry_replace"},
           {"TAKE", "registry_take"},
           {"CLAIM", "registry_claim"},
-          {"FIRST", "registry_first_key"}
+          {"FIRST", "registry_first_key"},
+          {"PAIRS", "registry_pairs"}
         ],
         File.read!(Path.join(@proofs, "OrderedResourceAdapter.lean"))
         |> String.replace("__PREFIX__", "Registry"),
@@ -107,18 +118,22 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
       base ++
         [
           proof_modules:
-            ~w(Registry.Properties Registry.ResourceProperties Registry.NifProperties),
+            ~w(Registry.Properties Registry.ResourceProperties Registry.Snapshots Registry.NifProperties),
           required_properties:
             Enum.map(
               ~w(replace_eq locked_contract replace_run replace_preserves_other take_eq take_contract take_run claim_eq claim_contract claim_run first_key_eq first_key_no_panic first_key_contract first_key_run),
               &("Registry.Properties." <> &1)
             ) ++
               Enum.map(
+                ~w(pairs_snapshot pairs_total pairs_contract pairs_run),
+                &("Registry.Snapshots." <> &1)
+              ) ++
+              Enum.map(
                 ~w(cleanup_contract cleanup_run final_release),
                 &("Registry.ResourceProperties." <> &1)
               ) ++
               Enum.map(
-                ~w(create_contract replace_contract take_contract claim_contract first_key_contract),
+                ~w(create_contract replace_contract take_contract claim_contract first_key_contract pairs_contract),
                 &("Registry.NifProperties." <> &1)
               )
         ]
@@ -176,7 +191,8 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
 
     for {before, after_text} <- [
           {"replace_value(&mut guard, key, value)", "replace_value(&mut guard, 0, value)"},
-          {".map(|(key, _)| *key)", ".map(|(_key, _)| 0)"}
+          {".map(|(key, _)| *key)", ".map(|(_key, _)| 0)"},
+          {"output.push((*key, *value))", "output.push((*value, *key))"}
         ] do
       changed = String.replace(original, before, after_text)
       refute changed == original
@@ -246,7 +262,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
     [{module, beam}] = Code.compile_file(Path.join(@proofs, "ordered_resource_laws.ex"))
 
     for law <-
-          ~w(empty updates independent_fields alias_observes rejected_input_preserves invalid_handle concurrent_claims first_key_empty first_key_order first_key_after_remove)a,
+          ~w(empty updates independent_fields alias_observes rejected_input_preserves invalid_handle concurrent_claims first_key_empty first_key_order first_key_after_remove snapshot_empty snapshot_order snapshot_replace_remove)a,
         do: assert(apply(module, law, []))
 
     law_options = [
@@ -257,7 +273,7 @@ defmodule Lynx.Rustler.OrderedResourcesTest do
     law_export = Path.join(tmp, "laws.export")
     reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, law_export))
     assert [] == for(r <- reports, r.status != :ok, do: {r.module, r.diagnostics})
-    assert length(Enum.flat_map(reports, & &1.theorems)) == 10
+    assert length(Enum.flat_map(reports, & &1.theorems)) == 13
 
     for kind <- [:rust_implementation, :cross_crate_contract, :nif_adapter, :elixir_law],
         do:

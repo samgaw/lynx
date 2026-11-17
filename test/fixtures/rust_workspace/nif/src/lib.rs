@@ -857,7 +857,7 @@ mod tests {
                 + 7 * usize::from(cfg!(feature = "text-slices"))
                 + 5 * usize::from(cfg!(feature = "ordered-collections"))
                 + 2 * usize::from(cfg!(feature = "ordered-iteration"))
-                + 5 * usize::from(cfg!(feature = "ordered-resources"))
+                + 6 * usize::from(cfg!(feature = "ordered-resources"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1168,6 +1168,7 @@ mod tests {
                 ("registry_replace", 3),
                 ("registry_take", 2),
                 ("registry_first_key", 1),
+                ("registry_pairs", 1),
                 ("registry_claim", 2),
             ] {
                 expected.push((
@@ -1477,4 +1478,11 @@ pub fn registry_release(resource: rustler::ResourceArc<RegistryState>) {
 /// Observes the first key of shared map state through both workspace crates.
 fn registry_first_key(resource: rustler::ResourceArc<RegistryState>) -> Option<u64> {
     experiment_analysis::registry_first_key(&resource.table)
+}
+
+#[cfg(feature = "ordered-resources")]
+#[rustler::nif(schedule = "DirtyCpu")]
+/// Copies a complete ordered snapshot through both workspace crates.
+fn registry_pairs(resource: rustler::ResourceArc<RegistryState>) -> Vec<(u64, u64)> {
+    experiment_analysis::registry_pairs(&resource.table)
 }
