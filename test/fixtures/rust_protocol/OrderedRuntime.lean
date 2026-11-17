@@ -22,7 +22,7 @@ theorem locked_contract (table : NativeMutex Map) (key value : U64) :
       let (previous, updated) ← __CORE__.replace_value guard.value key value
       NativeGuard.release {guard with value := updated}
       .ok previous) := by
-  simp [__CORE__.locked_replace, NativeGuard.deref_mut, NativeDrop.drop,
+  simp [__CORE__.locked_replace, NativeGuard.deref_mut, NativeDrop.drop, NativeOwnedDrop.drop,
     NativeM.lift, NativeM.ok]
   congr 1
   funext acquired
@@ -65,7 +65,7 @@ theorem take_contract (table : NativeMutex Map) (key : U64) :
       let (previous, updated) ← __CORE__.take guard.value key
       NativeGuard.release {guard with value := updated}
       .ok previous) := by
-  simp [__CORE__.locked_take, NativeGuard.deref_mut, NativeDrop.drop, NativeM.lift, NativeM.ok]
+  simp [__CORE__.locked_take, NativeGuard.deref_mut, NativeDrop.drop, NativeOwnedDrop.drop, NativeM.lift, NativeM.ok]
   congr 1
   funext acquired
   cases acquired <;> simp [NativePoisonError.into_inner]
@@ -94,7 +94,7 @@ theorem claim_contract (values : NativeMutex Set) (key : U64) :
       let (claimed, updated) ← __CORE__.claim guard.value key
       NativeGuard.release {guard with value := updated}
       .ok claimed) := by
-  simp [__CORE__.locked_claim, NativeGuard.deref_mut, NativeDrop.drop, NativeM.lift, NativeM.ok]
+  simp [__CORE__.locked_claim, NativeGuard.deref_mut, NativeDrop.drop, NativeOwnedDrop.drop, NativeM.lift, NativeM.ok]
   congr 1
   funext acquired
   cases acquired <;> simp [NativePoisonError.into_inner]

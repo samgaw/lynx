@@ -857,6 +857,7 @@ mod tests {
                 + 7 * usize::from(cfg!(feature = "text-slices"))
                 + 5 * usize::from(cfg!(feature = "ordered-collections"))
                 + 2 * usize::from(cfg!(feature = "ordered-iteration"))
+                + 4 * usize::from(cfg!(feature = "ordered-resources"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1161,6 +1162,20 @@ mod tests {
                 ),
             ]);
         }
+        if cfg!(feature = "ordered-resources") {
+            for (name, arity) in [
+                ("registry_new", 0),
+                ("registry_replace", 3),
+                ("registry_take", 2),
+                ("registry_claim", 2),
+            ] {
+                expected.push((
+                    name.to_owned(),
+                    arity,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ));
+            }
+        }
         if cfg!(feature = "ordered-iteration") {
             expected.extend([
                 (
@@ -1404,4 +1419,54 @@ fn prefix_length(value: rustler::Binary<'_>, length: u8) -> Option<u64> {
 #[rustler::nif(schedule = "DirtyCpu")]
 fn split_lengths(value: rustler::Binary<'_>, length: u8) -> Option<(u64, u64)> {
     experiment_analysis::split_lengths(value.as_slice(), length)
+}
+
+#[cfg(feature = "ordered-resources")]
+/// Persistent scalar registry with independently locked map and set state.
+pub struct RegistryState {
+    pub table: std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+    pub claims: std::sync::Mutex<std::collections::BTreeSet<u64>>,
+}
+#[cfg(feature = "ordered-resources")]
+#[rustler::resource_impl]
+impl rustler::Resource for RegistryState {}
+
+#[cfg(feature = "ordered-resources")]
+#[rustler::nif(schedule = "DirtyCpu")]
+/// Creates a registered scalar registry.
+///
+/// # Panics
+/// Panics if Rustler has not registered its resource type.
+fn registry_new() -> rustler::ResourceArc<RegistryState> {
+    rustler::ResourceArc::new(RegistryState {
+        table: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+        claims: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+    })
+}
+#[cfg(feature = "ordered-resources")]
+#[rustler::nif(schedule = "DirtyCpu")]
+/// Replaces a key through both first-party library crates.
+fn registry_replace(
+    resource: rustler::ResourceArc<RegistryState>,
+    key: u64,
+    value: u64,
+) -> Option<u64> {
+    experiment_analysis::registry_replace(&resource.table, key, value)
+}
+#[cfg(feature = "ordered-resources")]
+#[rustler::nif(schedule = "DirtyCpu")]
+/// Removes a key through both first-party library crates.
+fn registry_take(resource: rustler::ResourceArc<RegistryState>, key: u64) -> Option<u64> {
+    experiment_analysis::registry_take(&resource.table, key)
+}
+#[cfg(feature = "ordered-resources")]
+#[rustler::nif(schedule = "DirtyCpu")]
+/// Claims a key through both first-party library crates.
+fn registry_claim(resource: rustler::ResourceArc<RegistryState>, key: u64) -> bool {
+    experiment_analysis::registry_claim(&resource.claims, key)
+}
+#[cfg(feature = "ordered-resources")]
+/// Internal proof root for final Rust-owner cleanup; not exported as a NIF.
+pub fn registry_release(resource: rustler::ResourceArc<RegistryState>) {
+    drop(resource);
 }
