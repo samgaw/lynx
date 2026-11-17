@@ -150,15 +150,33 @@ defmodule Lynx.Rustler.FileResourceTest do
     assert_raise CompileError, fn -> Lynx.Rustler.prepare!(Keyword.delete(options, :files)) end
   end
 
-  @tag :tmp_dir
-  test "ordinary Elixir calls retain a shared file through release and synchronization", %{
-    tmp_dir: tmp
-  } do
+  for method <- ~w(sync_all sync_data) do
+    @tag :tmp_dir
+    @tag file_sync: method
+    test "ordinary Elixir calls retain a shared file through release and #{method}", %{
+      tmp_dir: tmp
+    } do
+      verify_resource_sync(tmp, unquote(method))
+    end
+  end
+
+  defp verify_resource_sync(tmp, method) do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
     for path <- ~w(Cargo.toml Cargo.lock core native),
         do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
+
+    core = Path.join(workspace, "core/src/lib.rs")
+
+    if method == "sync_data" do
+      File.write!(
+        core,
+        String.replace(File.read!(core), "    file.sync_all()\n}", "    file.sync_data()\n}",
+          global: false
+        )
+      )
+    end
 
     project = Path.join(tmp, "proofs")
     File.mkdir_p!(Path.join(project, "FileResource"))
@@ -212,6 +230,24 @@ defmodule Lynx.Rustler.FileResourceTest do
           end
         )
 
+      contents =
+        if method == "sync_data" and target in ["Properties", "Calls"] do
+          contents
+          |> String.replace("syncAll", "syncData")
+          |> String.replace(
+            "pollSync ⟨1⟩ (live env before)",
+            "pollSync ⟨1⟩ (live env before) true"
+          )
+          |> String.replace(
+            "pollSync ⟨1⟩ (decodedEnv env before counter)",
+            "pollSync ⟨1⟩ (decodedEnv env before counter) true"
+          )
+          |> String.replace(~r/\bsyncStep (before|once)\b/, "syncStep \\1 true")
+          |> String.replace(~s("sync_all"), ~s("sync_data"))
+        else
+          contents
+        end
+
       File.write!(Path.join(project, "FileResource/#{target}.lean"), contents)
     end
 
@@ -229,6 +265,11 @@ defmodule Lynx.Rustler.FileResourceTest do
 
     checked = Lynx.Rustler.prepare!(options)
     assert Enum.all?(checked.reports, &(&1.status == :ok))
+
+    assert Enum.any?(
+             checked.verification.unverified_external_calls,
+             &String.ends_with?(&1.rust_name, "::" <> method)
+           )
 
     assert Enum.any?(
              checked.verification.unverified_nif_exports,
@@ -301,18 +342,17 @@ defmodule Lynx.Rustler.FileResourceTest do
 
     File.write!(property, original)
 
-    native = Path.join(workspace, "core/src/lib.rs")
-    rust = File.read!(native)
+    rust = File.read!(core)
 
     changed =
       String.replace(
         rust,
-        "pub fn synchronize_file(file: &std::fs::File) -> std::io::Result<()> {\n    file.sync_all()\n}",
+        "pub fn synchronize_file(file: &std::fs::File) -> std::io::Result<()> {\n    file.#{method}()\n}",
         "pub fn synchronize_file(_file: &std::fs::File) -> std::io::Result<()> {\n    Ok(())\n}"
       )
 
     refute changed == rust
-    File.write!(native, changed)
+    File.write!(core, changed)
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
       Lynx.Rustler.prepare!(options)
