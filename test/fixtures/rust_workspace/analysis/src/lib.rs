@@ -455,3 +455,31 @@ mod producer_tests {
         assert_eq!(super::binary_roundtrip(&vec![0; 65536]), None);
     }
 }
+
+/// Constructs an ordered table and composes replacements across the crate boundary.
+pub fn table_replace(key: u64, value: u64, replacement: u64) -> Option<u64> {
+    let mut table = std::collections::BTreeMap::new();
+    experiment_core::ordered::replace_value(&mut table, key, value);
+    experiment_core::ordered::replace_value(&mut table, key, replacement)
+}
+
+/// Composes repeated key claims through the first-party core implementation.
+pub fn set_insert_twice(key: u64) -> (bool, bool, u64) {
+    let mut values = std::collections::BTreeSet::new();
+    let first = experiment_core::ordered::claim(&mut values, key);
+    let second = experiment_core::ordered::claim(&mut values, key);
+    (first, second, values.len() as u64)
+}
+
+/// Reports replacement and cardinality after two cross-crate ordered updates.
+pub fn table_stats(
+    first_key: u64,
+    first_value: u64,
+    second_key: u64,
+    second_value: u64,
+) -> (Option<u64>, u64) {
+    let mut table = std::collections::BTreeMap::new();
+    experiment_core::ordered::replace_value(&mut table, first_key, first_value);
+    let previous = experiment_core::ordered::replace_value(&mut table, second_key, second_value);
+    (previous, table.len() as u64)
+}

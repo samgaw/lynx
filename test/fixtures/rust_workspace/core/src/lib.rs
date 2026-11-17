@@ -1,5 +1,6 @@
 pub mod collections;
 pub mod nested;
+pub mod ordered;
 pub mod protocol;
 pub mod tree;
 
