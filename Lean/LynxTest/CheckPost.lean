@@ -30,6 +30,32 @@ theorem every_native_run (elapsed : PID → Nat → Nat)
     (run : Run (.start {} program elapsed) events last) (terminal : Terminal last outcome) :
     counter 2 last = true := checkPost_sound (native_counter elapsed) run terminal
 
+private def nativeCount : Config Term → Nat
+  | .start env .. => env.nativeRefCounter
+  | .running state .. => state.nativeRefCounter
+
+private def boundedCounter (config : Config Term) : Bool := nativeCount config ≤ 2
+
+theorem native_prefix_counter (elapsed : PID → Nat → Nat) :
+    checkInvariant boundedCounter 20 (.start {} program elapsed) = true := by
+  lynx_check_invariant
+
+theorem every_native_prefix (elapsed : PID → Nat → Nat)
+    (run : Run (.start {} program elapsed) events last) : boundedCounter last = true :=
+  checkInvariant_sound (native_prefix_counter elapsed) run
+
+/-- error: prefix invariant rejected at a reachable configuration -/
+#guard_msgs in
+example (elapsed : PID → Nat → Nat) :
+    checkInvariant (fun config => nativeCount config != 1) 20 (.start {} program elapsed) = true := by
+  lynx_check_invariant
+
+/-- error: prefix invariant search exhausted its step bound -/
+#guard_msgs in
+example (elapsed : PID → Nat → Nat) :
+    checkInvariant boundedCounter 1 (.start {} program elapsed) = true := by
+  lynx_check_invariant
+
 /-- error: postcondition rejected at a terminal configuration -/
 #guard_msgs in
 example (elapsed : PID → Nat → Nat) :

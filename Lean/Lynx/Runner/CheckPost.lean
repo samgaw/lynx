@@ -2,7 +2,7 @@ module
 public meta import Lean
 public import Lynx.Concurrent
 
-/-! Kernel-checked certificates for the existing exhaustive terminal-state checker.
+/-! Kernel-checked certificates for exhaustive terminal-state and prefix checking.
 
 Each node certifies every raw successor. Reuse requires equality of the entire
 configuration at the same remaining depth. No execution result is trusted. -/
@@ -21,6 +21,13 @@ public theorem step (α : Type) (accept : Config α → Bool) (depth : Nat) (con
     (checked : (first :: rest).all (fun entry => checkPost accept depth entry.2) = true) :
     checkPost accept (depth + 1) config = true := by
   simpa only [checkPost, successors] using checked
+
+public theorem invariantStep (α : Type) (accept : Config α → Bool) (depth : Nat)
+    (config : Config α) (steps : List (Event × Config α))
+    (successors : config.successors = steps) (accepted : accept config = true)
+    (checked : steps.all (fun entry => checkInvariant accept depth entry.2) = true) :
+    checkInvariant accept (depth + 1) config = true := by
+  simpa only [checkInvariant, accepted, Bool.true_and, Kernel.all_eq, successors] using checked
 
 public theorem allNil (α : Type) (predicate : Event × Config α → Bool) :
     ([] : List (Event × Config α)).all predicate = true := rfl
@@ -198,22 +205,30 @@ private structure Search where
   hits : Nat := 0
   nodes : Nat := 0
 
-private def transport (accept : Expr) (depth : Nat) (equal checked : Expr) : MetaM Expr := do
+private def transport (checker : Name) (accept : Expr) (depth : Nat) (equal checked : Expr) : MetaM Expr := do
   let cfgType := (← inferType equal).getArg! 0
   withLocalDeclD `next cfgType fun next => do
-    let test ← mkAppM ``checkPost #[accept, mkNatLit depth, next]
+    let test ← mkAppM checker #[accept, mkNatLit depth, next]
     let pred ← mkEq test (mkConst ``Bool.true)
     let fn ← mkLambdaFVars #[next] pred
     let typeEq ← mkCongrArg fn equal
     mkAppM ``Eq.mpr #[typeEq, checked]
 
-private partial def prove (locals : Array Expr) (accept : Expr) (depth : Nat) (raw : Expr)
+private def acceptAt (locals : Array Expr) (accept config : Expr) (failure : String) :
+    TacticM Expr := do
+  unless ← isDefEq (mkApp accept config) (mkConst ``Bool.true) do
+    throwError "{failure}"
+  declaration locals (← mkEq (mkApp accept config) (mkConst ``Bool.true))
+    (← mkEqRefl (mkConst ``Bool.true)) true
+
+private partial def prove (checker : Name) (locals : Array Expr) (accept : Expr) (depth : Nat) (raw : Expr)
     (state : IO.Ref Search) (limit : Nat) (memo : IO.Ref (Std.HashMap Expr Expr)) : TacticM (Expr × Expr × Expr) := do
-  if depth == 0 then throwError "postcondition search exhausted its step bound"
+  let search := if checker == ``checkInvariant then "prefix invariant search" else "postcondition search"
+  if depth == 0 then throwError "{search} exhausted its step bound"
   let normalized ← normalize memo raw
   let (config, normalizedEq) ← canonicalize memo normalized
   let config ← instantiateMVars config
-  let key ← instantiateMVars (← mkAppM ``checkPost #[accept, mkNatLit depth, config])
+  let key ← instantiateMVars (← mkAppM checker #[accept, mkNatLit depth, config])
   let mut cached? := (← state.get).cache[key]?
   if cached?.isNone then
     for (_, candidate) in (← state.get).cache do
@@ -224,10 +239,14 @@ private partial def prove (locals : Array Expr) (accept : Expr) (depth : Nat) (r
     state.modify fun s => {s with hits := s.hits + 1}
     let equal ← declaration locals (← mkEq raw cached.config) normalizedEq true
     return (cached.config, cached.proof, equal)
-  unless (← state.get).nodes < limit do throwError "postcondition search exhausted its node bound"
+  unless (← state.get).nodes < limit do throwError "{search} exhausted its node bound"
   state.modify fun s => {s with nodes := s.nodes + 1}
   let cfgType ← inferType raw
   let alias ← declaration locals cfgType config false
+  let prefixAccepted ←
+    if checker == ``checkInvariant then
+      some <$> acceptAt locals accept alias "prefix invariant rejected at a reachable configuration"
+    else pure none
   let α := cfgType.getArg! 0
   let pairType ← mkAppM ``Prod #[mkConst ``Event, cfgType]
   let successors ← mkAppM ``Config.successors #[alias]
@@ -242,7 +261,7 @@ private partial def prove (locals : Array Expr) (accept : Expr) (depth : Nat) (r
   let mut certificates : Array Expr := #[]
   for entry in entries do
     let (event, next) ← pair entry
-    let (named, checked, equal) ← prove locals accept (depth - 1) next state limit memo
+    let (named, checked, equal) ← prove checker locals accept (depth - 1) next state limit memo
     let rawPair ← mkAppM ``Prod.mk #[event, next]
     let namedPair ← mkAppM ``Prod.mk #[event, named]
     let pairEq ← withLocalDeclD `next cfgType fun next' => do
@@ -257,7 +276,7 @@ private partial def prove (locals : Array Expr) (accept : Expr) (depth : Nat) (r
   let mut rawTail ← mkListLit pairType []
   let mut namedTail ← mkListLit pairType []
   let predicate ← withLocalDeclD `entry pairType fun entry => do
-    mkLambdaFVars #[entry] (← mkAppM ``checkPost #[accept, mkNatLit (depth - 1), ← mkAppM ``Prod.snd #[entry]])
+    mkLambdaFVars #[entry] (← mkAppM checker #[accept, mkNatLit (depth - 1), ← mkAppM ``Prod.snd #[entry]])
   let mut allChecked := mkAppN (mkConst ``allNil) #[α, predicate]
   for idx in (List.range entries.size).reverse do
     let firstEq ← withLocalDeclD `head pairType fun head => do
@@ -270,41 +289,53 @@ private partial def prove (locals : Array Expr) (accept : Expr) (depth : Nat) (r
   let evaluatedEq ← mkEqTrans successorProof (← mkEqRefl rawList)
   let definitional ← declaration locals (← mkEq successors rawList) evaluatedEq true
   let successorsEq ← mkEqTrans definitional listEq
-  let proof ← if entries.isEmpty then do
-      unless ← isDefEq (mkApp accept alias) (mkConst ``Bool.true) do
-        throwError "postcondition rejected at a terminal configuration"
-      let accepted ← declaration locals (← mkEq (mkApp accept alias) (mkConst ``Bool.true))
-        (← mkEqRefl (mkConst ``Bool.true)) true
-      pure (mkAppN (mkConst ``terminal) #[α, accept, mkNatLit (depth - 1), alias, successorsEq, accepted])
-    else
-      pure (mkAppN (mkConst ``step) #[α, accept, mkNatLit (depth - 1), alias,
-        canonicalPairs[0]!, ← mkListLit pairType canonicalPairs.toList.tail!, successorsEq, allChecked])
-  let target ← mkEq (← mkAppM ``checkPost #[accept, mkNatLit depth, alias]) (mkConst ``Bool.true)
+  let proof ← match prefixAccepted with
+    | some accepted => do
+        let steps ← mkListLit pairType canonicalPairs.toList
+        pure (mkAppN (mkConst ``invariantStep) #[α, accept, mkNatLit (depth - 1), alias,
+          steps, successorsEq, accepted, allChecked])
+    | none =>
+        if entries.isEmpty then do
+          let accepted ← acceptAt locals accept alias "postcondition rejected at a terminal configuration"
+          pure (mkAppN (mkConst ``terminal) #[α, accept, mkNatLit (depth - 1), alias, successorsEq, accepted])
+        else
+          pure (mkAppN (mkConst ``step) #[α, accept, mkNatLit (depth - 1), alias,
+            canonicalPairs[0]!, ← mkListLit pairType canonicalPairs.toList.tail!, successorsEq, allChecked])
+  let target ← mkEq (← mkAppM checker #[accept, mkNatLit depth, alias]) (mkConst ``Bool.true)
   let checked ← declaration locals target proof true
   state.modify fun s => {s with cache := s.cache.insert key ⟨config, depth, alias, checked⟩}
   let equal ← declaration locals (← mkEq raw alias) normalizedEq true
   return (alias, checked, equal)
 
-/-- Certify `checkPost accept depth config = true` by sharing proofs of repeated
-configurations. The finite depth and node budgets fail closed. Every generated
-normalization and successor certificate is checked by Lean's kernel. -/
-syntax (name := checkPostTactic) "lynx_check_post" : tactic
-
-@[tactic checkPostTactic] public meta def evalCheckPost : Tactic := fun _ => withMainContext do
+private def evalChecker (checker : Name) : TacticM Unit := withMainContext do
   let goal ← getMainGoal
   let type ← instantiateMVars (← goal.getType)
-  let some (_, lhs, rhs) := type.eq? | throwError "expected a checkPost equality"
-  unless lhs.isAppOfArity ``checkPost 4 && rhs.isConstOf ``Bool.true do
-    throwError "expected checkPost accept depth config = true"
+  let some (_, lhs, rhs) := type.eq? | throwError "expected a {checker} equality"
+  unless lhs.isAppOfArity checker 4 && rhs.isConstOf ``Bool.true do
+    throwError "expected {checker} accept depth config = true"
   let depth ← getNatValue? (lhs.getArg! 2)
   let some depth := depth | throwError "postcondition search needs a concrete step bound"
   let locals ← (← getLCtx).foldlM (init := #[]) fun xs decl =>
     pure (if decl.isImplementationDetail then xs else xs.push decl.toExpr)
   let state ← IO.mkRef ({} : Search)
   let memo ← IO.mkRef ({} : Std.HashMap Expr Expr)
-  let (_, checked, equal) ← prove locals (lhs.getArg! 1) depth (lhs.getArg! 3) state 20000 memo
-  let result ← transport (lhs.getArg! 1) depth equal checked
+  let (_, checked, equal) ← prove checker locals (lhs.getArg! 1) depth (lhs.getArg! 3) state 20000 memo
+  let result ← transport checker (lhs.getArg! 1) depth equal checked
   goal.assign result
   replaceMainGoal []
+
+/-- Certify `checkPost accept depth config = true` by sharing proofs of repeated
+configurations. Both depth and node bounds fail closed. -/
+syntax (name := checkPostTactic) "lynx_check_post" : tactic
+
+@[tactic checkPostTactic] public meta def evalCheckPost : Tactic := fun _ =>
+  evalChecker ``checkPost
+
+/-- Certify `checkInvariant accept depth config = true` over every reached
+prefix. The kernel checks each predicate and successor certificate. -/
+syntax (name := checkInvariantTactic) "lynx_check_invariant" : tactic
+
+@[tactic checkInvariantTactic] public meta def evalCheckInvariant : Tactic := fun _ =>
+  evalChecker ``checkInvariant
 end
 end Lynx.Concurrent.CheckPost
