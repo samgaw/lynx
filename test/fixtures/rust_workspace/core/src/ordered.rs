@@ -61,3 +61,31 @@ mod tests {
         assert!(contains(&values, 2));
     }
 }
+
+/// An owned scalar snapshot of an ordered map entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub key: u64,
+    pub value: u64,
+}
+
+/// Copies every key/value pair in the map's iteration order.
+pub fn entries(table: &BTreeMap<u64, u64>) -> Vec<Entry> {
+    let mut output = Vec::new();
+    for (key, value) in table {
+        output.push(Entry {
+            key: *key,
+            value: *value,
+        });
+    }
+    output
+}
+
+/// Copies every claimed key in the set's iteration order.
+pub fn members(values: &BTreeSet<u64>) -> Vec<u64> {
+    let mut output = Vec::new();
+    for value in values {
+        output.push(*value);
+    }
+    output
+}

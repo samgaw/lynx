@@ -205,6 +205,23 @@ fn echo_borrowed_option(value: (Option<&str>, bool)) -> (Option<&str>, bool) {
     value
 }
 
+#[cfg(feature = "ordered-iteration")]
+#[rustler::nif(name = "ordered_entries", schedule = "DirtyCpu")]
+fn ordered_entries_nif(
+    first: u64,
+    first_value: u64,
+    second: u64,
+    second_value: u64,
+) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>, u64) {
+    experiment_analysis::ordered_entries(first, first_value, second, second_value)
+}
+
+#[cfg(feature = "ordered-iteration")]
+#[rustler::nif(name = "ordered_members", schedule = "DirtyCpu")]
+fn ordered_members_nif(first: u64, second: u64) -> (Option<u64>, Option<u64>, u64) {
+    experiment_analysis::ordered_members(first, second)
+}
+
 #[cfg(feature = "ordered-collections")]
 #[rustler::nif(name = "ordered_replace", schedule = "DirtyCpu")]
 fn ordered_replace_nif(key: u64, value: u64, replacement: u64) -> Option<u64> {
@@ -839,6 +856,7 @@ mod tests {
                 + 3 * usize::from(cfg!(feature = "borrowed-text"))
                 + 7 * usize::from(cfg!(feature = "text-slices"))
                 + 5 * usize::from(cfg!(feature = "ordered-collections"))
+                + 2 * usize::from(cfg!(feature = "ordered-iteration"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1140,6 +1158,20 @@ mod tests {
                     "echo_borrowed_option".to_owned(),
                     1,
                     rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
+        }
+        if cfg!(feature = "ordered-iteration") {
+            expected.extend([
+                (
+                    "ordered_entries".to_owned(),
+                    4,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "ordered_members".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
                 ),
             ]);
         }

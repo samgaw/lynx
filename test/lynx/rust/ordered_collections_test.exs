@@ -18,6 +18,15 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
     properties = Path.join(project, "Tables/Properties.lean")
     File.cp!(@properties, properties)
 
+    iteration =
+      File.read!(Path.join(Path.dirname(@properties), "OrderedIteration.lean"))
+      |> String.replace("__PREFIX__", "Tables")
+      |> String.replace("__CORE__", "experiment_analysis.experiment_core.ordered")
+      |> String.replace("__ANALYSIS__", "experiment_analysis")
+      |> String.replace("__RUST__", "experiment_analysis")
+
+    File.write!(Path.join(project, "Tables/IterationProperties.lean"), iteration)
+
     options = [
       tools: @tools,
       sysroot: :full_mir,
@@ -26,11 +35,11 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
       module_prefix: "Tables.Extraction",
       build_dir: Path.join(tmp, "build"),
       roots:
-        ~w(experiment_analysis::table_replace experiment_analysis::set_insert_twice experiment_analysis::table_stats experiment_analysis::table_take experiment_analysis::set_release),
-      proof_modules: ["Tables.Properties"],
+        ~w(experiment_analysis::table_replace experiment_analysis::set_insert_twice experiment_analysis::table_stats experiment_analysis::table_take experiment_analysis::set_release experiment_analysis::ordered_entries experiment_analysis::ordered_members),
+      proof_modules: ["Tables.Properties", "Tables.IterationProperties"],
       required_properties:
         Enum.map(
-          ~w(internal_replace internal_claim replace duplicate stats borrow_identity internal_peek internal_take internal_contains internal_release take_preserves_other release_preserves_other take_once release_once),
+          ~w(internal_replace internal_claim replace duplicate stats borrow_identity internal_peek internal_take internal_contains internal_release take_preserves_other release_preserves_other take_once release_once entries_total members_total entries_ordered_unique members_ordered_unique preview_entries preview_members),
           &("Tables.Properties." <> &1)
         )
     ]
@@ -59,7 +68,12 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
              &(&1.status == :ok and &1.cached)
            )
 
-    file = Lynx.Rust.Proofs.file!(result.extraction, ["Tables.Properties"])
+    file =
+      Lynx.Rust.Proofs.file!(result.extraction, [
+        "Tables.Properties",
+        "Tables.IterationProperties"
+      ])
+
     export = Path.join(tmp, "ordered.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
@@ -97,7 +111,9 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
           {"analysis/src/lib.rs", "(previous, table.len() as u64)", "(previous, 0)"},
           {"core/src/ordered.rs", "table.remove(&key)", "table.remove(&0)"},
           {"core/src/ordered.rs", "values.remove(&key)", "values.remove(&0)"},
-          {"core/src/ordered.rs", "table.get(&key).copied()", "table.get(&0).copied()"}
+          {"core/src/ordered.rs", "table.get(&key).copied()", "table.get(&0).copied()"},
+          {"core/src/ordered.rs", "key: *key,", "key: *value,"},
+          {"core/src/ordered.rs", "output.push(*value);", "output.push(0);"}
         ] do
       source = Path.join(workspace, relative)
       original = File.read!(source)
@@ -146,6 +162,37 @@ defmodule Lynx.Rust.OrderedCollectionsTest do
       assert [%{status: :error}] = Lynx.Commands.verify!(project, [file])
       File.write!(model, model_source)
       Lynx.Rust.Project.build!(project, ["Tables.Properties"])
+    end
+
+    cursor = Path.join(project, "Tables/Extraction/OrderedIteratorsModel.lean")
+    cursor_source = File.read!(cursor)
+
+    for {before, after_text} <- [
+          {"else .fail .undef", "else .fail .panic"},
+          {".ok (some pair, tail)", ".ok (some pair, remaining)"},
+          {".ok (some key, tail)", ".ok (some key, remaining)"}
+        ] do
+      changed = String.replace(cursor_source, before, after_text)
+      assert changed != cursor_source
+      File.write!(cursor, changed)
+
+      assert_raise RuntimeError, fn ->
+        Lynx.Rust.Project.build!(project, ["Tables.IterationProperties"])
+      end
+
+      File.write!(cursor, cursor_source)
+      Lynx.Rust.Project.build!(project, ["Tables.IterationProperties"])
+    end
+
+    for extra <- [
+          "private axiom unapproved_cursor : False",
+          "private theorem unfinished_cursor : True := by sorry"
+        ] do
+      File.write!(cursor, cursor_source <> "\n" <> extra <> "\n")
+      Lynx.Rust.Project.build!(project, ["Tables.IterationProperties"])
+      assert [%{status: :error}] = Lynx.Commands.verify!(project, [file])
+      File.write!(cursor, cursor_source)
+      Lynx.Rust.Project.build!(project, ["Tables.IterationProperties"])
     end
 
     source = Path.join(workspace, "core/src/ordered.rs")

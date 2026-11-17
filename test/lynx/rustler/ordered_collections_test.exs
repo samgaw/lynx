@@ -61,13 +61,15 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
         sysroot: :full_mir,
         mir: :promoted,
         root_attribute: if(@unpatched, do: "verify::start_from"),
-        cargo: [features: ["ordered-collections"]],
+        cargo: [features: ["ordered-collections", "ordered-iteration"]],
         only: [
           ordered_replace: 3,
           ordered_claims: 1,
           ordered_stats: 4,
           ordered_take: 3,
-          ordered_release: 2
+          ordered_release: 2,
+          ordered_entries: 4,
+          ordered_members: 2
         ],
         lean_project: project,
         module_prefix: "Tables.Extraction",
@@ -103,6 +105,22 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
 
       File.write!(Path.join(project, "Tables/Properties.lean"), properties)
 
+      iteration =
+        File.read!(Path.join(@proofs, "OrderedIteration.lean"))
+        |> String.replace("__PREFIX__", "Tables")
+        |> String.replace("__CORE__", "experiment_nif.experiment_core.ordered")
+        |> String.replace("__ANALYSIS__", "experiment_nif.experiment_analysis")
+        |> String.replace("__RUST__", "experiment_nif")
+
+      File.write!(Path.join(project, "Tables/IterationProperties.lean"), iteration)
+
+      iteration_adapter =
+        File.read!(Path.join(@proofs, "OrderedIterationAdapter.lean"))
+        |> String.replace("__ENTRIES_NIF__", bindings["ordered_entries"]["lean_name"])
+        |> String.replace("__MEMBERS_NIF__", bindings["ordered_members"]["lean_name"])
+
+      File.write!(Path.join(project, "Tables/IterationAdapterProperties.lean"), iteration_adapter)
+
       adapter =
         File.read!(Path.join(@proofs, "OrderedCollectionsAdapter.lean"))
         |> String.replace("__REPLACE_NIF__", bindings["ordered_replace"]["lean_name"])
@@ -116,14 +134,19 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
       options =
         base ++
           [
-            proof_modules: ["Tables.Properties", "Tables.AdapterProperties"],
+            proof_modules: [
+              "Tables.Properties",
+              "Tables.IterationProperties",
+              "Tables.AdapterProperties",
+              "Tables.IterationAdapterProperties"
+            ],
             required_properties:
               Enum.map(
-                ~w(internal_replace internal_claim replace duplicate stats borrow_identity internal_peek internal_take internal_contains internal_release take_preserves_other release_preserves_other take_once release_once),
+                ~w(internal_replace internal_claim replace duplicate stats borrow_identity internal_peek internal_take internal_contains internal_release take_preserves_other release_preserves_other take_once release_once entries_total members_total entries_ordered_unique members_ordered_unique preview_entries preview_members),
                 &("Tables.Properties." <> &1)
               ) ++
                 Enum.map(
-                  ~w(replace duplicate stats take_once release_once),
+                  ~w(replace duplicate stats take_once release_once preview_entries preview_members),
                   &("Tables.AdapterProperties." <> &1)
                 )
           ]
@@ -166,6 +189,45 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
                "flags" => 1
              } = bindings["ordered_release"]
 
+      assert %{
+               "arguments" => ["u64", "u64", "u64", "u64"],
+               "result" => %{
+                 "tuple" => [
+                   %{"option" => "u64"},
+                   %{"option" => "u64"},
+                   %{"option" => "u64"},
+                   %{"option" => "u64"},
+                   "u64"
+                 ]
+               },
+               "flags" => 1
+             } = bindings["ordered_entries"]
+
+      assert %{
+               "arguments" => ["u64", "u64"],
+               "result" => %{"tuple" => [%{"option" => "u64"}, %{"option" => "u64"}, "u64"]},
+               "flags" => 1
+             } = bindings["ordered_members"]
+
+      assert apply(native, :ordered_entries, [9, 90, 2, 20]) == {2, 20, 9, 90, 2}
+      assert apply(native, :ordered_entries, [2, 20, 9, 90]) == {2, 20, 9, 90, 2}
+      assert apply(native, :ordered_entries, [7, 11, 7, 42]) == {7, 42, nil, nil, 1}
+      assert apply(native, :ordered_members, [9, 2]) == {2, 9, 2}
+      assert apply(native, :ordered_members, [7, 7]) == {7, nil, 1}
+
+      assert apply(native, :ordered_entries, [
+               0,
+               0,
+               18_446_744_073_709_551_615,
+               18_446_744_073_709_551_615
+             ]) == {0, 0, 18_446_744_073_709_551_615, 18_446_744_073_709_551_615, 2}
+
+      assert_raise ArgumentError, fn -> apply(native, :ordered_entries, [2, :bad, 9, 90]) end
+
+      assert_raise ArgumentError, fn ->
+        apply(native, :ordered_members, [18_446_744_073_709_551_616, 0])
+      end
+
       assert apply(native, :ordered_take, [7, 11, 7]) == {11, 11, nil, 0}
       assert apply(native, :ordered_take, [7, 11, 8]) == {nil, nil, nil, 1}
       assert apply(native, :ordered_release, [7, 7]) == {true, true, false, false, 0}
@@ -187,6 +249,17 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
           do: assert_raise(ArgumentError, fn -> apply(native, :ordered_claims, args) end)
 
       cases = [
+        {"EntriesDescending", "#{name}.ordered_entries(9,90,2,20) == {2,20,9,90,2}"},
+        {"EntriesAscending", "#{name}.ordered_entries(2,20,9,90) == {2,20,9,90,2}"},
+        {"EntriesReplace", "#{name}.ordered_entries(7,11,7,42) == {7,42,nil,nil,1}"},
+        {"MembersDescending", "#{name}.ordered_members(9,2) == {2,9,2}"},
+        {"MembersDuplicate", "#{name}.ordered_members(7,7) == {7,nil,1}"},
+        {"EntriesMaximum",
+         "#{name}.ordered_entries(0,0,18446744073709551615,18446744073709551615) == {0,0,18446744073709551615,18446744073709551615,2}"},
+        {"EntriesWrongType",
+         "try do #{name}.ordered_entries(2,:bad,9,90); false catch :error, :badarg -> true end"},
+        {"MembersOverflow",
+         "try do #{name}.ordered_members(18446744073709551616,0); false catch :error, :badarg -> true end"},
         {"Take", "#{name}.ordered_take(7,11,7) == {11,11,nil,0}"},
         {"MissingTake", "#{name}.ordered_take(7,11,8) == {nil,nil,nil,1}"},
         {"MaximumTake",
@@ -252,7 +325,9 @@ defmodule Lynx.Rustler.OrderedCollectionsTest do
           Elixir.#{native}.«ordered_claims/1», Elixir.#{native}.«ordered_claims:execution/1»,
           Elixir.#{native}.«ordered_stats/4», Elixir.#{native}.«ordered_stats:execution/4»,
           Elixir.#{native}.«ordered_take/3», Elixir.#{native}.«ordered_take:execution/3»,
-          Elixir.#{native}.«ordered_release/2», Elixir.#{native}.«ordered_release:execution/2»]
+          Elixir.#{native}.«ordered_release/2», Elixir.#{native}.«ordered_release:execution/2»,
+          Elixir.#{native}.«ordered_entries/4», Elixir.#{native}.«ordered_entries:execution/4»,
+          Elixir.#{native}.«ordered_members/2», Elixir.#{native}.«ordered_members:execution/2»]
         cbv
         \"\"\"
     end

@@ -508,3 +508,38 @@ pub fn set_release(key: u64, query: u64) -> (bool, bool, bool, bool, u64) {
     let second = experiment_core::ordered::release(&mut values, query);
     (before, first, after, second, values.len() as u64)
 }
+
+/// Observes ordered key/value snapshots through a workspace dependency.
+pub fn ordered_entries(
+    first_key: u64,
+    first_value: u64,
+    second_key: u64,
+    second_value: u64,
+) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>, u64) {
+    let mut table = std::collections::BTreeMap::new();
+    experiment_core::ordered::replace_value(&mut table, first_key, first_value);
+    experiment_core::ordered::replace_value(&mut table, second_key, second_value);
+    let rows = experiment_core::ordered::entries(&table);
+    let first = match rows.first().copied() {
+        Some(row) => (Some(row.key), Some(row.value)),
+        None => (None, None),
+    };
+    let second = match rows.get(1).copied() {
+        Some(row) => (Some(row.key), Some(row.value)),
+        None => (None, None),
+    };
+    (first.0, first.1, second.0, second.1, rows.len() as u64)
+}
+
+/// Observes sorted, deduplicated members through the workspace dependency.
+pub fn ordered_members(first: u64, second: u64) -> (Option<u64>, Option<u64>, u64) {
+    let mut values = std::collections::BTreeSet::new();
+    experiment_core::ordered::claim(&mut values, first);
+    experiment_core::ordered::claim(&mut values, second);
+    let members = experiment_core::ordered::members(&values);
+    (
+        members.first().copied(),
+        members.get(1).copied(),
+        members.len() as u64,
+    )
+}
