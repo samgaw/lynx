@@ -38,6 +38,9 @@ defmodule Lynx.Rust.TextSlicesTest do
         &("TextSlices.Properties." <> &1)
       )
 
+    record = File.read!(Path.join(Path.dirname(@properties), "TextRecord.lean"))
+    File.write!(Path.join(project, "TextSlices/Record.lean"), record)
+
     options = [
       tools: @tools,
       sysroot: :full_mir,
@@ -50,11 +53,17 @@ defmodule Lynx.Rust.TextSlicesTest do
         "experiment_analysis::checked_text_split",
         "experiment_analysis::text_equal",
         "experiment_analysis::text_has_prefix",
-        "experiment_analysis::text_consume_prefix"
+        "experiment_analysis::text_consume_prefix",
+        "experiment_analysis::text_record"
       ],
       build_dir: Path.join(tmp, "build"),
-      proof_modules: ["TextSlices.Properties"],
-      required_properties: required
+      proof_modules: ["TextSlices.Properties", "TextSlices.Record"],
+      required_properties:
+        required ++
+          Enum.map(
+            ~w(tagged_composition tagged_exact tagged_returns tagged_sound record_sound record_accepts record_rejects_first record_rejects_second record_total record_unicode),
+            &("TextSlices.Record." <> &1)
+          )
     ]
 
     result = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
@@ -75,7 +84,9 @@ defmodule Lynx.Rust.TextSlicesTest do
              &(&1.status == :ok and &1.cached)
            )
 
-    file = Lynx.Rust.Proofs.file!(result.extraction, ["TextSlices.Properties"])
+    file =
+      Lynx.Rust.Proofs.file!(result.extraction, ["TextSlices.Properties", "TextSlices.Record"])
+
     export = Path.join(tmp, "borrowed-text.export")
     assert [%{status: :ok}] = Lynx.Commands.verify!(project, [file], export: export)
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
@@ -120,6 +131,8 @@ defmodule Lynx.Rust.TextSlicesTest do
           {"core/src/protocol.rs", "left == right", "left != right"},
           {"core/src/protocol.rs", "text.starts_with(prefix)", "prefix.starts_with(text)"},
           {"core/src/protocol.rs", "text.strip_prefix(prefix)", "text.strip_prefix(\"\")"},
+          {"analysis/src/lib.rs", "Some((name, value, remainder))",
+           "Some((value, name, remainder))"},
           {"analysis/src/lib.rs", "Some((left, right))", "Some((right, left))"}
         ] do
       source = Path.join(workspace, relative)

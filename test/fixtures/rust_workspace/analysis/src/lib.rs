@@ -29,6 +29,15 @@ pub fn text_consume_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     experiment_core::protocol::text_consume_prefix(text, prefix)
 }
 
+/// Parses two tagged UTF-8 fields and preserves the unconsumed record suffix.
+pub fn text_record(text: &str, name_bytes: u8, value_bytes: u8) -> Option<(&str, &str, &str)> {
+    let (name, remainder) =
+        experiment_core::protocol::tagged_text_field(text, "name:", name_bytes as usize)?;
+    let (value, remainder) =
+        experiment_core::protocol::tagged_text_field(remainder, "|value:", value_bytes as usize)?;
+    Some((name, value, remainder))
+}
+
 /// Borrows a field through the workspace dependency.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     experiment_core::protocol::text_window(text, start, end)
@@ -360,6 +369,28 @@ pub fn array_window_length(start: usize, end: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_records_preserve_fields_and_leave_the_remainder() {
+        assert_eq!(
+            super::text_record("name:é|value:🙂tail", 2, 4),
+            Some(("é", "🙂", "tail"))
+        );
+        assert_eq!(super::text_record("name:|value:", 0, 0), Some(("", "", "")));
+        for (input, name_bytes, value_bytes) in [
+            ("name:é|value:🙂", 1, 4),
+            ("name:é|value:🙂", 2, 3),
+            ("name:é|value:🙂", 2, 5),
+            ("name:é|wrong:🙂", 2, 4),
+            ("wrong:é|value:🙂", 2, 4),
+        ] {
+            assert_eq!(
+                super::text_record(input, name_bytes, value_bytes),
+                None,
+                "{input:?}"
+            );
+        }
+    }
+
     #[test]
     fn split_lengths_account_for_the_entire_input() {
         let input = [0, 255, 128, 65];

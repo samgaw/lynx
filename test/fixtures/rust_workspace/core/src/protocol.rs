@@ -202,6 +202,16 @@ pub fn text_consume_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     text.strip_prefix(prefix)
 }
 
+/// Borrows one tagged field, leaving unconsumed bytes for the next parser.
+pub fn tagged_text_field<'a>(
+    text: &'a str,
+    tag: &str,
+    length: usize,
+) -> Option<(&'a str, &'a str)> {
+    let remainder = text_consume_prefix(text, tag)?;
+    checked_text_split(remainder, length)
+}
+
 /// Borrows a field only when both byte offsets are UTF-8 character boundaries.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     text.get(start..end)
