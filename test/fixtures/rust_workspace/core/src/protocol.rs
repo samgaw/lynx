@@ -182,6 +182,11 @@ pub fn text_boundary(text: &str, position: usize) -> bool {
     text.is_char_boundary(position)
 }
 
+/// Splits a text field through Rust's checked standard-library implementation.
+pub fn checked_text_split(text: &str, position: usize) -> Option<(&str, &str)> {
+    text.split_at_checked(position)
+}
+
 /// Borrows a field only when both byte offsets are UTF-8 character boundaries.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     text.get(start..end)
@@ -375,6 +380,17 @@ mod tests {
     #[test]
     fn string_fields_reject_partial_characters() {
         let text = "aé🙂z";
+        for position in 0..=text.len() + 1 {
+            match super::checked_text_split(text, position) {
+                Some((left, right)) => {
+                    assert_eq!(left.len(), position);
+                    assert_eq!(format!("{left}{right}"), text);
+                }
+                None => assert!(!super::text_boundary(text, position)),
+            }
+        }
+        assert_eq!(super::checked_text_split(text, usize::MAX), None);
+        assert_eq!(super::checked_text_split("", 0), Some(("", "")));
         for (start, end, expected) in [
             (1, 3, Some("é")),
             (3, 7, Some("🙂")),

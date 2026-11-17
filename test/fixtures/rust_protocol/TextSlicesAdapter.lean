@@ -28,4 +28,16 @@ theorem window_encoding (input : Lynx.Term) (text field : Str) (start stop : U8)
     have bounded : stop.val ≤ 255 := by scalar_tac
     omega
 
+theorem checked_facade_utf8 (input : Lynx.Term) (text left right : Str) (position : U8)
+    (decoded : Lynx.Rustler.decodeStr input = .ok text)
+    (returned : __CHECKED_NIF__ text position = .ok (some (left, right))) :
+    (TextSlices.Extraction.StringSlices.bytes left).IsValidUTF8 ∧
+      (TextSlices.Extraction.StringSlices.bytes right).IsValidUTF8 := by
+  have valid : (TextSlices.Extraction.StringSlices.bytes text).IsValidUTF8 :=
+    Lynx.Rustler.decodeStr_utf8 input text decoded
+  have call : experiment_nif.experiment_analysis.checked_text_split text
+      (UScalar.cast .Usize position) = .ok (some (left, right)) := by
+    simpa [__CHECKED_NIF__, lift] using returned
+  exact TextSlices.Properties.checked_utf8 _ _ _ _ valid call
+
 end TextSlices.AdapterProperties

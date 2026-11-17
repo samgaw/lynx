@@ -87,4 +87,84 @@ theorem split_utf8 (text left right : Str) (position : Usize)
         Extraction.StringSlices.rangeGet_valid_utf8 _ _ _ valid hs⟩
 
 
+theorem checked_implementation (text : Str) (position : Usize) :
+    experiment_analysis.checked_text_split text position =
+      (if TextSlices.Extraction.StringViews.isCharBoundary text position then do
+        let fields ← TextSlices.Extraction.StringSlices.splitUnchecked text position
+        pure (some fields)
+       else .ok none) := by
+  rfl
+
+theorem checked_consistent (text : Str) (position : Usize)
+    (valid : (TextSlices.Extraction.StringSlices.bytes text).IsValidUTF8) :
+    experiment_analysis.checked_text_split text position = experiment_analysis.split_text text position := by
+  rw [checked_implementation]
+  cases boundary : TextSlices.Extraction.StringViews.isCharBoundary text position with
+  | false =>
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    exact (split_rejected text position boundary).symm
+  | true =>
+    have bounded : position.val ≤ text.val.length := by
+      have pos := TextSlices.Extraction.StringSlices.boundary_valid text valid position boundary
+      have bound := pos.le_rawEndPos
+      simpa [String.Pos.Raw.le_iff, String.rawEndPos, String.utf8ByteSize] using bound
+    have zero : TextSlices.Extraction.StringViews.isCharBoundary text 0#usize = true := by
+      simp [TextSlices.Extraction.StringViews.isCharBoundary]
+    have ending : TextSlices.Extraction.StringViews.isCharBoundary text (Slice.len text) = true := by
+      simp [TextSlices.Extraction.StringViews.isCharBoundary, Slice.len]
+    simp [Str, TextSlices.Extraction.StringSlices.splitUnchecked, boundary,
+      core.slice.Slice.split_at, bounded, UScalar.le_equiv, Slice.length,
+      experiment_analysis.split_text, experiment_analysis.experiment_core.protocol.text_prefix,
+      experiment_analysis.experiment_core.protocol.text_suffix, TextSlices.Extraction.StringSlices.get,
+      TextSlices.Extraction.StringSlices.RangeToIndex, TextSlices.Extraction.StringSlices.RangeFromIndex,
+      TextSlices.Extraction.StringSlices.toGet, TextSlices.Extraction.StringSlices.fromGet,
+      TextSlices.Extraction.StringSlices.rangeGet, zero, ending, Slice.len,
+      core.slice.index.SliceIndexRangeUsizeSlice.get, Lynx.Rust.Try.optionBranch,
+      lift, pure, List.slice, List.splitAt_eq]
+    simp only [← List.length_drop, List.take_length]
+
+theorem checked_rejected (text : Str) (position : Usize)
+    (rejected : TextSlices.Extraction.StringViews.isCharBoundary text position = false) :
+    experiment_analysis.checked_text_split text position = .ok none := by
+  simp [checked_implementation, rejected]
+
+theorem checked_utf8 (text left right : Str) (position : Usize)
+    (valid : (TextSlices.Extraction.StringSlices.bytes text).IsValidUTF8)
+    (returned : experiment_analysis.checked_text_split text position = .ok (some (left, right))) :
+    (TextSlices.Extraction.StringSlices.bytes left).IsValidUTF8 ∧
+      (TextSlices.Extraction.StringSlices.bytes right).IsValidUTF8 := by
+  exact split_utf8 text left right position valid (by rwa [← checked_consistent text position valid])
+
+@[cbv_eval] theorem checked_by_values (text : Str) (position : Usize) :
+    experiment_analysis.checked_text_split text position =
+      if TextSlices.Extraction.StringViews.isCharBoundary text position then
+        .ok (some (Slice.from (text.val.take position.val) (by scalar_tac), text.drop position))
+      else .ok none := by
+  rw [checked_implementation]
+  cases boundary : TextSlices.Extraction.StringViews.isCharBoundary text position with
+  | false => rfl
+  | true =>
+    have bounded : position.val ≤ text.val.length := by
+      by_cases zero : position.val = 0
+      · omega
+      · by_cases inside : position.val < text.val.length
+        · omega
+        · have absent : text.val[position.val]? = none := List.getElem?_eq_none (by omega)
+          have ending : position.val = text.val.length := by
+            simpa [TextSlices.Extraction.StringViews.isCharBoundary, zero, absent] using boundary
+          omega
+    simp [Str, TextSlices.Extraction.StringSlices.splitUnchecked, boundary,
+      core.slice.Slice.split_at, bounded, Slice.length,
+      Slice.drop, List.splitAt_eq, pure]
+
+attribute [local cbv_opaque] RustM.ok RustM.fail
+
+theorem checked_unicode :
+    experiment_analysis.checked_text_split (toStr "aé🙂z") 3#usize =
+      .ok (some (toStr "aé", toStr "🙂z")) ∧
+    experiment_analysis.checked_text_split (toStr "aé🙂z") 2#usize = .ok none ∧
+    experiment_analysis.checked_text_split (toStr "aé🙂z") 9#usize = .ok none := by
+  cbv
+  all_goals simp
+
 end TextSlices.Properties

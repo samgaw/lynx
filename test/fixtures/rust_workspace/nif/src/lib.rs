@@ -219,6 +219,13 @@ fn split_text(text: &str, position: u8) -> Option<(&str, &str)> {
     experiment_analysis::split_text(text, position as usize)
 }
 
+/// Calls the extracted standard checked splitter through the workspace crates.
+#[cfg(feature = "text-slices")]
+#[rustler::nif(name = "checked_split_text", schedule = "DirtyCpu")]
+fn checked_split_text_nif(text: &str, position: u8) -> Option<(&str, &str)> {
+    experiment_analysis::checked_text_split(text, position as usize)
+}
+
 /// Counts validated text payload bytes through a renamed dirty NIF export.
 #[cfg(feature = "text-views")]
 #[rustler::nif(name = "text_payload", schedule = "DirtyCpu")]
@@ -761,7 +768,7 @@ mod tests {
                 + usize::from(cfg!(feature = "owned-text"))
                 + 3 * usize::from(cfg!(feature = "text-input"))
                 + 3 * usize::from(cfg!(feature = "borrowed-text"))
-                + 2 * usize::from(cfg!(feature = "text-slices"))
+                + 3 * usize::from(cfg!(feature = "text-slices"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1068,6 +1075,11 @@ mod tests {
         }
         if cfg!(feature = "text-slices") {
             expected.extend([
+                (
+                    "checked_split_text".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
                 (
                     "slice_text".to_owned(),
                     3,

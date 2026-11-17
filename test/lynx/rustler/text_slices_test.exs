@@ -59,9 +59,11 @@ defmodule Lynx.Rustler.TextSlicesTest do
         workspace: workspace,
         package: "experiment-nif",
         tools: @tools,
+        sysroot: :full_mir,
+        mir: :promoted,
         root_attribute: if(@unpatched, do: "verify::start_from"),
         cargo: [features: ["text-slices"]],
-        only: [slice_text: 3, split_text: 2],
+        only: [slice_text: 3, split_text: 2, checked_split_text: 2],
         lean_project: project,
         module_prefix: "TextSlices.Extraction",
         build_dir: Path.join(tmp, "build")
@@ -78,6 +80,12 @@ defmodule Lynx.Rustler.TextSlicesTest do
                "result" => %{"option" => %{"tuple" => ["str", "str"]}}
              } = bindings["split_text"]
 
+      assert %{
+               "arguments" => ["str", "u8"],
+               "flags" => 1,
+               "result" => %{"option" => %{"tuple" => ["str", "str"]}}
+             } = bindings["checked_split_text"]
+
       properties =
         File.read!(@proof)
         |> String.replace("experiment_analysis.experiment_core", "experiment_nif.experiment_core")
@@ -88,6 +96,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
       adapter =
         File.read!(Path.join(Path.dirname(@proof), "TextSlicesAdapter.lean"))
         |> String.replace("__SLICE_NIF__", bindings["slice_text"]["lean_name"])
+        |> String.replace("__CHECKED_NIF__", bindings["checked_split_text"]["lean_name"])
 
       File.write!(Path.join(project, "TextSlices/AdapterProperties.lean"), adapter)
 
@@ -97,9 +106,13 @@ defmodule Lynx.Rustler.TextSlicesTest do
             proof_modules: ["TextSlices.Properties", "TextSlices.AdapterProperties"],
             required_properties:
               Enum.map(
-                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8),
+                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode),
                 &("TextSlices.Properties." <> &1)
-              ) ++ ["TextSlices.AdapterProperties.window_encoding"]
+              ) ++
+                [
+                  "TextSlices.AdapterProperties.window_encoding",
+                  "TextSlices.AdapterProperties.checked_facade_utf8"
+                ]
           ]
 
       prepared = Lynx.Rustler.prepare!(options)
@@ -139,7 +152,23 @@ defmodule Lynx.Rustler.TextSlicesTest do
       for args <- [[<<255>>, 0, 0], [[97], 0, 0], ["é", -1, 0], ["é", 0, 4_294_967_296]],
           do: assert_raise(ArgumentError, fn -> apply(native, :slice_text, args) end)
 
+      for {position, expected} <- [
+            {0, {"", "aé🙂z"}},
+            {1, {"a", "é🙂z"}},
+            {2, nil},
+            {3, {"aé", "🙂z"}},
+            {8, {"aé🙂z", ""}},
+            {9, nil}
+          ],
+          do: assert(apply(native, :checked_split_text, ["aé🙂z", position]) == expected)
+
+      assert_raise ArgumentError, fn -> apply(native, :checked_split_text, [<<255>>, 0]) end
+
       cases = [
+        {"Checked", "#{native_name}.checked_split_text(\"aé🙂z\",3) == {\"aé\",\"🙂z\"}"},
+        {"CheckedInside", "#{native_name}.checked_split_text(\"aé🙂z\",2) == nil"},
+        {"CheckedEnd", "#{native_name}.checked_split_text(\"aé🙂z\",8) == {\"aé🙂z\",\"\"}"},
+        {"CheckedPastEnd", "#{native_name}.checked_split_text(\"aé🙂z\",9) == nil"},
         {"Narrowing", "#{native_name}.slice_text(\"aé🙂z\",257,259) == \"é\""},
         {"Window", "#{native_name}.slice_text(\"aé🙂z\",1,3) == \"é\""},
         {"Inside", "#{native_name}.slice_text(\"aé🙂z\",2,2) == nil"},
@@ -189,7 +218,8 @@ defmodule Lynx.Rustler.TextSlicesTest do
         proof: ~LEAN\"\"\"
         simp only [Lynx.apply,«slicing:ensures/0»,
           Elixir.#{native}.«slice_text/3», Elixir.#{native}.«slice_text:execution/3»,
-          Elixir.#{native}.«split_text/2», Elixir.#{native}.«split_text:execution/2»]
+          Elixir.#{native}.«split_text/2», Elixir.#{native}.«split_text:execution/2»,
+          Elixir.#{native}.«checked_split_text/2», Elixir.#{native}.«checked_split_text:execution/2»]
         cbv
         all_goals
           rcases System.Platform.numBits_eq with bits | bits

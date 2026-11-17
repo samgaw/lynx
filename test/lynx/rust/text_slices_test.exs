@@ -34,15 +34,21 @@ defmodule Lynx.Rust.TextSlicesTest do
 
     required =
       Enum.map(
-        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8),
+        ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode),
         &("TextSlices.Properties." <> &1)
       )
 
     options = [
       tools: @tools,
+      sysroot: :full_mir,
+      mir: :promoted,
       lean_project: project,
       module_prefix: "TextSlices.Extraction",
-      roots: ["experiment_analysis::text_window", "experiment_analysis::split_text"],
+      roots: [
+        "experiment_analysis::text_window",
+        "experiment_analysis::split_text",
+        "experiment_analysis::checked_text_split"
+      ],
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["TextSlices.Properties"],
       required_properties: required
@@ -50,6 +56,16 @@ defmodule Lynx.Rust.TextSlicesTest do
 
     result = Lynx.Rust.verify!(workspace, "experiment-analysis", options)
     assert Enum.all?(result.reports, &(&1.status == :ok))
+
+    assert Enum.any?(result.extraction.translation["functions"], fn function ->
+             function["def_id"] in result.extraction.audit.library_helpers and
+               String.ends_with?(function["lean_name"], "core.str.Str.split_at_checked")
+           end)
+
+    refute Enum.any?(
+             result.verification.unverified_external_calls,
+             &String.ends_with?(&1.rust_name, "::split_at_checked")
+           )
 
     assert Enum.all?(
              Lynx.Rust.verify!(workspace, "experiment-analysis", options).reports,
@@ -97,6 +113,7 @@ defmodule Lynx.Rust.TextSlicesTest do
 
     for {relative, before, after_text} <- [
           {"core/src/protocol.rs", "text.get(start..end)", "text.get(0..end)"},
+          {"core/src/protocol.rs", "text.split_at_checked(position)", "text.split_at_checked(0)"},
           {"analysis/src/lib.rs", "Some((left, right))", "Some((right, left))"}
         ] do
       source = Path.join(workspace, relative)
