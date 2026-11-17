@@ -746,7 +746,7 @@ defmodule Lynx.Rust.Extraction do
     describe!(context, tools, roots, output, module, opts, opaque)
   end
 
-  defp describe!(context, tools, roots, output, module, opts, opaque) do
+  defp describe!(context, tools, roots, output, module, opts, opaque, complete_methods \\ false) do
     unless is_list(roots) and Enum.all?(roots, &is_binary/1) and
              (roots != [] or Keyword.get(opts, :item_roots, []) != []),
            do:
@@ -802,6 +802,7 @@ defmodule Lynx.Rust.Extraction do
 
     args =
       ["rustc", "--sysroot", if(context[:sysroot], do: context.sysroot.path, else: "default")] ++
+        if(complete_methods, do: ["--translate-all-methods"], else: []) ++
         Lynx.Rust.Futures.arguments!(Keyword.get(opts, :futures, :reject), tools) ++
         Lynx.Rust.NativeOwnedDrops.arguments!(Keyword.get(opts, :owned_drops, false), tools) ++
         Lynx.Rust.Mir.arguments!(opts) ++
@@ -858,51 +859,67 @@ defmodule Lynx.Rust.Extraction do
       )
 
     document = read_llbc!(llbc, diagnostics)
-    validate_target!(document)
 
-    Lynx.Rust.RootSelection.validate!(
-      document,
-      roots,
-      attribute,
-      [context.artifact["target"]["name"]],
-      first_party
-    )
+    if not complete_methods and incomplete_comparison?(document) do
+      describe!(context, tools, roots, output, module, opts, opaque, true)
+    else
+      validate_target!(document)
 
-    models =
-      models ++
-        Lynx.Rust.Futures.type_models!(Keyword.get(opts, :futures, :reject), document, module)
+      Lynx.Rust.RootSelection.validate!(
+        document,
+        roots,
+        attribute,
+        [context.artifact["target"]["name"]],
+        first_party
+      )
 
-    allocator_layout =
-      if opts[:unwind] == :captured and Lynx.Rust.AllocatorLayout.required?(document) do
-        allocator_file = Path.rootname(llbc) <> ".allocators.llbc"
+      models =
+        models ++
+          Lynx.Rust.Futures.type_models!(Keyword.get(opts, :futures, :reject), document, module)
 
-        allocator_args =
-          Enum.flat_map(args, fn
-            "--preset=aeneas" -> Lynx.Rust.AllocatorLayout.arguments()
-            ^llbc -> [allocator_file]
-            argument -> [argument]
-          end)
+      allocator_layout =
+        if opts[:unwind] == :captured and Lynx.Rust.AllocatorLayout.required?(document) do
+          allocator_file = Path.rootname(llbc) <> ".allocators.llbc"
 
-        diagnostics =
-          run!(charon, allocator_args,
-            cd: context.record["directory"],
-            env: Lynx.Rust.Cargo.environment(context)
-          )
+          allocator_args =
+            Enum.flat_map(args, fn
+              "--preset=aeneas" -> Lynx.Rust.AllocatorLayout.arguments()
+              ^llbc -> [allocator_file]
+              argument -> [argument]
+            end)
 
-        allocator_document = read_llbc!(allocator_file, diagnostics)
-        validate_target!(allocator_document)
+          diagnostics =
+            run!(charon, allocator_args,
+              cd: context.record["directory"],
+              env: Lynx.Rust.Cargo.environment(context)
+            )
 
-        Lynx.Rust.AllocatorLayout.audit!(allocator_document, document, first_party)
-        |> Map.put(:fingerprint, Lynx.Rust.Fingerprint.file!(allocator_file))
-      end
+          allocator_document = read_llbc!(allocator_file, diagnostics)
+          validate_target!(allocator_document)
 
-    %{
-      document: document,
-      llbc: llbc,
-      first_party: first_party,
-      models: models,
-      allocator_layout: allocator_layout
-    }
+          Lynx.Rust.AllocatorLayout.audit!(allocator_document, document, first_party)
+          |> Map.put(:fingerprint, Lynx.Rust.Fingerprint.file!(allocator_file))
+        end
+
+      %{
+        document: document,
+        llbc: llbc,
+        first_party: first_party,
+        models: models,
+        allocator_layout: allocator_layout
+      }
+    end
+  end
+
+  # The slice model calls ne even when Rust's optimized comparison calls eq.
+  # Ask Charon for the actual omitted methods; never invent a dictionary slot.
+  defp incomplete_comparison?(document) do
+    Enum.any?(document["translated"]["trait_decls"] || [], fn trait ->
+      trait &&
+        trait["item_meta"]["name"] ==
+          Enum.map(~w(core cmp PartialEq), &%{"Ident" => [&1, 0]}) &&
+        Enum.any?(trait["methods"], &is_nil/1)
+    end)
   end
 
   @doc false

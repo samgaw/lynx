@@ -33,6 +33,56 @@ defmodule Lynx.Rust.ComparisonModels do
 
   def resolve(_, _, _), do: nil
 
+  def string_helper?(f, t) do
+    refs = LLBC.type_references!(t)
+    trait = comparison_trait(t)
+
+    with %{
+           "TraitImpl" => %{
+             "impl_ref" => %{"id" => impl},
+             "item_id" => 0,
+             "reuses_default" => false
+           }
+         } <- f["src"],
+         true <- match?(%{"Structured" => _}, f["body"]),
+         true <-
+           f["item_meta"]["name"] ==
+             path(~w(core str traits)) ++ [%{"Impl" => %{"Trait" => impl}}, ident("eq")],
+         true <- is_integer(trait) and safe?(f["signature"]),
+         true <- parameters?(f["generics"], 0, 2, false, trait),
+         [left, right] <- CallModels.expand(f["signature"]["inputs"], refs),
+         %{"Ref" => [%{"Var" => %{"Free" => 0}}, str, "Shared"]} <- left,
+         true <- right == ref(str, 1),
+         true <- Lynx.Rust.StringModels.borrowed_type?(left, t, refs),
+         true <- CallModels.expand(f["signature"]["output"], refs) == %{"Scalar" => "Bool"},
+         %{"src" => "Normal", "is_unsafe" => false, "is_negative" => false} = implementation <-
+           find(t["trait_impls"], impl),
+         true <-
+           implementation["generics"] ==
+             Map.new(
+               ~w(regions types const_generics trait_clauses outlives trait_type_constraints),
+               &{&1, []}
+             ),
+         true <-
+           CallModels.expand(implementation["impl_trait"], refs) == declaration(trait, [str, str]) do
+      Lynx.Rust.FormatModels.method_identity?(
+        f,
+        %{
+          implementation
+          | "methods" =>
+              Enum.filter(
+                implementation["methods"],
+                &match?(%{"kind" => %{"TraitMethod" => [^trait, 0]}}, &1)
+              )
+        },
+        trait,
+        %{translated: t, refs: refs}
+      )
+    else
+      _ -> false
+    end
+  end
+
   def prefix_helper?(f, t) do
     refs = LLBC.type_references!(%{"translated" => t})
     trait = comparison_trait(t)

@@ -14,6 +14,7 @@ defmodule Lynx.Rust.LibraryHelpers do
       if(context[:sysroot],
         do:
           [
+            "core::str::traits::_::eq",
             "core::str::_::split_at_checked",
             "core::slice::_::starts_with",
             "core::slice::_::strip_prefix",
@@ -26,6 +27,23 @@ defmodule Lynx.Rust.LibraryHelpers do
         else: []
       )
   end
+
+  def selected?(
+        %{
+          "body" => %{"Structured" => _},
+          "item_meta" => %{
+            "name" => [
+              %{"Ident" => ["core", 0]},
+              %{"Ident" => ["str", 0]},
+              %{"Ident" => ["traits", 0]},
+              _,
+              %{"Ident" => ["eq", 0]}
+            ]
+          }
+        } = function,
+        translated
+      ),
+      do: Lynx.Rust.ComparisonModels.string_helper?(function, translated)
 
   def selected?(
         %{
