@@ -2,6 +2,23 @@ defmodule Lynx.Rust.LLBCJsonTest do
   use ExUnit.Case, async: true
   alias Lynx.Rust.LLBCJson
 
+  test "restores a shared trait-call dictionary without changing its method slot or type family" do
+    dictionary = %{
+      "kind" => %{"Clause" => [%{"Free" => 0}, %{"regions" => []}]},
+      "trait_decl_ref" => %{"id" => 9, "generics" => %{}}
+    }
+
+    original = %{"dictionary" => %{"Value" => [10, dictionary]}}
+    document = %{"Trait" => [%{"Deduplicated" => 10}, 4], "ty" => %{"Deduplicated" => 10}}
+
+    assert %{"Trait" => [%{"Value" => [10, ^dictionary]}, 4], "ty" => %{"Deduplicated" => 10}} =
+             LLBCJson.restore_trait_references!(document, original)
+
+    assert_raise ArgumentError, ~r/missing LLBC trait reference/, fn ->
+      LLBCJson.restore_trait_references!(document, %{})
+    end
+  end
+
   test "constant identity survives trait-dictionary rehydration inside constant calls" do
     dictionary = %{"kind" => "SelfId", "trait_decl_ref" => %{"id" => 2, "generics" => %{}}}
     binder = fn value -> %{"regions" => [], "outlives" => [], "skip_binder" => value} end

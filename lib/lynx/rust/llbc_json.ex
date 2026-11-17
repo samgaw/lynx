@@ -291,8 +291,17 @@ defmodule Lynx.Rust.LLBCJson do
 
   defp restore_traits(map, refs, seen) when is_map(map) do
     Map.new(map, fn
-      {"trait_refs", values} -> {"trait_refs", Enum.map(values, &restore_trait(&1, refs, seen))}
-      {key, value} -> {key, restore_traits(value, refs, seen)}
+      {"trait_refs", values} ->
+        {"trait_refs", Enum.map(values, &restore_trait(&1, refs, seen))}
+
+      {"Trait", [raw, slot]} when is_map(raw) and is_integer(slot) ->
+        bound =
+          restore_trait(%{"regions" => [], "outlives" => [], "skip_binder" => raw}, refs, seen)
+
+        {"Trait", [bound["skip_binder"], slot]}
+
+      {key, value} ->
+        {key, restore_traits(value, refs, seen)}
     end)
   end
 
