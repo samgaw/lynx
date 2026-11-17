@@ -165,6 +165,63 @@ theorem decodeString_exhausted (bytes : ByteArray)
     decodeString (.bitstring bytes 0) = .error .exhausted := by
   simp [decodeString,decodeBinary,large]
 
+/-- Rustler borrows valid UTF-8 directly from an inspected binary. Logical bytes
+are retained exactly. Native pointers, environment pinning and borrow lifetimes
+are unverified FFI boundaries; impossible native slice sizes exhaust. -/
+@[expose] def decodeStr (input : Term) : Except Exception Str := do
+  let bytes ← decodeBinary input
+  let values := bytes.data.toList.map fun byte => (⟨byte.toBitVec⟩ : U8)
+  if bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat then
+    if bytes.validateUTF8 then
+      .ok (Slice.from values (by simpa [values] using bounds.1))
+    else .error (.error (.atom "badarg"))
+  else .error .exhausted
+
+/-- Closed ordinary-size binary proofs can reduce without unfolding symbolic
+machine-width constants. The larger-input branch retains the original bounds. -/
+@[cbv_eval] theorem decodeStr_binary_eq (bytes : ByteArray) :
+    decodeStr (.bitstring bytes 0) =
+      let values := bytes.data.toList.map fun byte => (⟨byte.toBitVec⟩ : U8)
+      if small : bytes.size ≤ 2147483647 then
+        if bytes.validateUTF8 then
+          Except.ok (Slice.from values (by
+            have bound : bytes.size ≤ Usize.max := by scalar_tac
+            simpa [values] using bound))
+        else Except.error (.error (.atom "badarg"))
+      else if bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat then
+        if bytes.validateUTF8 then
+          Except.ok (Slice.from values (by simpa [values] using bounds.1))
+        else Except.error (.error (.atom "badarg"))
+      else Except.error .exhausted := by
+  by_cases small : bytes.size ≤ 2147483647
+  · have unsigned : bytes.size ≤ Usize.max := by scalar_tac
+    have signed : bytes.size ≤ Isize.max.toNat := by scalar_tac
+    simp [decodeStr, decodeBinary, small, unsigned, signed]
+    rfl
+  · simp [decodeStr, decodeBinary, small]
+    rfl
+
+theorem decodeStr_values (bytes : ByteArray)
+    (bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat)
+    (valid : bytes.validateUTF8 = true) :
+    ∃ text, decodeStr (.bitstring bytes 0) = .ok text ∧
+      text.val = bytes.data.toList.map (fun byte => (⟨byte.toBitVec⟩ : U8)) := by
+  have utf8 : bytes.IsValidUTF8 := by simpa using valid
+  simp [decodeStr, decodeBinary, bounds, utf8]
+  exact ⟨_, rfl, by simp⟩
+
+theorem decodeStr_invalid (bytes : ByteArray)
+    (bounds : bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat)
+    (invalid : bytes.validateUTF8 = false) :
+    decodeStr (.bitstring bytes 0) = .error (.error (.atom "badarg")) := by
+  have utf8 : ¬bytes.IsValidUTF8 := by simpa using invalid
+  simp [decodeStr, decodeBinary, bounds, utf8]
+
+theorem decodeStr_exhausted (bytes : ByteArray)
+    (large : ¬(bytes.size ≤ Usize.max ∧ bytes.size ≤ Isize.max.toNat)) :
+    decodeStr (.bitstring bytes 0) = .error .exhausted := by
+  simp [decodeStr, decodeBinary, large]
+
 @[expose] def encodeBinary (bytes : Binary) : Term := .bitstring bytes 0
 
 @[simp] theorem decodeBinary_encodeBinary (bytes : Binary) :

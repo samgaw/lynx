@@ -11,6 +11,13 @@ defmodule Lynx.Rustler do
   native slice sizes exhaust verification. Actual compiler type identity is checked.
   String result encoding retains its explicit size cutoff. Pure String bindings
   default to elaborated MIR so rustc resolves intermediate cleanup before auditing.
+  Shared `&str` arguments and results use the compiler's builtin str identity,
+  strict UTF-8 binary decoding and the existing byte-slice representation. Native
+  pointers, environment pinning and borrow lifetimes remain FFI boundaries; no
+  allocation or native lifetime proof is claimed. Mutable, static and other
+  reference contracts remain rejected. Nested tuples and options retain their
+  ordinary codec behavior. Explicit ownership mode does not admit borrowed text
+  at the adapter boundary.
   Options try the payload decoder first, then
   recognize `nil`; nested options therefore do not have an injective encoding.
   Return values can also contain monomorphic

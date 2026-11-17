@@ -86,6 +86,18 @@ fn single_literal(expression: &Expr) -> Result<Lit, String> {
 }
 
 fn supported_type(ty: &Type) -> Result<Value, String> {
+    if let Type::Reference(reference) = ty {
+        if reference.mutability.is_none()
+            && reference
+                .lifetime
+                .as_ref()
+                .is_none_or(|lifetime| lifetime.ident == "_")
+            && matches!(&*reference.elem, Type::Path(path) if path.qself.is_none() && path.path.is_ident("str"))
+        {
+            return Ok(json!("str"));
+        }
+        return Err("only shared str references with an elided lifetime are supported".into());
+    }
     if let Type::Tuple(tuple) = ty {
         if tuple.elems.len() <= 7 {
             let fields: Result<Vec<_>, _> = tuple.elems.iter().map(supported_type).collect();
@@ -693,6 +705,28 @@ mod tests {
             1,
         );
         assert_eq!(unsupported.errors.len(), 1);
+    }
+
+    #[test]
+    fn discovers_borrowed_text_without_approving_other_reference_contracts() {
+        let bindings = discover(
+            "fn native(value: (Option<&str>, bool)) -> &str { todo!() }",
+            1,
+        );
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(
+            bindings.entries[0]["arguments"],
+            json!([{"tuple": [{"option": "str"}, "bool"]}])
+        );
+        assert_eq!(bindings.entries[0]["result"], json!("str"));
+        for source in [
+            "fn native(value: &mut str) -> bool { true }",
+            "fn native(value: &'static str) -> bool { true }",
+            "fn native(value: &String) -> bool { true }",
+            "fn native(value: &[u8]) -> bool { true }",
+        ] {
+            assert_eq!(discover(source, 1).errors.len(), 1, "source: {source}");
+        }
     }
 
     #[test]

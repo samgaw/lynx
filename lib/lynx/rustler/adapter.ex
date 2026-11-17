@@ -383,6 +383,14 @@ defmodule Lynx.Rustler.Adapter do
       encode_m: "(fun value => Lynx.Rustler.Encoding.string value ())"
     }
 
+  defp type!("str"),
+    do: %{
+      lean: "Str",
+      decode: "Lynx.Rustler.decodeStr",
+      encode: nil,
+      encode_m: "(fun value => Lynx.Rustler.Encoding.str value ())"
+    }
+
   defp type!("binary"),
     do: %{
       lean: "Lynx.Rustler.Binary",

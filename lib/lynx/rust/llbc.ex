@@ -877,6 +877,13 @@ defmodule Lynx.Rust.LLBC do
        when width in ~w(U8 U16 U32 U64),
        do: String.downcase(width)
 
+  defp signature_type!(%{"Ref" => _} = type, audit) do
+    if Lynx.Rust.StringModels.borrowed_type?(type, audit.translated, audit.references),
+      do: "str",
+      else:
+        raise(ArgumentError, "unsupported NIF reference: requires a shared builtin str borrow")
+  end
+
   defp signature_type!(
          %{
            "Adt" => %{

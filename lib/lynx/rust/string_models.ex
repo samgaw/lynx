@@ -2,6 +2,27 @@ defmodule Lynx.Rust.StringModels do
   @moduledoc false
   alias Lynx.Rust.CallModels
 
+  # Rustler text borrows must resolve to rustc's builtin str, not a nominal
+  # lookalike or a mutable reference. Native borrow lifetime/layout stays at FFI.
+  def borrowed_type?(type, translated, refs) do
+    with %{"Ref" => [%{"Var" => %{"Free" => region}}, str, "Shared"]} <-
+           CallModels.expand(type, refs),
+         true <- is_integer(region) and region >= 0,
+         %{"Adt" => %{"id" => id, "builtin" => "Str", "generics" => args}} <- str,
+         true <- args == arguments(),
+         %{
+           "src" => %{"Builtin" => "Str"},
+           "kind" => %{"Struct" => [%{"name" => "_0", "ty" => field}]},
+           "item_meta" => %{"name" => [%{"Builtin" => ["Str", 0]}]},
+           "generics" => params
+         } <-
+           Enum.find(translated["type_decls"], &(&1 && &1["def_id"] == id)) do
+      params == empty_params() and CallModels.expand(field, refs) == bytes()
+    else
+      _ -> false
+    end
+  end
+
   # Str is Aeneas's existing Slice U8 representation. These models preserve its
   # bytes and borrow; they do not prove Rust core's transmute or native layout.
   def resolve(function, translated, refs) do

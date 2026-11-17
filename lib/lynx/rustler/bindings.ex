@@ -45,8 +45,41 @@ defmodule Lynx.Rustler.Bindings do
         ]
       else
         []
+      end ++
+      if borrowed_text_arguments?(manifest) do
+        [
+          "Rustler #{version} borrowed str Decoder model: binary-only strict UTF-8 and exact borrowed bytes; native validator, pointers, environment pinning and lifetimes unverified; impossible native slice sizes exhaust verification"
+        ]
+      else
+        []
+      end ++
+      if borrowed_text_result?(manifest) do
+        [
+          "Rustler #{version} borrowed str Encoder model: exact UTF-8 binary; successful allocation assumed; native Encoder, FFI and lifetimes unverified; output over 4294967295 bytes or invalid logical str exhausts verification"
+        ]
+      else
+        []
       end
   end
+
+  def borrowed_text_arguments?(manifest),
+    do: Enum.any?(manifest.bindings, &borrowed_text_schema?(&1["arguments"]))
+
+  def borrowed_text_result?(manifest),
+    do: Enum.any?(manifest.bindings, &borrowed_text_schema?(&1["result"]))
+
+  defp borrowed_text_schema?("str"), do: true
+
+  defp borrowed_text_schema?(map) when is_map_key(map, "native") or is_map_key(map, "resource"),
+    do: false
+
+  defp borrowed_text_schema?(map) when is_map(map),
+    do: Enum.any?(Map.values(map), &borrowed_text_schema?/1)
+
+  defp borrowed_text_schema?(list) when is_list(list),
+    do: Enum.any?(list, &borrowed_text_schema?/1)
+
+  defp borrowed_text_schema?(_), do: false
 
   def string_arguments?(manifest),
     do: Enum.any?(manifest.bindings, &string_schema?(&1["arguments"]))
