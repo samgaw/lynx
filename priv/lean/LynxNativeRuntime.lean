@@ -3624,9 +3624,9 @@ Failure preserves the previous offset under the explicit std/OS model. -/
         script := rest })
   else some (.Err (.os value), {state with durable := durable, script := rest})
 
-@[expose] def syncStep (state : State) :
+@[expose] def syncStep (state : State) (dataOnly : Bool := false) :
     Option (core.result.Result Unit NativeIoError × State) := do
-  let (success, value, mask, rest) ← action "sync_all" state.script
+  let (success, value, mask, rest) ← action (if dataOnly then "sync_data" else "sync_all") state.script
   if success then
     if value != 0 then none
     else some (.Ok (), {state with durable := state.visible, script := rest})
@@ -4159,18 +4159,25 @@ Write completion does not assert persistence. Invalid capabilities/choices cut o
 
 /-- Synchronization errors may still persist a torn image; only success guarantees
 all visible file contents and length. Directory/device correspondence is assumed. -/
-@[expose] def pollSync (file : NativeFile) (env : Environment) :
+@[expose] def pollSync (file : NativeFile) (env : Environment) (dataOnly : Bool := false) :
     Option (Except Exception (core.result.Result Unit NativeIoError) × Environment) :=
   match lookup file env with
-  | none => pollDirectorySync file env
+  | none => if dataOnly then some (.error .exhausted, env) else pollDirectorySync file env
   | some state =>
     if blocked state then none else
-    match syncStep state with
+    match syncStep state dataOnly with
     | none => some (.error .exhausted, env)
     | some (reply, updated) => some (.ok reply, store file updated env)
 
 @[expose] def syncAll (file : NativeFile) : NativeM (core.result.Result Unit NativeIoError) :=
-  .wait (pollSync file) fun reply => match reply with
+  .wait (fun env => pollSync file env) fun reply => match reply with
+    | .ok value => .ok value
+    | .error exception => .error exception
+
+/-- Data synchronization guarantees the contents and length of a regular file.
+Directory handles are outside this model and exhaust verification. -/
+@[expose] def syncData (file : NativeFile) : NativeM (core.result.Result Unit NativeIoError) :=
+  .wait (fun env => pollSync file env true) fun reply => match reply with
     | .ok value => .ok value
     | .error exception => .error exception
 

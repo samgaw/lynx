@@ -4,6 +4,7 @@ defmodule Lynx.Rust.FileModels do
   @file_path ~w(std fs File)
   @error ~w(core io error Error)
   @seek ~w(core io seek SeekFrom)
+  @sync_methods [{"sync_all", "syncAll"}, {"sync_data", "syncData"}]
 
   def enabled!(:reject, _execution), do: []
   def enabled!(:regular, :runtime), do: [:native_files]
@@ -60,15 +61,19 @@ defmodule Lynx.Rust.FileModels do
             {"std::fs::{core::io::seek::Seek<std::fs::File>}::seek", "seek"}
 
           length(params["regions"]) == 1 and input == [reference(0, f, "Shared")] and
-            result?(
-              output,
-              %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args([])}},
-              e,
-              translated,
-              refs
-            ) and
-              inherent?(function, f, refs, "sync_all") ->
-            {"std::fs::{std::fs::File}::sync_all", "syncAll"}
+              result?(
+                output,
+                %{"Adt" => %{"id" => 0, "builtin" => "Tuple", "generics" => args([])}},
+                e,
+                translated,
+                refs
+              ) ->
+            Enum.find_value(@sync_methods, fn {method, lean} ->
+              if inherent?(function, f, refs, method) and
+                   (method == "sync_all" or data_sync_target?(translated)) do
+                {"std::fs::{std::fs::File}::" <> method, lean}
+              end
+            end)
 
           length(params["regions"]) == 1 and input == [reference(0, f, "Shared"), scalar("U64")] and
             result?(
@@ -97,13 +102,24 @@ defmodule Lynx.Rust.FileModels do
           native_file_types: {file["def_id"], error["def_id"]},
           file_seek_type: if(lean == "seek", do: seek_id(translated), else: nil),
           label:
-            "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; write errors preserve visible bytes and offset while retaining permitted background persistence (std/OS model assumption); reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); regular-file sync_all success persists visible contents and length; admitted root-directory sync_all success commits visible namespace names without synchronizing inode bytes, with filesystem/device correspondence assumed; directory sync errors retain the last guaranteed checkpoint; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); single-file and bounded flat-filesystem crash-image/restart host admission, per-path metadata-version choices, std, OS, filesystem/device and native descriptor correspondence unverified; open/append modes and unrestricted concurrent file access unsupported; owned File destruction requires the separately validated close model; synchronized callers may be verified against these per-operation transitions"
+            if(lean == "syncData",
+              do:
+                "Bounded regular-file File::sync_data model (1048576 bytes, Linux/macOS): success persists visible file bytes and length; error may persist an allowed torn image; preserves the offset and directory checkpoint; directory handles exhaust verification; other inode metadata and std, OS, filesystem/device and native descriptor correspondence are external boundaries",
+              else:
+                "Bounded regular-file #{lean} model (1048576 bytes): registered borrowed file identities, explicit partial/error outcomes; write errors preserve visible bytes and offset while retaining permitted background persistence (std/OS model assumption); reads preserve unread buffer bytes and preserve the buffer/offset on errors (std/OS model assumptions); bytewise old/new torn persistence with length between durable and visible sizes; set_len changes visible length, preserves offset and zero-fills extension; successful set_len does not guarantee persistence; failed set_len preserves visible length and bytes (std/OS assumption); regular-file sync_all success persists visible contents and length; admitted root-directory sync_all success commits visible namespace names without synchronizing inode bytes, with filesystem/device correspondence assumed; directory sync errors retain the last guaranteed checkpoint; seek computes the bounded signed target, preserves contents, and preserves the offset on errors (std/OS assumption); single-file and bounded flat-filesystem crash-image/restart host admission, per-path metadata-version choices, std, OS, filesystem/device and native descriptor correspondence unverified; open/append modes and unrestricted concurrent file access unsupported; owned File destruction requires the separately validated close model; synchronized callers may be verified against these per-operation transitions"
+            )
         }
       end
     else
       _ -> nil
     end
   end
+
+  defp data_sync_target?(%{"target_information" => [_ | _] = targets}) do
+    Enum.all?(targets, &match?(%{"value" => %{"os" => os}} when os in ["Linux", "MacOs"], &1))
+  end
+
+  defp data_sync_target?(_), do: false
 
   # Write for &File mutably borrows the reference slot, not an owned File.
   # Validate its inherited lifetime and actual trait-method substitution; the

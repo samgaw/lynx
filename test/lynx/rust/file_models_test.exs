@@ -149,6 +149,43 @@ defmodule Lynx.Rust.FileModelsTest do
     assert is_nil(FileModels.resolve(function, %{"type_decls" => [file, file | rest]}, %{}))
   end
 
+  test "data synchronization requires a supported target and the exact shared File signature" do
+    {sync, translated} = sync_fixture()
+    function = put_in(sync, ["item_meta", "name", Access.at(3)], %{"Ident" => ["sync_data", 0]})
+
+    for os <- ~w(Linux MacOs) do
+      target = %{"value" => %{"os" => os}}
+      document = Map.put(translated, "target_information", [target])
+
+      assert %{
+               rust_name: "std::fs::{std::fs::File}::sync_data",
+               lean: "Lynx.NativeFile.syncData",
+               can_fail: true,
+               native_cutoff_only: true
+             } = FileModels.resolve(function, document, %{})
+
+      assert nil ==
+               FileModels.resolve(
+                 put_in(
+                   function,
+                   ["signature", "inputs", Access.at(0), "Ref", Access.at(2)],
+                   "Mut"
+                 ),
+                 document,
+                 %{}
+               )
+    end
+
+    for targets <- [[], [%{"value" => %{"os" => "Windows"}}]] do
+      assert nil ==
+               FileModels.resolve(
+                 function,
+                 Map.put(translated, "target_information", targets),
+                 %{}
+               )
+    end
+  end
+
   test "set_len validates its inherent method and actual argument and result widths" do
     {sync, translated} = sync_fixture()
     path = Enum.drop(sync["item_meta"]["name"], -1) ++ [%{"Ident" => ["set_len", 0]}]

@@ -298,7 +298,7 @@ defmodule Lynx.Rust do
   and `:cargo` options as in `Lynx.Rustler.prepare!/3`.
 
   `files: :regular, execution: :runtime` admits checked standard `File::read`, `File::write`,
-  `File::sync_all`, `File::set_len` and `Seek<File>::seek` calls over registered regular-file capabilities.
+  `File::sync_all`, `File::sync_data`, `File::set_len` and `Seek<File>::seek` calls over registered regular-file capabilities.
   Explicit and compiler-inserted destruction of an owned `File` is admitted after
   validating the compiler destructor dictionary. A `close` outcome consumes the
   capability on success or error and retains its disk state for crash reasoning.
@@ -306,7 +306,11 @@ defmodule Lynx.Rust do
   The default `:reject` admits none of these calls. The bounded model (1 MiB) distinguishes
   visible bytes, persistent bytes, offsets, partial writes, blocking and I/O errors.
   Explicit outcome scripts describe external choices; malformed choices exhaust
-  verification. A successful sync persists visible contents and length. Earlier
+  verification. A successful sync persists visible contents and length. On Linux
+  and macOS, data synchronization uses the separate `sync_data` outcome and
+  admits only regular file capabilities. Directory checkpoints require the
+  directory `sync_all` model. Other inode metadata is outside the data model.
+  Earlier
   persistence may tear bytewise between old and visible images, without device
   corruption. These filesystem/device guarantees and native descriptor
   correspondence are external assumptions, reported with the verification result.
