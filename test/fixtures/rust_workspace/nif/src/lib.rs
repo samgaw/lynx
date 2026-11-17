@@ -163,6 +163,27 @@ fn decode_owned(value: rustler::Binary<'_>) -> Result<String, Vec<u8>> {
     experiment_analysis::decode_owned(bytes)
 }
 
+/// Decorates decoded owned UTF-8 text through the workspace libraries.
+#[cfg(feature = "text-input")]
+#[rustler::nif(name = "decorate_text", schedule = "DirtyCpu")]
+fn decorate_text_nif(text: String, marked: bool) -> String {
+    experiment_analysis::decorate_owned(text, marked)
+}
+
+/// Observes text without returning an owned value across the NIF boundary.
+#[cfg(feature = "text-input")]
+#[rustler::nif]
+fn owned_nonempty(text: String) -> bool {
+    experiment_analysis::owned_nonempty(text)
+}
+
+/// Retains nested option and tuple decoding and encoding semantics.
+#[cfg(feature = "text-input")]
+#[rustler::nif]
+fn echo_text_option(value: (Option<String>, bool)) -> (Option<String>, bool) {
+    value
+}
+
 /// Counts validated text payload bytes through a renamed dirty NIF export.
 #[cfg(feature = "text-views")]
 #[rustler::nif(name = "text_payload", schedule = "DirtyCpu")]
@@ -703,6 +724,7 @@ mod tests {
                 + 2 * usize::from(cfg!(feature = "protocol"))
                 + usize::from(cfg!(feature = "text-views"))
                 + usize::from(cfg!(feature = "owned-text"))
+                + 3 * usize::from(cfg!(feature = "text-input"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -987,6 +1009,25 @@ mod tests {
                 3,
                 rustler::SchedulerFlags::DirtyCpu as u32,
             ));
+        }
+        if cfg!(feature = "text-input") {
+            expected.extend([
+                (
+                    "decorate_text".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
+                (
+                    "owned_nonempty".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+                (
+                    "echo_text_option".to_owned(),
+                    1,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
+            ]);
         }
         if cfg!(feature = "text-views") {
             expected.push((

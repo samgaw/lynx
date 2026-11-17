@@ -278,6 +278,13 @@ pub fn owned_bytes_roundtrip(bytes: Vec<u8>) -> Vec<u8> {
     }
 }
 
+/// Checks whether owned text exceeds a byte budget.
+/// Native allocation and reclamation remain explicit verification boundaries.
+pub fn owned_exceeds(text: String, budget: usize) -> bool {
+    let bytes = text.into_bytes();
+    bytes.len() > budget
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

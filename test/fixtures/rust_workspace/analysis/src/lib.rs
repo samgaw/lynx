@@ -267,6 +267,23 @@ pub fn owned_bytes_roundtrip(bytes: Vec<u8>) -> Vec<u8> {
     experiment_core::protocol::owned_bytes_roundtrip(bytes)
 }
 
+/// Adds a protocol marker through the core crate only when requested.
+///
+/// # Panics
+/// Propagates standard String capacity overflow.
+pub fn decorate_owned(text: String, marked: bool) -> String {
+    if marked {
+        experiment_core::protocol::append_owned(text, "!")
+    } else {
+        text
+    }
+}
+
+/// Observes owned text through an internal first-party function.
+pub fn owned_nonempty(text: String) -> bool {
+    experiment_core::protocol::owned_exceeds(text, 0)
+}
+
 #[cfg(test)]
 mod framing_tests {
     #[test]
