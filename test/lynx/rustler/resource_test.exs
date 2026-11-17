@@ -197,37 +197,38 @@ defmodule Lynx.Rustler.ResourceTest do
       law retained_value,
         expects: LynxEffectsFixture.Native.retained(7) == 7,
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «retained_value:ensures/0», Elixir.LynxEffectsFixture.Native.«retained/1»,
-          Elixir.LynxEffectsFixture.Native.«retained:execution/1», Lynx.Rustler.withResourceTypes,
-          Lynx.Rustler.decodeUnsigned, Lynx.Result.ofExcept,
-          Lynx.NativeResourceArc.typeName, Erlang.erlang.«==/2»,
-          Aeneas.Std.U64.max, Aeneas.Std.UScalar.val, Aeneas.Std.U64.numBits]
-        rw [Resource.Properties.facade_continuation]
-        all_goals simp [Lynx.NativeResourceArc.typeName, Aeneas.Std.UScalar.val]
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        lynx_check_post
         """
       law repeated_retains,
         expects: LynxEffectsFixture.Native.retained(LynxEffectsFixture.Native.retained(7)) == 7,
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «repeated_retains:ensures/0», Elixir.LynxEffectsFixture.Native.«retained/1»,
-          Elixir.LynxEffectsFixture.Native.«retained:execution/1», Lynx.Rustler.withResourceTypes,
-          Lynx.Rustler.decodeUnsigned, Lynx.Result.ofExcept,
-          Lynx.NativeResourceArc.typeName, Erlang.erlang.«==/2»,
-          Aeneas.Std.U64.max, Aeneas.Std.UScalar.val, Aeneas.Std.U64.numBits]
-        rw [Resource.Properties.facade_continuation]
-        · simp [Lynx.Rustler.withResourceTypes, Lynx.Rustler.decodeUnsigned,
-            Lynx.Result.ofExcept, Aeneas.Std.U64.max, Aeneas.Std.UScalar.val, Aeneas.Std.U64.numBits]
-          rw [Resource.Properties.facade_continuation]
-          all_goals simp [Lynx.NativeResourceArc.typeName, Aeneas.Std.UScalar.val]
-        · simp [Lynx.NativeResourceArc.typeName]
-        · rfl
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        lynx_check_post
         """
       law badarg,
         expects: (try do LynxEffectsFixture.Native.retained(-1) catch :error, :badarg -> true end),
         proof: ~LEAN"""
-        simp [Lynx.concurrent_eq_run, «badarg:ensures/0», Elixir.LynxEffectsFixture.Native.«retained/1»,
-          Lynx.Rustler.withResourceTypes, Lynx.Rustler.decodeUnsigned, Lynx.Result.ofExcept,
-          Lynx.Result.tryWith, Lynx.Result.handle, Lynx.Result.bind,
-          Lynx.Exception.classTerm, Lynx.Exception.reason]
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        lynx_check_post
         """
     end
     '''

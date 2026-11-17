@@ -111,7 +111,13 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
     source = Path.join(tmp, "laws.ex")
     File.write!(source, laws())
     [{_, beam}] = Code.compile_file(source)
-    reports = Lynx.Laws.verify([beam], native: {Lynx.Rustler, options})
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      options: [maxHeartbeats: 4_000_000]
+    ]
+
+    reports = Lynx.Laws.verify([beam], law_options)
     assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
     guarantees = Enum.flat_map(reports, &Map.get(&1, :guarantees, []))
 
@@ -119,12 +125,12 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
         do: assert(Enum.any?(guarantees, &(&1.kind == kind)))
 
     assert Enum.any?(prepared.verification.external_models, &String.contains?(&1, "VM resource"))
-    warm = Lynx.Laws.verify([beam], native: {Lynx.Rustler, options})
+    warm = Lynx.Laws.verify([beam], law_options)
     assert Enum.all?(warm, &(&1.status == :ok && &1.cached))
     export = Path.join(tmp, "handles.export")
 
     assert Enum.all?(
-             Lynx.Laws.verify([beam], native: {Lynx.Rustler, options}, export: export),
+             Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export)),
              &(&1.status == :ok)
            )
 
@@ -160,7 +166,7 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
     File.write!(core, changed)
 
     assert_raise RuntimeError, ~r/native Lean project command failed/, fn ->
-      Lynx.Laws.verify([beam], native: {Lynx.Rustler, options})
+      Lynx.Laws.verify([beam], law_options)
     end
   end
 
@@ -204,23 +210,14 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
       law roundtrip,
         expects: LynxEffectsFixture.Native.resource_value(LynxEffectsFixture.Native.resource_create(7)) == 7,
         proof: ~LEAN"""
-        let seven : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 7⟩
-        have input : Lynx.Rustler.decodeUnsigned .U64 64 (.integer 7) = .ok seven := rfl
-        simp only [Lynx.concurrent_eq_run, Lynx.apply_eq, «roundtrip:ensures/0»,
-          Elixir.LynxEffectsFixture.Native.«resource_create/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_create:execution/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_value/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_value:execution/1»,
-          Lynx.Rustler.withResourceTypes, input, Lynx.Result.ofExcept,
-          Lynx.Result.ok_bind, Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
-          Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply, bind_assoc]
-        rw [Handles.Properties.create_continuation]
-        · simp only [Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
-          rw [Handles.Properties.read_continuation seven _ _ 1 3 4]
-          all_goals simp [seven, Lynx.NativeResourceArc.typeName, Aeneas.Std.UScalar.val,
-            Erlang.erlang.«==/2», -Aeneas.Std.UScalar.bv_toNat]
-        · simp [Lynx.NativeResourceArc.typeName]
-        · rfl
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        lynx_check_post
         """
       law failure_cleanup,
         expects: (
@@ -234,34 +231,14 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
           caught and LynxEffectsFixture.Native.resource_value(resource) == 7
         ),
         proof: ~LEAN"""
-        let seven : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 7⟩
-        have input : Lynx.Rustler.decodeUnsigned .U64 64 (.integer 7) = .ok seven := rfl
-        simp only [Lynx.concurrent_eq_run, Lynx.apply_eq, «failure_cleanup:ensures/0»,
-          Elixir.LynxEffectsFixture.Native.«resource_create/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_create:execution/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_checked/2»,
-          Elixir.LynxEffectsFixture.Native.«resource_value/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_value:execution/1»,
-          Lynx.Rustler.withResourceTypes, input, Lynx.Result.ofExcept,
-          Lynx.Result.ok_bind, Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
-          Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply, bind_assoc]
-        rw [Handles.Properties.create_continuation]
-        · simp only [Lynx.Result.andAlso_eq, Lynx.Result.tryWith_eq,
-            Lynx.Rustler.decodeBool,
-            Lynx.Result.handle_nativeGet, Lynx.Result.handle_nativeSet, Lynx.Result.handle_error, bind_assoc, Lynx.Result.error_bind,
-            Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
-            Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
-          rw [Lynx.NativeResourceArc.decode_failure_cleanup_handled_next
-            (effects_native.ScalarResource.mk (effects_native.effects_core.Counter.mk seven)) _ _ _ 1 3 4]
-          · simp only [Lynx.Result.pure_eq_ok, Lynx.Result.ok_bind,
-              Lynx.Exception.classTerm, Lynx.Exception.reason, Lynx.Result.nativeGet_bind,
-              Lynx.Result.nativeSet_bind, Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
-            rw [Handles.Properties.read_continuation seven _ _ 1 3 4]
-            all_goals simp [seven, Lynx.NativeResourceArc.typeName, Aeneas.Std.UScalar.val,
-              Erlang.erlang.«==/2», -Aeneas.Std.UScalar.bv_toNat]
-          all_goals simp [Lynx.NativeResourceArc.typeName]
-        · simp [Lynx.NativeResourceArc.typeName]
-        · rfl
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        lynx_check_post
         """
       law two_resources,
         expects: (
@@ -271,43 +248,14 @@ defmodule Lynx.Rustler.ResourceHandlesTest do
             LynxEffectsFixture.Native.resource_value(second) == 9
         ),
         proof: ~LEAN"""
-        let seven : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 7⟩
-        let nine : Aeneas.Std.U64 := ⟨BitVec.ofNat 64 9⟩
-        have input7 : Lynx.Rustler.decodeUnsigned .U64 64 (.integer 7) = .ok seven := rfl
-        have input9 : Lynx.Rustler.decodeUnsigned .U64 64 (.integer 9) = .ok nine := rfl
-        have eq7 : Erlang.erlang.«==/2» (.integer seven.val) (.integer 7) = .ok (.atom "true") := by
-          simp [seven, Aeneas.Std.UScalar.val, Erlang.erlang.«==/2»]
-        have eq9 : Erlang.erlang.«==/2» (.integer nine.val) (.integer 9) = .ok (.atom "true") := by
-          simp [nine, Aeneas.Std.UScalar.val, Erlang.erlang.«==/2»]
-        simp only [Lynx.concurrent_eq_run, Lynx.apply_eq, «two_resources:ensures/0»,
-          Elixir.LynxEffectsFixture.Native.«resource_create/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_create:execution/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_value/1»,
-          Elixir.LynxEffectsFixture.Native.«resource_value:execution/1»,
-          Lynx.Rustler.withResourceTypes, input7, input9, Lynx.Result.ofExcept,
-          Lynx.Result.andAlso_eq, Lynx.Result.ok_bind, Lynx.Result.nativeGet_bind, Lynx.Result.nativeSet_bind,
-          Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply, bind_assoc]
-        rw [Handles.Properties.create_framed_continuation seven]
-        · simp only [Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
-          rw [Handles.Properties.create_framed_continuation nine]
-          · simp only [Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
-            rw [Handles.Properties.read_pinned_continuation seven _ _ 1 3 4]
-            · simp only [eq7, Lynx.Result.ofExcept, Lynx.Result.ok_bind,
-                Lynx.Result.nativeGet_continuation_apply, Lynx.Result.nativeSet_continuation_apply]
-              rw [Handles.Properties.read_pinned_continuation nine _ _ 5 7 8]
-              · simp [eq9, Lynx.Result.ofExcept]
-              · constructor <;> simp [Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.typeName,
-                  Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.termType]
-              · simp [Lynx.NativeResourceArc.typeName]
-            · constructor <;> simp [Lynx.NativeResourceArc.vmCells, Lynx.NativeResourceArc.typeName,
-                Lynx.NativeResourceArc.handleType, Lynx.NativeResourceArc.termType]
-            · simp [Lynx.NativeResourceArc.typeName]
-          · simp [Lynx.NativeResourceArc.typeName]
-          · simpa only [Lynx.NativeResourceArc.vmCells, List.append_nil] using
-              (Lynx.NativeResourceArc.FrameBelow.vmCells
-                (effects_native.ScalarResource.mk (effects_native.effects_core.Counter.mk seven)) 1 3 4 4 (by decide))
-        · simp [Lynx.NativeResourceArc.typeName]
-        · simp [Lynx.NativeResourceArc.FrameBelow]
+        refine ⟨0, ?_⟩
+        intro depth enough elapsed events last outcome run terminal
+        apply terminal.outcome_eq.symm.trans
+        apply Lynx.Outcome.eq_of_isTrue
+        apply Lynx.Concurrent.checkPost_sound (depth := 64)
+          (accept := fun config => config.outcome.isTrue) ?_ run terminal
+        clear enough events last outcome run terminal
+        lynx_check_post
         """
     end
     '''
