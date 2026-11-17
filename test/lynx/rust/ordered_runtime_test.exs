@@ -61,7 +61,7 @@ defmodule Lynx.Rust.OrderedRuntimeTest do
           &("Registry.Properties." <> &1)
         ) ++
           Enum.map(
-            ~w(pairs_snapshot pairs_total pairs_contract pairs_run),
+            ~w(pairs_snapshot pairs_outcome pairs_total pairs_contract pairs_run),
             &("Registry.Snapshots." <> &1)
           )
     ]

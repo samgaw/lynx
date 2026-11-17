@@ -48,6 +48,27 @@ theorem pairs_snapshot (table : Map) (snapshot : MapIterator)
     simpa [alloc.vec.Vec.new] using values
   simp [__CORE__.pairs, __CORE__.pairs_loop, NativeM.loop, decoded, returned, same]
 
+theorem pairs_outcome (table : Map) :
+    __CORE__.pairs table =
+      if admitted : table.size ≤ 262144 ∧
+          table.toList.all (fun row => decide (row.1 < 2^64)) = true then
+        NativeM.ok (alloc.vec.Vec.from
+          (table.toList.map (fun row => (keyScalar row.1, row.2)))
+          (by simp; have := admitted.1; scalar_tac))
+      else Result.error .exhausted := by
+  by_cases admitted : table.size ≤ 262144 ∧
+      table.toList.all (fun row => decide (row.1 < 2^64)) = true
+  · rw [dite_eq_left admitted]
+    apply pairs_snapshot table
+    · unfold mapIntoIter
+      exact ite_eq_left admitted
+    · simpa using admitted.1
+  · rw [dite_eq_right admitted]
+    have exhausted : mapIntoIter table = RustM.fail .undef := by
+      unfold mapIntoIter
+      exact ite_eq_right admitted
+    simp [__CORE__.pairs, exhausted]
+
 theorem pairs_total (table : Map) (bounded : table.size ≤ 262144)
     (valid : table.toList.all (fun row => decide (row.1 < 2^64)) = true) :
     ∃ result, __CORE__.pairs table = NativeM.ok result ∧
