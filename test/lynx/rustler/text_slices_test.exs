@@ -69,7 +69,8 @@ defmodule Lynx.Rustler.TextSlicesTest do
           checked_split_text: 2,
           equal_text: 2,
           has_text_prefix: 2,
-          consume_text_prefix: 2
+          consume_text_prefix: 2,
+          parse_text_record: 3
         ],
         lean_project: project,
         module_prefix: "TextSlices.Extraction",
@@ -99,6 +100,12 @@ defmodule Lynx.Rustler.TextSlicesTest do
       assert %{"arguments" => ["str", "str"], "result" => %{"option" => "str"}, "flags" => 0} =
                bindings["consume_text_prefix"]
 
+      assert %{
+               "arguments" => ["str", "u8", "u8"],
+               "flags" => 1,
+               "result" => %{"option" => %{"tuple" => ["str", "str", "str"]}}
+             } = bindings["parse_text_record"]
+
       properties =
         File.read!(@proof)
         |> String.replace("experiment_analysis.core.slice.", "experiment_nif.core.slice.")
@@ -107,6 +114,13 @@ defmodule Lynx.Rustler.TextSlicesTest do
 
       File.write!(Path.join(project, "TextSlices/Properties.lean"), properties)
 
+      record =
+        File.read!(Path.join(Path.dirname(@proof), "TextRecord.lean"))
+        |> String.replace("experiment_analysis.experiment_core", "experiment_nif.experiment_core")
+        |> String.replace("experiment_analysis.", "experiment_nif.experiment_analysis.")
+
+      File.write!(Path.join(project, "TextSlices/Record.lean"), record)
+
       adapter =
         File.read!(Path.join(Path.dirname(@proof), "TextSlicesAdapter.lean"))
         |> String.replace("__SLICE_NIF__", bindings["slice_text"]["lean_name"])
@@ -114,24 +128,35 @@ defmodule Lynx.Rustler.TextSlicesTest do
         |> String.replace("__EQUAL_NIF__", bindings["equal_text"]["lean_name"])
         |> String.replace("__PREFIX_NIF__", bindings["has_text_prefix"]["lean_name"])
         |> String.replace("__CONSUME_NIF__", bindings["consume_text_prefix"]["lean_name"])
+        |> String.replace("__RECORD_NIF__", bindings["parse_text_record"]["lean_name"])
 
       File.write!(Path.join(project, "TextSlices/AdapterProperties.lean"), adapter)
 
       options =
         base ++
           [
-            proof_modules: ["TextSlices.Properties", "TextSlices.AdapterProperties"],
+            proof_modules: [
+              "TextSlices.Properties",
+              "TextSlices.Record",
+              "TextSlices.AdapterProperties"
+            ],
             required_properties:
               Enum.map(
                 ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive text_prefix_bytes text_prefix_reflexive consume_implementation consume_by_values consume_exact consume_utf8),
                 &("TextSlices.Properties." <> &1)
               ) ++
+                Enum.map(
+                  ~w(tagged_composition tagged_exact tagged_returns tagged_sound record_sound record_accepts record_rejects_first record_rejects_second record_total record_unicode),
+                  &("TextSlices.Record." <> &1)
+                ) ++
                 [
                   "TextSlices.AdapterProperties.window_encoding",
                   "TextSlices.AdapterProperties.equal_facade",
                   "TextSlices.AdapterProperties.prefix_facade",
                   "TextSlices.AdapterProperties.consume_facade",
                   "TextSlices.AdapterProperties.consume_encoding",
+                  "TextSlices.AdapterProperties.record_facade",
+                  "TextSlices.AdapterProperties.record_encoding",
                   "TextSlices.AdapterProperties.checked_facade_utf8"
                 ]
           ]
@@ -211,7 +236,32 @@ defmodule Lynx.Rustler.TextSlicesTest do
 
       assert_raise ArgumentError, fn -> apply(native, :consume_text_prefix, ["ok", <<195>>]) end
 
+      assert apply(native, :parse_text_record, ["name:é|value:🙂tail", 2, 4]) == {"é", "🙂", "tail"}
+      assert apply(native, :parse_text_record, ["name:|value:", 0, 0]) == {"", "", ""}
+
+      for args <- [
+            ["name:é|value:🙂", 1, 4],
+            ["name:é|value:🙂", 2, 3],
+            ["name:é|value:🙂", 2, 5],
+            ["name:é|wrong:🙂", 2, 4]
+          ],
+          do: assert(apply(native, :parse_text_record, args) == nil)
+
+      for args <- [[<<255>>, 2, 4], ["name:|value:", -1, 0], ["name:|value:", 0, 4_294_967_296]],
+          do: assert_raise(ArgumentError, fn -> apply(native, :parse_text_record, args) end)
+
       cases = [
+        {"Record",
+         "#{native_name}.parse_text_record(\"name:é|value:🙂tail\",2,4) == {\"é\",\"🙂\",\"tail\"}"},
+        {"RecordEmpty",
+         "#{native_name}.parse_text_record(\"name:|value:\",0,0) == {\"\",\"\",\"\"}"},
+        {"RecordNameBoundary", "#{native_name}.parse_text_record(\"name:é|value:🙂\",1,4) == nil"},
+        {"RecordValueBoundary",
+         "#{native_name}.parse_text_record(\"name:é|value:🙂\",2,3) == nil"},
+        {"RecordTruncated", "#{native_name}.parse_text_record(\"name:é|value:🙂\",2,5) == nil"},
+        {"RecordTag", "#{native_name}.parse_text_record(\"name:é|wrong:🙂\",2,4) == nil"},
+        {"RecordMalformed",
+         "try do #{native_name}.parse_text_record(<<255>>,2,4); false catch :error, :badarg -> true end"},
         {"Consume", "#{native_name}.consume_text_prefix(\"aé🙂z\",\"aé\") == \"🙂z\""},
         {"ConsumeEmpty", "#{native_name}.consume_text_prefix(\"aé\",\"\") == \"aé\""},
         {"ConsumeAll", "#{native_name}.consume_text_prefix(\"aé\",\"aé\") == \"\""},
@@ -282,6 +332,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         simp only [Lynx.apply,«slicing:ensures/0»,
           Elixir.#{native}.«slice_text/3», Elixir.#{native}.«slice_text:execution/3»,
           Elixir.#{native}.«split_text/2», Elixir.#{native}.«split_text:execution/2»,
+          Elixir.#{native}.«parse_text_record/3», Elixir.#{native}.«parse_text_record:execution/3»,
           Elixir.#{native}.«consume_text_prefix/2», Elixir.#{native}.«consume_text_prefix:execution/2»,
           Elixir.#{native}.«has_text_prefix/2», Elixir.#{native}.«has_text_prefix:execution/2»,
           Elixir.#{native}.«equal_text/2», Elixir.#{native}.«equal_text:execution/2»,

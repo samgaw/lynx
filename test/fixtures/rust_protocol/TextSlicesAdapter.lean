@@ -1,5 +1,6 @@
 module
 public import TextSlices.Properties
+public import TextSlices.Record
 public import TextSlices.RustlerBridge
 public section
 open Aeneas Aeneas.Std
@@ -38,6 +39,30 @@ theorem consume_encoding (input : Lynx.Term) (text needle field : Str)
       (Lynx.Rustler.decodeStr_utf8 input text decoded)
     simpa [__CONSUME_NIF__, lift] using returned
   · exact bounded
+
+theorem record_facade (text : Str) (nameBytes valueBytes : U8) :
+    __RECORD_NIF__ text nameBytes valueBytes =
+      experiment_nif.experiment_analysis.text_record text nameBytes valueBytes := by
+  simp [__RECORD_NIF__, lift]
+
+theorem record_encoding (input : Lynx.Term) (text fieldName value remainder : Str)
+    (nameBytes valueBytes : U8) (env : Lynx.Rustler.Env)
+    (decoded : Lynx.Rustler.decodeStr input = .ok text)
+    (returned : __RECORD_NIF__ text nameBytes valueBytes = .ok (some (fieldName, value, remainder)))
+    (bounded : text.val.length ≤ 4294967295) :
+    Lynx.Rustler.Encoding.str fieldName env = .ok (.bitstring (TextSlices.Extraction.StringSlices.bytes fieldName) 0) ∧
+    Lynx.Rustler.Encoding.str value env = .ok (.bitstring (TextSlices.Extraction.StringSlices.bytes value) 0) ∧
+    Lynx.Rustler.Encoding.str remainder env = .ok (.bitstring (TextSlices.Extraction.StringSlices.bytes remainder) 0) := by
+  have call : experiment_nif.experiment_analysis.text_record text nameBytes valueBytes =
+      .ok (some (fieldName, value, remainder)) := by rwa [record_facade] at returned
+  obtain ⟨reconstruction, _, _, nameValid, valueValid, restValid⟩ :=
+    TextSlices.Record.record_sound text fieldName value remainder nameBytes valueBytes
+      (Lynx.Rustler.decodeStr_utf8 input text decoded) call
+  have lengths := congrArg List.length reconstruction
+  simp only [List.length_append] at lengths
+  exact ⟨Lynx.Rustler.Encoding.str_valid fieldName env nameValid (by omega),
+    Lynx.Rustler.Encoding.str_valid value env valueValid (by omega),
+    Lynx.Rustler.Encoding.str_valid remainder env restValid (by omega)⟩
 
 /-- Every field returned by the actual facade after successful text decoding
 encodes as its exact UTF-8 binary, within the byte-offset output bound. -/

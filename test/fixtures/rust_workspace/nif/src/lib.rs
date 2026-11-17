@@ -207,6 +207,16 @@ fn echo_borrowed_option(value: (Option<&str>, bool)) -> (Option<&str>, bool) {
 
 /// Borrows a UTF-8 field through both library crates.
 #[cfg(feature = "text-slices")]
+#[rustler::nif(name = "parse_text_record", schedule = "DirtyCpu")]
+fn parse_text_record_nif(
+    text: &str,
+    name_bytes: u8,
+    value_bytes: u8,
+) -> Option<(&str, &str, &str)> {
+    experiment_analysis::text_record(text, name_bytes, value_bytes)
+}
+
+#[cfg(feature = "text-slices")]
 #[rustler::nif(name = "consume_text_prefix")]
 fn consume_text_prefix_nif<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     experiment_analysis::text_consume_prefix(text, prefix)
@@ -788,7 +798,7 @@ mod tests {
                 + usize::from(cfg!(feature = "owned-text"))
                 + 3 * usize::from(cfg!(feature = "text-input"))
                 + 3 * usize::from(cfg!(feature = "borrowed-text"))
-                + 6 * usize::from(cfg!(feature = "text-slices"))
+                + 7 * usize::from(cfg!(feature = "text-slices"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1095,6 +1105,11 @@ mod tests {
         }
         if cfg!(feature = "text-slices") {
             expected.extend([
+                (
+                    "parse_text_record".to_owned(),
+                    3,
+                    rustler::SchedulerFlags::DirtyCpu as u32,
+                ),
                 (
                     "consume_text_prefix".to_owned(),
                     2,
