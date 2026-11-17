@@ -336,3 +336,6 @@ fn read_exact_word_nif() -> Result<Option<u16>, u8> {
 fn slice_word_nif(input: rustler::Binary<'_>) -> Result<(u16, u64), u8> {
     io_protocol::parse_packet(input.as_slice())
 }
+
+#[cfg(all(unix, feature = "positional-file"))]
+mod offset_file;
