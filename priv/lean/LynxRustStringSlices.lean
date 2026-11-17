@@ -26,6 +26,13 @@ exhaust verification; they are not modelled Rust outcomes. -/
 @[expose] def fromGet (range : core.ops.range.RangeFrom Usize) (text : Str) :
     RustM (Option Str) := rangeGet ⟨range.start, Slice.len text⟩ text
 
+/-- Only called by the extracted standard prefix remover after its check.
+Invalid offsets exhaust verification rather than becoming native outcomes. -/
+@[expose] def uncheckedFrom (text : Str) (range : core.ops.range.RangeFrom Usize) : RustM Str := do
+  match ← fromGet range text with
+  | some field => .ok field
+  | none => .fail .undef
+
 @[expose] def toGet (range : core.ops.range.RangeTo Usize) (text : Str) :
     RustM (Option Str) := rangeGet ⟨0#usize, range.end⟩ text
 
@@ -105,6 +112,53 @@ theorem boundary_valid (text : Str) (valid : (bytes text).IsValidUTF8) (position
       rw [ending]
       exact String.Pos.Raw.isValid_rawEndPos
 
+theorem boundary_of_valid (text : Str) (valid : (bytes text).IsValidUTF8) (position : Usize)
+    (atBoundary : String.Pos.Raw.IsValid ⟨bytes text, valid⟩ ⟨position.val⟩) :
+    __PREFIX__.StringViews.isCharBoundary text position = true := by
+  by_cases zero : position.val = 0
+  · simp [__PREFIX__.StringViews.isCharBoundary, zero]
+  rcases String.Pos.Raw.isValid_iff_isUTF8FirstByte.mp atBoundary with ending | ⟨inside, first⟩
+  · have endingValue := congrArg String.Pos.Raw.byteIdx ending
+    have equal : position.val = text.val.length := by
+      simpa [String.rawEndPos, String.utf8ByteSize] using endingValue
+    simp [__PREFIX__.StringViews.isCharBoundary, zero, equal]
+  · have insideBytes : position.val < (bytes text).size := by
+      simpa [String.Pos.Raw.lt_iff, String.rawEndPos, String.utf8ByteSize] using inside
+    have insideList : position.val < text.val.length := by simpa using insideBytes
+    rw [String.getUTF8Byte_eq_getElem] at first
+    have classified := (first_byte_iff _ (valid_byte_bound (bytes text) valid position.val insideBytes)).mp first
+    have byteBound : (text.val[position.val]'insideList).val < 256 := by scalar_tac
+    simpa [__PREFIX__.StringViews.isCharBoundary, zero, List.getElem?_eq_getElem, insideList,
+      bytes, ByteArray.getElem_eq_getElem_data, UInt8.toNat_ofNat', Nat.mod_eq_of_lt byteBound] using classified
+
+theorem prefix_boundary (text needle : Str)
+    (valid : (bytes text).IsValidUTF8) (needleValid : (bytes needle).IsValidUTF8)
+    (matched : needle.val = text.val.take needle.val.length)
+    (bounded : needle.val.length ≤ text.val.length) :
+    __PREFIX__.StringViews.isCharBoundary text (Slice.len needle) = true := by
+  apply boundary_of_valid text valid
+  have converted : bytes needle = (bytes text).extract 0 needle.val.length := by
+    have sliceEq : text.val.slice 0 needle.val.length = needle.val := by
+      simpa only [List.slice, List.drop_zero, Nat.sub_zero] using matched.symm
+    have bound : (text.val.slice 0 needle.val.length).length ≤ Usize.max := by
+      rw [sliceEq]
+      exact Slice.property needle
+    have equality : needle = Slice.from (text.val.slice 0 needle.val.length) bound := by
+      apply (Slice.eq_iff _ _).mpr
+      simpa only [Slice.from_val] using sliceEq.symm
+    calc
+      bytes needle = bytes (Slice.from (text.val.slice 0 needle.val.length) bound) := congrArg bytes equality
+      _ = (bytes text).extract 0 needle.val.length := bytes_slice text 0 needle.val.length bound
+  have extracted : ((bytes text).extract 0 needle.val.length).IsValidUTF8 := by
+    rwa [← converted]
+  have ends := (String.Pos.Raw.isValidUTF8_extract_iff (s := ⟨bytes text, valid⟩)
+    ⟨0⟩ ⟨needle.val.length⟩ (by simp [String.Pos.Raw.le_iff])
+    (by simpa [String.Pos.Raw.le_iff, String.rawEndPos, String.utf8ByteSize] using bounded)).mp extracted
+  rcases ends with equal | ⟨_, ending⟩
+  · have zero : needle.val.length = 0 := by simpa using (congrArg String.Pos.Raw.byteIdx equal).symm
+    simpa [Slice.len, zero] using (String.Pos.Raw.isValid_zero (s := ⟨bytes text, valid⟩))
+  · simpa [Slice.len] using ending
+
 theorem rangeGet_valid_utf8 (range : core.ops.range.Range Usize) (text field : Str)
     (valid : (bytes text).IsValidUTF8) (returned : rangeGet range text = .ok (some field)) :
     (bytes field).IsValidUTF8 := by
@@ -150,6 +204,19 @@ theorem rangeGet_returns (range : core.ops.range.Range Usize) (text : Str) :
     split <;> exact ⟨_, rfl⟩
   · exact ⟨_, rfl⟩
 
+
+theorem uncheckedFrom_valid_utf8 (text field : Str) (range : core.ops.range.RangeFrom Usize)
+    (valid : (bytes text).IsValidUTF8) (returned : uncheckedFrom text range = .ok field) :
+    (bytes field).IsValidUTF8 := by
+  obtain ⟨result, computation⟩ := rangeGet_returns ⟨range.start, Slice.len text⟩ text
+  have borrowed : fromGet range text = .ok result := computation
+  simp only [uncheckedFrom, borrowed, bind_ok] at returned
+  cases result with
+  | none => simp at returned
+  | some value =>
+    have equality : value = field := by simpa using returned
+    subst field
+    exact rangeGet_valid_utf8 _ _ _ valid computation
 
 -- Unsupported dictionary slots exhaust verification. They are not native
 -- outcomes and cannot establish successful execution of an unchecked operation.

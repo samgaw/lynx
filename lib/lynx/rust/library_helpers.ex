@@ -37,12 +37,13 @@ defmodule Lynx.Rust.LibraryHelpers do
               %{"Ident" => ["core", 0]},
               %{"Ident" => ["str", 0]},
               _,
-              %{"Ident" => ["starts_with", 0]}
+              %{"Ident" => [name, 0]}
             ]
           }
         } = f,
         t
-      ),
+      )
+      when name in ["starts_with", "strip_prefix"],
       do: Lynx.Rust.StringPatterns.selected?(f, t)
 
   def selected?(
@@ -53,12 +54,13 @@ defmodule Lynx.Rust.LibraryHelpers do
               %{"Ident" => ["str", 0]},
               %{"Ident" => ["pattern", 0]},
               _,
-              %{"Ident" => ["is_prefix_of", 0]}
+              %{"Ident" => [name, 0]}
             ]
           }
         } = f,
         t
-      ),
+      )
+      when name in ["is_prefix_of", "strip_prefix_of"],
       do: Lynx.Rust.StringPatterns.selected?(f, t)
 
   def selected?(

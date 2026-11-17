@@ -854,7 +854,12 @@ defmodule Lynx.Rust.Extraction do
         Enum.flat_map(Lynx.Rustler.EncoderModels.metadata_includes(models), &["--include", &1]) ++
         Enum.flat_map(Lynx.Rust.LibraryHelpers.includes(context), &["--include", &1]) ++
         if(context[:sysroot],
-          do: ["--opaque", "core::str::pattern::Pattern::is_prefix_of"],
+          do: [
+            "--opaque",
+            "core::str::pattern::Pattern::is_prefix_of",
+            "--opaque",
+            "core::str::pattern::Pattern::strip_prefix_of"
+          ],
           else: []
         ) ++
         if(context[:sysroot], do: ["--exclude", "alloc::io::read::Read::read"], else: []) ++

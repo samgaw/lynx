@@ -318,7 +318,7 @@ defmodule Lynx.Rust.LLBC do
       end)
 
     string_pattern_dispatch =
-      case Lynx.Rust.StringPatterns.audit(functions, translated, refs) do
+      case Lynx.Rust.StringPatterns.audit(functions, translated, refs, available_models) do
         {:ok, dispatch} -> dispatch
         {:error, function, message} -> failure!(function, translated, message)
       end

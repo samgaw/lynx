@@ -1,20 +1,35 @@
 defmodule Lynx.Rust.StringPatterns do
   @moduledoc false
-  alias Lynx.Rust.{CallModels, LLBC, LLBCJson, ResourceModels, StringModels}
-  @path ~w(core str pattern Pattern)
-  @slot 2
+  alias Lynx.Rust.{
+    CallModels,
+    LLBC,
+    LLBCJson,
+    OptionModels,
+    ResourceModels,
+    StringModels,
+    StringSliceModels
+  }
 
-  def includes, do: ["core::str::_::starts_with", "core::str::pattern::_::is_prefix_of"]
+  @path ~w(core str pattern Pattern)
+  @methods %{2 => "is_prefix_of", 4 => "strip_prefix_of"}
+  @wrappers %{"starts_with" => 2, "strip_prefix" => 4}
+
+  def includes,
+    do: [
+      "core::str::_::starts_with",
+      "core::str::pattern::_::is_prefix_of",
+      "core::str::_::strip_prefix",
+      "core::str::pattern::_::strip_prefix_of"
+    ]
 
   def selected?(f, t) do
     refs = LLBC.type_references!(t)
     trait = trait(t, refs)
-    is_integer(trait) and safe?(f) and (starts?(f, t, refs, trait) or method?(f, t, refs, trait))
+    is_integer(trait) and safe?(f) and (wrapper?(f, t, refs, trait) or method?(f, t, refs, trait))
   end
 
-  defp starts?(f, t, refs, trait) do
-    with true <- expand(f["signature"]["output"], refs) == %{"Scalar" => "Bool"},
-         "Normal" <- f["src"],
+  defp wrapper?(f, t, refs, trait) do
+    with "Normal" <- f["src"],
          [
            %{"Ident" => ["core", 0]},
            %{"Ident" => ["str", 0]},
@@ -27,14 +42,17 @@ defmodule Lynx.Rust.StringPatterns do
                }
              }
            },
-           %{"Ident" => ["starts_with", 0]}
+           %{"Ident" => [name, 0]}
          ] <- f["item_meta"]["name"],
+         slot when is_integer(slot) <- @wrappers[name],
+         true <- trait_method?(slot, t, refs, trait),
          true <- params?(parent_params, 0, 0, 0),
          true <- params?(f["generics"], 1, 1, 1),
          [bound] <- f["generics"]["trait_clauses"],
          true <- clause(bound, refs) == decl(trait, var()),
          str = expand(parent, refs),
-         true <- StringModels.borrowed_type?(ref(str, region(0)), t, refs) do
+         true <- StringModels.borrowed_type?(ref(str, region(0)), t, refs),
+         true <- output?(f["signature"]["output"], ref(str, region(0)), slot, t, refs) do
       expand(f["signature"]["inputs"], refs) == [ref(str, region(0)), var()]
     else
       _ -> false
@@ -42,23 +60,24 @@ defmodule Lynx.Rust.StringPatterns do
   end
 
   defp method?(f, t, refs, trait) do
-    with true <- expand(f["signature"]["output"], refs) == %{"Scalar" => "Bool"},
-         %{
+    with %{
            "TraitImpl" => %{
              "impl_ref" => %{"id" => id},
              "trait_ref" => %{"id" => ^trait},
-             "item_id" => @slot,
+             "item_id" => slot,
              "reuses_default" => false
            }
          } <- f["src"],
+         true <- Map.has_key?(@methods, slot) and trait_method?(slot, t, refs, trait),
          true <-
            f["item_meta"]["name"] ==
-             path(~w(core str pattern)) ++ [%{"Impl" => %{"Trait" => id}}, ident("is_prefix_of")],
+             path(~w(core str pattern)) ++ [%{"Impl" => %{"Trait" => id}}, ident(@methods[slot])],
          true <- params?(f["generics"], 0, 2, 0),
          [prefix, text] <- expand(f["signature"]["inputs"], refs),
          %{"Ref" => [r, str, "Shared"]} <- prefix,
          true <- r == region(0) and text == ref(str, region(1)),
          true <- StringModels.borrowed_type?(prefix, t, refs),
+         true <- output?(f["signature"]["output"], text, slot, t, refs),
          impl when is_map(impl) <- find(t["trait_impls"], id),
          true <-
            impl["src"] == "Normal" and impl["is_unsafe"] == false and impl["is_negative"] == false,
@@ -72,10 +91,10 @@ defmodule Lynx.Rust.StringPatterns do
          true <-
            expand(f["src"]["TraitImpl"]["impl_ref"]["generics"], refs) == args([], [region(0)]),
          %{
-           "kind" => %{"TraitMethod" => [^trait, @slot]},
+           "kind" => %{"TraitMethod" => [^trait, ^slot]},
            "params" => p,
            "skip_binder" => %{"id" => method_id, "generics" => g}
-         } <- Enum.at(impl["methods"], @slot) do
+         } <- Enum.at(impl["methods"], slot) do
       method_id == f["def_id"] and params?(p, 0, 1, 0) and
         expand(g, refs) == args([], [region(0), %{"Var" => %{"Bound" => [0, 0]}}])
     else
@@ -83,9 +102,10 @@ defmodule Lynx.Rust.StringPatterns do
     end
   end
 
-  def audit(functions, t, refs) do
+  def audit(functions, t, refs, models \\ %{}) do
     ctx = %{
       t: t,
+      models: models,
       refs: refs,
       trait: trait(t, refs),
       traits: ResourceModels.trait_references(t),
@@ -126,9 +146,22 @@ defmodule Lynx.Rust.StringPatterns do
   defp walk(_, _, _), do: {[], []}
 
   defp call(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => g}}, owner, ctx) do
-    target = ctx.functions[id]
-    ids = if target, do: arguments!(target["generics"], g, owner, ctx), else: []
-    {ids, []}
+    if ctx.models[id][:string_unchecked_from] do
+      unless method?(owner, ctx.t, ctx.refs, ctx.trait) and
+               owner["src"]["TraitImpl"]["item_id"] == 4,
+             do:
+               raise(
+                 ArgumentError,
+                 "unchecked string borrowing is restricted to the extracted standard strip_prefix implementation"
+               )
+
+      StringSliceModels.unchecked_from_call!(g, ctx.models, ctx.t, ctx.refs, ctx.traits)
+      {[], []}
+    else
+      target = ctx.functions[id]
+      ids = if target, do: arguments!(target, g, owner, ctx), else: []
+      {ids, []}
+    end
   end
 
   defp call(
@@ -143,12 +176,12 @@ defmodule Lynx.Rust.StringPatterns do
       )
 
     if (is_integer(ctx.trait) and value) && value["trait_decl_ref"]["id"] == ctx.trait do
-      unless slot == @slot and starts?(owner, ctx.t, ctx.refs, ctx.trait) and
+      unless slot == wrapper_slot(owner) and wrapper?(owner, ctx.t, ctx.refs, ctx.trait) and
                length(g["regions"]) == 1 and g["types"] == [] and g["trait_refs"] == [] and
                g["const_generics"] == [],
              do: reject!()
 
-      {dictionary!(value, expand(value["trait_decl_ref"], ctx.refs), owner, ctx), [func]}
+      {dictionary!(value, expand(value["trait_decl_ref"], ctx.refs), owner, ctx, slot), [func]}
     else
       {[], []}
     end
@@ -156,7 +189,11 @@ defmodule Lynx.Rust.StringPatterns do
 
   defp call(_, _, _), do: {[], []}
 
-  defp arguments!(params, g, owner, ctx) do
+  defp arguments!(target, g, owner, ctx) do
+    params = target["generics"]
+    slots = needed_slots(target, ctx, [])
+    slots = if slots == [], do: [2], else: slots
+
     for {bound, index} <- Enum.with_index(params["trait_clauses"] || []),
         expected = clause(bound, ctx.refs),
         is_integer(ctx.trait) and expected["id"] == ctx.trait,
@@ -168,16 +205,19 @@ defmodule Lynx.Rust.StringPatterns do
           CallModels.instantiate(expected, Map.update!(g, "types", &expand(&1, ctx.refs)))
 
         ids ++
-          dictionary!(
-            ResourceModels.dictionary(Enum.at(g["trait_refs"], index), ctx.traits),
-            expected,
-            owner,
-            ctx
-          )
+          Enum.flat_map(slots, fn slot ->
+            dictionary!(
+              ResourceModels.dictionary(Enum.at(g["trait_refs"], index), ctx.traits),
+              expected,
+              owner,
+              ctx,
+              slot
+            )
+          end)
     end
   end
 
-  defp dictionary!(%{"trait_decl_ref" => actual, "kind" => kind}, expected, owner, ctx) do
+  defp dictionary!(%{"trait_decl_ref" => actual, "kind" => kind}, expected, owner, ctx, slot) do
     unless expand(actual, ctx.refs) == expected, do: reject!()
 
     case kind do
@@ -188,10 +228,11 @@ defmodule Lynx.Rust.StringPatterns do
 
       %{"TraitImpl" => %{"id" => id, "generics" => g}} ->
         impl = find(ctx.t["trait_impls"], id)
-        method = if impl, do: get_in(Enum.at(impl["methods"], @slot), ["skip_binder", "id"])
+        method = if impl, do: get_in(Enum.at(impl["methods"], slot), ["skip_binder", "id"])
         f = ctx.functions[method]
 
         unless f && safe?(f) && method?(f, ctx.t, ctx.refs, ctx.trait) &&
+                 f["src"]["TraitImpl"]["item_id"] == slot &&
                  length(g["regions"]) == 1 && g["types"] == [] && g["const_generics"] == [] &&
                  g["trait_refs"] == [] &&
                  CallModels.instantiate(expand(impl["impl_trait"], ctx.refs), g) == expected,
@@ -204,7 +245,44 @@ defmodule Lynx.Rust.StringPatterns do
     end
   end
 
-  defp dictionary!(_, _, _, _), do: reject!()
+  defp dictionary!(_, _, _, _, _), do: reject!()
+
+  defp wrapper_slot(f) do
+    case f["item_meta"]["name"] do
+      [
+        %{"Ident" => ["core", 0]},
+        %{"Ident" => ["str", 0]},
+        %{"Impl" => %{"Ty" => _}},
+        %{"Ident" => [name, 0]}
+      ] ->
+        @wrappers[name]
+
+      _ ->
+        nil
+    end
+  end
+
+  defp needed_slots(f, ctx, seen) do
+    if f["def_id"] in seen do
+      []
+    else
+      case wrapper_slot(f) do
+        n when is_integer(n) -> [n]
+        _ -> slot_calls(f["body"], ctx, [f["def_id"] | seen]) |> Enum.uniq()
+      end
+    end
+  end
+
+  defp slot_calls(%{"Regular" => %{"kind" => %{"Fun" => id}}}, ctx, seen) do
+    if f = ctx.functions[id], do: needed_slots(f, ctx, seen), else: []
+  end
+
+  defp slot_calls(map, ctx, seen) when is_map(map), do: slot_calls(Map.values(map), ctx, seen)
+
+  defp slot_calls(list, ctx, seen) when is_list(list),
+    do: Enum.flat_map(list, &slot_calls(&1, ctx, seen))
+
+  defp slot_calls(_, _, _), do: []
 
   # Only the unused foreign searcher interface is projected away. Executable
   # prefix bodies and function identities are retained; the full input is audited
@@ -214,7 +292,17 @@ defmodule Lynx.Rust.StringPatterns do
     refs = LLBC.type_references!(document)
     id = trait(t, refs)
 
-    if is_integer(id) and Enum.any?(audit.functions, &starts?(&1, t, refs, id)) do
+    slots =
+      for f <- audit.functions,
+          selected?(f, t),
+          slot = wrapper_slot(f) || get_in(f, ["src", "TraitImpl", "item_id"]),
+          is_integer(slot),
+          do: slot
+
+    slots = Enum.sort(Enum.uniq(slots))
+    positions = Map.new(Enum.with_index(slots))
+
+    if is_integer(id) and slots != [] do
       document =
         document
         |> LLBCJson.restore_type_references!(document)
@@ -247,8 +335,12 @@ defmodule Lynx.Rust.StringPatterns do
       traits =
         Enum.map(t["trait_decls"], fn d ->
           if d && d["def_id"] == id do
-            method = Enum.at(d["methods"], @slot) |> put_in(["skip_binder", "default"], nil)
-            %{d | "types" => [], "methods" => [method]}
+            methods =
+              Enum.map(slots, fn slot ->
+                Enum.at(d["methods"], slot) |> put_in(["skip_binder", "default"], nil)
+              end)
+
+            %{d | "types" => [], "methods" => methods}
           else
             d
           end
@@ -257,7 +349,7 @@ defmodule Lynx.Rust.StringPatterns do
       impls =
         Enum.map(t["trait_impls"], fn d ->
           if d && d["impl_trait"]["id"] == id,
-            do: %{d | "types" => [], "methods" => [Enum.at(d["methods"], @slot)]},
+            do: %{d | "types" => [], "methods" => Enum.map(slots, &Enum.at(d["methods"], &1))},
             else: d
         end)
 
@@ -351,11 +443,11 @@ defmodule Lynx.Rust.StringPatterns do
       document =
         update_in(document, ["translated", "assoc_item_names"], fn names ->
           List.update_at(names, id, fn row ->
-            %{row | "types" => [], "methods" => ["is_prefix_of"]}
+            %{row | "types" => [], "methods" => Enum.map(slots, &@methods[&1])}
           end)
         end)
 
-      projected = renumber(document, id)
+      projected = renumber(document, id, positions)
 
       for f <- original_functions, f["def_id"] not in audit.library_helpers do
         after_f = find(projected["translated"]["fun_decls"], f["def_id"])
@@ -371,7 +463,7 @@ defmodule Lynx.Rust.StringPatterns do
       {projected,
        %{
          trait: id,
-         method: @slot,
+         methods: slots,
          implementations: Enum.filter(audit.library_helpers, &MapSet.member?(kept, &1))
        }}
     else
@@ -420,56 +512,78 @@ defmodule Lynx.Rust.StringPatterns do
   defp searcher?(list, id) when is_list(list), do: Enum.any?(list, &searcher?(&1, id))
   defp searcher?(_, _), do: false
 
-  defp renumber(map, id) when is_map(map) do
-    map = Map.new(map, fn {k, v} -> {k, renumber(v, id)} end)
+  defp renumber(map, id, positions) when is_map(map) do
+    map = Map.new(map, fn {k, v} -> {k, renumber(v, id, positions)} end)
 
     map =
-      if map["TraitMethod"] == [id, @slot], do: Map.put(map, "TraitMethod", [id, 0]), else: map
+      case map["TraitMethod"] do
+        [^id, slot] -> Map.put(map, "TraitMethod", [id, Map.fetch!(positions, slot)])
+        _ -> map
+      end
 
     map =
       case map["Trait"] do
-        [raw, @slot] ->
+        [raw, slot] ->
           if expand(raw, %{})["trait_decl_ref"]["id"] == id,
-            do: Map.put(map, "Trait", [raw, 0]),
+            do: Map.put(map, "Trait", [raw, Map.fetch!(positions, slot)]),
             else: map
 
         _ ->
           map
       end
 
-    if map["item_id"] == @slot && get_in(map, ["trait_ref", "id"]) == id,
-      do: Map.put(map, "item_id", 0),
+    if get_in(map, ["trait_ref", "id"]) == id and Map.has_key?(map, "item_id"),
+      do: Map.put(map, "item_id", Map.fetch!(positions, map["item_id"])),
       else: map
   end
 
-  defp renumber(list, id) when is_list(list), do: Enum.map(list, &renumber(&1, id))
-  defp renumber(v, _), do: v
+  defp renumber(list, id, p) when is_list(list), do: Enum.map(list, &renumber(&1, id, p))
+  defp renumber(v, _, _), do: v
 
   defp trait(t, refs) do
     d = Enum.find(t["trait_decls"] || [], &(&1 && &1["item_meta"]["name"] == path(@path)))
 
     if d && d["src"] == "Normal" && d["is_unsafe"] == false && params?(d["generics"], 1, 0, 0) do
-      m = Enum.at(d["methods"], @slot)
-      sig = if m, do: expand(m["skip_binder"]["signature"], refs)
-
-      if m && m["kind"] == %{"TraitMethod" => [d["def_id"], @slot]} &&
-           m["skip_binder"]["name"] == "is_prefix_of" &&
-           params?(m["params"], 0, 1, 0) && sig["abi"] == "Rust" && sig["is_unsafe"] == false &&
-           sig["is_variadic"] == false &&
-           sig["output"] == %{"Scalar" => "Bool"} &&
-           match?([%{"TypeVar" => %{"Free" => 0}}, _], sig["inputs"]) do
-        [_, input] = sig["inputs"]
-
-        case input do
-          %{"Ref" => [%{"Var" => %{"Bound" => [0, 0]}}, str, "Shared"]} ->
-            if StringModels.borrowed_type?(ref(str, region(0)), t, refs), do: d["def_id"]
-
-          _ ->
-            nil
-        end
-      end
+      if trait_method?(2, t, refs, d["def_id"]), do: d["def_id"]
     end
   end
+
+  defp trait_method?(slot, t, refs, id) do
+    d = find(t["trait_decls"], id)
+    m = if d, do: Enum.at(d["methods"], slot)
+    sig = if m, do: expand(m["skip_binder"]["signature"], refs)
+
+    with true <-
+           m && m["kind"] == %{"TraitMethod" => [id, slot]} &&
+             m["skip_binder"]["name"] == @methods[slot],
+         true <- params?(m["params"], 0, 1, 0),
+         %{
+           "abi" => "Rust",
+           "is_unsafe" => false,
+           "is_variadic" => false,
+           "inputs" => [self, %{"Ref" => [r, str, "Shared"]} = input]
+         } <- sig,
+         true <- self == var() and r == %{"Var" => %{"Bound" => [0, 0]}},
+         true <- StringModels.borrowed_type?(ref(str, region(0)), t, refs) do
+      output?(sig["output"], input, slot, t, refs)
+    else
+      _ -> false
+    end
+  end
+
+  defp output?(raw, _, 2, _, refs), do: expand(raw, refs) == %{"Scalar" => "Bool"}
+
+  defp output?(raw, expected, 4, t, refs) do
+    with %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => g}} <- expand(raw, refs),
+         true <- g == args([expected]),
+         d when is_map(d) <- find(t["type_decls"], id) do
+      OptionModels.option_type?(d, refs)
+    else
+      _ -> false
+    end
+  end
+
+  defp output?(_, _, _, _, _), do: false
 
   defp safe?(f),
     do:

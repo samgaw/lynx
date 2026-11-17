@@ -9,7 +9,8 @@ defmodule Lynx.Rust.StringSliceModels do
   def fingerprint, do: Lynx.Rust.Fingerprint.digest(@contents)
 
   def resolve(function, translated, refs) do
-    safe(function, translated, refs) || elaboration(function, translated, refs)
+    safe(function, translated, refs) || unchecked_wrapper(function, translated, refs) ||
+      elaboration(function, translated, refs)
   end
 
   defp safe(function, translated, refs) do
@@ -65,13 +66,24 @@ defmodule Lynx.Rust.StringSliceModels do
     end
   end
 
-  defp wrapper(f, t, refs) do
+  defp unchecked_wrapper(%{"body" => "Opaque", "signature" => sig} = f, t, refs) do
+    if Map.take(sig, ~w(abi is_unsafe is_variadic)) == %{
+         "abi" => "Rust",
+         "is_unsafe" => true,
+         "is_variadic" => false
+       },
+       do: wrapper(f, t, refs, "get_unchecked")
+  end
+
+  defp unchecked_wrapper(_, _, _), do: nil
+
+  defp wrapper(f, t, refs, method \\ "get") do
     with "Normal" <- f["src"],
          [
            %{"Ident" => ["core", 0]},
            %{"Ident" => ["str", 0]},
            %{"Impl" => %{"Ty" => parent}},
-           %{"Ident" => ["get", 0]}
+           %{"Ident" => [^method, 0]}
          ] <- f["item_meta"]["name"],
          true <- parent["kind"] == "InherentImplBlock" and parent["params"] == params(),
          str = CallModels.expand(parent["skip_binder"], refs),
@@ -102,8 +114,23 @@ defmodule Lynx.Rust.StringSliceModels do
          true <- trait?(trait, t),
          true <- CallModels.expand(actual, refs) == args([variable(0), str, variable(1)]),
          true <- CallModels.expand(f["signature"]["inputs"], refs) == [ref(str), variable(0)],
-         true <- option?(f["signature"]["output"], ref(variable(1)), t, refs) do
-      model("core::str::{str}::get", "get") |> Map.put(:str_index_method, 0)
+         true <-
+           if(method == "get",
+             do: option?(f["signature"]["output"], ref(variable(1)), t, refs),
+             else: CallModels.expand(f["signature"]["output"], refs) == ref(variable(1))
+           ) do
+      if method == "get" do
+        model("core::str::{str}::get", "get") |> Map.put(:str_index_method, 0)
+      else
+        model("core::str::{str}::get_unchecked", "uncheckedFrom")
+        |> Map.merge(%{
+          string_unchecked_from: true,
+          keep_params: [false, false],
+          keep_trait_clauses: [false],
+          label:
+            "Shared str unchecked RangeFrom borrow model restricted to the extracted standard strip_prefix implementation; invalid UTF-8 boundaries exhaust verification; actual range dictionary is validated; Rust core raw pointers, native layout and borrow lifetime remain unverified"
+        })
+      end
     else
       _ -> nil
     end
@@ -196,6 +223,38 @@ defmodule Lynx.Rust.StringSliceModels do
       _ ->
         raise ArgumentError,
               "missing or unsupported SliceIndex implementation selected by str::get"
+    end
+  end
+
+  def unchecked_from_call!(actual, models, t, refs, traits) do
+    get = index_method!(actual, models, t, refs, traits)
+
+    with %{str_range: "RangeFrom"} <- models[get],
+         %{"kind" => %{"TraitImpl" => %{"id" => id}}} <-
+           ResourceModels.dictionary(hd(actual["trait_refs"]), traits),
+         impl when is_map(impl) <- find(t["trait_impls"], id),
+         %{"skip_binder" => %{"id" => unchecked}} <- Enum.at(impl["methods"], 2),
+         %{elaboration_only: true, function: f} <- models[unchecked],
+         true <- f["src"]["TraitImpl"]["item_id"] == 2,
+         p = f["generics"],
+         true <- p == params(),
+         [range, str] <- CallModels.expand(actual["types"], refs),
+         true <-
+           Map.take(f["signature"], ~w(abi is_unsafe is_variadic)) == %{
+             "abi" => "Rust",
+             "is_unsafe" => true,
+             "is_variadic" => false
+           },
+         true <-
+           CallModels.expand(f["signature"]["inputs"], refs) == [
+             range,
+             %{"RawPtr" => [str, "Shared"]}
+           ],
+         true <-
+           CallModels.expand(f["signature"]["output"], refs) == %{"RawPtr" => [str, "Shared"]} do
+      unchecked
+    else
+      _ -> raise ArgumentError, "missing or unsupported unchecked RangeFrom string implementation"
     end
   end
 
