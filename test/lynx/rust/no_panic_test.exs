@@ -74,6 +74,58 @@ defmodule Lynx.Rust.NoPanicTest do
     assert plan.protected == MapSet.new([1, 2, 3])
   end
 
+  test "protects compiler dictionary methods and inherited dictionaries before cleanup pruning" do
+    first =
+      put_in(function(1, "parse", []), ["body", "Structured"], %{
+        "trait_refs" => [
+          %{
+            "skip_binder" => %{
+              "Value" => [
+                20,
+                %{
+                  "kind" => %{"TraitImpl" => %{"id" => 7}},
+                  "trait_decl_ref" => %{}
+                }
+              ]
+            }
+          }
+        ]
+      })
+
+    input =
+      document([
+        first,
+        function(2, "callback", [3]),
+        function(3, "leaf", []),
+        function(4, "inherited", []),
+        function(5, "unrelated", [])
+      ])
+
+    input =
+      put_in(input, ["translated", "trait_impls"], [
+        %{
+          "def_id" => 7,
+          "methods" => [%{"skip_binder" => %{"id" => 2}}],
+          "implied_trait_refs" => [%{"TraitImpl" => %{"id" => 8}}]
+        },
+        %{
+          "def_id" => 8,
+          "methods" => [%{"skip_binder" => %{"id" => 4}}],
+          "implied_trait_refs" => [%{"TraitImpl" => %{"id" => 7}}]
+        }
+      ])
+
+    {^input, plan} = NoPanic.prepare!(input, [{"core_lib::parse", "Proofs.safe"}], ["core_lib"])
+    assert plan.protected == MapSet.new([1, 2, 3, 4])
+
+    assert :ok =
+             NoPanic.audit!(plan, %{
+               functions: input["translated"]["fun_decls"],
+               constants: %{},
+               callback_dependencies: %{1 => [2, 4]}
+             })
+  end
+
   test "rejects a missing or opaque first-party implementation" do
     for functions <- [[], [put_in(function(1, "parse", []), ["body"], "Opaque")]] do
       assert_raise ArgumentError, ~r/extracted ordinary first-party/, fn ->

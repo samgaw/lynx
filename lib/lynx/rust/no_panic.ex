@@ -39,8 +39,14 @@ defmodule Lynx.Rust.NoPanic do
     :ok
   end
 
+  def prepare!(document, [], _first_party),
+    do: {document, %{contracts: [], protected: MapSet.new()}}
+
   def prepare!(document, contracts, first_party) do
-    translated = document["translated"]
+    translated =
+      document
+      |> Lynx.Rust.LLBCJson.restore_trait_references!(document)
+      |> Map.fetch!("translated")
 
     functions =
       Map.new(for f <- translated["fun_decls"], f != nil, do: {f["def_id"], f})
@@ -68,9 +74,15 @@ defmodule Lynx.Rust.NoPanic do
         {global["def_id"], Lynx.Rust.Constants.initializer_id(global)}
       end)
 
+    dictionaries =
+      Map.new(Enum.reject(translated["trait_impls"] || [], &is_nil/1), &{&1["def_id"], &1})
+
     dependencies =
       Map.new(functions, fn {id, f} ->
-        {id, references(f["body"]) ++ global_references(f["body"], initializers)}
+        {id,
+         references(f["body"]) ++
+           global_references(f["body"], initializers) ++
+           dictionary_references(f["body"], dictionaries, initializers, MapSet.new())}
       end)
 
     protected = closure(Enum.map(selected, & &1.id), dependencies, MapSet.new())
@@ -156,6 +168,44 @@ defmodule Lynx.Rust.NoPanic do
   defp references(map) when is_map(map), do: Enum.flat_map(Map.values(map), &references/1)
   defp references(list) when is_list(list), do: Enum.flat_map(list, &references/1)
   defp references(_), do: []
+
+  # Compiler-resolved dictionaries can invoke closure methods without a direct
+  # function operand at the call site. Protect every method and inherited
+  # dictionary dependency before any pending certificate can prune cleanup.
+  defp dictionary_references(
+         %{"TraitImpl" => %{"id" => id}} = node,
+         dictionaries,
+         initializers,
+         seen
+       ) do
+    visited = MapSet.member?(seen, id)
+    seen = MapSet.put(seen, id)
+    children = dictionary_references(Map.values(node), dictionaries, initializers, seen)
+
+    if visited do
+      children
+    else
+      dictionary = Map.get(dictionaries, id, %{})
+      nested = Map.take(dictionary, ~w(methods implied_trait_refs consts))
+
+      methods =
+        for %{"skip_binder" => %{"id" => method}} <- dictionary["methods"] || [], do: method
+
+      children ++
+        methods ++
+        references(nested) ++
+        global_references(nested, initializers) ++
+        dictionary_references(nested, dictionaries, initializers, seen)
+    end
+  end
+
+  defp dictionary_references(node, dictionaries, initializers, seen) when is_map(node),
+    do: dictionary_references(Map.values(node), dictionaries, initializers, seen)
+
+  defp dictionary_references(nodes, dictionaries, initializers, seen) when is_list(nodes),
+    do: Enum.flat_map(nodes, &dictionary_references(&1, dictionaries, initializers, seen))
+
+  defp dictionary_references(_, _, _, _), do: []
 
   # A const read executes its actual initializer. Protect that body and its
   # dependencies before any pending certificate can simplify unwind cleanup.
