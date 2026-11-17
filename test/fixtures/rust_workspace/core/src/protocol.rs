@@ -192,6 +192,11 @@ pub fn text_equal(left: &str, right: &str) -> bool {
     left == right
 }
 
+/// Recognizes a complete UTF-8 prefix through the standard pattern implementation.
+pub fn text_has_prefix(text: &str, prefix: &str) -> bool {
+    text.starts_with(prefix)
+}
+
 /// Borrows a field only when both byte offsets are UTF-8 character boundaries.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     text.get(start..end)
@@ -388,6 +393,10 @@ mod tests {
         assert!(super::text_equal(text, text));
         assert!(!super::text_equal("é", "e\u{301}"));
         assert!(!super::text_equal("field", "field\0"));
+        assert!(super::text_has_prefix(text, "aé"));
+        assert!(super::text_has_prefix(text, ""));
+        assert!(!super::text_has_prefix("a", text));
+        assert!(!super::text_has_prefix("é", "e\u{301}"));
         for position in 0..=text.len() + 1 {
             match super::checked_text_split(text, position) {
                 Some((left, right)) => {

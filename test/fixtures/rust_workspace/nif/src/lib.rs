@@ -233,6 +233,13 @@ fn equal_text_nif(left: &str, right: &str) -> bool {
     experiment_analysis::text_equal(left, right)
 }
 
+/// Recognizes a decoded text prefix across the workspace crates.
+#[cfg(feature = "text-slices")]
+#[rustler::nif(name = "has_text_prefix")]
+fn has_text_prefix_nif(text: &str, prefix: &str) -> bool {
+    experiment_analysis::text_has_prefix(text, prefix)
+}
+
 /// Counts validated text payload bytes through a renamed dirty NIF export.
 #[cfg(feature = "text-views")]
 #[rustler::nif(name = "text_payload", schedule = "DirtyCpu")]
@@ -775,7 +782,7 @@ mod tests {
                 + usize::from(cfg!(feature = "owned-text"))
                 + 3 * usize::from(cfg!(feature = "text-input"))
                 + 3 * usize::from(cfg!(feature = "borrowed-text"))
-                + 4 * usize::from(cfg!(feature = "text-slices"))
+                + 5 * usize::from(cfg!(feature = "text-slices"))
                 + usize::from(cfg!(feature = "slice-index"))
                 + 2 * usize::from(cfg!(feature = "slice-prefix"))
                 + 3 * usize::from(cfg!(feature = "prefix-consume"))
@@ -1082,6 +1089,11 @@ mod tests {
         }
         if cfg!(feature = "text-slices") {
             expected.extend([
+                (
+                    "has_text_prefix".to_owned(),
+                    2,
+                    rustler::SchedulerFlags::Normal as u32,
+                ),
                 (
                     "equal_text".to_owned(),
                     2,

@@ -10,6 +10,13 @@ theorem equal_facade (left right : Str) :
     __EQUAL_NIF__ left right = .ok (decide (left.val = right.val)) := by
   simpa [__EQUAL_NIF__, lift] using TextSlices.Properties.text_equal_bytes left right
 
+theorem prefix_facade (text needle : Str) :
+    __PREFIX_NIF__ text needle =
+      if needle.val.length ≤ text.val.length then
+        .ok (decide (needle.val = text.val.take needle.val.length))
+      else .ok false := by
+  simpa [__PREFIX_NIF__, lift] using TextSlices.Properties.text_prefix_bytes text needle
+
 /-- Every field returned by the actual facade after successful text decoding
 encodes as its exact UTF-8 binary, within the byte-offset output bound. -/
 theorem window_encoding (input : Lynx.Term) (text field : Str) (start stop : U8)

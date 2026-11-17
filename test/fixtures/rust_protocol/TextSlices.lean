@@ -182,6 +182,22 @@ theorem text_equal_reflexive (text : Str) :
     experiment_analysis.text_equal text text = .ok true := by
   simp [text_equal_bytes]
 
+@[cbv_eval] theorem text_prefix_bytes (text needle : Str) :
+    experiment_analysis.text_has_prefix text needle =
+      if needle.val.length ≤ text.val.length then
+        .ok (decide (needle.val = text.val.take needle.val.length))
+      else .ok false := by
+  change experiment_analysis.core.slice.Slice.starts_with core.cmp.PartialEqU8 text needle = _
+  unfold Str at text needle
+  by_cases bounded : needle.val.length ≤ text.val.length
+  all_goals simp [experiment_analysis.core.slice.Slice.starts_with,
+    core.slice.index.Slice.index, core.slice.index.SliceIndexRangeToUsizeSlice.index,
+    Slice.len, slice_equal, List.slice, bounded]
+
+theorem text_prefix_reflexive (text : Str) :
+    experiment_analysis.text_has_prefix text text = .ok true := by
+  simp [text_prefix_bytes]
+
 attribute [local cbv_opaque] RustM.ok RustM.fail
 
 theorem checked_unicode :

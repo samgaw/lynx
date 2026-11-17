@@ -19,6 +19,11 @@ pub fn text_equal(left: &str, right: &str) -> bool {
     experiment_core::protocol::text_equal(left, right)
 }
 
+/// Recognizes a text prefix through the workspace dependency.
+pub fn text_has_prefix(text: &str, prefix: &str) -> bool {
+    experiment_core::protocol::text_has_prefix(text, prefix)
+}
+
 /// Borrows a field through the workspace dependency.
 pub fn text_window(text: &str, start: usize, end: usize) -> Option<&str> {
     experiment_core::protocol::text_window(text, start, end)

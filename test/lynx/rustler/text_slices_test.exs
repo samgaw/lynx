@@ -63,7 +63,13 @@ defmodule Lynx.Rustler.TextSlicesTest do
         mir: :promoted,
         root_attribute: if(@unpatched, do: "verify::start_from"),
         cargo: [features: ["text-slices"]],
-        only: [slice_text: 3, split_text: 2, checked_split_text: 2, equal_text: 2],
+        only: [
+          slice_text: 3,
+          split_text: 2,
+          checked_split_text: 2,
+          equal_text: 2,
+          has_text_prefix: 2
+        ],
         lean_project: project,
         module_prefix: "TextSlices.Extraction",
         build_dir: Path.join(tmp, "build")
@@ -91,6 +97,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
 
       properties =
         File.read!(@proof)
+        |> String.replace("experiment_analysis.core.slice.", "experiment_nif.core.slice.")
         |> String.replace("experiment_analysis.experiment_core", "experiment_nif.experiment_core")
         |> String.replace("experiment_analysis.", "experiment_nif.experiment_analysis.")
 
@@ -101,6 +108,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         |> String.replace("__SLICE_NIF__", bindings["slice_text"]["lean_name"])
         |> String.replace("__CHECKED_NIF__", bindings["checked_split_text"]["lean_name"])
         |> String.replace("__EQUAL_NIF__", bindings["equal_text"]["lean_name"])
+        |> String.replace("__PREFIX_NIF__", bindings["has_text_prefix"]["lean_name"])
 
       File.write!(Path.join(project, "TextSlices/AdapterProperties.lean"), adapter)
 
@@ -110,12 +118,13 @@ defmodule Lynx.Rustler.TextSlicesTest do
             proof_modules: ["TextSlices.Properties", "TextSlices.AdapterProperties"],
             required_properties:
               Enum.map(
-                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive),
+                ~w(window_composition window_valid split_roundtrip split_rejected windows_unicode window_utf8 split_utf8 checked_implementation checked_consistent checked_rejected checked_utf8 checked_unicode text_equal_bytes text_equal_reflexive text_prefix_bytes text_prefix_reflexive),
                 &("TextSlices.Properties." <> &1)
               ) ++
                 [
                   "TextSlices.AdapterProperties.window_encoding",
                   "TextSlices.AdapterProperties.equal_facade",
+                  "TextSlices.AdapterProperties.prefix_facade",
                   "TextSlices.AdapterProperties.checked_facade_utf8"
                 ]
           ]
@@ -174,7 +183,23 @@ defmodule Lynx.Rustler.TextSlicesTest do
       refute apply(native, :equal_text, ["field", "field" <> <<0>>])
       assert_raise ArgumentError, fn -> apply(native, :equal_text, ["ok", <<255>>]) end
 
+      for {text, prefix, expected} <- [
+            {"aé🙂z", "aé", true},
+            {"aé", "", true},
+            {"a", "aé", false},
+            {"é", "é", false}
+          ],
+          do: assert(apply(native, :has_text_prefix, [text, prefix]) == expected)
+
+      assert_raise ArgumentError, fn -> apply(native, :has_text_prefix, ["ok", <<195>>]) end
+
       cases = [
+        {"Prefix", "#{native_name}.has_text_prefix(\"aé🙂z\",\"aé\")"},
+        {"EmptyPrefix", "#{native_name}.has_text_prefix(\"aé\",\"\")"},
+        {"LongPrefix", "#{native_name}.has_text_prefix(\"a\",\"aé\") == false"},
+        {"DifferentPrefix", "#{native_name}.has_text_prefix(\"é\",\"é\") == false"},
+        {"MalformedPrefix",
+         "try do #{native_name}.has_text_prefix(\"ok\",<<195>>); false catch :error, :badarg -> true end"},
         {"Equal", "#{native_name}.equal_text(\"aé🙂z\",\"aé🙂z\")"},
         {"Different", "#{native_name}.equal_text(\"é\",\"é\") == false"},
         {"Nul", "#{native_name}.equal_text(\"field\",<<102,105,101,108,100,0>>) == false"},
@@ -232,6 +257,7 @@ defmodule Lynx.Rustler.TextSlicesTest do
         simp only [Lynx.apply,«slicing:ensures/0»,
           Elixir.#{native}.«slice_text/3», Elixir.#{native}.«slice_text:execution/3»,
           Elixir.#{native}.«split_text/2», Elixir.#{native}.«split_text:execution/2»,
+          Elixir.#{native}.«has_text_prefix/2», Elixir.#{native}.«has_text_prefix:execution/2»,
           Elixir.#{native}.«equal_text/2», Elixir.#{native}.«equal_text:execution/2»,
           Elixir.#{native}.«checked_split_text/2», Elixir.#{native}.«checked_split_text:execution/2»]
         cbv
