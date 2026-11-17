@@ -75,6 +75,18 @@ defmodule Lynx.Rust.TupleLayoutsTest do
     end
   end
 
+  test "compiler drop glue has no first-party crate path for tuple layout discovery", c do
+    glue = %{
+      "def_id" => 0,
+      "item_meta" => %{
+        "name" => [%{"Impl" => %{"Trait" => 6}}, %{"Builtin" => ["DropGlue", 0]}]
+      }
+    }
+
+    document = put_in(c.probe, ["translated", "fun_decls"], [glue])
+    assert %{queries: []} = TupleLayouts.prepare!(nil, nil, document, nil, nil, ["tuple_drop"])
+  end
+
   test "vector arguments require unique matching layout and signed byte bounds", c do
     target = c.probe["translated"]["target_information"]
 

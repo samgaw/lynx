@@ -19,9 +19,7 @@ defmodule Lynx.Rust.TupleLayouts do
           do: f["def_id"]
 
     types =
-      for f <- t["fun_decls"],
-          f,
-          [%{"Ident" => [crate, _]} | _] = f["item_meta"]["name"],
+      for %{"item_meta" => %{"name" => [%{"Ident" => [crate, _]} | _]}} = f <- t["fun_decls"],
           crate in first_party,
           type <-
             candidates(f["body"], pushes, refs) ++ input_tuples(f["signature"]["inputs"], t, refs),
