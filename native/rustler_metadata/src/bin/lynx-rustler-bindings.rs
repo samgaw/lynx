@@ -91,12 +91,12 @@ fn supported_type(ty: &Type) -> Result<Value, String> {
             && reference
                 .lifetime
                 .as_ref()
-                .is_none_or(|lifetime| lifetime.ident == "_")
+                .is_none_or(|lifetime| lifetime.ident != "static")
             && matches!(&*reference.elem, Type::Path(path) if path.qself.is_none() && path.path.is_ident("str"))
         {
             return Ok(json!("str"));
         }
-        return Err("only shared str references with an elided lifetime are supported".into());
+        return Err("only shared non-static str references are supported".into());
     }
     if let Type::Tuple(tuple) = ty {
         if tuple.elems.len() <= 7 {
@@ -347,7 +347,10 @@ impl Bindings {
         };
         if !matches!(function.sig.safety, syn::Safety::Default)
             || function.sig.asyncness.is_some()
-            || !function.sig.generics.params.is_empty()
+            || !function.sig.generics.params.iter().all(|parameter| {
+                matches!(parameter, syn::GenericParam::Lifetime(lifetime) if lifetime.bounds.is_empty())
+            })
+            || function.sig.generics.where_clause.is_some()
             || function.sig.variadic.is_some()
             || function.sig.abi.is_some()
         {
@@ -589,6 +592,27 @@ mod tests {
             bindings.entries[0]["arguments"],
             json!([{"native": ["packet", "Input"]}])
         );
+    }
+
+    #[test]
+    fn discovers_explicit_borrow_lifetimes_without_accepting_type_or_const_generics() {
+        let bindings = discover(
+            "fn native<'a>(text: &'a str, prefix: &str) -> Option<&'a str> { text.strip_prefix(prefix) }",
+            2,
+        );
+        assert!(bindings.errors.is_empty(), "{:?}", bindings.errors);
+        assert_eq!(bindings.entries[0]["arguments"], json!(["str", "str"]));
+        assert_eq!(bindings.entries[0]["result"], json!({"option": "str"}));
+        for signature in [
+            "fn native<const N: usize>(text: &str) -> &str { text }",
+            "fn native<'a, T>(text: &'a str) -> &'a str { text }",
+            "fn native<'a: 'b, 'b>(text: &'a str) -> &'b str { text }",
+            "fn native<'a>(text: &'a str) -> &'a str where 'a: 'static { text }",
+            "fn native(text: &'static str) -> &'static str { text }",
+            "fn native<'a>(text: &'a mut str) -> &'a mut str { text }",
+        ] {
+            assert_eq!(discover(signature, 1).errors.len(), 1, "{signature}");
+        }
     }
 
     #[test]
