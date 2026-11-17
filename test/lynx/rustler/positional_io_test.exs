@@ -8,7 +8,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
          do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned owned-drops backend")
 
   @tag :tmp_dir
-  test "positional calls share one compiled file resource and acknowledge only complete writes",
+  test "compiled positional calls preserve resource ownership and share the named inode",
        %{
          tmp_dir: tmp
        } do
@@ -39,7 +39,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
       package: "io-native",
       tools: @tools,
       cargo: [features: ["positional-file"]],
-      only: [patch_at: 3, observe_at: 2],
+      only: [open_slots: 0, patch_at: 3, observe_at: 2],
       execution: :runtime,
       files: :regular,
       owned_drops: true,
@@ -55,6 +55,13 @@ defmodule Lynx.Rustler.PositionalIoTest do
     resource = ["io_native", "offset_file", "OffsetFile"]
 
     assert %{
+             "open_slots" => %{
+               "flags" => 2,
+               "arity" => 0,
+               "rust_name" => "open_nif",
+               "arguments" => [],
+               "result" => %{"nif_result" => %{"resource" => ^resource}}
+             },
              "patch_at" => %{
                "flags" => 2,
                "arity" => 3,
@@ -79,7 +86,8 @@ defmodule Lynx.Rustler.PositionalIoTest do
     for {source, module} <- [
           {"Properties.lean", "Base"},
           {"PositionalProperties.lean", "Properties"},
-          {"PositionalNifProperties.lean", "Nif"}
+          {"PositionalNifProperties.lean", "Nif"},
+          {"PositionalOpenedProperties.lean", "Opened"}
         ] do
       content =
         File.read!(Path.join(@fixture, source))
@@ -90,6 +98,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
         )
         |> String.replace("io_protocol.io_core.", "io_native.io_core.")
         |> String.replace("io_protocol.positional.", "io_native.io_protocol.positional.")
+        |> String.replace("__OPEN__", bindings["open_slots"]["lean_name"])
         |> String.replace("__PATCH__", bindings["patch_at"]["lean_name"])
         |> String.replace("__OBSERVE__", bindings["observe_at"]["lean_name"])
 
@@ -99,23 +108,37 @@ defmodule Lynx.Rustler.PositionalIoTest do
     options =
       base ++
         [
-          proof_modules: ~w(Positional.Base Positional.Properties Positional.Nif),
+          proof_modules:
+            ~w(Positional.Base Positional.Properties Positional.Nif Positional.Opened),
           required_properties:
             ~w(Positional.Proofs.patch_persists_prefix Positional.Proofs.observe_prefix
-          Positional.Proofs.observe_eof Positional.Nif.completed_program)
+          Positional.Proofs.observe_eof Positional.Nif.completed_program
+          Positional.Opened.opened_shared_inode Positional.Opened.failed_open_releases_error)
         ]
 
     checked = Lynx.Rustler.prepare!(options)
     assert Enum.all?(checked.reports, &(&1.status == :ok))
 
-    for operation <- ~w(write_at read_at sync_data) do
+    assert Enum.any?(checked.verification.guarantees, fn
+             %{
+               kind: :cross_crate_contract,
+               theorem: "Positional.Opened.opened_shared_inode",
+               implementation_dependencies: dependencies
+             } ->
+               Enum.any?(dependencies, &(&1["rust_name"] == "io_protocol::open_readwrite"))
+
+             _ ->
+               false
+           end)
+
+    for operation <- ~w(open write_at read_at sync_data) do
       assert Enum.any?(
                checked.verification.unverified_external_calls,
                &String.ends_with?(&1.rust_name, "::" <> operation)
              )
     end
 
-    for {name, arity} <- [{"patch_at", 3}, {"observe_at", 2}] do
+    for {name, arity} <- [{"open_slots", 0}, {"patch_at", 3}, {"observe_at", 2}] do
       assert Enum.any?(
                checked.verification.guarantees,
                &match?(
@@ -125,10 +148,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
              )
     end
 
-    assert Enum.any?(
-             checked.verification.unverified_nif_exports,
-             &match?(%{function: "open_slots", arity: 0, status: :unverified}, &1)
-           )
+    refute Enum.any?(checked.verification.unverified_nif_exports, &(&1.function == "open_slots"))
 
     load_and_calibrate(prepared, tmp)
 
@@ -143,6 +163,8 @@ defmodule Lynx.Rustler.PositionalIoTest do
     short_options = Keyword.put(law_options, :initial_environment, "Positional.Nif.short")
 
     for {module, environment, theorem} <- [
+          {LynxPositionalFixture.Opened, "Positional.Opened.ready", "shared_inode/0"},
+          {LynxPositionalFixture.Missing, "Positional.Opened.missing", "raises_open_failed/0"},
           {LynxPositionalFixture.Success, "Positional.Nif.ready", "patch_and_observe/0"},
           {LynxPositionalFixture.Short, "Positional.Nif.short", "zero_write_is_unacknowledged/0"},
           {LynxPositionalFixture.Invalid, "Positional.Nif.ready", "rejects_negative_offset/0"}
@@ -150,7 +172,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
       run_options = Keyword.put(law_options, :initial_environment, environment)
 
       run_options =
-        if module == LynxPositionalFixture.Success,
+        if module == LynxPositionalFixture.Opened,
           do: Keyword.put(run_options, :export, export),
           else: run_options
 
@@ -206,6 +228,15 @@ defmodule Lynx.Rustler.PositionalIoTest do
            )
 
     File.write!(source, rust)
+
+    mutation = String.replace(rust, ~s|RaiseAtom("open_failed")|, ~s|RaiseAtom("wrong_error")|)
+    refute mutation == rust
+    File.write!(source, mutation)
+
+    error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+    assert error.message =~ "Opened.lean:"
+    assert error.message =~ "postcondition"
+    File.write!(source, rust)
   end
 
   defp load_and_calibrate(prepared, tmp) do
@@ -239,10 +270,18 @@ defmodule Lynx.Rustler.PositionalIoTest do
 
     File.write!(script, """
     alias LynxPositionalFixture.Native
+    true = try do
+      Native.open_slots()
+      false
+    catch
+      :error, :open_failed -> true
+    end
     File.write!("slots", <<1, 2>>)
     file = Native.open_slots()
+    reader = Native.open_slots()
+    false = file == reader
     true = Native.patch_at(file, 4, 9)
-    9 = Native.observe_at(file, 4)
+    9 = Native.observe_at(reader, 4)
     nil = Native.observe_at(file, 5)
     1 = Native.observe_at(file, 0)
     true = try do

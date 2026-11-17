@@ -1,6 +1,6 @@
 //! Cursor-preserving byte updates through one VM-owned descriptor.
-use rustler::ResourceArc;
-use std::fs::{File, OpenOptions};
+use rustler::{Error, NifResult, ResourceArc};
+use std::fs::File;
 
 #[derive(Debug)]
 pub struct OffsetFile {
@@ -10,15 +10,16 @@ pub struct OffsetFile {
 #[rustler::resource_impl]
 impl rustler::Resource for OffsetFile {}
 
-/// Open the fixture file for native calibration.
+/// Open the existing fixture file without truncation.
 #[rustler::nif(name = "open_slots", schedule = "DirtyIo")]
-fn open_nif() -> ResourceArc<OffsetFile> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("slots")
-        .expect("open fixture slots");
-    ResourceArc::new(OffsetFile { file })
+fn open_nif() -> NifResult<ResourceArc<OffsetFile>> {
+    match io_protocol::open_readwrite("slots") {
+        Ok(file) => Ok(ResourceArc::new(OffsetFile { file })),
+        Err(error) => {
+            drop(error);
+            Err(Error::RaiseAtom("open_failed"))
+        }
+    }
 }
 
 /// Acknowledge one byte only after a complete, synchronized write.

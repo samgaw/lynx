@@ -25,6 +25,56 @@ defmodule LynxPositionalFixture.Success do
     """
 end
 
+defmodule LynxPositionalFixture.Opened do
+  @compile :debug_info
+  use Lynx.Laws
+  alias LynxPositionalFixture.Native
+
+  law shared_inode,
+    expects:
+      (
+        writer = Native.open_slots()
+        reader = Native.open_slots()
+
+        writer != reader and Native.patch_at(writer, 4, 9) and
+          Native.observe_at(reader, 4) == 9
+      ),
+    proof: ~LEAN"""
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Positional.Opened.accepted_outcome (counter := 13) (heap := Positional.Opened.openedHeap)
+    apply Lynx.Concurrent.checkPost_sound (depth := 256) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
+    """
+end
+
+defmodule LynxPositionalFixture.Missing do
+  @compile :debug_info
+  use Lynx.Laws
+  alias LynxPositionalFixture.Native
+
+  law raises_open_failed,
+    expects:
+      (try do
+         Native.open_slots()
+         false
+       catch
+         :error, :open_failed -> true
+       end),
+    proof: ~LEAN"""
+    refine ⟨0, ?_⟩
+    intro depth enough elapsed events last outcome run terminal
+    apply terminal.outcome_eq.symm.trans
+    apply Positional.Opened.accepted_outcome (counter := 1)
+      (heap := [Positional.Opened.namespaceCell [] .nil])
+    apply Lynx.Concurrent.checkPost_sound (depth := 128) ?_ run terminal
+    clear enough events last outcome run terminal
+    lynx_check_post
+    """
+end
+
 defmodule LynxPositionalFixture.Short do
   @compile :debug_info
   use Lynx.Laws
