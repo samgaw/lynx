@@ -650,8 +650,9 @@ defmodule Lynx.Rust do
   allocation and FFI remain reported boundaries.
   `branching: :duplicate` retains separate symbolic branch contexts for supported
   guard-bearing results returned across first-party crates. It requires the
-  branch-duplication backend and can increase generated code size. The default
-  `:join` keeps the existing extraction heuristic. Loop fixed-point joins and
+  branch-duplication backend and can increase generated code size. The codec
+  toolchain installed with `--recover-joins` defaults to `:duplicate`. Other
+  toolchains default to `:join`. Loop fixed-point joins and
   invariant checks are unchanged; unsupported cases still fail extraction.
 
   Runtime RwLock operations support shared readers and exclusive writers.
@@ -821,7 +822,7 @@ defmodule Lynx.Rust do
         execution: Keyword.get(opts, :execution, :pure),
         unwind: Keyword.get(opts, :unwind, :reject),
         futures: Keyword.get(opts, :futures, :reject),
-        branching: Keyword.get(opts, :branching, :join),
+        branching: Lynx.Rust.Branching.resolve!(opts, tools),
         files: Keyword.get(opts, :files, :reject),
         nonpanicking: Keyword.get(opts, :nonpanicking, []),
         owned_drops: Keyword.get(opts, :owned_drops, false)

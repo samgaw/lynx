@@ -157,10 +157,8 @@ aeneas_source="$install_dir/aeneas-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/aeneas "$aeneas_source"
 git -C "$aeneas_source" checkout --detach 2b9e3ea4662b48c19262be759dbb704f20c24364
 if [ "$verification_profile" = join-recovery ]; then
-  # Preserve native enum-tag reads after a move, and use upstream's existing
-  # branch-continuation fallback when a context match cannot be joined.
+  # Preserve native enum-tag reads after a move and keep codec branches separate.
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-partial-discriminants.patch"
-  git -C "$aeneas_source" apply "$script_dir/patches/aeneas-recoverable-joins.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-duplicate-branches.patch"
 else
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-static-shared-loans.patch"
@@ -182,7 +180,7 @@ opam switch create --root="$opam_root" lynx-aeneas ocaml-base-compiler.5.3.0 --y
 opam install --root="$opam_root" --switch=lynx-aeneas \
   "$aeneas_source/src" --deps-only --locked --yes
 if [ "$verification_profile" = join-recovery ]; then
-  aeneas_version=build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1+duplicate-branches-v1
+  aeneas_version=build-2b9e3ea+partial-discriminants-v1+duplicate-branches-v1
 else
   aeneas_version=nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1+immediate-futures-v1+workspace-roots-v1+undefined-behavior-v1+effectful-calls-v1+partial-discriminants-v1+lean-record-types-v1+duplicate-branches-v1+tuple-patterns-v1+local-resource-defaults-v1
 fi
@@ -190,7 +188,8 @@ AENEAS_VERSION="$aeneas_version" opam exec --root="$opam_root" --switch=lynx-aen
   dune build --root "$aeneas_source/src" main.exe
 cp "$aeneas_source/src/_build/default/main.exe" "$install_dir/aeneas"
 if [ "$verification_profile" = join-recovery ]; then
-  printf '%s\n' 'profile=join-recovery' 'aeneas_branching=duplicate-v1' "aeneas=$aeneas_version" \
+  printf '%s\n' 'profile=join-recovery' 'aeneas_branching=duplicate-v1' \
+    'aeneas_default_branching=duplicate' "aeneas=$aeneas_version" \
     'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots' \
     'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
   echo "Installed join-recovery toolchain with the unmodified Lean library. Set LYNX_AENEAS_DIR to $install_dir"

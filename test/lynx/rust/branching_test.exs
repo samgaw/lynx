@@ -33,6 +33,18 @@ defmodule Lynx.Rust.BranchingTest do
     assert Branching.backend_arguments!([branching: :duplicate], tools) == ["-duplicate-branches"]
   end
 
+  @tag :tmp_dir
+  test "the codec profile selects duplication unless a mode was specified", %{tmp_dir: tools} do
+    assert Branching.resolve!([], tools) == :join
+    manifest = Path.join(tools, "lynx-toolchain")
+    File.write!(manifest, "aeneas_branching=duplicate-v1\n")
+    assert Branching.resolve!([], tools) == :join
+
+    File.write!(manifest, "aeneas_branching=duplicate-v1\naeneas_default_branching=duplicate\n")
+    assert Branching.resolve!([], tools) == :duplicate
+    assert Branching.resolve!([branching: :join], tools) == :join
+  end
+
   test "backend metadata must confirm the selected mode" do
     assert :ok = Branching.validate_metadata!(%{}, [])
     assert :ok = Branching.validate_metadata!(%{"branch_joins" => true}, [])

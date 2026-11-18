@@ -10,6 +10,28 @@ defmodule Lynx.Rust.Branching do
     mode
   end
 
+  def resolve!(opts, tools) do
+    if Keyword.has_key?(opts, :branching) do
+      validate!(opts)
+    else
+      case File.read(Path.join(tools, "lynx-toolchain")) do
+        {:ok, manifest} ->
+          if "aeneas_default_branching=duplicate" in String.split(manifest, "\n"),
+            do: :duplicate,
+            else: :join
+
+        {:error, :enoent} ->
+          :join
+
+        {:error, reason} ->
+          raise File.Error,
+            reason: reason,
+            action: "read",
+            path: Path.join(tools, "lynx-toolchain")
+      end
+    end
+  end
+
   def backend_arguments!(opts, tools) do
     case validate!(opts) do
       :join ->

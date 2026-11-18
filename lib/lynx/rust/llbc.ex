@@ -593,6 +593,7 @@ defmodule Lynx.Rust.LLBC do
                "build-2b9e3ea",
                "build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1",
                "build-2b9e3ea+recoverable-join-v1+partial-discriminants-v1+duplicate-branches-v1",
+               "build-2b9e3ea+partial-discriminants-v1+duplicate-branches-v1",
                "nightly-2026.11.04-2b9e3ea",
                "nightly-2026.11.04-2b9e3ea+lynx-static-loans-v1",
                "nightly-2026.11.04-2b9e3ea+lynx-result-monad-v1",
