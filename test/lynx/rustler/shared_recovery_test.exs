@@ -12,6 +12,8 @@ defmodule Lynx.Rustler.SharedRecoveryTest do
         "ConcurrentStorageProperties",
         "SharedRecoveryProperties",
         "ConcurrentRecoveryProperties",
+        "EncodedPrefixRecovery",
+        "NamedJournalCrash",
         "SharedReadProperties",
         "SharedFilesystemProperties"
       ])

@@ -35,6 +35,7 @@ defmodule Lynx.Rust.IoFixture do
         File.read!(Path.join(@fixture, name <> ".lean"))
         |> String.replace("__APPEND__", Map.fetch!(names, "log_append"))
         |> String.replace("__CREATE__", Map.fetch!(names, "log_create"))
+        |> String.replace("Lynx io_protocol", "Lynx io_native io_native.io_protocol")
 
       File.write!(Path.join(project, "Record/" <> name <> ".lean"), source)
     end

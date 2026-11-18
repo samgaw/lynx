@@ -1,9 +1,11 @@
 module
 public import Record.LogProperties
-public import Record.ConstructorLogProperties
+public import Record.EncodedPrefixRecovery
+public import Record.NamedJournalCrash
 public section
-open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol
+open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.SharedReadProperties
+open Record.RepairCrashProperties (Prefix)
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.IntegrityProperties Record.CrashProperties Record.AppendProperties Record.LogProperties
 
@@ -180,29 +182,40 @@ def reopenedView (highWater : Nat) (names : Names) (positive : 1 ≤ highWater) 
     lookup := fun state valid => lookup_reopened highWater names state positive valid
     store := fun before after valid => store_reopened highWater names before after positive valid }
 
-theorem recover_encoded_view (file : NativeFile) (view : FileView file) (values : List U16) (rest : Term) (position : Nat)
+/-- The reader recovers a complete prefix without consuming an arbitrary suffix. -/
+theorem recover_prefix_view (file : NativeFile) (view : FileView file)
+    (values : List U16) (data : ByteArray) (rest : Term) (position : Nat)
+    (fits : data.size ≤ limit) (encoded : Prefix (disk (logBytes values)) data)
+    (bounded : values.length ≤ 262144) (offset : position ≤ limit) :
+    recover_log file (Usize.ofNatCore values.length (by scalar_tac))
+      (view.environment ⟨data, data, position, recoveryScript data rest⟩) =
+      (.ok (.Ok (alloc.vec.Vec.from values (by scalar_tac)), file),
+        view.environment (scanning data rest (4 * values.length))) := by
+  obtain ⟨tail, rfl⟩ := Record.EncodedPrefixRecovery.prefix_shape values data encoded
+  apply recover_log_records file view _ (scanning (disk (logBytes values ++ tail)) rest 0) _ values _
+  · exact ⟨fits, le_rfl, offset⟩
+  · simp [blocked, recoveryScript, outcome]
+  · simpa [scanning, recoveryScript, sought] using Record.RecoveryProperties.seek_start
+      (⟨disk (logBytes values ++ tail), disk (logBytes values ++ tail), position,
+        recoveryScript (disk (logBytes values ++ tail)) rest⟩ : State)
+      0#u64 (zeroMask (disk (logBytes values ++ tail))) (disk (logBytes values ++ tail))
+      _ (by simp [limit]) (action_outcome _ _ _ _ _) (persist_zero _)
+  · simpa only [List.nil_append, List.length_nil, Nat.zero_add] using
+      scanning_records values [] tail rest (by simpa [disk, ← ByteArray.size_data] using fits)
+  · simp [Usize.ofNatCore]
+  · exact bounded
+
+theorem recover_encoded_view (file : NativeFile) (view : FileView file) (values : List U16)
+    (rest : Term) (position : Nat)
     (bounded : values.length ≤ 262144) (offset : position ≤ limit) :
     recover_log file (Usize.ofNatCore values.length (by scalar_tac))
       (view.environment ⟨disk (logBytes values), disk (logBytes values), position,
         recoveryScript (disk (logBytes values)) rest⟩) =
       (.ok (.Ok (alloc.vec.Vec.from values (by scalar_tac)), file),
         view.environment (scanning (disk (logBytes values)) rest (4 * values.length))) := by
-  have size : (disk (logBytes values)).size = 4 * values.length := by
-    simp [disk, ← ByteArray.size_data]
-  apply recover_log_records file view _ (scanning (disk (logBytes values)) rest 0) _ values _
-  · simp only [Valid, size]
-    exact ⟨by simp only [limit]; omega, Nat.le_refl _, offset⟩
-  · simp [blocked, recoveryScript, outcome]
-  · simpa [scanning, recoveryScript, sought] using Record.RecoveryProperties.seek_start
-      (⟨disk (logBytes values), disk (logBytes values), position,
-        recoveryScript (disk (logBytes values)) rest⟩ : State)
-      0#u64 (zeroMask (disk (logBytes values))) (disk (logBytes values)) _ (by simp [limit])
-      (action_outcome _ _ _ _ _) (persist_zero _)
-  · simpa only [List.nil_append, List.append_nil, List.length_nil, Nat.zero_add] using
-      scanning_records values [] [] rest (by simp [logBytes_length, limit]; omega)
-  · simp [Usize.ofNatCore]
-  · exact bounded
-
+  apply recover_prefix_view file view values _ rest position _ ⟨le_rfl, fun _ _ => rfl⟩ bounded offset
+  simp only [disk, ByteArray.size, List.size_toArray, List.length_map, logBytes_length, limit]
+  omega
 
 /-- Recovery is executed through the actual reopened read-only descriptor and
 shared inode; every successful read preserves the persistent namespace. -/
@@ -217,50 +230,73 @@ theorem recover_reopened_log (highWater : Nat) (names : Names) (values : List U1
   recover_encoded_view ⟨highWater + 1⟩ (reopenedView highWater names positive)
     values rest position bounded offset
 
+@[expose] def journal : ByteArray := ⟨#[106,111,117,114,110,97,108]⟩
+
+private theorem actual_path : bytes (toStr "journal") = journal := by cbv
+
 @[expose] def openingScript (script : Term) : Term :=
-  .cons (.tuple #[.atom "open",.bitstring Record.ConstructorLogProperties.fileName 0,
+  .cons (.tuple #[.atom "open",.bitstring journal 0,
     .atom "ok",.integer 0,script]) .nil
 
 @[expose] def boot (highWater : Nat) (data : ByteArray) (script : Term) : Environment := {
   nativeRefCounter := highWater
   nativeHeap := [
-    (0,namespaceTypeName,encodeNamespace ⟨Record.ConstructorLogProperties.names,
-      Record.ConstructorLogProperties.names,[],openingScript script⟩),
+    (0,namespaceTypeName,encodeNamespace ⟨(Record.NamedJournalCrash.namedJournal journal),
+      (Record.NamedJournalCrash.namedJournal journal),[],openingScript script⟩),
     (1,inodeTypeName,encode ⟨data,data,0,.nil⟩)] }
 
 theorem restart_named_log (highWater : Nat) (data : ByteArray) (script : Term)
     (positive : 1 ≤ highWater) (bounded : data.size ≤ limit) :
-    restartFilesystem ⟨Record.ConstructorLogProperties.names,[(1,data)],highWater⟩
+    restartFilesystem ⟨(Record.NamedJournalCrash.namedJournal journal),[(1,data)],highWater⟩
       (openingScript script) = some (boot highWater data script) := by
   have supported : supportedPath (⟨#[106,111,117,114,110,97,108]⟩ : ByteArray) = true := by decide +kernel
-  simp [supported,restartFilesystem,boot,Record.ConstructorLogProperties.names,
+  simp [supported,restartFilesystem,boot,Record.NamedJournalCrash.namedJournal,
     namespaceTable,namespaceEntry,encodeNames,
     not_lt.mpr bounded,not_lt.mpr positive,List.eraseDups_cons,
-    Record.ConstructorLogProperties.fileName]
+    journal]
 
 theorem open_named_log (highWater : Nat) (data : ByteArray) (script : Term)
     (positive : 1 ≤ highWater) (bounded : data.size ≤ limit) :
     io_core.open_readonly (toStr "journal") (boot highWater data script) =
       (.ok (.Ok ⟨highWater + 1⟩),
-        reopened highWater Record.ConstructorLogProperties.names ⟨data,data,0,script⟩) := by
+        reopened highWater (Record.NamedJournalCrash.namedJournal journal) ⟨data,data,0,script⟩) := by
   have live : highWater ≠ 0 := by omega
   have liveEq : (highWater == 0) = false := by simp [live]
   have fits : ¬ 1048576 < data.size := not_lt.mpr bounded
   have supported : supportedPath (⟨#[106,111,117,114,110,97,108]⟩ : ByteArray) = true := by decide +kernel
   have poll : pollOpenReadOnly (toStr "journal") (boot highWater data script) =
       some (.ok (.Ok ⟨highWater + 1⟩),
-        reopened highWater Record.ConstructorLogProperties.names ⟨data,data,0,script⟩) := by
-    simp [fits,supported,pollOpenReadOnly,Record.ConstructorLogProperties.journal_bytes,
+        reopened highWater (Record.NamedJournalCrash.namedJournal journal) ⟨data,data,0,script⟩) := by
+    simp [fits,supported,pollOpenReadOnly,actual_path,
       supportedOpenPath,
-      boot,reopened,openingScript,Record.ConstructorLogProperties.names,
+      boot,reopened,openingScript,Record.NamedJournalCrash.namedJournal,
       namespaceState,namespaceSnapshot,namespaceTable,namespaceHistory,namespaceEntry,
       encodeNamespace,encodeNames,tablesEqual,List.eraseDups_cons,openChoice,pathChoice,
       inode,decode,encode,limit,replaceNamespaceScript,encodeHandle,namespaceTypeName,
       inodeTypeName,handleTypeName,not_lt.mpr positive,liveEq,List.filter,
-      Record.ConstructorLogProperties.fileName]
+      journal]
   simp only [io_core.open_readonly,monadLift_self,openReadOnly]
   rw [Result.wait_ready_run _ _ _ _ _ poll]
   simp
+
+/-- Restart the actual namespace, open the shared inode and recover the
+complete prefix under the declared successful read script. -/
+theorem named_log_prefix_restart (highWater : Nat) (values : List U16) (data : ByteArray) (rest : Term)
+    (positive : 1 ≤ highWater) (fits : data.size ≤ limit)
+    (encoded : Prefix (disk (logBytes values)) data) (bounded : values.length ≤ 262144) :
+    let names := Record.NamedJournalCrash.namedJournal journal
+    let script := recoveryScript data rest
+    restartFilesystem ⟨names,[(1,data)],highWater⟩ (openingScript script) =
+      some (boot highWater data script) ∧
+    io_core.open_readonly (toStr "journal") (boot highWater data script) =
+      (.ok (.Ok ⟨highWater + 1⟩), reopened highWater names ⟨data,data,0,script⟩) ∧
+    recover_log ⟨highWater + 1⟩ (Usize.ofNatCore values.length (by scalar_tac))
+      (reopened highWater names ⟨data,data,0,script⟩) =
+      (.ok (.Ok (alloc.vec.Vec.from values (by scalar_tac)),⟨highWater + 1⟩),
+        reopened highWater names (scanning data rest (4 * values.length))) := by
+  dsimp only
+  exact ⟨restart_named_log highWater _ _ positive fits, open_named_log highWater _ _ positive fits,
+    recover_prefix_view _ (reopenedView highWater _ positive) values data rest 0 fits encoded bounded (by simp [limit])⟩
 
 /-- Compose filesystem restart, the extracted Rust opener and the extracted
 cross-crate parser without replacing the shared file by an independent file cell. -/
@@ -268,15 +304,15 @@ theorem named_log_restart (highWater : Nat) (values : List U16) (rest : Term)
     (positive : 1 ≤ highWater) (bounded : values.length ≤ 262144) :
     let data := disk (logBytes values)
     let script := recoveryScript data rest
-    restartFilesystem ⟨Record.ConstructorLogProperties.names,[(1,data)],highWater⟩
+    restartFilesystem ⟨(Record.NamedJournalCrash.namedJournal journal),[(1,data)],highWater⟩
       (openingScript script) = some (boot highWater data script) ∧
     io_core.open_readonly (toStr "journal") (boot highWater data script) =
       (.ok (.Ok ⟨highWater + 1⟩),
-        reopened highWater Record.ConstructorLogProperties.names ⟨data,data,0,script⟩) ∧
+        reopened highWater (Record.NamedJournalCrash.namedJournal journal) ⟨data,data,0,script⟩) ∧
     recover_log ⟨highWater + 1⟩ (Usize.ofNatCore values.length (by scalar_tac))
-      (reopened highWater Record.ConstructorLogProperties.names ⟨data,data,0,script⟩) =
+      (reopened highWater (Record.NamedJournalCrash.namedJournal journal) ⟨data,data,0,script⟩) =
       (.ok (.Ok (alloc.vec.Vec.from values (by scalar_tac)),⟨highWater + 1⟩),
-        reopened highWater Record.ConstructorLogProperties.names
+        reopened highWater (Record.NamedJournalCrash.namedJournal journal)
           (scanning data rest (4 * values.length))) := by
   dsimp only
   have size : (disk (logBytes values)).size ≤ limit := by
