@@ -632,6 +632,9 @@ defmodule Lynx.Rust.Extraction do
         unwind_input: unwind_input
       )
 
+    # Release Aeneas omits this field for RustM. Pass the checked value to codecs.
+    translation = Map.put_new(translation, "result_monad", result_monad)
+
     Lynx.Rust.Runtime.install_extracted_notation!(
       output,
       module,

@@ -77,7 +77,12 @@ defmodule Lynx.Rustler.DerivedTupleDecoderTest do
 
       assert Enum.any?(
                prepared.verification.external_models,
-               &String.contains?(&1, "boxed errors exhaust verification")
+               &String.contains?(&1, "encoding deferred through actual extracted dictionaries")
+             )
+
+      assert Enum.any?(
+               prepared.verification.external_models,
+               &String.contains?(&1, "unknown boxed cleanup exhausts verification")
              )
 
       File.mkdir_p!(Path.join(workspace, "priv"))
