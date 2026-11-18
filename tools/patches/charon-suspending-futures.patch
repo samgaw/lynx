@@ -75,7 +75,7 @@
              _ => panic!("Unexpected item when translating types: {def:?}"),
 --- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
 +++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -316,6 +316,292 @@
+@@ -316,6 +316,185 @@
          }
      }
 
@@ -258,126 +258,18 @@
 +        Ok(())
 +    }
 +
-+    /// Inline the compiler's Pin constructor only for an Unpin mutable pointee.
-+    /// Check the standard implementation, rather than accepting an opaque call.
-+    fn normalize_coroutine_pin(
-+        &mut self,
-+        def: &hax::FullDef<'tcx>,
-+        body: &mut mir::Body<'tcx>,
-+    ) -> Result<(), Error> {
-+        if !self.options.suspending_futures || !matches!(def.kind(), hax::FullDefKind::Coroutine(_))
-+        {
-+            return Ok(());
-+        }
-+        use crate::hax::UnderOwnerState;
-+        let tcx = self.tcx;
-+        let pin = tcx.lang_items().pin_type().unwrap();
-+        let constructor = tcx.lang_items().get(LangItem::PinNewUnchecked).unwrap();
-+        let implementation = tcx.optimized_mir(constructor);
-+        if implementation.basic_blocks.len() != 1 {
-+            return Ok(());
-+        }
-+        let block = &implementation.basic_blocks[mir::START_BLOCK];
-+        if !matches!(block.terminator().kind, mir::TerminatorKind::Return) {
-+            return Ok(());
-+        }
-+        let statements: Vec<_> = block
-+            .statements
-+            .iter()
-+            .filter(|statement| {
-+                !matches!(
-+                    statement.kind,
-+                    mir::StatementKind::StorageLive(_)
-+                        | mir::StatementKind::StorageDead(_)
-+                        | mir::StatementKind::Nop
-+                )
-+            })
-+            .collect();
-+        let [statement] = statements.as_slice() else {
-+            return Ok(());
-+        };
-+        let mir::StatementKind::Assign((dest, mir::Rvalue::Aggregate(kind, values))) =
-+            &statement.kind
-+        else {
-+            return Ok(());
-+        };
-+        if dest.local != mir::RETURN_PLACE
-+            || !dest.projection.is_empty()
-+            || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, _, _, _) if *id == pin)
-+            || values.len() != 1
-+            || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)], mir::Operand::Copy(place) | mir::Operand::Move(place)
-+                if place.local.as_usize() == 1 && place.projection.is_empty())
-+        {
-+            return Ok(());
-+        }
-+        for block in body.basic_blocks.as_mut() {
-+            let terminator = block.terminator.as_mut().unwrap();
-+            let mir::TerminatorKind::Call {
-+                func,
-+                args,
-+                destination,
-+                target: Some(target),
-+                ..
-+            } = &terminator.kind
-+            else {
-+                continue;
-+            };
-+            let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
-+                continue;
-+            };
-+            if *id != constructor || args.len() != 1 {
-+                continue;
-+            }
-+            let ty::Ref(_, pointee, rustc_hir::Mutability::Mut) =
-+                args[0].node.ty(&body.local_decls, tcx).kind()
-+            else {
-+                continue;
-+            };
-+            if !pointee.is_unpin(tcx, self.hax_state.typing_env()) {
-+                continue;
-+            }
-+            let ty::Adt(def, generics) = destination.ty(&body.local_decls, tcx).ty.kind() else {
-+                continue;
-+            };
-+            if def.did() != pin {
-+                continue;
-+            }
-+            let source_info = terminator.source_info;
-+            let mut inlined = (*statement).clone();
-+            inlined.source_info = source_info;
-+            inlined.kind = mir::StatementKind::Assign(Box::new((
-+                *destination,
-+                mir::Rvalue::Aggregate(
-+                    Box::new(mir::AggregateKind::Adt(
-+                        pin,
-+                        rustc_abi::VariantIdx::from_usize(0),
-+                        generics,
-+                        None,
-+                        None,
-+                    )),
-+                    rustc_index::IndexVec::from_raw(vec![args[0].node.clone()]),
-+                ),
-+            )));
-+            let target = *target;
-+            block.statements.push(inlined);
-+            terminator.kind = mir::TerminatorKind::Goto { target };
-+        }
-+        Ok(())
-+    }
-+
      fn translate_def_body_inner(
          &mut self,
          span: Span,
-@@ -324,6 +610,8 @@
+@@ -324,6 +503,7 @@
          // Retrieve the body
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
 +            self.normalize_coroutine_context(def, &mut body)?;
-+            self.normalize_coroutine_pin(def, &mut body)?;
              Ok(self.translate_body(span, body, &def.source_text))
          } else if let Some(value) =
              def.evaluate(self.hax_state_with_id(), hax::ReadMode::Structured)
-@@ -1104,11 +1392,58 @@
+@@ -1104,11 +1284,58 @@
          })
      }
 
@@ -438,7 +330,7 @@
          use crate::hax::{BaseState, SInto};
          use rustc_middle::ty;
 
-@@ -1117,7 +1452,8 @@
+@@ -1117,7 +1344,8 @@
          let mut place_ty: mir::PlaceTy = mir::Place::from(mir_place.local).ty(local_decls, tcx);
          let var_id = self.translate_local(&mir_place.local).unwrap();
          let mut place = self.locals.place_for_var(var_id);
@@ -448,7 +340,7 @@
              use mir::ProjectionElem::*;
              if let TyKind::Error(msg) = place.ty().kind() {
                  return Err(Error {
-@@ -1191,6 +1527,27 @@
+@@ -1191,6 +1419,27 @@
                          ty::Tuple(_types) => ProjectionElem::Field(None, field_id),
                          // We get there when we access one of the fields of the state captured by a
                          // closure.
@@ -476,7 +368,7 @@
                          ty::Closure(..) | ty::Coroutine(..) => {
                              ProjectionElem::Field(None, field_id)
                          }
-@@ -1241,7 +1598,7 @@
+@@ -1241,7 +1490,7 @@
              place = place.project(proj_elem, next_place_ty);
              place_ty = projected_place_ty;
          }
@@ -485,7 +377,7 @@
      }
 
      /// Translate an operand
-@@ -1685,6 +2042,23 @@
+@@ -1685,6 +1934,23 @@
                          operands_t.push(Operand::Const(
                              IntegerValue::from_unchecked_uint(UIntTy::U32, 0).to_constant(),
                          ));
@@ -509,7 +401,7 @@
                          Ok(Rvalue::Aggregate(
                              AggregateKind::Adt(tref, None, None),
                              operands_t,
-@@ -1751,8 +2125,27 @@
+@@ -1751,8 +2017,27 @@
                  None
              }
              mir::StatementKind::Assign((place, rvalue)) => {
@@ -539,7 +431,7 @@
                  Some(StatementKind::Assign(t_place, t_rvalue))
              }
              mir::StatementKind::SetDiscriminant {
-@@ -2225,7 +2618,14 @@
+@@ -2225,7 +2510,14 @@
          // There are two cases, depending on whether this is a "regular"
          // call to a top-level function identified by its id, or if we
          // are using a local function pointer (i.e., the operand is a "move").
@@ -555,7 +447,7 @@
          let on_unwind = self.translate_unwind_action(span, unwind);
          // Translate the function operand.
          let fn_operand = match op_ty.kind() {
-@@ -2324,6 +2724,31 @@
+@@ -2324,6 +2616,31 @@
              }
          };
 

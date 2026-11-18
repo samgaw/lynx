@@ -1,11 +1,169 @@
 diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-index 9c1b3209bd42..32e28409c7eb 100644
+index 17cd268f3026..4a0584c51be3 100644
 --- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
 +++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -466,6 +466,198 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -317,6 +317,356 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          }
      }
- 
+
++    /// Ignore only storage markers when checking the compiler's Pin helpers.
++    fn pin_body_statements<'body>(
++        block: &'body mir::BasicBlockData<'tcx>,
++    ) -> Vec<&'body mir::Statement<'tcx>> {
++        block
++            .statements
++            .iter()
++            .filter(|statement| {
++                !matches!(
++                    statement.kind,
++                    mir::StatementKind::StorageLive(_)
++                        | mir::StatementKind::StorageDead(_)
++                        | mir::StatementKind::Nop
++                )
++            })
++            .collect()
++    }
++
++    /// Check that the helper returns Pin containing exactly the expected local.
++    fn pin_returns_argument(
++        &self,
++        statement: &mir::Statement<'tcx>,
++        implementation: &mir::Body<'tcx>,
++        input: mir::Local,
++    ) -> bool {
++        let mir::StatementKind::Assign((result, mir::Rvalue::Aggregate(kind, values))) =
++            &statement.kind
++        else {
++            return false;
++        };
++        result.local == mir::RETURN_PLACE
++            && result.projection.is_empty()
++            && matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _)
++                if Some(*id) == self.tcx.lang_items().pin_type()
++                    && args.type_at(0) == implementation.local_decls[input].ty)
++            && values.len() == 1
++            && matches!(&values[rustc_abi::FieldIdx::from_usize(0)],
++                mir::Operand::Copy(place) | mir::Operand::Move(place)
++                if place.local == input && place.projection.is_empty())
++    }
++
++    fn pin_assignment(
++        &self,
++        source_info: mir::SourceInfo,
++        destination: mir::Place<'tcx>,
++        generics: ty::GenericArgsRef<'tcx>,
++        value: mir::Operand<'tcx>,
++    ) -> mir::Statement<'tcx> {
++        let pin = self.tcx.lang_items().pin_type().unwrap();
++        mir::Statement::new(
++            source_info,
++            mir::StatementKind::Assign(Box::new((
++                destination,
++                mir::Rvalue::Aggregate(
++                    Box::new(mir::AggregateKind::Adt(
++                        pin,
++                        rustc_abi::VariantIdx::from_usize(0),
++                        generics,
++                        None,
++                        None,
++                    )),
++                    rustc_index::IndexVec::from_raw(vec![value]),
++                ),
++            ))),
++        )
++    }
++
++    /// Inline standard Pin constructors on mutable Unpin references after
++    /// checking that the compiler body only packs that reference. The caller
++    /// supplies the unchecked constructor only when translating a coroutine.
++    fn normalize_pin_constructor_calls(
++        &self,
++        body: &mut mir::Body<'tcx>,
++        unchecked: Option<rustc_hir::def_id::DefId>,
++    ) {
++        if !self.options.immediate_futures {
++            return;
++        }
++        use crate::hax::UnderOwnerState;
++        let tcx = self.tcx;
++        let pin = tcx.lang_items().pin_type().unwrap();
++        for block in body.basic_blocks.as_mut() {
++            let terminator = block.terminator.as_mut().unwrap();
++            let mir::TerminatorKind::Call {
++                func,
++                args,
++                destination,
++                target: Some(target),
++                ..
++            } = &terminator.kind
++            else {
++                continue;
++            };
++            let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
++                continue;
++            };
++            if args.len() != 1 {
++                continue;
++            }
++            if let Some(constructor) = unchecked {
++                if *id != constructor {
++                    continue;
++                }
++            } else {
++                if tcx.item_name(*id).as_str() != "new"
++                    || tcx.fn_sig(*id).skip_binder().safety().is_unsafe()
++                {
++                    continue;
++                }
++                let Some(parent) = tcx.impl_of_assoc(*id) else {
++                    continue;
++                };
++                let parent_ty = tcx
++                    .type_of(parent)
++                    .instantiate_identity()
++                    .skip_normalization();
++                if !matches!(parent_ty.kind(), ty::Adt(parent, _) if parent.did() == pin) {
++                    continue;
++                }
++            }
++            let pointer = args[0].node.ty(&body.local_decls, tcx);
++            let ty::Ref(_, pointee, rustc_hir::Mutability::Mut) = pointer.kind() else {
++                continue;
++            };
++            if !pointee.is_unpin(tcx, self.hax_state.typing_env()) {
++                continue;
++            }
++            let ty::Adt(output, generics) = destination.ty(&body.local_decls, tcx).ty.kind() else {
++                continue;
++            };
++            if output.did() != pin || generics.type_at(0) != pointer {
++                continue;
++            }
++            let implementation = tcx.optimized_mir(*id);
++            if implementation.arg_count != 1 || implementation.basic_blocks.len() != 1 {
++                continue;
++            }
++            let entry = &implementation.basic_blocks[mir::START_BLOCK];
++            if !matches!(entry.terminator().kind, mir::TerminatorKind::Return) {
++                continue;
++            }
++            let statements = Self::pin_body_statements(entry);
++            let [statement] = statements.as_slice() else {
++                continue;
++            };
++            if !self.pin_returns_argument(statement, implementation, mir::Local::from_usize(1)) {
++                continue;
++            }
++            block.statements.push(self.pin_assignment(
++                terminator.source_info,
++                *destination,
++                generics,
++                args[0].node.clone(),
++            ));
++            terminator.kind = mir::TerminatorKind::Goto { target: *target };
++        }
++    }
++
 +    fn pin_reborrow_statements(
 +        &self,
 +        local_decls: &mut rustc_index::IndexVec<mir::Local, mir::LocalDecl<'tcx>>,
@@ -201,16 +359,24 @@ index 9c1b3209bd42..32e28409c7eb 100644
      /// Recover only rustc's private Context -> NonNull -> ResumeTy -> Context round-trip.
      /// Pointer values must not escape or be observed by any other operation.
      fn normalize_coroutine_context(
-@@ -898,6 +1090,8 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -641,7 +991,16 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+         // Retrieve the body
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
-             self.normalize_safe_pin_calls(&mut body);
++            self.normalize_pin_constructor_calls(&mut body, None);
 +            self.normalize_pin_macro_calls(&mut body);
 +            self.normalize_pin_macro_drops(&mut body);
              self.normalize_coroutine_context(def, &mut body)?;
-             self.normalize_coroutine_pin(def, &mut body)?;
++            if self.options.suspending_futures
++                && matches!(def.kind(), hax::FullDefKind::Coroutine(_))
++                && let Some(constructor) = self.tcx.lang_items().get(LangItem::PinNewUnchecked)
++            {
++                self.normalize_pin_constructor_calls(&mut body, Some(constructor));
++            }
              Ok(self.translate_body(span, body, &def.source_text))
-@@ -3037,7 +3231,34 @@ impl<'tcx> BlockTransCtx<'tcx, '_, '_, '_> {
+         } else if let Some(value) =
+             def.evaluate(self.hax_state_with_id(), hax::ReadMode::Structured)
+@@ -2779,7 +3138,34 @@ impl<'tcx> BlockTransCtx<'tcx, '_, '_, '_> {
                  //
                  // note: loss of precision, we erase the bound vars.
                  let generics = hax::erase_free_regions(tcx, generics.skip_binder());
@@ -247,13 +413,58 @@ index 9c1b3209bd42..32e28409c7eb 100644
                      && let ty::Coroutine(id, args) = generics.type_at(0).kind()
                  {
 diff --git i/charon/tests/crate_data.rs w/charon/tests/crate_data.rs
-index fced806101e9..2b7457a40466 100644
+index f226775e4912..2b7457a40466 100644
 --- i/charon/tests/crate_data.rs
 +++ w/charon/tests/crate_data.rs
-@@ -1513,3 +1513,73 @@ fn main() {}
+@@ -1468,3 +1468,118 @@ fn main() {}
      );
      Ok(())
  }
++
++#[test]
++fn safe_pin_new_inlines_only_the_checked_standard_constructor() -> anyhow::Result<()> {
++    let data = translate(
++        r#"//@ charon-args=--preset=aeneas --immediate-futures --mir=optimized --sysroot=default --start-from=crate::make_pin --start-from=crate::make_shadow --opaque=core --opaque=std --include=core::pin --monomorphize-mut=all
++pub fn make_pin(value: &mut u64) -> std::pin::Pin<&mut u64> { std::pin::Pin::new(value) }
++pub struct Shadow<'a> { value: &'a mut u64 }
++impl<'a> Shadow<'a> {
++    #[inline(never)] pub fn new(value: &'a mut u64) -> Self { Self { value } }
++}
++pub fn make_shadow(value: &mut u64) -> Shadow<'_> { Shadow::new(value) }
++fn main() {}
++"#,
++    )?;
++    let by_name = |name: &str| {
++        data.fun_decls
++            .iter()
++            .find(|f| f.item_meta.name.debug_repr(&data) == name)
++            .unwrap()
++    };
++    let pin = by_name("test_crate::make_pin")
++        .body
++        .as_structured()
++        .unwrap();
++    assert!(pin.body.statements.iter().any(|s| matches!(&s.kind,
++        StatementKind::Assign(_, Rvalue::Aggregate(AggregateKind::Adt(_, None, None), args)) if args.len() == 1)));
++    assert!(
++        !pin.body
++            .statements
++            .iter()
++            .any(|s| matches!(&s.kind, StatementKind::Call { .. }))
++    );
++    let shadow = by_name("test_crate::make_shadow")
++        .body
++        .as_structured()
++        .unwrap();
++    assert!(
++        shadow
++            .body
++            .statements
++            .iter()
++            .any(|s| matches!(&s.kind, StatementKind::Call { .. }))
++    );
++    Ok(())
++}
 +
 +#[test]
 +fn pin_macro_links_actual_coroutine_poll_and_structural_drop() -> anyhow::Result<()> {

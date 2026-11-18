@@ -1,11 +1,11 @@
 diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-index 32e28409c7eb..15b9c6b9ec4d 100644
+index 4a0584c51be3..4a12cff680dc 100644
 --- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
 +++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -466,6 +466,161 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -475,6 +475,161 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          }
      }
- 
+
 +    /// Reborrow only standard Pin<&mut T>; custom DerefMut pointers are excluded.
 +    /// Check the complete standard helper before replacing its reference plumbing.
 +    fn normalize_pin_as_mut(&self, body: &mut mir::Body<'tcx>) {
@@ -164,10 +164,10 @@ index 32e28409c7eb..15b9c6b9ec4d 100644
      fn pin_reborrow_statements(
          &self,
          local_decls: &mut rustc_index::IndexVec<mir::Local, mir::LocalDecl<'tcx>>,
-@@ -1090,6 +1245,7 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -992,6 +1147,7 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
-             self.normalize_safe_pin_calls(&mut body);
+             self.normalize_pin_constructor_calls(&mut body, None);
 +            self.normalize_pin_as_mut(&mut body);
              self.normalize_pin_macro_calls(&mut body);
              self.normalize_pin_macro_drops(&mut body);

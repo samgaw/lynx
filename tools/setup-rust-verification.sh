@@ -78,8 +78,7 @@ if [ "$verification_profile" = runtime ] || [ "$verification_profile" = runtime-
   git -C "$source_dir" apply "$script_dir/patches/charon-cancelling-futures.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-owned-drops.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-owned-future-captures.patch"
-  git -C "$source_dir" apply "$script_dir/patches/charon-safe-pin-new.patch"
-  git -C "$source_dir" apply "$script_dir/patches/charon-pin-macro.patch"
+  git -C "$source_dir" apply "$script_dir/patches/charon-pin-constructors.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-pin-as-mut.patch"
 fi
 if [ "$verification_profile" = runtime-captured ]; then
