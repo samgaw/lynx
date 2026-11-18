@@ -1,8 +1,8 @@
 diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-index 6d0556ebd47b..fafae158882f 100644
+index 9c1b3209bd42..32e28409c7eb 100644
 --- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
 +++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -433,6 +433,235 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -466,6 +466,198 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          }
      }
  
@@ -15,7 +15,6 @@ index 6d0556ebd47b..fafae158882f 100644
 +        pin_args: ty::GenericArgsRef<'tcx>,
 +        region: ty::Region<'tcx>,
 +    ) -> [mir::Statement<'tcx>; 2] {
-+        let pin_id = self.tcx.lang_items().pin_type().unwrap();
 +        let fresh = local_decls.push(mir::LocalDecl::new(pin_args.type_at(0), source_info.span));
 +        let borrow = mir::Statement::new(
 +            source_info,
@@ -30,23 +29,11 @@ index 6d0556ebd47b..fafae158882f 100644
 +                ),
 +            ))),
 +        );
-+        let construct = mir::Statement::new(
++        let construct = self.pin_assignment(
 +            source_info,
-+            mir::StatementKind::Assign(Box::new((
-+                destination,
-+                mir::Rvalue::Aggregate(
-+                    Box::new(mir::AggregateKind::Adt(
-+                        pin_id,
-+                        rustc_abi::VariantIdx::from_usize(0),
-+                        pin_args,
-+                        None,
-+                        None,
-+                    )),
-+                    rustc_index::IndexVec::from_raw(vec![mir::Operand::Move(mir::Place::from(
-+                        fresh,
-+                    ))]),
-+                ),
-+            ))),
++            destination,
++            pin_args,
++            mir::Operand::Move(mir::Place::from(fresh)),
 +        );
 +        [borrow, construct]
 +    }
@@ -128,18 +115,7 @@ index 6d0556ebd47b..fafae158882f 100644
 +            if !matches!(entry.terminator().kind, mir::TerminatorKind::Return) {
 +                continue;
 +            }
-+            let statements: Vec<_> = entry
-+                .statements
-+                .iter()
-+                .filter(|statement| {
-+                    !matches!(
-+                        statement.kind,
-+                        mir::StatementKind::StorageLive(_)
-+                            | mir::StatementKind::StorageDead(_)
-+                            | mir::StatementKind::Nop
-+                    )
-+                })
-+                .collect();
++            let statements = Self::pin_body_statements(entry);
 +            let [borrow, construct] = statements.as_slice() else {
 +                continue;
 +            };
@@ -158,20 +134,7 @@ index 6d0556ebd47b..fafae158882f 100644
 +            {
 +                continue;
 +            }
-+            let mir::StatementKind::Assign((result, mir::Rvalue::Aggregate(kind, values))) =
-+                &construct.kind
-+            else {
-+                continue;
-+            };
-+            if result.local != mir::RETURN_PLACE
-+                || !result.projection.is_empty()
-+                || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _)
-+                    if *id == pin_id && args.type_at(0) == implementation.local_decls[borrow_dest.local].ty)
-+                || values.len() != 1
-+                || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)],
-+                    mir::Operand::Copy(place) | mir::Operand::Move(place)
-+                    if place.local == borrow_dest.local && place.projection.is_empty())
-+            {
++            if !self.pin_returns_argument(construct, implementation, borrow_dest.local) {
 +                continue;
 +            }
 +            let place = match &args[0].node {
@@ -238,7 +201,7 @@ index 6d0556ebd47b..fafae158882f 100644
      /// Recover only rustc's private Context -> NonNull -> ResumeTy -> Context round-trip.
      /// Pointer values must not escape or be observed by any other operation.
      fn normalize_coroutine_context(
-@@ -865,6 +1094,8 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -898,6 +1090,8 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
              self.normalize_safe_pin_calls(&mut body);
@@ -247,7 +210,7 @@ index 6d0556ebd47b..fafae158882f 100644
              self.normalize_coroutine_context(def, &mut body)?;
              self.normalize_coroutine_pin(def, &mut body)?;
              Ok(self.translate_body(span, body, &def.source_text))
-@@ -3004,7 +3235,34 @@ impl<'tcx> BlockTransCtx<'tcx, '_, '_, '_> {
+@@ -3037,7 +3231,34 @@ impl<'tcx> BlockTransCtx<'tcx, '_, '_, '_> {
                  //
                  // note: loss of precision, we erase the bound vars.
                  let generics = hax::erase_free_regions(tcx, generics.skip_binder());

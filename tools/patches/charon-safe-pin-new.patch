@@ -1,10 +1,76 @@
---- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
-+++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -314,6 +314,122 @@
-                 unreachable!()
-             };
-             *operand = mir::Operand::Move(*place);
-+        }
+diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon/src/bin/charon-driver/translate/translate_bodies.rs
+index 414a8028a8f7..9c1b3209bd42 100644
+--- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -317,6 +317,155 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+         }
+     }
+ 
++    /// Ignore only storage markers when checking the compiler's Pin helpers.
++    fn pin_body_statements<'body>(
++        block: &'body mir::BasicBlockData<'tcx>,
++    ) -> Vec<&'body mir::Statement<'tcx>> {
++        block
++            .statements
++            .iter()
++            .filter(|statement| {
++                !matches!(
++                    statement.kind,
++                    mir::StatementKind::StorageLive(_)
++                        | mir::StatementKind::StorageDead(_)
++                        | mir::StatementKind::Nop
++                )
++            })
++            .collect()
++    }
++
++    /// Check that the helper returns Pin containing exactly the expected local.
++    fn pin_returns_argument(
++        &self,
++        statement: &mir::Statement<'tcx>,
++        implementation: &mir::Body<'tcx>,
++        input: mir::Local,
++    ) -> bool {
++        let mir::StatementKind::Assign((result, mir::Rvalue::Aggregate(kind, values))) =
++            &statement.kind
++        else {
++            return false;
++        };
++        result.local == mir::RETURN_PLACE
++            && result.projection.is_empty()
++            && matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _)
++                if Some(*id) == self.tcx.lang_items().pin_type()
++                    && args.type_at(0) == implementation.local_decls[input].ty)
++            && values.len() == 1
++            && matches!(&values[rustc_abi::FieldIdx::from_usize(0)],
++                mir::Operand::Copy(place) | mir::Operand::Move(place)
++                if place.local == input && place.projection.is_empty())
++    }
++
++    fn pin_assignment(
++        &self,
++        source_info: mir::SourceInfo,
++        destination: mir::Place<'tcx>,
++        generics: ty::GenericArgsRef<'tcx>,
++        value: mir::Operand<'tcx>,
++    ) -> mir::Statement<'tcx> {
++        let pin = self.tcx.lang_items().pin_type().unwrap();
++        mir::Statement::new(
++            source_info,
++            mir::StatementKind::Assign(Box::new((
++                destination,
++                mir::Rvalue::Aggregate(
++                    Box::new(mir::AggregateKind::Adt(
++                        pin,
++                        rustc_abi::VariantIdx::from_usize(0),
++                        generics,
++                        None,
++                        None,
++                    )),
++                    rustc_index::IndexVec::from_raw(vec![value]),
++                ),
++            ))),
++        )
 +    }
 +
 +    /// Inline only safe standard Pin::new calls on mutable Unpin references.
@@ -72,58 +138,27 @@
 +            if !matches!(entry.terminator().kind, mir::TerminatorKind::Return) {
 +                continue;
 +            }
-+            let statements: Vec<_> = entry
-+                .statements
-+                .iter()
-+                .filter(|statement| {
-+                    !matches!(
-+                        statement.kind,
-+                        mir::StatementKind::StorageLive(_)
-+                            | mir::StatementKind::StorageDead(_)
-+                            | mir::StatementKind::Nop
-+                    )
-+                })
-+                .collect();
++            let statements = Self::pin_body_statements(entry);
 +            let [statement] = statements.as_slice() else {
 +                continue;
 +            };
-+            let mir::StatementKind::Assign((dest, mir::Rvalue::Aggregate(kind, values))) =
-+                &statement.kind
-+            else {
-+                continue;
-+            };
-+            if dest.local != mir::RETURN_PLACE
-+                || !dest.projection.is_empty()
-+                || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _)
-+                    if *id == pin && args.type_at(0) == implementation.local_decls[mir::Local::from_usize(1)].ty)
-+                || values.len() != 1
-+                || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)],
-+                    mir::Operand::Copy(place) | mir::Operand::Move(place)
-+                    if place.local.as_usize() == 1 && place.projection.is_empty())
-+            {
++            if !self.pin_returns_argument(statement, implementation, mir::Local::from_usize(1)) {
 +                continue;
 +            }
-+            let mut inlined = (*statement).clone();
-+            inlined.source_info = terminator.source_info;
-+            inlined.kind = mir::StatementKind::Assign(Box::new((
++            block.statements.push(self.pin_assignment(
++                terminator.source_info,
 +                *destination,
-+                mir::Rvalue::Aggregate(
-+                    Box::new(mir::AggregateKind::Adt(
-+                        pin,
-+                        rustc_abi::VariantIdx::from_usize(0),
-+                        generics,
-+                        None,
-+                        None,
-+                    )),
-+                    rustc_index::IndexVec::from_raw(vec![args[0].node.clone()]),
-+                ),
-+            )));
-+            block.statements.push(inlined);
++                generics,
++                args[0].node.clone(),
++            ));
 +            terminator.kind = mir::TerminatorKind::Goto { target: *target };
-         }
-     }
-
-@@ -748,6 +864,7 @@
++        }
++    }
++
+     /// Recover only rustc's private Context -> NonNull -> ResumeTy -> Context round-trip.
+     /// Pointer values must not escape or be observed by any other operation.
+     fn normalize_coroutine_context(
+@@ -748,6 +897,7 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          // Retrieve the body
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
@@ -131,9 +166,11 @@
              self.normalize_coroutine_context(def, &mut body)?;
              self.normalize_coroutine_pin(def, &mut body)?;
              Ok(self.translate_body(span, body, &def.source_text))
---- a/charon/tests/crate_data.rs
-+++ b/charon/tests/crate_data.rs
-@@ -1468,3 +1468,48 @@
+diff --git i/charon/tests/crate_data.rs w/charon/tests/crate_data.rs
+index f226775e4912..fced806101e9 100644
+--- i/charon/tests/crate_data.rs
++++ w/charon/tests/crate_data.rs
+@@ -1468,3 +1468,48 @@ fn main() {}
      );
      Ok(())
  }

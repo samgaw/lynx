@@ -1,8 +1,8 @@
 diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-index fafae158882f..58a5e7083820 100644
+index 32e28409c7eb..15b9c6b9ec4d 100644
 --- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
 +++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -433,6 +433,179 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -466,6 +466,161 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          }
      }
  
@@ -89,15 +89,7 @@ index fafae158882f..58a5e7083820 100644
 +                continue;
 +            }
 +            let start = &implementation.basic_blocks[mir::START_BLOCK];
-+            let executable = |statement: &&mir::Statement<'tcx>| {
-+                !matches!(
-+                    statement.kind,
-+                    mir::StatementKind::StorageLive(_)
-+                        | mir::StatementKind::StorageDead(_)
-+                        | mir::StatementKind::Nop
-+                )
-+            };
-+            let first: Vec<_> = start.statements.iter().filter(executable).collect();
++            let first = Self::pin_body_statements(start);
 +            let [borrow] = first.as_slice() else {
 +                continue;
 +            };
@@ -138,21 +130,11 @@ index fafae158882f..58a5e7083820 100644
 +            if !matches!(last.terminator().kind, mir::TerminatorKind::Return) {
 +                continue;
 +            }
-+            let second: Vec<_> = last.statements.iter().filter(executable).collect();
++            let second = Self::pin_body_statements(last);
 +            let [construct] = second.as_slice() else {
 +                continue;
 +            };
-+            let mir::StatementKind::Assign((result, mir::Rvalue::Aggregate(kind, values))) =
-+                &construct.kind
-+            else {
-+                continue;
-+            };
-+            if result.local != mir::RETURN_PLACE
-+                || !result.projection.is_empty()
-+                || !matches!(kind.as_ref(), mir::AggregateKind::Adt(id, _, args, _, _) if *id == pin_id && args.type_at(0) == implementation.local_decls[borrowed.local].ty)
-+                || values.len() != 1
-+                || !matches!(&values[rustc_abi::FieldIdx::from_usize(0)], mir::Operand::Move(place) | mir::Operand::Copy(place) if place == borrowed)
-+            {
++            if !self.pin_returns_argument(construct, implementation, borrowed.local) {
 +                continue;
 +            }
 +            let place = match &args[0].node {
@@ -182,7 +164,7 @@ index fafae158882f..58a5e7083820 100644
      fn pin_reborrow_statements(
          &self,
          local_decls: &mut rustc_index::IndexVec<mir::Local, mir::LocalDecl<'tcx>>,
-@@ -1094,6 +1267,7 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -1090,6 +1245,7 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
              self.normalize_safe_pin_calls(&mut body);
