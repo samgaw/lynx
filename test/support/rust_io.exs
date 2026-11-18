@@ -161,4 +161,12 @@ defmodule Lynx.Rust.IoFixture do
 
     {workspace, project, options}
   end
+
+  def qualify_owned_drops!(project, modules) do
+    for module <- modules do
+      path = Path.join(project, String.replace(module, ".", "/") <> ".lean")
+      source = File.read!(path)
+      File.write!(path, String.replace(source, "NativeDrop.drop", "NativeOwnedDrop.drop"))
+    end
+  end
 end
