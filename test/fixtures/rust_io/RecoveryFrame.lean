@@ -17,17 +17,19 @@ private theorem read_frame (before : State) (buffer : Slice U8)
       before.position ≤ after.position ∧ ∀ count, reply = .Ok count →
         after.position = before.position + count.val ∧ count.val ≤ buffer.val.length := by
   unfold readStep at step
+  simp only [Bool.false_eq_true, ↓reduceIte, Option.bind_eq_bind] at step
   split at step
   · contradiction
-  · cases chosen : action "read" before.script with
-    | none => simp [chosen] at step
+  · generalize action "read" before.script = choice at step
+    cases choice with
+    | none => contradiction
     | some choice =>
         obtain ⟨success,count,mask,rest⟩ := choice
-        simp only [chosen,Option.bind_eq_bind,Option.bind_some] at step
+        simp only [Option.bind_some] at step
         cases persisted : persist before.durable before.visible mask with
         | none => simp [persisted] at step
         | some data =>
-            have same := persist_same before.visible mask data (by simpa only [stable] using persisted)
+            have same := NativeFile.persist_same before.visible mask data (by simpa only [stable] using persisted)
             subst data
             simp only [persisted,Option.bind_some] at step
             cases success

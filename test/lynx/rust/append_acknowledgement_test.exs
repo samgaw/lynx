@@ -12,7 +12,7 @@ defmodule Lynx.Rust.AppendAcknowledgementTest do
     tmp_dir: tmp
   } do
     {workspace, project, base} =
-      Lynx.Rust.IoFixture.prepare!(tmp, @tools, [
+      Lynx.Rust.IoFixture.prepare_repair_writer!(tmp, @tools, [
         "RepeatedRepairProperties",
         "RecoveryScanInvariant",
         "RepairReturnProperties",
@@ -23,8 +23,6 @@ defmodule Lynx.Rust.AppendAcknowledgementTest do
         "RepairAppendAcknowledgement",
         "AppendAcknowledgementWitness"
       ])
-
-    Lynx.Rust.IoFixture.qualify_owned_drops!(project, base[:proof_modules])
 
     modules = ~w(Record.RepairAcknowledgement Record.AppendAcknowledgement
       Record.RepairAppendAcknowledgement Record.AppendAcknowledgementWitness)
@@ -41,11 +39,6 @@ defmodule Lynx.Rust.AppendAcknowledgementTest do
 
     options =
       base
-      |> Keyword.merge(owned_drops: true, branching: :duplicate)
-      |> Keyword.update!(
-        :roots,
-        &["io_protocol::repair_and_append", "io_protocol::locked_repair_and_append" | &1]
-      )
       |> Keyword.put(:proof_modules, modules)
       |> Keyword.put(:required_properties, properties)
 

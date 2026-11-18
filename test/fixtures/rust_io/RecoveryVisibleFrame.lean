@@ -25,11 +25,10 @@ theorem read_returns (file : NativeFile) (env : Environment)
       | error exception => cases rest
       | ok output =>
           cases rest
-          unfold pollRead at ready
-          rw [lookup_admitted env file before frame separate valid] at ready
+          simp only [pollRead, lookup_admitted env file before frame separate valid] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
-          · simp only [stopped] at ready
+          · simp only [stopped, Option.any, Option.elim, Option.isSome, Bool.false_eq_true, ↓reduceIte] at ready
             cases step : readStep before buffer with
             | none => simp [step] at ready
             | some outcome =>
@@ -48,13 +47,15 @@ private theorem read_frame (before : State) (buffer : Slice U8)
       before.position ≤ after.position ∧ ∀ count, reply = .Ok count →
         after.position = before.position + count.val ∧ count.val ≤ buffer.val.length := by
   unfold readStep at step
+  simp only [Bool.false_eq_true, ↓reduceIte, Option.bind_eq_bind] at step
   split at step
   · contradiction
-  · cases chosen : action "read" before.script with
-    | none => simp [chosen] at step
+  · generalize action "read" before.script = choice at step
+    cases choice with
+    | none => contradiction
     | some choice =>
         obtain ⟨success,count,mask,rest⟩ := choice
-        simp only [chosen,Option.bind_eq_bind,Option.bind_some] at step
+        simp only [Option.bind_some] at step
         cases persisted : persist before.durable before.visible mask with
         | none => simp [persisted] at step
         | some data =>
@@ -281,14 +282,16 @@ private theorem read_choice (before : State) (count : Usize) (after : State) (up
       count.val = value ∧ value ≤ 1 ∧ value ≤ before.visible.size - before.position ∧
       ¬(value = 0 ∧ before.position < before.visible.size) := by
   unfold readStep at step
-  simp only [one, Slice.from_val, List.length_singleton] at step
+  simp only [one, Slice.from_val, List.length_singleton, Bool.false_eq_true, ↓reduceIte,
+    Option.bind_eq_bind] at step
   split at step
   · contradiction
-  · cases chosen : action "read" before.script with
-    | none => simp [chosen] at step
+  · generalize action "read" before.script = choice at step
+    cases choice with
+    | none => contradiction
     | some choice =>
         obtain ⟨success, value, mask, rest⟩ := choice
-        simp only [chosen, Option.bind_eq_bind, Option.bind_some] at step
+        simp only [Option.bind_some] at step
         cases accepted : persist before.durable before.visible mask with
         | none => simp [accepted] at step
         | some data =>

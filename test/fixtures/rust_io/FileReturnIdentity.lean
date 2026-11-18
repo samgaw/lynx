@@ -22,7 +22,7 @@ private theorem seek_frame (before : State) (reply : core.result.Result U64 Nati
       cases persisted : persist before.durable before.visible mask with
       | none => simp [persisted] at step
       | some data =>
-          have same := persist_same before.visible mask data (by simpa only [stable] using persisted)
+          have same := NativeFile.persist_same before.visible mask data (by simpa only [stable] using persisted)
           subst data
           simp only [persisted,Option.bind_some] at step
           cases success

@@ -15,13 +15,15 @@ private theorem read_step_preserves (before : State) (buffer : Slice U8)
     (step : readStep before buffer = some (reply, after, updated)) :
     Admitted after ∧ Prefix head after.visible ∧ Prefix head after.durable := by
   unfold readStep at step
+  simp only [Bool.false_eq_true, ↓reduceIte, Option.bind_eq_bind] at step
   split at step
   · contradiction
-  · cases chosen : action "read" before.script with
-    | none => simp [chosen] at step
+  · generalize action "read" before.script = choice at step
+    cases choice with
+    | none => contradiction
     | some choice =>
         obtain ⟨success, count, mask, rest⟩ := choice
-        simp only [chosen, Option.bind_eq_bind, Option.bind_some] at step
+        simp only [Option.bind_some] at step
         cases accepted : persist before.durable before.visible mask with
         | none => simp [accepted] at step
         | some data =>
@@ -136,7 +138,7 @@ private theorem read_next_invariant (env : Environment) (file : NativeFile)
   rw [lookup_admitted env file before frame separate valid] at ready
   by_cases stopped : blocked before = true
   · simp [stopped] at ready
-  · simp only [stopped] at ready
+  · simp only [stopped, Option.any, Option.elim, Option.isSome, Bool.false_eq_true, ↓reduceIte] at ready
     cases step : readStep before buffer with
     | none =>
         simp only [step] at ready

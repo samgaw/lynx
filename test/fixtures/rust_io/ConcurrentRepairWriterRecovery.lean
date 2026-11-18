@@ -185,7 +185,7 @@ theorem terminal_recovery (elapsed : PID → Nat → Nat) (events : List Concurr
     simp only [Bool.or_eq_true, Bool.and_eq_true] at images
     rcases images with pair | pair
     · rw [bytes_equal _ _ pair.1, bytes_equal _ _ pair.2] at persisted
-      have same := persist_same ordered mask bytes persisted
+      have same := NativeFile.persist_same ordered mask bytes persisted
       refine ⟨[13#u16,19#u16,23#u16], by decide, Or.inl rfl, same, ?_⟩
       apply restart_repair _ _ rest 4#usize
       · rw [same]
@@ -193,7 +193,7 @@ theorem terminal_recovery (elapsed : PID → Nat → Nat) (events : List Concurr
       · rw [same]; dsimp only; decide
       · decide
     · rw [bytes_equal _ _ pair.1, bytes_equal _ _ pair.2] at persisted
-      have same := persist_same reversed mask bytes persisted
+      have same := NativeFile.persist_same reversed mask bytes persisted
       refine ⟨[13#u16,23#u16,19#u16], by decide, Or.inr rfl, same, ?_⟩
       apply restart_repair _ _ rest 4#usize
       · rw [same]

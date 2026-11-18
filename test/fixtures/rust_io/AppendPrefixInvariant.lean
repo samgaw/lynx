@@ -99,12 +99,14 @@ private theorem write_preserves (before : State) (value : U16)
   have original := step
   have payloadLength : (payload value).val.length = 4 := by simp [payload, layout]
   unfold writeStep at step
-  simp only [payloadLength, show ¬ 4 > limit by decide, decide_false, Bool.false_or, ↓reduceIte] at step
-  cases chosen : action "write" before.script with
-  | none => simp [chosen] at step
+  simp only [payloadLength, show ¬ 4 > limit by decide, decide_false, Bool.false_or,
+    Bool.false_eq_true, ↓reduceIte, Option.bind_eq_bind] at step
+  generalize action "write" before.script = choice at step
+  cases choice with
+  | none => contradiction
   | some choice =>
       obtain ⟨success, count, mask, rest⟩ := choice
-      simp only [chosen, Option.bind_eq_bind, Option.bind_some] at step
+      simp only [Option.bind_some] at step
       cases success
       · cases accepted : persist before.durable before.visible mask with
         | none => simp [accepted] at step
@@ -181,12 +183,13 @@ private theorem sync_preserves (before : State)
     (durable : Prefix head before.durable)
     (step : syncStep before = some (reply, after)) :
     Admitted after ∧ Prefix head after.visible ∧ Prefix head after.durable := by
-  unfold syncStep at step
-  cases chosen : action "sync_all" before.script with
-  | none => simp [chosen] at step
+  simp only [syncStep, Bool.false_eq_true, ↓reduceIte, Option.bind_eq_bind] at step
+  generalize action "sync_all" before.script = choice at step
+  cases choice with
+  | none => contradiction
   | some choice =>
       obtain ⟨success, value, mask, rest⟩ := choice
-      simp only [chosen, Option.bind_eq_bind, Option.bind_some] at step
+      simp only [Option.bind_some] at step
       cases success
       · simp only [Bool.false_eq_true, ↓reduceIte] at step
         cases accepted : persist before.durable before.visible mask with
@@ -321,8 +324,8 @@ private theorem write_next_invariant (env : Environment) (file : NativeFile)
   simp only [NativeFile.write, Result.wait_bind]
   apply Result.NativeInvariant.wait _ _ _ initial
   intro actual world ready
-  unfold pollWrite at ready
-  rw [lookup_admitted env file before frame separate valid,
+  simp only [pollWrite, Option.any, Option.elim, Option.isSome, Bool.false_eq_true, ↓reduceIte,
+    lookup_admitted env file before frame separate valid,
     no_shared_handle_at env file before frame separate] at ready
   by_cases stopped : blocked before = true
   · simp [stopped] at ready

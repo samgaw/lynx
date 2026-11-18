@@ -158,6 +158,22 @@ defmodule Lynx.Rust.IoFixture do
     {workspace, project, options}
   end
 
+  def prepare_repair_writer!(tmp, tools, modules) do
+    {workspace, project, options} = prepare!(tmp, tools, modules)
+
+    qualify_owned_drops!(project, options[:proof_modules])
+
+    options =
+      options
+      |> Keyword.update!(
+        :roots,
+        &(["io_protocol::repair_and_append", "io_protocol::locked_repair_and_append"] ++ &1)
+      )
+      |> Keyword.merge(owned_drops: true, branching: :duplicate)
+
+    {workspace, project, options}
+  end
+
   def qualify_shared_proofs!(project, modules) do
     qualify_proofs!(project, modules, fn source ->
       source
@@ -166,7 +182,7 @@ defmodule Lynx.Rust.IoFixture do
     end)
   end
 
-  def qualify_owned_drops!(project, modules) do
+  defp qualify_owned_drops!(project, modules) do
     qualify_proofs!(
       project,
       modules,
