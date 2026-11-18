@@ -41,7 +41,7 @@ theorem unregistered_cleanup (value : U64) (env : Environment)
     resource_new value (initial env) =
       (.error (.error (.atom "rust_panicked")), {env with nativeRefCounter := 1, nativeHeap := []}) := by
   simp [resource_new, NativeMutex.new, NativeResourceArc.newOwned, NativeResourceCleanup.cleanup,
-    CounterResource.drop_owned, NativeOwnedDrop.drop, NativeMutex.dispose,
+    CounterResource.drop_owned, NativeOwnedDrop.drop, NativeMutexDrop.drop, NativeMutex.dispose,
     NativeM.allocate, NativeM.readCell, NativeM.removeCell, NativeM.ok, NativeM.fail,
     initial, absent, NativeCodec.roundtrip]
 
@@ -49,7 +49,8 @@ theorem payload_cleanup_next {α : Type} (value : U64) (env : Environment) (toke
     (do CounterResource.drop_owned ⟨⟨1⟩⟩; next) (live env value token counter) = next (payloadReclaimed env token counter) := by
   have n1 : (token == 1) = false := by simp; omega
   have n2 : (token == 2) = false := by simp; omega
-  simp [bne_eq, n1, n2, List.filter, CounterResource.drop_owned, NativeOwnedDrop.drop, NativeMutex.dispose,
+  simp [bne_eq, n1, n2, List.filter, CounterResource.drop_owned, NativeOwnedDrop.drop,
+    NativeMutexDrop.drop, NativeMutex.dispose,
     NativeM.readCell, NativeM.removeCell, NativeM.ok, live, cell, payloadReclaimed, (by omega : token ≠ 1),
     NativeMutex.typeName, NativeResourceArc.typeName, NativeResourceArc.handleType, NativeCodec.roundtrip]
 
@@ -68,7 +69,8 @@ theorem final_release_next {α : Type} (next : Unit → NativeM α) (value : U64
     intro next
     simp [NativeResourceArc.retiredState, live, cell, n1, n2, r1, r2, bne_eq, List.filter,
       NativeResourceCleanup.cleanup, CounterResource.drop_owned, NativeOwnedDrop.drop,
-      NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeM.ok, NativeCodec.roundtrip]
+      NativeMutexDrop.drop, NativeMutex.dispose, NativeM.readCell, NativeM.removeCell, NativeM.ok,
+      NativeCodec.roundtrip]
   have released := NativeResourceArc.releaseOwned_last_run_next
     (⟨2,token⟩ : NativeResourceArc CounterResource) ⟨⟨1⟩⟩ next (live env value token counter)
     {env with nativeRefCounter := counter, nativeHeap := []}
