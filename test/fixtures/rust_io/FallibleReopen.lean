@@ -16,17 +16,22 @@ open scoped Lynx.NativeArithmetic
 @[expose] def choice (op : String) (success : Bool) (count : Nat) (rest : Term) : Term :=
   .cons (.tuple #[.atom op, .atom (if success then "ok" else "error"), .integer count, .bitstring zeroes 0]) rest
 
+@[expose] def readBytes (count : Nat) (rest : Term) : Term :=
+  (List.range count).foldr (fun _ => choice "read" true 1) rest
+
+@[expose] def openScript (success : Bool) (error : Nat) (steps rest : Term) : Term :=
+  .cons (.tuple #[.atom "open", .bitstring journalName 0,
+    .atom (if success then "ok" else "error"), .integer error, steps]) rest
+
 @[expose] def capScript (closeSucceeds : Bool) : Term :=
   let close := choice "close" closeSucceeds (if closeSucceeds then 0 else 5) .nil
-  choice "seek" true 0 ((List.range 8).foldr (fun _ => choice "read" true 1) close)
+  choice "seek" true 0 (readBytes 8 close)
 
 @[expose] def boot (counter : Nat) (left openSucceeds closeSucceeds : Bool) : Environment :=
   let data := contents left
   let names := [(journalName, 1)]
-  let openChoice := .cons (.tuple #[.atom "open", .bitstring journalName 0,
-    .atom (if openSucceeds then "ok" else "error"),
-    .integer (if openSucceeds then 0 else counter + 1),
-    if openSucceeds then capScript closeSucceeds else .nil]) .nil
+  let openChoice := openScript openSucceeds (if openSucceeds then 0 else counter + 1)
+    (if openSucceeds then capScript closeSucceeds else .nil) .nil
   { nativeRefCounter := if openSucceeds then counter else counter + 1,
     nativeResourceTypes := [NativeResourceArc.typeName shared_log.LogResource],
     nativeHeap := [

@@ -40,42 +40,60 @@ defmodule Lynx.Rustler.FallibleReopenTest do
            ] =
              discovered.bindings.bindings
 
-    proof = File.read!(Path.join(@fixture, "FallibleReopen.lean"))
+    proofs = [
+      {"FallibleReopen", "errors_preserve_completed_records"},
+      {"FallibleRetry", "reopens_after_typed_failure"},
+      {"RepairIoFailures", "repair_failure_consumes_owners"}
+    ]
 
-    File.write!(
-      Path.join(project, "Record/FallibleReopen.lean"),
-      String.replace(proof, "__TRY_REOPEN__", implementation)
-    )
+    for {module, _} <- proofs do
+      source = File.read!(Path.join(@fixture, module <> ".lean"))
 
-    property = "Record.FallibleReopen.errors_preserve_completed_records"
+      File.write!(
+        Path.join(project, "Record/" <> module <> ".lean"),
+        String.replace(source, "__TRY_REOPEN__", implementation)
+      )
+    end
+
+    properties = for {module, name} <- proofs, do: "Record." <> module <> "." <> name
 
     options =
       Keyword.merge(options,
-        proof_modules: ["Record.FallibleReopen"],
-        required_properties: [property]
+        proof_modules: for({module, _} <- proofs, do: "Record." <> module),
+        required_properties: properties
       )
 
     prepared = Lynx.Rustler.prepare!(options)
 
-    assert Enum.any?(prepared.verification.guarantees, fn evidence ->
-             evidence.kind == :cross_crate_contract && evidence.lean_name == implementation &&
-               evidence.theorem == property
-           end)
+    for property <- properties do
+      assert Enum.any?(prepared.verification.guarantees, fn evidence ->
+               evidence.kind == :cross_crate_contract && evidence.lean_name == implementation &&
+                 evidence.theorem == property
+             end)
+    end
 
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
-    beams = Map.new(Code.compile_file(Path.join(@fixture, "FallibleReopenLaws.exs")))
+
+    beams =
+      for fixture <- ~w(FallibleReopenLaws FallibleRetryLaws),
+          {module, beam} <- Code.compile_file(Path.join(@fixture, fixture <> ".exs")),
+          into: %{},
+          do: {module, beam}
+
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
 
-    for {module, boot} <- [
-          {LynxIoFixture.RecordLimitLaws, "limitedBoot"},
-          {LynxIoFixture.JournalIoLaws, "failedOpenBoot"}
+    for {module, environment, boot} <- [
+          {LynxIoFixture.RecordLimitLaws, "FallibleReopen", "limitedBoot"},
+          {LynxIoFixture.JournalIoLaws, "FallibleReopen", "failedOpenBoot"},
+          {LynxIoFixture.RecordLimitRetryLaws, "FallibleRetry", "limitedRetry"},
+          {LynxIoFixture.JournalIoRetryLaws, "FallibleRetry", "failedOpenRetry"}
         ] do
       beam = Map.fetch!(beams, module)
       export = Path.join(tmp, boot <> ".export")
 
       law_options = [
         native: {Lynx.Rustler, options},
-        initial_environment: "Record.FallibleReopen." <> boot,
+        initial_environment: "Record." <> environment <> "." <> boot,
         options: [maxHeartbeats: 32_000_000, maxRecDepth: 8192]
       ]
 
