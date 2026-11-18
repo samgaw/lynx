@@ -1,18 +1,54 @@
---- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
-+++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -342,6 +342,7 @@
-             let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
-                 continue;
-             };
-+
-             if tcx.item_name(*id).as_str() != "new"
-                 || args.len() != 1
-                 || tcx.fn_sig(*id).skip_binder().safety().is_unsafe()
-@@ -430,6 +431,217 @@
-             )));
-             block.statements.push(inlined);
-             terminator.kind = mir::TerminatorKind::Goto { target: *target };
-+        }
+diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon/src/bin/charon-driver/translate/translate_bodies.rs
+index 6d0556ebd47b..fafae158882f 100644
+--- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -433,6 +433,235 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+         }
+     }
+ 
++    fn pin_reborrow_statements(
++        &self,
++        local_decls: &mut rustc_index::IndexVec<mir::Local, mir::LocalDecl<'tcx>>,
++        source_info: mir::SourceInfo,
++        destination: mir::Place<'tcx>,
++        projected: mir::Place<'tcx>,
++        pin_args: ty::GenericArgsRef<'tcx>,
++        region: ty::Region<'tcx>,
++    ) -> [mir::Statement<'tcx>; 2] {
++        let pin_id = self.tcx.lang_items().pin_type().unwrap();
++        let fresh = local_decls.push(mir::LocalDecl::new(pin_args.type_at(0), source_info.span));
++        let borrow = mir::Statement::new(
++            source_info,
++            mir::StatementKind::Assign(Box::new((
++                mir::Place::from(fresh),
++                mir::Rvalue::Ref(
++                    region,
++                    mir::BorrowKind::Mut {
++                        kind: mir::MutBorrowKind::Default,
++                    },
++                    projected,
++                ),
++            ))),
++        );
++        let construct = mir::Statement::new(
++            source_info,
++            mir::StatementKind::Assign(Box::new((
++                destination,
++                mir::Rvalue::Aggregate(
++                    Box::new(mir::AggregateKind::Adt(
++                        pin_id,
++                        rustc_abi::VariantIdx::from_usize(0),
++                        pin_args,
++                        None,
++                        None,
++                    )),
++                    rustc_index::IndexVec::from_raw(vec![mir::Operand::Move(mir::Place::from(
++                        fresh,
++                    ))]),
++                ),
++            ))),
++        );
++        [borrow, construct]
 +    }
 +
 +    /// Reproduce the standard pin! helper only at its compiler macro expansion.
@@ -149,41 +185,14 @@
 +                ],
 +                tcx,
 +            );
-+            let fresh = body.local_decls.push(mir::LocalDecl::new(
-+                output_pointer,
-+                terminator.source_info.span,
-+            ));
-+            let mut borrowed = (*borrow).clone();
-+            borrowed.source_info = terminator.source_info;
-+            borrowed.kind = mir::StatementKind::Assign(Box::new((
-+                mir::Place::from(fresh),
-+                mir::Rvalue::Ref(
-+                    *region,
-+                    mir::BorrowKind::Mut {
-+                        kind: mir::MutBorrowKind::Default,
-+                    },
-+                    projected,
-+                ),
-+            )));
-+            let mut constructed = (*construct).clone();
-+            constructed.source_info = terminator.source_info;
-+            constructed.kind = mir::StatementKind::Assign(Box::new((
++            block.statements.extend(self.pin_reborrow_statements(
++                &mut body.local_decls,
++                terminator.source_info,
 +                *destination,
-+                mir::Rvalue::Aggregate(
-+                    Box::new(mir::AggregateKind::Adt(
-+                        pin_id,
-+                        rustc_abi::VariantIdx::from_usize(0),
-+                        pin_args,
-+                        None,
-+                        None,
-+                    )),
-+                    rustc_index::IndexVec::from_raw(vec![mir::Operand::Move(mir::Place::from(
-+                        fresh,
-+                    ))]),
-+                ),
-+            )));
-+            block.statements.push(borrowed);
-+            block.statements.push(constructed);
++                projected,
++                pin_args,
++                *region,
++            ));
 +            terminator.kind = mir::TerminatorKind::Goto { target: *target };
 +        }
 +    }
@@ -223,10 +232,13 @@
 +                )],
 +                tcx,
 +            );
-         }
-     }
-
-@@ -865,6 +1077,8 @@
++        }
++    }
++
+     /// Recover only rustc's private Context -> NonNull -> ResumeTy -> Context round-trip.
+     /// Pointer values must not escape or be observed by any other operation.
+     fn normalize_coroutine_context(
+@@ -865,6 +1094,8 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
              self.normalize_safe_pin_calls(&mut body);
@@ -235,7 +247,7 @@
              self.normalize_coroutine_context(def, &mut body)?;
              self.normalize_coroutine_pin(def, &mut body)?;
              Ok(self.translate_body(span, body, &def.source_text))
-@@ -3004,7 +3218,34 @@
+@@ -3004,7 +3235,34 @@ impl<'tcx> BlockTransCtx<'tcx, '_, '_, '_> {
                  //
                  // note: loss of precision, we erase the bound vars.
                  let generics = hax::erase_free_regions(tcx, generics.skip_binder());
@@ -271,9 +283,11 @@
                      && self.tcx.get_diagnostic_item(Symbol::intern("mem_drop")) == Some(*def_id)
                      && let ty::Coroutine(id, args) = generics.type_at(0).kind()
                  {
---- a/charon/tests/crate_data.rs
-+++ b/charon/tests/crate_data.rs
-@@ -1513,3 +1513,73 @@
+diff --git i/charon/tests/crate_data.rs w/charon/tests/crate_data.rs
+index fced806101e9..2b7457a40466 100644
+--- i/charon/tests/crate_data.rs
++++ w/charon/tests/crate_data.rs
+@@ -1513,3 +1513,73 @@ fn main() {}
      );
      Ok(())
  }

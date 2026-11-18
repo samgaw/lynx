@@ -1,13 +1,11 @@
---- a/charon/src/bin/charon-driver/translate/translate_bodies.rs
-+++ b/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -430,6 +430,212 @@
-                 ),
-             )));
-             block.statements.push(inlined);
-+            terminator.kind = mir::TerminatorKind::Goto { target: *target };
-+        }
-+    }
-+
+diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon/src/bin/charon-driver/translate/translate_bodies.rs
+index fafae158882f..58a5e7083820 100644
+--- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
++++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
+@@ -433,6 +433,179 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+         }
+     }
+ 
 +    /// Reborrow only standard Pin<&mut T>; custom DerefMut pointers are excluded.
 +    /// Check the complete standard helper before replacing its reference plumbing.
 +    fn normalize_pin_as_mut(&self, body: &mut mir::Body<'tcx>) {
@@ -91,22 +89,15 @@
 +                continue;
 +            }
 +            let start = &implementation.basic_blocks[mir::START_BLOCK];
-+            let executable = |block: &mir::BasicBlockData<'tcx>| {
-+                block
-+                    .statements
-+                    .iter()
-+                    .filter(|s| {
-+                        !matches!(
-+                            s.kind,
-+                            mir::StatementKind::StorageLive(_)
-+                                | mir::StatementKind::StorageDead(_)
-+                                | mir::StatementKind::Nop
-+                        )
-+                    })
-+                    .cloned()
-+                    .collect::<Vec<_>>()
++            let executable = |statement: &&mir::Statement<'tcx>| {
++                !matches!(
++                    statement.kind,
++                    mir::StatementKind::StorageLive(_)
++                        | mir::StatementKind::StorageDead(_)
++                        | mir::StatementKind::Nop
++                )
 +            };
-+            let first = executable(start);
++            let first: Vec<_> = start.statements.iter().filter(executable).collect();
 +            let [borrow] = first.as_slice() else {
 +                continue;
 +            };
@@ -147,7 +138,7 @@
 +            if !matches!(last.terminator().kind, mir::TerminatorKind::Return) {
 +                continue;
 +            }
-+            let second = executable(last);
++            let second: Vec<_> = last.statements.iter().filter(executable).collect();
 +            let [construct] = second.as_slice() else {
 +                continue;
 +            };
@@ -176,44 +167,22 @@
 +                ],
 +                tcx,
 +            );
-+            let fresh = body.local_decls.push(mir::LocalDecl::new(
-+                output_pointer,
-+                terminator.source_info.span,
-+            ));
-+            let mut reborrow = borrow.clone();
-+            reborrow.source_info = terminator.source_info;
-+            reborrow.kind = mir::StatementKind::Assign(Box::new((
-+                mir::Place::from(fresh),
-+                mir::Rvalue::Ref(
-+                    *region,
-+                    mir::BorrowKind::Mut {
-+                        kind: mir::MutBorrowKind::Default,
-+                    },
-+                    projected,
-+                ),
-+            )));
-+            let mut aggregate = construct.clone();
-+            aggregate.source_info = terminator.source_info;
-+            aggregate.kind = mir::StatementKind::Assign(Box::new((
++            block.statements.extend(self.pin_reborrow_statements(
++                &mut body.local_decls,
++                terminator.source_info,
 +                *destination,
-+                mir::Rvalue::Aggregate(
-+                    Box::new(mir::AggregateKind::Adt(
-+                        pin_id,
-+                        rustc_abi::VariantIdx::from_usize(0),
-+                        output_args,
-+                        None,
-+                        None,
-+                    )),
-+                    rustc_index::IndexVec::from_raw(vec![mir::Operand::Move(mir::Place::from(
-+                        fresh,
-+                    ))]),
-+                ),
-+            )));
-+            block.statements.extend([reborrow, aggregate]);
-             terminator.kind = mir::TerminatorKind::Goto { target: *target };
-         }
-     }
-@@ -1077,6 +1283,7 @@
++                projected,
++                output_args,
++                *region,
++            ));
++            terminator.kind = mir::TerminatorKind::Goto { target: *target };
++        }
++    }
++
+     fn pin_reborrow_statements(
+         &self,
+         local_decls: &mut rustc_index::IndexVec<mir::Local, mir::LocalDecl<'tcx>>,
+@@ -1094,6 +1267,7 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          if let Some(mut body) = self.get_mir(def.this(), span)? {
              self.normalize_pin_get_mut(def, &mut body);
              self.normalize_safe_pin_calls(&mut body);
@@ -221,9 +190,11 @@
              self.normalize_pin_macro_calls(&mut body);
              self.normalize_pin_macro_drops(&mut body);
              self.normalize_coroutine_context(def, &mut body)?;
---- a/charon/tests/crate_data.rs
-+++ b/charon/tests/crate_data.rs
-@@ -1583,3 +1583,69 @@
+diff --git i/charon/tests/crate_data.rs w/charon/tests/crate_data.rs
+index 2b7457a40466..b4e1d66a644b 100644
+--- i/charon/tests/crate_data.rs
++++ w/charon/tests/crate_data.rs
+@@ -1583,3 +1583,69 @@ fn main() {}
      );
      Ok(())
  }
