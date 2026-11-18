@@ -165,6 +165,50 @@ defmodule Lynx.Rust.PositionalIoTest do
            end)
   end
 
+  @tag :tmp_dir
+  @tag skip:
+         System.get_env("LYNX_FULL_MIR") != "1" &&
+           "set LYNX_FULL_MIR=1 for standard positional reads"
+  test "proves exact positional reads and cross-crate record decoding", %{tmp_dir: tmp} do
+    {workspace, project} = fixture!(tmp)
+    File.mkdir_p!(Path.join(project, "ExactOffsetRead"))
+
+    File.cp!(
+      Path.join(@fixture, "ExactOffsetReadProperties.lean"),
+      Path.join(project, "ExactOffsetRead/Properties.lean")
+    )
+
+    required =
+      Enum.map(
+        ~w(reads_all decodes_complete word_no_panic short_reads_decode interrupted_read_retries
+          short_eof_is_truncated eof_retains_initialized_suffix failed_read_leaves_tail),
+        &("ExactOffsetRead.Properties." <> &1)
+      )
+
+    result =
+      Lynx.Rust.verify!(workspace, "io-protocol",
+        tools: @tools,
+        sysroot: :full_mir,
+        execution: :runtime,
+        owned_drops: true,
+        files: :regular,
+        roots: ["io_protocol::positional::observe_word"],
+        lean_project: project,
+        module_prefix: "ExactOffsetRead.Extraction",
+        build_dir: Path.join(tmp, "build"),
+        proof_modules: ["ExactOffsetRead.Properties"],
+        required_properties: required
+      )
+
+    assert [%{status: :ok}] = result.reports
+
+    assert Enum.any?(result.verification.guarantees, fn row ->
+             row.kind == :cross_crate_contract &&
+               row.theorem == "ExactOffsetRead.Properties.decodes_complete" &&
+               "ExactOffsetRead.Properties.reads_all" in row.contracts_used
+           end)
+  end
+
   defp fixture!(tmp) do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)

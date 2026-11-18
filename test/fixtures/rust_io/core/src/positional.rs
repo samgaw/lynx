@@ -19,6 +19,15 @@ pub fn read_at(file: &File, data: &mut [u8], offset: u64) -> io::Result<usize> {
     file.read_at(data, offset)
 }
 
+/// Fills an initialized buffer from the given offset.
+///
+/// # Errors
+/// Returns unexpected EOF if the buffer cannot be filled, or the first
+/// non-interrupted operating system read error.
+pub fn read_exact_at(file: &File, buffer: &mut [u8], offset: u64) -> io::Result<()> {
+    FileExt::read_exact_at(file, buffer, offset)
+}
+
 /// Writes the full slice at the supplied offset, retrying interrupted operations.
 ///
 /// # Errors

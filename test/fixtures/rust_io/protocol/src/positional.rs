@@ -19,6 +19,16 @@ pub fn observe(file: &File, offset: u64, buffer: &mut [u8]) -> io::Result<usize>
     io_core::positional::read_at(file, buffer, offset)
 }
 
+/// Reads one little-endian record at the explicit offset.
+///
+/// # Errors
+/// Propagates an incomplete record or an operating system read failure.
+pub fn observe_word(file: &File, offset: u64) -> io::Result<u16> {
+    let mut bytes = [0; 2];
+    io_core::positional::read_exact_at(file, &mut bytes, offset)?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
 /// Writes the entire range and synchronizes the resulting file image.
 ///
 /// # Errors

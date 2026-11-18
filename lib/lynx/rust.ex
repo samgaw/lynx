@@ -64,7 +64,7 @@ defmodule Lynx.Rust do
   Runtime regular-file verification also admits `Error::kind` for registered OS
   errors, using the classification metadata described below. Full-MIR runtime
   extraction also retains the standard `Read::read_exact` and Unix
-  `FileExt::write_all_at` loops for File. These cover partial transfers,
+  `FileExt::read_exact_at` and `FileExt::write_all_at` loops for File. These cover partial transfers,
   Interrupted retry, and the actual static UnexpectedEof and WriteZero values.
   Array lengths must be literal usize values; mutable, nested and generic constant
   payloads remain rejected. Array views and endian conversions retain their
@@ -355,12 +355,12 @@ defmodule Lynx.Rust do
   loop. The override retains its single-byte path and upstream Copy slice model;
   standard Copy metadata, source/destination lengths and bounds failures are
   checked. Native copying and memory layout remain external boundaries.
-  The extracted Unix `FileExt::write_all_at` default dispatches to the checked
-  regular-file positional write model. It passes the remaining suffix and advanced
-  offset after each short write, preserves the descriptor cursor, and returns
-  the standard WriteZero error on a zero write. Full-MIR extraction verifies the
-  loop over its bounded native steps. Persistence requires a separate admitted
-  synchronization.
+  The extracted Unix `FileExt::read_exact_at` and `FileExt::write_all_at` defaults
+  dispatch to the checked regular-file positional models. Both advance the
+  explicit offset and retain the descriptor cursor. Exact reads reconstruct the
+  initialized buffer across short reads and return UnexpectedEof when truncated.
+  Full writes return WriteZero on a zero write. Persistence requires a separate
+  admitted synchronization.
   Byte-array repetition admits only u8 and the exact standard Clone<u8> dictionary. Mutable slice reconstruction retains the
   upstream checked range semantics. The existing loop budget remains a verification
   cutoff, not a Rust execution limit or termination assumption.

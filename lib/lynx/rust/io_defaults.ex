@@ -6,9 +6,13 @@ defmodule Lynx.Rust.IoDefaults do
   @file_ext ~w(std os unix fs FileExt)
   @read_default @read ++ ["read_exact"]
   @read_helper ~w(alloc io read default_read_exact)
+  @positional_read_default @file_ext ++ ["read_exact_at"]
   @positional_write_default @file_ext ++ ["write_all_at"]
-  @defaults [@read_default, @read_helper, @positional_write_default]
-  @io_traits [{@read, {0, "Lynx.NativeFile.read"}}, {@file_ext, {5, "Lynx.NativeFile.writeAt"}}]
+  @defaults [@read_default, @read_helper, @positional_read_default, @positional_write_default]
+  @io_traits [
+    {@read, [{0, "Lynx.NativeFile.read"}]},
+    {@file_ext, [{0, "Lynx.NativeFile.readAt"}, {5, "Lynx.NativeFile.writeAt"}]}
+  ]
 
   def includes do
     Enum.map(@defaults, &Enum.join(&1, "::")) ++
@@ -32,8 +36,12 @@ defmodule Lynx.Rust.IoDefaults do
         operation?(function, translated, refs, @read, read_inputs()) and
           default_method?(function, translated)
 
+      name == path(@positional_read_default) ->
+        operation?(function, translated, refs, @file_ext, positional_inputs("Mut")) and
+          default_method?(function, translated)
+
       name == path(@positional_write_default) ->
-        operation?(function, translated, refs, @file_ext, positional_write_inputs()) and
+        operation?(function, translated, refs, @file_ext, positional_inputs("Shared")) and
           default_method?(function, translated)
 
       true ->
@@ -169,10 +177,10 @@ defmodule Lynx.Rust.IoDefaults do
     interfaces =
       for declaration <- translated["trait_decls"] || [],
           declaration,
-          {name, operation} <- @io_traits,
+          {name, operations} <- @io_traits,
           declaration["item_meta"]["name"] == path(name),
           into: %{},
-          do: {declaration["def_id"], operation}
+          do: {declaration["def_id"], retained_operations(declaration, operations)}
 
     ctx = %{
       functions: Map.new(functions, &{&1["def_id"], &1}),
@@ -197,6 +205,12 @@ defmodule Lynx.Rust.IoDefaults do
       rescue
         error in ArgumentError -> {:halt, {:error, function, Exception.message(error)}}
       end
+    end)
+  end
+
+  defp retained_operations(%{"def_id" => trait, "methods" => methods}, operations) do
+    Enum.filter(operations, fn {slot, _} ->
+      Enum.any?(methods, &match?(%{"kind" => %{"TraitMethod" => [^trait, ^slot]}}, &1))
     end)
   end
 
@@ -256,7 +270,9 @@ defmodule Lynx.Rust.IoDefaults do
         ctx.traits
       )
 
-    if value && match?({^member, _}, ctx.interfaces[value["trait_decl_ref"]["id"]]) do
+    operations = value && ctx.interfaces[value["trait_decl_ref"]["id"]]
+
+    if operations && List.keymember?(operations, member, 0) do
       require!(
         length(args["regions"]) == 2 and
           Enum.all?(~w(types const_generics trait_refs), &(args[&1] == []))
@@ -274,7 +290,8 @@ defmodule Lynx.Rust.IoDefaults do
   defp dictionary!(%{"trait_decl_ref" => actual, "kind" => kind}, expected, owner, ctx) do
     require!(CallModels.expand(actual, ctx.refs) == expected)
     trait = expected["id"]
-    {slot, primitive} = Map.fetch!(ctx.interfaces, trait)
+    operations = Map.fetch!(ctx.interfaces, trait)
+    require!(operations != [])
 
     case kind do
       %{"Clause" => [%{"Free" => index}, %{"regions" => []}]} ->
@@ -308,26 +325,7 @@ defmodule Lynx.Rust.IoDefaults do
 
         require!(CallModels.expand(impl["impl_trait"], ctx.refs) == expected)
 
-        methods =
-          Enum.filter(
-            impl["methods"],
-            &(&1 && &1["kind"] == %{"TraitMethod" => [trait, slot]})
-          )
-
-        require!(length(methods) == 1)
-        [method] = methods
-
-        id = method["skip_binder"]["id"]
-        function = Enum.find(ctx.translated["fun_decls"], &(&1 && &1["def_id"] == id))
-        model = function && FileModels.resolve(function, ctx.translated, ctx.refs)
-        require!(get_in(function, ["src", "TraitImpl", "impl_ref", "id"]) == impl["def_id"])
-
-        require!(
-          model && ctx.models[id] && model.lean == primitive &&
-            ctx.models[id].lean == model.lean
-        )
-
-        [id]
+        Enum.map(operations, &primitive_method!(&1, trait, impl, ctx))
 
       _ ->
         require!(false)
@@ -335,6 +333,26 @@ defmodule Lynx.Rust.IoDefaults do
   end
 
   defp dictionary!(_, _, _, _), do: require!(false)
+
+  defp primitive_method!({slot, primitive}, trait, impl, ctx) do
+    methods =
+      Enum.filter(impl["methods"], &match?(%{"kind" => %{"TraitMethod" => [^trait, ^slot]}}, &1))
+
+    require!(length(methods) == 1)
+    [method] = methods
+
+    id = method["skip_binder"]["id"]
+    function = Enum.find(ctx.translated["fun_decls"], &(&1 && &1["def_id"] == id))
+    model = function && FileModels.resolve(function, ctx.translated, ctx.refs)
+    require!(get_in(function, ["src", "TraitImpl", "impl_ref", "id"]) == impl["def_id"])
+
+    require!(
+      model && ctx.models[id] && model.lean == primitive && ctx.models[id].lean == model.lean
+    )
+
+    id
+  end
+
   defp clause(bound, ctx), do: CallModels.expand(bound["trait_"]["skip_binder"], ctx.refs)
   defp substitute(%{"TypeVar" => %{"Free" => index}}, types), do: Enum.fetch!(types, index)
 
@@ -488,8 +506,12 @@ defmodule Lynx.Rust.IoDefaults do
   defp variable, do: %{"TypeVar" => %{"Free" => 0}}
   defp read_inputs, do: [reference(0, variable(), "Mut"), reference(1, byte_slice(), "Mut")]
 
-  defp positional_write_inputs,
-    do: [reference(0, variable(), "Shared"), reference(1, byte_slice(), "Shared"), scalar("U64")]
+  defp positional_inputs(buffer_borrow),
+    do: [
+      reference(0, variable(), "Shared"),
+      reference(1, byte_slice(), buffer_borrow),
+      scalar("U64")
+    ]
 
   defp byte_slice, do: %{"Slice" => [scalar("U8"), nil]}
   defp scalar(name), do: %{"Scalar" => %{"Integer" => %{"Unsigned" => name}}}
