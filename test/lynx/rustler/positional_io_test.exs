@@ -262,7 +262,8 @@ defmodule Lynx.Rustler.PositionalIoTest do
   end
 
   @tag :tmp_dir
-  test "every admitted crash at a positional writer prefix permits a fresh Rust read", %{
+  @tag timeout: 1_800_000
+  test "admitted positional crashes and interrupted Rustler reopens preserve the named image", %{
     tmp_dir: tmp
   } do
     base = fixture!(tmp)
@@ -274,7 +275,8 @@ defmodule Lynx.Rustler.PositionalIoTest do
       @proof_sources ++
         [
           {"PositionalConcurrentProperties.lean", "Concurrent"},
-          {"PositionalCrashProperties.lean", "Crash"}
+          {"PositionalCrashProperties.lean", "Crash"},
+          {"PositionalNamedRestartProperties.lean", "NamedRestart"}
         ]
 
     write_proofs!(project, bindings, sources)
@@ -282,29 +284,54 @@ defmodule Lynx.Rustler.PositionalIoTest do
     implementation_counts = %{
       "Positional.CrashPrefix.crashes_preserve_positional_bytes" => 2,
       "Positional.CrashRead.observes_after_restart" => 1,
-      "Positional.CrashRecovery.crashes_recover_positional_byte" => 3
+      "Positional.CrashRecovery.crashes_recover_positional_byte" => 3,
+      "Positional.NamedRestart.named_restart_reads" => 2,
+      "Positional.NamedPrefix.retains_named_inode" => 2,
+      "Positional.NamedCapture.named_crash_reopens" => 3,
+      "Positional.Reopening.reopen_prefix_checked" => 2,
+      "Positional.RepeatedReopen.crash_during_reopen" => 2,
+      "Positional.RepeatedReopen.every_finite_reopen" => 2,
+      "Positional.RepeatedReopen.named_crash_reopens_after_retries" => 3
     }
 
     proof_modules = Enum.map(sources, fn {_, module} -> "Positional." <> module end)
     required = Map.keys(implementation_counts)
 
-    prepared =
-      Lynx.Rustler.prepare!(base ++ [proof_modules: proof_modules, required_properties: required])
+    options = base ++ [proof_modules: proof_modules, required_properties: required]
+    load_and_calibrate(prepared, tmp)
 
-    file =
-      Lynx.Rust.Proofs.file!(prepared.extraction, proof_modules, required_properties: required)
-
+    [{_, beam}] = Code.compile_file(Path.join(@fixture, "positional_restarted_laws.ex"))
     export = Path.join(tmp, "positional-crash.export")
-    reports = Lynx.Commands.verify!(project, [file], export: export)
-    assert [%{status: :ok}] = reports
+
+    reports =
+      Lynx.Laws.verify([beam],
+        native: {Lynx.Rustler, options},
+        initial_environment: "Positional.NamedRestart.afterSeven",
+        options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192],
+        export: export
+      )
+
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+    assert [%{name: "reads_reopened_byte/0"}] = Enum.flat_map(reports, & &1.theorems)
+
+    properties = Lynx.Rust.Proofs.properties!(reports)
 
     reported =
-      reports
-      |> Lynx.Rust.Proofs.properties!()
+      properties
       |> Map.new(&{&1["theorem"], length(&1["implementations"])})
       |> Map.take(required)
 
     assert reported == implementation_counts
+
+    facade_roots = MapSet.new(bindings, fn {_, binding} -> binding["lean_name"] end)
+
+    for theorem <-
+          ~w(Positional.NamedCapture.named_crash_reopens Positional.RepeatedReopen.named_crash_reopens_after_retries) do
+      assert [%{"implementations" => roots}] =
+               Enum.filter(properties, &(&1["theorem"] == theorem))
+
+      assert MapSet.new(roots) == facade_roots
+    end
 
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)

@@ -34,6 +34,48 @@ The parent may still have its final observation queued. -/
           (imageWith writtenByte writer.durable && imageWith writtenByte writer.visible))
   | _, _ => false
 
+end Positional.CrashPrefix
+
+namespace Positional.NamedPrefix
+open Positional.Opened (names fileName)
+open Positional.CrashPrefix (snapshot)
+
+@[expose] def checkpoint : NamespaceSnapshot := ⟨names, names, [], .nil⟩
+
+@[expose] def singleName : Names → Bool
+  | [(path, node)] => path.data == fileName.data && node == 1
+  | _ => false
+
+theorem single_eq {table : Names} (valid : singleName table = true) : table = names := by
+  cases table with
+  | nil => simp [singleName] at valid
+  | cons item rest =>
+    cases rest with
+    | nil =>
+      obtain ⟨path, node⟩ := item
+      simp only [singleName, Bool.and_eq_true, beq_iff_eq] at valid
+      have equal : path = fileName := ByteArray.ext valid.1
+      simp [names, equal, valid.2]
+    | cons next rest => simp [singleName] at valid
+
+@[expose] def nodeIds (env : Environment) : List Nat :=
+  (env.nativeHeap.filter (fun cell => cell.2.1 == inodeTypeName)).map (·.1)
+
+@[expose] def namedState (config : Concurrent.Config Term) : Bool :=
+  let env := snapshot config
+  match namespaceSnapshot env, inode 1 env, NativeFile.lookup ⟨2⟩ env with
+  | some table, some disk, some writer =>
+      singleName table.names && singleName table.committed && table.pending.isEmpty &&
+        table.script == .nil && nodeIds env == [1] &&
+        (11 ≤ env.nativeRefCounter && env.nativeRefCounter ≤ 14) &&
+        disk.durable.data == writer.durable.data && disk.visible.data == writer.visible.data
+  | _, _, _ => false
+
+end Positional.NamedPrefix
+
+namespace Positional.CrashPrefix
+open Positional.Concurrent (ready program)
+
 private theorem persisted_byte (old visible mask result : ByteArray)
     (accepted : persist old visible mask = some result) (i : Nat) (inside : i < result.size) :
     result[i]! = if mask[i]! == 1 then visible[i]! else old[i]! := by
@@ -78,11 +120,10 @@ private theorem persists_with (first : UInt8 → Bool) (old visible mask bytes :
 set_option maxRecDepth 8192 in
 set_option maxHeartbeats 256000000 in
 private theorem prefixes_checked (elapsed : PID → Nat → Nat) :
-    Concurrent.checkInvariant retainsFile 64 (.start ready
-      (program
+    Concurrent.checkInvariant (fun cfg => retainsFile cfg && Positional.NamedPrefix.namedState cfg) 64
+      (.start ready (program
         __PATCH__
-        __OBSERVE__)
-      elapsed) = true := by
+        __OBSERVE__) elapsed) = true := by
   lynx_check_invariant
 
 /-- Every admitted bytewise tear at every reached prefix retains the untouched
@@ -101,7 +142,9 @@ theorem crashes_preserve_positional_bytes (elapsed : PID → Nat → Nat)
     ∀ writer peer, NativeFile.lookup ⟨2⟩ (snapshot last) = some writer →
       NativeFile.lookup ⟨7⟩ (snapshot last) = some peer →
       synchronized writer peer = true → imageWith writtenByte image.bytes = true := by
-  have retained := Concurrent.checkInvariant_sound (prefixes_checked elapsed) run
+  have checked := Concurrent.checkInvariant_sound (prefixes_checked elapsed) run
+  simp only [Bool.and_eq_true] at checked
+  have retained := checked.1
   unfold retainsFile at retained
   cases found : NativeFile.lookup ⟨2⟩ (snapshot last) with
   | none => simp [found] at retained
@@ -126,6 +169,53 @@ theorem crashes_preserve_positional_bytes (elapsed : PID → Nat → Nat)
       exact persists_with _ _ _ _ _ keptAfterSync.1 keptAfterSync.2 choice
 
 end Positional.CrashPrefix
+
+namespace Positional.NamedPrefix
+open Positional.Opened (names)
+open Positional.Concurrent (ready program)
+open Positional.CrashPrefix (snapshot)
+
+/-- Every prefix retains its committed name, the sole named inode and exactly
+the persisted and visible bytes seen by the writer capability. -/
+theorem retains_named_inode (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config Term}
+    (run : Concurrent.Run (.start ready (program
+      __PATCH__
+      __OBSERVE__) elapsed) events last) :
+    let env := snapshot last
+    namespaceSnapshot env = some checkpoint ∧ nodeIds env = [1] ∧
+    11 ≤ env.nativeRefCounter ∧ env.nativeRefCounter ≤ 14 ∧
+    ∃ disk writer, inode 1 env = some disk ∧ NativeFile.lookup ⟨2⟩ env = some writer ∧
+      disk.durable = writer.durable ∧ disk.visible = writer.visible := by
+  have combined := Concurrent.checkInvariant_sound (Positional.CrashPrefix.prefixes_checked elapsed) run
+  simp only [Bool.and_eq_true] at combined
+  have checked := combined.2
+  unfold namedState at checked
+  dsimp only at checked ⊢
+  cases tables : namespaceSnapshot (snapshot last) with
+  | none => simp [tables] at checked
+  | some table =>
+    cases persisted : inode 1 (snapshot last) with
+    | none => simp [tables, persisted] at checked
+    | some disk =>
+      cases looked : NativeFile.lookup ⟨2⟩ (snapshot last) with
+      | none => simp [tables, persisted, looked] at checked
+      | some writer =>
+        simp only [tables, persisted, looked, Bool.and_eq_true, beq_iff_eq,
+          decide_eq_true_eq, List.isEmpty_iff] at checked
+        obtain ⟨⟨⟨⟨⟨⟨⟨visibleNames, durableNames⟩, pending⟩, script⟩, ids⟩,
+          ⟨lower, upper⟩⟩, durable⟩, visible⟩ := checked
+        have scriptEmpty : table.script = .nil := (Term.compare_eq_nil _).mp
+          ((Term.beq_iff_compare_eq _ _).mp script)
+        have same : table = checkpoint := by
+          rcases table with ⟨names, committed, pendingTables, scriptTerm⟩
+          dsimp only at visibleNames durableNames pending scriptEmpty
+          rw [single_eq visibleNames, single_eq durableNames, pending, scriptEmpty]
+          rfl
+        exact ⟨congrArg some same, ids, lower, upper, disk, writer, rfl, rfl,
+          ByteArray.ext durable, ByteArray.ext visible⟩
+
+end Positional.NamedPrefix
 
 namespace Positional.CrashRead
 open Positional.Properties
