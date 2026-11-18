@@ -18,3 +18,11 @@ pub fn write_at(file: &File, data: &[u8], offset: u64) -> io::Result<usize> {
 pub fn read_at(file: &File, data: &mut [u8], offset: u64) -> io::Result<usize> {
     file.read_at(data, offset)
 }
+
+/// Writes the full slice at the supplied offset, retrying interrupted operations.
+///
+/// # Errors
+/// Propagates the first non-interrupted OS write error, or a zero-byte write.
+pub fn write_all_at(file: &File, bytes: &[u8], offset: u64) -> io::Result<()> {
+    FileExt::write_all_at(file, bytes, offset)
+}

@@ -118,13 +118,13 @@ defmodule Lynx.Rust.LLBC do
     if functions == [],
       do: raise(ArgumentError, "no first-party function implementations were extracted")
 
-    needed_defaults = Lynx.Rust.ExactRead.needed_defaults(translated)
+    needed_defaults = Lynx.Rust.IoDefaults.needed_defaults(translated)
 
     {library_helpers, external} =
       Enum.split_with(
         external,
         &(Lynx.Rust.LibraryHelpers.selected?(&1, translated) and
-            Lynx.Rust.ExactRead.retained?(&1, needed_defaults))
+            Lynx.Rust.IoDefaults.retained?(&1, needed_defaults))
       )
 
     {primitives, external} =
@@ -144,7 +144,7 @@ defmodule Lynx.Rust.LLBC do
       Enum.filter(
         translated["global_decls"],
         &(&1 != nil &&
-            (first_party?(&1, first_party) or Lynx.Rust.ExactRead.global?(&1, translated, refs)))
+            (first_party?(&1, first_party) or Lynx.Rust.IoDefaults.global?(&1, translated, refs)))
       )
       |> Lynx.Rust.LLBCJson.restore_constant_references!(document)
       |> Lynx.Rust.LLBCJson.restore_global_constant_values!(document)
@@ -366,14 +366,14 @@ defmodule Lynx.Rust.LLBC do
         Enum.uniq(a ++ b)
       end)
 
-    read_dispatch =
-      case Lynx.Rust.ExactRead.audit(functions, available_models, translated, refs) do
+    io_dispatch =
+      case Lynx.Rust.IoDefaults.audit(functions, available_models, translated, refs) do
         {:ok, dispatch} -> dispatch
         {:error, function, message} -> failure!(function, translated, message)
       end
 
     trait_dependencies =
-      Map.merge(trait_dependencies, read_dispatch.dependencies, fn _, a, b ->
+      Map.merge(trait_dependencies, io_dispatch.dependencies, fn _, a, b ->
         Enum.uniq(a ++ b)
       end)
 
@@ -443,7 +443,7 @@ defmodule Lynx.Rust.LLBC do
         end)
         |> Map.merge(pattern_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
         |> Map.merge(string_pattern_dispatch.calls, fn _, a, b -> Enum.uniq(a ++ b) end)
-        |> Map.merge(read_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
+        |> Map.merge(io_dispatch.calls, fn _, left, right -> Enum.uniq(left ++ right) end)
     }
 
     for function <- functions do

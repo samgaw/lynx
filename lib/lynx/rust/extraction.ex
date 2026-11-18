@@ -661,7 +661,7 @@ defmodule Lynx.Rust.Extraction do
         Lynx.Rust.StringModels.install!(audit, output, module) ++
         Lynx.Rust.StringSliceModels.install!(audit, output, module)
 
-    Lynx.Rust.ExactRead.install!(audit, translation, output)
+    Lynx.Rust.IoDefaults.install!(audit, translation, output)
 
     codec_modules = Lynx.Rust.NativeCodecs.install!(codec_plan, translation, output, module)
 

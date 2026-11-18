@@ -1455,7 +1455,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   # ownership of a single-owner container/whole compiler frame. A frame inside
   # another aggregate must account for all of that aggregate's native owners.
   defp moves!(%{"Move" => %{"kind" => %{"Global" => _}} = place}, live, ctx) do
-    unless Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs),
+    unless Lynx.Rust.IoDefaults.static_error_reference?(place, ctx.translated, ctx.refs),
       do: if(native_place?(place, ctx), do: reject!(ctx))
 
     live
@@ -1524,7 +1524,7 @@ defmodule Lynx.Rust.NativeLifetimes do
   end
 
   defp moves!(%{"Copy" => %{"kind" => %{"Global" => _}} = place}, live, ctx) do
-    unless Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs),
+    unless Lynx.Rust.IoDefaults.static_error_reference?(place, ctx.translated, ctx.refs),
       do: if(native_place?(place, ctx), do: reject!(ctx))
 
     live
@@ -1545,10 +1545,10 @@ defmodule Lynx.Rust.NativeLifetimes do
   # A const access evaluates the retained initializer each time. The checked
   # static-message constant is a fresh value, not a move from owned global state.
   defp fresh_static_error?(%{"Use" => [%{"Move" => place}, _]}, ctx),
-    do: Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs)
+    do: Lynx.Rust.IoDefaults.static_error_reference?(place, ctx.translated, ctx.refs)
 
   defp fresh_static_error?(%{"Use" => [%{"Copy" => place}, _]}, ctx),
-    do: Lynx.Rust.ExactRead.static_error_reference?(place, ctx.translated, ctx.refs)
+    do: Lynx.Rust.IoDefaults.static_error_reference?(place, ctx.translated, ctx.refs)
 
   defp fresh_static_error?(_, _), do: false
 

@@ -1,10 +1,19 @@
-defmodule Lynx.Rust.ExactRead do
+defmodule Lynx.Rust.IoDefaults do
   @moduledoc false
   alias Lynx.Rust.{CallModels, FileModels, ResourceModels}
 
+  @read ~w(alloc io read Read)
+  @file_ext ~w(std os unix fs FileExt)
+  @read_default @read ++ ["read_exact"]
+  @read_helper ~w(alloc io read default_read_exact)
+  @positional_write_default @file_ext ++ ["write_all_at"]
+  @defaults [@read_default, @read_helper, @positional_write_default]
+  @io_traits [{@read, {0, "Lynx.NativeFile.read"}}, {@file_ext, {5, "Lynx.NativeFile.writeAt"}}]
+
   def includes do
-    ~w(alloc::io::read::Read::read_exact alloc::io::read::default_read_exact
-      core::io::error::_::READ_EXACT_EOF core::io::error::SimpleMessage)
+    Enum.map(@defaults, &Enum.join(&1, "::")) ++
+      ~w(core::io::error::_::READ_EXACT_EOF core::io::error::_::WRITE_ALL_EOF
+        core::io::error::SimpleMessage)
   end
 
   # These are implementation selections, not external specifications. Each body
@@ -12,25 +21,22 @@ defmodule Lynx.Rust.ExactRead do
   def selected?(%{"body" => %{"Structured" => _}} = function, translated) do
     refs = Lynx.Rust.LLBC.type_references!(translated)
 
-    case function["item_meta"]["name"] do
-      [
-        %{"Ident" => ["alloc", 0]},
-        %{"Ident" => ["io", 0]},
-        %{"Ident" => ["read", 0]},
-        %{"Ident" => ["default_read_exact", 0]}
-      ] ->
-        function["src"] == "Normal" and reader?(function, translated, refs)
+    name = function["item_meta"]["name"]
 
-      [
-        %{"Ident" => ["alloc", 0]},
-        %{"Ident" => ["io", 0]},
-        %{"Ident" => ["read", 0]},
-        %{"Ident" => ["Read", 0]},
-        %{"Ident" => ["read_exact", 0]}
-      ] ->
-        reader?(function, translated, refs) and default_method?(function, translated)
+    cond do
+      name == path(@read_helper) ->
+        function["src"] == "Normal" and
+          operation?(function, translated, refs, @read, read_inputs())
 
-      _ ->
+      name == path(@read_default) ->
+        operation?(function, translated, refs, @read, read_inputs()) and
+          default_method?(function, translated)
+
+      name == path(@positional_write_default) ->
+        operation?(function, translated, refs, @file_ext, positional_write_inputs()) and
+          default_method?(function, translated)
+
+      true ->
         with %{"GlobalInitializer" => %{"id" => id}} <- function["src"],
              [global] <- Enum.filter(translated["global_decls"], &(&1 && &1["def_id"] == id)) do
           constant?(global, refs, translated["type_decls"]) and
@@ -49,21 +55,14 @@ defmodule Lynx.Rust.ExactRead do
 
   def selected?(_, _), do: false
 
-  # Read's default method can be retained in trait metadata even when a concrete
-  # reader overrides it. Keep only defaults referenced by implementation bodies
+  # A trait default can be retained in metadata even when its implementation
+  # overrides it. Keep only defaults referenced by implementation bodies
   # or const initializers; a later unsupported indirect call still fails closed.
   def needed_defaults(translated) do
     functions = Enum.reject(translated["fun_decls"], &is_nil/1)
 
     defaults =
-      Enum.filter(functions, fn f ->
-        name = f["item_meta"]["name"]
-
-        name in [
-          path(~w(alloc io read Read read_exact)),
-          path(~w(alloc io read default_read_exact))
-        ]
-      end)
+      Enum.filter(functions, &known_default?/1)
       |> MapSet.new(& &1["def_id"])
 
     globals =
@@ -97,12 +96,11 @@ defmodule Lynx.Rust.ExactRead do
       else: closure(Map.get(edges, id, []) ++ rest, edges, MapSet.put(seen, id))
   end
 
-  def retained?(function, needed) do
-    function["item_meta"]["name"] not in [
-      path(~w(alloc io read Read read_exact)),
-      path(~w(alloc io read default_read_exact))
-    ] or MapSet.member?(needed, function["def_id"])
-  end
+  def retained?(function, needed),
+    do: not known_default?(function) or MapSet.member?(needed, function["def_id"])
+
+  defp known_default?(function),
+    do: Enum.any?(@defaults, &(function["item_meta"]["name"] == path(&1)))
 
   # The upstream trait builder unfolds tagged definitions to resolve references
   # to already supplied methods. Expose only the actual selected helper bodies;
@@ -165,20 +163,24 @@ defmodule Lynx.Rust.ExactRead do
 
   def static_error_reference?(_, _, _), do: false
 
-  # Link dictionary parameters to matching caller clauses or the actual checked
-  # File::read external model. No first-party reader is supplied by a contract.
+  # Link dictionary parameters to matching caller clauses or the checked File
+  # primitive for the operation used by the extracted default.
   def audit(functions, models, translated, refs) do
+    interfaces =
+      for declaration <- translated["trait_decls"] || [],
+          declaration,
+          {name, operation} <- @io_traits,
+          declaration["item_meta"]["name"] == path(name),
+          into: %{},
+          do: {declaration["def_id"], operation}
+
     ctx = %{
       functions: Map.new(functions, &{&1["def_id"], &1}),
       models: models,
       translated: translated,
       refs: refs,
       traits: ResourceModels.trait_references(translated),
-      read:
-        Enum.find(
-          translated["trait_decls"] || [],
-          &(&1 && &1["item_meta"]["name"] == path(~w(alloc io read Read)))
-        )
+      interfaces: interfaces
     }
 
     Enum.reduce_while(functions, {:ok, %{dependencies: %{}, calls: %{}}}, fn function,
@@ -218,11 +220,11 @@ defmodule Lynx.Rust.ExactRead do
   defp call(%{"Regular" => %{"kind" => %{"Fun" => id}, "generics" => args}}, owner, ctx) do
     target = ctx.functions[id]
 
-    if target && ctx.read do
+    if target do
       deps =
         for {bound, index} <- Enum.with_index(target["generics"]["trait_clauses"]),
             expected = clause(bound, ctx),
-            expected["id"] == ctx.read["def_id"],
+            Map.has_key?(ctx.interfaces, expected["id"]),
             reduce: [] do
           deps ->
             require!(length(args["trait_refs"]) == length(target["generics"]["trait_clauses"]))
@@ -244,7 +246,7 @@ defmodule Lynx.Rust.ExactRead do
   end
 
   defp call(
-         %{"Regular" => %{"kind" => %{"Trait" => [raw, 0]}, "generics" => args}} = func,
+         %{"Regular" => %{"kind" => %{"Trait" => [raw, member]}, "generics" => args}} = func,
          owner,
          ctx
        ) do
@@ -254,7 +256,7 @@ defmodule Lynx.Rust.ExactRead do
         ctx.traits
       )
 
-    if ctx.read && value && value["trait_decl_ref"]["id"] == ctx.read["def_id"] do
+    if value && match?({^member, _}, ctx.interfaces[value["trait_decl_ref"]["id"]]) do
       require!(
         length(args["regions"]) == 2 and
           Enum.all?(~w(types const_generics trait_refs), &(args[&1] == []))
@@ -271,6 +273,8 @@ defmodule Lynx.Rust.ExactRead do
 
   defp dictionary!(%{"trait_decl_ref" => actual, "kind" => kind}, expected, owner, ctx) do
     require!(CallModels.expand(actual, ctx.refs) == expected)
+    trait = expected["id"]
+    {slot, primitive} = Map.fetch!(ctx.interfaces, trait)
 
     case kind do
       %{"Clause" => [%{"Free" => index}, %{"regions" => []}]} ->
@@ -280,7 +284,6 @@ defmodule Lynx.Rust.ExactRead do
 
       "SelfId" ->
         require!(Enum.any?(owner["generics"]["trait_clauses"], &(clause(&1, ctx) == expected)))
-        trait = ctx.read["def_id"]
 
         require!(
           match?(
@@ -308,7 +311,7 @@ defmodule Lynx.Rust.ExactRead do
         methods =
           Enum.filter(
             impl["methods"],
-            &(&1 && &1["kind"] == %{"TraitMethod" => [ctx.read["def_id"], 0]})
+            &(&1 && &1["kind"] == %{"TraitMethod" => [trait, slot]})
           )
 
         require!(length(methods) == 1)
@@ -320,7 +323,7 @@ defmodule Lynx.Rust.ExactRead do
         require!(get_in(function, ["src", "TraitImpl", "impl_ref", "id"]) == impl["def_id"])
 
         require!(
-          model && ctx.models[id] && model.lean == "Lynx.NativeFile.read" &&
+          model && ctx.models[id] && model.lean == primitive &&
             ctx.models[id].lean == model.lean
         )
 
@@ -346,7 +349,7 @@ defmodule Lynx.Rust.ExactRead do
     do:
       raise(
         ArgumentError,
-        "missing or inconsistent Read dictionary; requires a matching generic clause or the audited standard File::read model"
+        "missing or inconsistent standard I/O dictionary; requires a matching generic clause or the audited File operation"
       )
 
   def global?(global, translated, refs) do
@@ -384,11 +387,12 @@ defmodule Lynx.Rust.ExactRead do
                }
              }
            },
-           %{"Ident" => ["READ_EXACT_EOF", 0]}
+           %{"Ident" => [constant, 0]}
          ],
          refs,
          types
-       ) do
+       )
+       when constant in ["READ_EXACT_EOF", "WRITE_ALL_EOF"] do
     case error(types) do
       %{"def_id" => id} ->
         Enum.all?(
@@ -403,7 +407,7 @@ defmodule Lynx.Rust.ExactRead do
 
   defp constant_name?(_, _, _), do: false
 
-  defp reader?(function, translated, refs) do
+  defp operation?(function, translated, refs, trait_path, inputs) do
     with %{
            "signature" => %{"abi" => "Rust", "is_unsafe" => false, "is_variadic" => false} = sig,
            "generics" => params
@@ -420,18 +424,14 @@ defmodule Lynx.Rust.ExactRead do
          } <- CallModels.expand(clause["trait_"], refs),
          true <- args == ResourceModels.args([variable()]),
          [declaration] <- Enum.filter(translated["trait_decls"], &(&1 && &1["def_id"] == trait)),
-         true <- declaration["item_meta"]["name"] == path(~w(alloc io read Read)),
+         true <- declaration["item_meta"]["name"] == path(trait_path),
          %{"def_id" => error} <- FileModels.error_declaration(translated),
          [result] <-
            Enum.filter(
              translated["type_decls"],
              &(&1 && &1["item_meta"]["name"] == path(~w(core result Result)))
            ),
-         true <-
-           CallModels.expand(sig["inputs"], refs) == [
-             reference(0, variable()),
-             reference(1, %{"Slice" => [scalar(), nil]})
-           ],
+         true <- CallModels.expand(sig["inputs"], refs) == inputs,
          true <-
            CallModels.expand(sig["output"], refs) == %{
              "Adt" => %{
@@ -486,6 +486,14 @@ defmodule Lynx.Rust.ExactRead do
     do: %{"Adt" => %{"id" => id, "builtin" => nil, "generics" => ResourceModels.args([])}}
 
   defp variable, do: %{"TypeVar" => %{"Free" => 0}}
-  defp scalar, do: %{"Scalar" => %{"Integer" => %{"Unsigned" => "U8"}}}
-  defp reference(region, type), do: %{"Ref" => [%{"Var" => %{"Free" => region}}, type, "Mut"]}
+  defp read_inputs, do: [reference(0, variable(), "Mut"), reference(1, byte_slice(), "Mut")]
+
+  defp positional_write_inputs,
+    do: [reference(0, variable(), "Shared"), reference(1, byte_slice(), "Shared"), scalar("U64")]
+
+  defp byte_slice, do: %{"Slice" => [scalar("U8"), nil]}
+  defp scalar(name), do: %{"Scalar" => %{"Integer" => %{"Unsigned" => name}}}
+
+  defp reference(region, type, kind),
+    do: %{"Ref" => [%{"Var" => %{"Free" => region}}, type, kind]}
 end

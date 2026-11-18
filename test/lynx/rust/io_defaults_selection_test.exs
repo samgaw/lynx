@@ -1,6 +1,6 @@
-defmodule Lynx.Rust.ExactReadSelectionTest do
+defmodule Lynx.Rust.IoDefaultsSelectionTest do
   use ExUnit.Case, async: true
-  alias Lynx.Rust.ExactRead
+  alias Lynx.Rust.IoDefaults
   defp name(parts), do: Enum.map(parts, &%{"Ident" => [&1, 0]})
 
   defp function(id, name, body),
@@ -26,17 +26,17 @@ defmodule Lynx.Rust.ExactReadSelectionTest do
 
   test "retains called defaults and their transitive constant dependencies" do
     translated = fixture(2)
-    needed = ExactRead.needed_defaults(translated)
+    needed = IoDefaults.needed_defaults(translated)
     assert MapSet.new([1, 2, 3, 4, 5]) == needed
-    assert Enum.all?(translated["fun_decls"], &ExactRead.retained?(&1, needed))
+    assert Enum.all?(translated["fun_decls"], &IoDefaults.retained?(&1, needed))
   end
 
   test "an overridden method does not require its unused default implementation" do
     translated = fixture(4)
-    needed = ExactRead.needed_defaults(translated)
+    needed = IoDefaults.needed_defaults(translated)
     assert MapSet.new([1, 4, 5]) == needed
     [_, default, helper | _] = translated["fun_decls"]
-    refute ExactRead.retained?(default, needed)
-    refute ExactRead.retained?(helper, needed)
+    refute IoDefaults.retained?(default, needed)
+    refute IoDefaults.retained?(helper, needed)
   end
 end

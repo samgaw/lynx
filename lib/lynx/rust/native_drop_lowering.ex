@@ -265,7 +265,7 @@ defmodule Lynx.Rust.NativeDropLowering do
                    (Lynx.Rust.DropModels.primitive_scalar?(type) ||
                       readonly_constant_type?(type, ctx.translated["type_decls"]) ||
                       Lynx.Rustler.ErrorLiterals.static_string?(type, ctx.refs) ||
-                      Lynx.Rust.ExactRead.static_error_reference?(
+                      Lynx.Rust.IoDefaults.static_error_reference?(
                         %{"kind" => kind, "ty" => annotation},
                         ctx.translated,
                         ctx.refs

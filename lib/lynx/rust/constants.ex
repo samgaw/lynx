@@ -134,7 +134,7 @@ defmodule Lynx.Rust.Constants do
   defp supported_initializer_type?(%{"global_kind" => "NamedConst"} = global, type, refs, types),
     do:
       scalar_or_array?(type, refs) or fieldless_enum?(type, types) or
-        Lynx.Rust.ExactRead.constant?(global, refs, types)
+        Lynx.Rust.IoDefaults.constant?(global, refs, types)
 
   defp supported_initializer_type?(
          %{"global_kind" => "AnonConst", "item_meta" => %{"name" => name}},

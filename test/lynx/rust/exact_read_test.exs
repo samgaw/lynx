@@ -1,6 +1,6 @@
 defmodule Lynx.Rust.ExactReadTest do
   use ExUnit.Case
-  alias Lynx.Rust.{ArrayModels, ExactRead, IoErrorModels, Project, Proofs}
+  alias Lynx.Rust.{ArrayModels, IoDefaults, IoErrorModels, Project, Proofs}
   @fixture Path.expand("../../fixtures/rust_io", __DIR__)
   @tools System.get_env("LYNX_AENEAS_DIR")
   @moduletag timeout: 900_000
@@ -59,11 +59,11 @@ defmodule Lynx.Rust.ExactReadTest do
 
     audit = result.extraction.audit
     assert %{"translate_all_methods" => false} = audit.translated["options"]
-    helpers = Enum.filter(audit.functions, &ExactRead.selected?(&1, audit.translated))
+    helpers = Enum.filter(audit.functions, &IoDefaults.selected?(&1, audit.translated))
     assert Enum.any?(helpers, &(inspect(&1["item_meta"]["name"]) =~ "default_read_exact"))
 
     for function <- helpers do
-      refute ExactRead.selected?(
+      refute IoDefaults.selected?(
                put_in(function, ["signature", "is_unsafe"], true),
                audit.translated
              )
@@ -115,7 +115,7 @@ defmodule Lynx.Rust.ExactReadTest do
       end)
 
     assert {:error, _, _} =
-             ExactRead.audit(audit.functions, audit.external_calls, changed, audit.references)
+             IoDefaults.audit(audit.functions, audit.external_calls, changed, audit.references)
 
     file = Proofs.file!(result.extraction, options[:proof_modules], required_properties: required)
     export = Path.join(tmp, "exact-read.export")

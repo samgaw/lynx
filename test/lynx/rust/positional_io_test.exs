@@ -11,20 +11,8 @@ defmodule Lynx.Rust.PositionalIoTest do
   test "checks positional writes, synchronized images and cursor-preserving reads", %{
     tmp_dir: tmp
   } do
-    workspace = Path.join(tmp, "workspace")
-    File.mkdir_p!(workspace)
-
-    for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol native),
-        do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
-
-    project = Path.join(tmp, "proofs")
+    {workspace, project} = fixture!(tmp)
     File.mkdir_p!(Path.join(project, "Positional"))
-    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
-
-    if File.dir?(packages) do
-      File.mkdir_p!(Path.join(project, ".lake"))
-      File.ln_s!(packages, Path.join(project, ".lake/packages"))
-    end
 
     File.write!(
       Path.join(project, "Positional/Base.lean"),
@@ -129,5 +117,69 @@ defmodule Lynx.Rust.PositionalIoTest do
 
     assert error.message =~ "Positional/Properties.lean:"
     File.write!(source, rust)
+  end
+
+  @tag :tmp_dir
+  @tag skip:
+         System.get_env("LYNX_FULL_MIR") != "1" &&
+           "set LYNX_FULL_MIR=1 for standard positional writes"
+  test "proves the standard full positional write and synchronization independently of Rustler",
+       %{tmp_dir: tmp} do
+    {workspace, project} = fixture!(tmp)
+    File.mkdir_p!(Path.join(project, "ExactWrite"))
+
+    File.cp!(
+      Path.join(@fixture, "ExactWriteProperties.lean"),
+      Path.join(project, "ExactWrite/Properties.lean")
+    )
+
+    required =
+      Enum.map(
+        ~w(writes_all synchronizes_after_all caller_no_panic two_short_writes_synchronize
+          write_zero_preserves_prefix interrupted_write_retries_same_range fatal_write_preserves_prefix
+          sync_error_after_complete_write),
+        &("ExactWrite.Properties." <> &1)
+      )
+
+    result =
+      Lynx.Rust.verify!(workspace, "io-protocol",
+        tools: @tools,
+        sysroot: :full_mir,
+        execution: :runtime,
+        owned_drops: true,
+        files: :regular,
+        roots: ["io_protocol::positional::write_all_and_sync"],
+        lean_project: project,
+        module_prefix: "ExactWrite.Extraction",
+        build_dir: Path.join(tmp, "build"),
+        proof_modules: ["ExactWrite.Properties"],
+        required_properties: required
+      )
+
+    assert [%{status: :ok}] = result.reports
+
+    assert Enum.any?(result.verification.guarantees, fn row ->
+             row.kind == :cross_crate_contract &&
+               row.theorem == "ExactWrite.Properties.synchronizes_after_all" &&
+               "ExactWrite.Properties.writes_all" in row.contracts_used
+           end)
+  end
+
+  defp fixture!(tmp) do
+    workspace = Path.join(tmp, "workspace")
+    File.mkdir_p!(workspace)
+
+    for path <- ~w(Cargo.toml Cargo.lock rust-toolchain.toml core protocol native),
+        do: File.cp_r!(Path.join(@fixture, path), Path.join(workspace, path))
+
+    project = Path.join(tmp, "proofs")
+    packages = Path.expand("../../fixtures/rust_workspace/proofs/.lake/packages", __DIR__)
+
+    if File.dir?(packages) do
+      File.mkdir_p!(Path.join(project, ".lake"))
+      File.ln_s!(packages, Path.join(project, ".lake/packages"))
+    end
+
+    {workspace, project}
   end
 end

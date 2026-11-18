@@ -18,3 +18,12 @@ pub fn patch(file: &File, offset: u64, bytes: &[u8]) -> io::Result<usize> {
 pub fn observe(file: &File, offset: u64, buffer: &mut [u8]) -> io::Result<usize> {
     io_core::positional::read_at(file, buffer, offset)
 }
+
+/// Writes the entire range and synchronizes the resulting file image.
+///
+/// # Errors
+/// Propagates write and data synchronization errors.
+pub fn write_all_and_sync(file: &File, bytes: &[u8], offset: u64) -> io::Result<()> {
+    io_core::positional::write_all_at(file, bytes, offset)?;
+    file.sync_data()
+}
