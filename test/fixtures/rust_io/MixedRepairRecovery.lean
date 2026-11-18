@@ -53,7 +53,7 @@ open scoped Record.MixedRepairRecovery
 private theorem head_size (left : Bool) : (contents left).size = 8 := by
   cases left <;> rfl
 
-private theorem packed_size (left : Bool) (tail : List UInt8) :
+theorem packed_size (left : Bool) (tail : List UInt8) :
     (withTail left tail).size = 8 + tail.length := by
   change ((contents left).data ++ tail.toArray).size = _
   have head : (contents left).data.size = 8 := head_size left
@@ -74,29 +74,30 @@ private theorem sync_image (left : Bool) :
     JournalBytes (contents left) (contents left) :=
   ⟨⟨le_rfl, fun _ _ => rfl⟩, by omega⟩
 
-private theorem persisted_size (old visible mask result : ByteArray)
-    (prior : visible.size ≤ old.size) (accepted : persist old visible mask = some result) :
-    result.size ≤ old.size := by
+private theorem persisted_size (old visible mask result : ByteArray) (bound : Nat)
+    (oldBound : old.size ≤ bound) (visibleBound : visible.size ≤ bound)
+    (accepted : persist old visible mask = some result) : result.size ≤ bound := by
   unfold persist at accepted
   split at accepted
   · rename_i sizes
-    have upper : mask.size ≤ old.size := sizes.2.1.trans_eq (max_eq_left prior)
+    have upper : mask.size ≤ bound := sizes.2.1.trans (max_le oldBound visibleBound)
     cases accepted
     simpa [← ByteArray.size_data] using upper
   · contradiction
 
-@[expose] def keepsJournal (counter : Nat) (left : Bool) (config : Concurrent.Config Term) : Bool :=
+@[expose] def keepsJournal (counter maxBytes : Nat) (left : Bool) (config : Concurrent.Config Term) : Bool :=
   let env := environment config
   let names := namedJournal journalName
   counter ≤ env.nativeRefCounter && inodeIds env == [1] &&
   (match namespaceSnapshot env, inode 1 env with
    | some table, some file => tablesEqual table.names names && tablesEqual table.committed names &&
-     table.pending.isEmpty && preserves left file.visible && preserves left file.durable
+     table.pending.isEmpty && preserves left file.visible && preserves left file.durable &&
+     file.visible.size ≤ maxBytes && file.durable.size ≤ maxBytes
    | _, _ => false)
 
 @[expose] def repairChecked (counter : Nat) (left : Bool) (eof closeTail : Nat)
     (last : Concurrent.Config Term) : Bool :=
-  keepsJournal counter left last &&
+  keepsJournal counter (8 + eof) left last &&
     (!last.successors.isEmpty || rejected counter left eof closeTail last)
 
 set_option maxRecDepth 8192 in
@@ -140,9 +141,9 @@ theorem all_admitted_masks (counter : Nat) (left closeSucceeds : Bool) (tail : L
   have resizedImage := persist_journal _ _ _ _ _ original complete resizeChoice
   have synchronizedImage := persist_journal _ _ _ _ _ resizedImage complete syncChoice
   have closedImage := persist_journal _ _ _ _ _ synchronizedImage complete closeChoice
-  have resizeBound := persisted_size _ _ _ _ original.1.1 resizeChoice
-  have syncBound := persisted_size _ _ _ _ resizedImage.1.1 syncChoice
-  have closeBound := persisted_size _ _ _ _ synchronizedImage.1.1 closeChoice
+  have resizeBound := persisted_size _ _ _ _ _ le_rfl original.1.1 resizeChoice
+  have syncBound := persisted_size _ _ _ _ _ le_rfl resizedImage.1.1 syncChoice
+  have closeBound := persisted_size _ _ _ _ _ le_rfl synchronizedImage.1.1 closeChoice
   obtain ⟨resizeTail, resizeShort, rfl⟩ := image_shape left resized resizedImage
   obtain ⟨syncTail, syncShort, rfl⟩ := image_shape left synchronized synchronizedImage
   obtain ⟨closeTail, closeShort, rfl⟩ := image_shape left closed closedImage
@@ -161,21 +162,21 @@ private theorem retained_bytes (left : Bool) (bytes : ByteArray)
   exact ⟨⟨kept.1.1, kept.2⟩, kept.1.2⟩
 
 /-- Any admitted crash at a protected prefix keeps the original name and its
-complete records. The retained image has only a possible partial next record. -/
-private theorem prefix_crash (counter : Nat) (left : Bool) (config : Concurrent.Config Term)
-    (safe : keepsJournal counter left config = true)
+complete records. Any retained partial record fits within the original file length. -/
+private theorem prefix_crash (counter maxBytes : Nat) (left : Bool) (config : Concurrent.Config Term)
+    (safe : keepsJournal counter maxBytes left config = true)
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
     (crash : filesystemCrashImage chosen masks (environment config) = some image) :
     ∃ bytes, image = ⟨namedJournal journalName, [(1, bytes)], image.highWater⟩ ∧
-      counter ≤ image.highWater ∧ JournalBytes (contents left) bytes := by
+      counter ≤ image.highWater ∧ JournalBytes (contents left) bytes ∧ bytes.size ≤ maxBytes := by
   unfold keepsJournal at safe
   dsimp only at safe
   simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at safe
   obtain ⟨⟨advance, ids⟩, images⟩ := safe
   split at images
   · rename_i table file snapshot found
-    simp only [Bool.and_eq_true, List.isEmpty_iff] at images
-    obtain ⟨⟨⟨⟨visible, committed⟩, pending⟩, current⟩, durable⟩ := images
+    simp only [Bool.and_eq_true, List.isEmpty_iff, decide_eq_true_eq] at images
+    obtain ⟨⟨⟨⟨⟨⟨visible, committed⟩, pending⟩, current⟩, durable⟩, visibleBound⟩, durableBound⟩ := images
     have named : namespaceSnapshot (environment config) =
         some ⟨namedJournal journalName, namedJournal journalName, [], table.script⟩ := by
       rw [snapshot]
@@ -186,7 +187,8 @@ private theorem prefix_crash (counter : Nat) (left : Bool) (config : Concurrent.
     obtain ⟨mask, bytes, accepted, captured⟩ :=
       captured_journal journalName _ file table.script named ids found chosen masks image crash
     exact ⟨bytes, by rw [captured], by simpa only [captured] using advance,
-      persist_journal _ _ _ _ _ (retained_bytes left _ durable) (retained_bytes left _ current) accepted⟩
+      persist_journal _ _ _ _ _ (retained_bytes left _ durable) (retained_bytes left _ current) accepted,
+      persisted_size _ _ _ _ _ durableBound visibleBound accepted⟩
   · contradiction
 
 /-- Every admitted crash at any point of a modeled mixed-mask failed repair
@@ -204,7 +206,7 @@ theorem reopens_after_prefix_crash (counter : Nat) (left closeSucceeds : Bool) (
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
     (crash : filesystemCrashImage chosen masks (environment last) = some image) :
     ∃ bytes, image = ⟨namedJournal journalName, [(1, bytes)], image.highWater⟩ ∧
-      counter ≤ image.highWater ∧ JournalBytes (contents left) bytes ∧
+      counter ≤ image.highWater ∧ JournalBytes (contents left) bytes ∧ bytes.size ≤ 8 + tail.length ∧
       restartFilesystem image (script bytes) = some (cold image.highWater bytes) ∧
       Concurrent.checkPost (repaired image.highWater left bytes.size) 64
         (.start (registered (cold image.highWater bytes))
@@ -213,11 +215,11 @@ theorem reopens_after_prefix_crash (counter : Nat) (left closeSucceeds : Bool) (
     syncMask closeMask resized synchronized closed resizeChoice syncChoice closeChoice positive elapsed
   have observed := Concurrent.checkInvariant_sound checked ran
   simp only [repairChecked, Bool.and_eq_true] at observed
-  obtain ⟨bytes, stored, advance, shape⟩ :=
-    prefix_crash counter left last observed.1 chosen masks image crash
+  obtain ⟨bytes, stored, advance, shape, bounded⟩ :=
+    prefix_crash counter _ left last observed.1 chosen masks image crash
   obtain ⟨restart, restarted⟩ :=
     reopens_captured_image image.highWater left bytes (Nat.le_trans positive advance) shape nextElapsed
-  refine ⟨bytes, stored, advance, shape, ?_, restarted⟩
+  refine ⟨bytes, stored, advance, shape, bounded, ?_, restarted⟩
   rw [← show image = ⟨Record.TornSyncRecovery.names, [(1, bytes)], image.highWater⟩ from stored] at restart
   exact restart
 

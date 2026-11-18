@@ -234,6 +234,8 @@ defmodule Lynx.Rustler.FallibleReopenTest do
       {"MixedRepairChains", "reopens_after_repeated_prefix_crashes"},
       {"MixedRepairIdempotence", "idempotent_completed_recovery"},
       {"MixedRepairIdempotence", "mixed_then_completed"},
+      {"MixedRepairChains", "interrupted_preserves"},
+      {"MixedRepairAlternating", "alternating_repairs"},
       {"TypedRestartAppend", nil},
       {"MixedRepairAppend", "appends_after_mixed_interruptions"},
       {"MixedRepairAppend", "boot_after_two_interruptions"}

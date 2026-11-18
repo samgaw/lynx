@@ -15,7 +15,7 @@ open Record.FallibleReopen (contents call environment)
 open Record.TornSyncFailure (withTail tail_forms)
 open Record.TornSyncRecovery (names script cold registered repaired reopens_captured_image)
 open Record.MixedRepairScripts (start)
-open Record.MixedRepairRecovery (reopens_after_prefix_crash)
+open Record.MixedRepairRecovery (packed_size reopens_after_prefix_crash)
 open Record.TornSyncChains (JournalImage Reopen admitError)
 
 structure AdmittedMasks (left : Bool) (tail : List UInt8) where
@@ -68,10 +68,14 @@ inductive InterruptedAttempts (reopen : Reopen) (left : Bool) :
       InterruptedAttempts reopen left count middle after →
       InterruptedAttempts reopen left (count + 1) before after
 
-private theorem one_attempt (left : Bool) (before after : FilesystemImage)
+@[expose] def journalLength (image : FilesystemImage) : Nat :=
+  (image.inodes.head?.map fun entry => entry.2.size).getD 0
+
+theorem interrupted_preserves (left : Bool) (before after : FilesystemImage)
     (safe : JournalImage left before)
     (interrupted : InterruptedAttempt __TRY_REOPEN__ left before after) :
-    JournalImage left after ∧ before.highWater ≤ after.highWater := by
+    JournalImage left after ∧ before.highWater ≤ after.highWater ∧
+      journalLength after ≤ journalLength before := by
   obtain ⟨_, _, _, positive⟩ := safe
   obtain ⟨tail, masks, boot, elapsed, events, last, chosen, crashMasks, short, sameImage,
     restarted, ran, crash⟩ := interrupted
@@ -80,11 +84,14 @@ private theorem one_attempt (left : Bool) (before after : FilesystemImage)
     rw [sameImage] at restarted
     simpa only [next, Option.some.injEq] using restarted.symm
   rw [same] at ran
-  obtain ⟨bytes, recorded, advance, shape, _, _⟩ :=
+  obtain ⟨bytes, recorded, advance, shape, lengthBound, _, _⟩ :=
     reopens_after_prefix_crash before.highWater left masks.closeSucceeds tail short masks.resizeMask
       masks.syncMask masks.closeMask masks.resized masks.synchronized masks.closed masks.resize
       masks.sync masks.close positive elapsed (fun _ _ => 0) events last ran chosen crashMasks after crash
-  exact ⟨⟨bytes, recorded, shape, Nat.le_trans positive advance⟩, advance⟩
+  refine ⟨⟨bytes, recorded, shape, Nat.le_trans positive advance⟩, advance, ?_⟩
+  rw [recorded, sameImage]
+  change bytes.size ≤ (withTail left tail).size
+  rwa [packed_size]
 
 /-- Arbitrarily many interruptions preserve both acknowledged records and
 never lower the reference allocator's high-water mark. -/
@@ -95,7 +102,7 @@ theorem repeated_prefix_crashes (left : Bool) (count : Nat) (before after : File
   induction attempts with
   | zero => exact ⟨safe, le_rfl⟩
   | @next before middle count after attempt rest ih =>
-    obtain ⟨safeMiddle, advance⟩ := one_attempt left before middle safe attempt
+    obtain ⟨safeMiddle, advance, _⟩ := interrupted_preserves left before middle safe attempt
     obtain ⟨safeAfter, later⟩ := ih safeMiddle
     exact ⟨safeAfter, Nat.le_trans advance later⟩
 

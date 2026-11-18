@@ -66,7 +66,7 @@ inductive CompletedRecoveries (reopen : Reopen) :
       CompletedRecoveries reopen count middle after →
       CompletedRecoveries reopen (count + 1) before after
 
-private theorem one_completed_recovery (left : Bool) (before after : FilesystemImage)
+theorem completed_preserves (left : Bool) (before after : FilesystemImage)
     (safe : JournalImage left before)
     (attempt : CompletedRecovery __TRY_REOPEN__ before after) :
     after = ⟨names, [(1, contents left)], before.highWater + 6⟩ := by
@@ -95,7 +95,7 @@ theorem idempotent_completed_recovery (left : Bool) (count : Nat) (before after 
   induction attempts with
   | zero => exact ⟨safe, by simp, by omega⟩
   | @next before middle count after attempt rest ih =>
-    have image := one_completed_recovery left before middle safe attempt
+    have image := completed_preserves left before middle safe attempt
     have stored : JournalBytes (contents left) (contents left) :=
       ⟨⟨le_rfl, fun _ _ => rfl⟩, by omega⟩
     have safeMiddle : JournalImage left middle := by
