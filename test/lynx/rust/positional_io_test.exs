@@ -38,7 +38,7 @@ defmodule Lynx.Rust.PositionalIoTest do
 
     required =
       Enum.map(
-        ~w(patch_order patch_persists_prefix patch_write_error observe_contract observe_prefix observe_eof observe_error observe_outside),
+        ~w(patch_order patch_persists_prefix patch_sync_error patch_write_error observe_contract observe_prefix observe_eof observe_error observe_outside),
         &("Positional.Proofs." <> &1)
       )
 

@@ -39,6 +39,40 @@ theorem observe_contract (file : NativeFile) (offset : U64) (buffer : Slice U8) 
     io_protocol.positional.observe file offset buffer = readAt file buffer offset := by
   simp [io_protocol.positional.observe, io_protocol.io_core.positional.read_at, monadLift_self]
 
+private theorem patch_from_steps (file : NativeFile) (data : Slice U8) (offset : U64)
+    (env : Environment) (frame : List (Nat × String × Term))
+    (before middle after : State) (amount : Usize) (reply : core.result.Result Unit NativeIoError)
+    (separate : Separate file frame) (initial : Valid before)
+    (bounded : offset.val ≤ limit) (ready : blocked before = false)
+    (writeReady : writeStep {before with position := offset.val} data true =
+      some (.Ok amount, middle))
+    (validMiddle : Valid {middle with position := before.position})
+    (readyMiddle : blocked middle = false)
+    (syncReady : syncStep {middle with position := before.position} true = some (reply, after)) :
+    io_protocol.positional.patch file offset data (fileEnv env file before frame) =
+      (.ok (match reply with | .Ok () => .Ok amount | .Err error => .Err error),
+        fileEnv env file after frame) := by
+  have first : pollWrite file data (fileEnv env file before frame) (some offset) =
+      some (.ok (.Ok amount, file), fileEnv env file {middle with position := before.position} frame) := by
+    simp [-getHandle, pollWrite, lookup_at env file before frame separate initial,
+      ready, not_lt.mpr bounded, writeReady, no_shared_handle_at env file before frame separate,
+      store_at env file before {middle with position := before.position} frame separate]
+  have second : pollSync file (fileEnv env file {middle with position := before.position} frame) true =
+      some (.ok reply, fileEnv env file after frame) := by
+    have sameBlocked : blocked {middle with position := before.position} = false := readyMiddle
+    simp [pollSync, lookup_at env file _ frame separate validMiddle, sameBlocked,
+      syncReady, store_at env file _ after frame separate]
+  rw [patch_order]
+  unfold writeAt
+  dsimp only
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ first]
+  simp only [Result.ok_bind]
+  unfold syncData
+  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ second]
+  cases reply with
+  | Ok result => cases result; simp [Result.ok_bind, Result.ok_apply]
+  | Err error => simp [Result.ok_bind, Result.ok_apply]
+
 /-- In this independent descriptor world, successful positional writes and
 subsequent sync preserve unrelated cells and the descriptor's original cursor. -/
 theorem patch_ready (file : NativeFile) (data : Slice U8) (offset : U64)
@@ -53,24 +87,8 @@ theorem patch_ready (file : NativeFile) (data : Slice U8) (offset : U64)
     (syncReady : syncStep {middle with position := before.position} true = some (.Ok (), after)) :
     io_protocol.positional.patch file offset data (fileEnv env file before frame) =
       (.ok (.Ok amount), fileEnv env file after frame) := by
-  have first : pollWrite file data (fileEnv env file before frame) (some offset) =
-      some (.ok (.Ok amount, file), fileEnv env file {middle with position := before.position} frame) := by
-    simp [-getHandle, pollWrite, lookup_at env file before frame separate initial,
-      ready, not_lt.mpr bounded, writeReady, no_shared_handle_at env file before frame separate,
-      store_at env file before {middle with position := before.position} frame separate]
-  have second : pollSync file (fileEnv env file {middle with position := before.position} frame) true =
-      some (.ok (.Ok ()), fileEnv env file after frame) := by
-    have sameBlocked : blocked {middle with position := before.position} = false := readyMiddle
-    simp [pollSync, lookup_at env file _ frame separate validMiddle, sameBlocked,
-      syncReady, store_at env file _ after frame separate]
-  rw [patch_order]
-  unfold writeAt
-  dsimp only
-  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ first]
-  simp only [Result.ok_bind]
-  unfold syncData
-  rw [Result.wait_bind, Result.wait_ready_run _ _ _ _ _ second]
-  simp [Result.ok_bind, Result.ok_apply]
+  exact patch_from_steps file data offset env frame before middle after amount (.Ok ())
+    separate initial bounded ready writeReady validMiddle readyMiddle syncReady
 
 /-- All bytes in an acknowledged image survive any admitted crash mask.
 A short write changes only its accepted prefix at the requested offset. -/
@@ -116,6 +134,62 @@ theorem patch_persists_prefix (file : NativeFile) (data : Slice U8) (offset : U6
     obtain ⟨saved, choice, result⟩ := Option.bind_eq_some_iff.mp captured
     cases Option.some.inj result
     exact persist_same _ _ _ choice
+
+/-- A successful positional write followed by a failed synchronization reports
+that error, preserves the accepted write's visible bytes and cursor, and keeps
+exactly the persistence admitted by the failing host operation. -/
+theorem patch_sync_error (file : NativeFile) (data : Slice U8) (offset : U64)
+    (env : Environment) (frame : List (Nat × String × Term)) (before : State)
+    (amount error : Nat) (writeMask written syncMask durable : ByteArray) (rest : Term)
+    (separate : Separate file frame) (valid : Valid before)
+    (countBound : amount ≤ data.val.length) (bufferBound : data.val.length ≤ limit)
+    (positionBound : offset.val + amount ≤ limit)
+    (script : before.script = outcome "write_at" true amount writeMask
+      (outcome "sync_data" false error syncMask rest))
+    (writtenBytes : persist before.durable
+      (overwrite before.visible offset.val (bytes data) amount) writeMask = some written)
+    (syncedBytes : persist written
+      (overwrite before.visible offset.val (bytes data) amount) syncMask = some durable) :
+    let visible := overwrite before.visible offset.val (bytes data) amount
+    let after := fileEnv env file ⟨visible, durable, before.position, rest⟩ frame
+    io_protocol.positional.patch file offset data (fileEnv env file before frame) =
+      (.ok (.Err (.os error)), after) ∧
+    ∀ crashMask image, crashImage file crashMask after = some image →
+      persist durable visible crashMask = some image.bytes := by
+  intro visible after
+  let middle : State :=
+    ⟨visible, written, offset.val + amount, outcome "sync_data" false error syncMask rest⟩
+  have offsetBound : offset.val ≤ limit := by omega
+  have shifted : Valid {before with position := offset.val} := ⟨valid.1, valid.2.1, offsetBound⟩
+  have writtenValid : Valid middle :=
+    written_valid {before with position := offset.val} data amount writeMask written _ shifted
+      countBound positionBound writtenBytes
+  have admitted : persist written visible syncMask = some durable := syncedBytes
+  have fits : written.size ≤ visible.size := writtenValid.2.1
+  have durableBound : durable.size ≤ visible.size := by
+    obtain ⟨equalSize, maskFits⟩ := persist_size written visible syncMask durable admitted
+    rw [equalSize]
+    simpa only [max_eq_right fits] using maskFits
+  have finalValid : Valid (⟨visible, durable, before.position, rest⟩ : State) :=
+    ⟨writtenValid.1, durableBound, valid.2.2⟩
+  constructor
+  · apply patch_from_steps file data offset env frame before middle _ (count data amount countBound) (.Err (.os error))
+      separate valid offsetBound
+    · simp [blocked, script, outcome]
+    · simp [writeStep, script, action_outcome, countBound, not_lt.mpr bufferBound,
+        not_lt.mpr positionBound, writtenBytes, middle, visible, count]
+    · exact ⟨writtenValid.1, writtenValid.2.1, valid.2.2⟩
+    · simp [blocked, middle, outcome]
+    · simp [syncStep, middle, action_outcome, admitted]
+  · intro crashMask image captured
+    unfold crashImage at captured
+    dsimp only [after] at captured
+    rw [lookup_at env file _ frame separate finalValid] at captured
+    change (persist durable visible crashMask).bind (fun saved =>
+      some (⟨saved, after.nativeRefCounter⟩ : Image)) = some image at captured
+    obtain ⟨saved, choice, result⟩ := Option.bind_eq_some_iff.mp captured
+    cases Option.some.inj result
+    exact choice
 
 /-- An actual positional read retains the original cursor and exposes only the
 selected mutation of the buffer and the admitted background persistence step. -/
