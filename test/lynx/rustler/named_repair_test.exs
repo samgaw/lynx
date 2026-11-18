@@ -12,7 +12,7 @@ defmodule Lynx.Rustler.NamedRepairTest do
   @tag :tmp_dir
   test "verifies arbitrary named repair and the Rustler return boundary", %{tmp_dir: tmp} do
     extra =
-      ~w(NamedCloseInvariant NamedJournalCrash NamedRepairAcknowledgement NamedRepairCrash NamedRustlerRepair NamedRustlerAdapterProof
+      ~w(NamedCloseInvariant NamedInterruptedRecovery NamedJournalCrash NamedRepairAcknowledgement NamedRepairCrash NamedRustlerRepair NamedRustlerAdapterProof
       NamedRustlerLaw RecoveryScanInvariant RepairAcknowledgement RepairCrashProperties
       RepairImageInvariant RepairReturnProperties RepeatedRepairProperties)
 
@@ -49,7 +49,7 @@ defmodule Lynx.Rustler.NamedRepairTest do
              discovered.bindings.bindings
 
     for name <-
-          ~w(NamedCloseInvariant NamedRepairCrash NamedRustlerRepair NamedRustlerAdapterProof NamedRustlerLaw) do
+          ~w(NamedCloseInvariant NamedInterruptedRecovery NamedRepairCrash NamedRustlerRepair NamedRustlerAdapterProof NamedRustlerLaw) do
       path = Path.join(project, "Record/" <> name <> ".lean")
       File.write!(path, String.replace(File.read!(path), "__TRY_REOPEN__", reopen))
     end
@@ -61,6 +61,7 @@ defmodule Lynx.Rustler.NamedRepairTest do
       Record.NamedCloseInvariant.typed_close_rejects_reuse
       Record.NamedRepairCrash.typed_repair_prefix_crash
       Record.NamedRepairCrash.typed_retry_after_prefix_crashes
+      Record.NamedInterruptedRecovery.typed_retry_after_interruptions
       Record.NamedRustlerAdapterProof.arbitrary_repair_encodes
       Record.NamedRustlerLaw.concrete_raw_result)
 
