@@ -29,23 +29,17 @@ fi
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64)
     asset=aeneas-macos-aarch64.tar.gz
-    checksum=b8ddc2f99375819a171e559aa7b14fc1e47544c9e6c8686a5261e760b65173a8
-    pure_checksum=0d71e3d81d3eeaa573d48876e412811a0a01f25bfc9bc0966ea1ab65c74fd287 ;;
+    checksum=0d71e3d81d3eeaa573d48876e412811a0a01f25bfc9bc0966ea1ab65c74fd287 ;;
   Linux:aarch64)
     asset=aeneas-linux-aarch64.tar.gz
-    checksum=ee2a9e2ada0f701c00e6c6196fa872e1ae88acce979d302e2967b450feb6a553
-    pure_checksum=4af73179259ab5eb5c3a265572c3be0e9aba2ced09b1500e343d1b71defac49a ;;
+    checksum=4af73179259ab5eb5c3a265572c3be0e9aba2ced09b1500e343d1b71defac49a ;;
   Linux:x86_64)
     asset=aeneas-linux-x86_64.tar.gz
-    checksum=5e076582425aa7a9b9318e419a69306d06999317d1a9fbb45fe9d751cb102579
-    pure_checksum=139d05e5ffa25e0a08906d68134fb8144794d6f32e6d7729a5bf93419d4c6985 ;;
+    checksum=139d05e5ffa25e0a08906d68134fb8144794d6f32e6d7729a5bf93419d4c6985 ;;
   *) echo "no pinned Aeneas binary for this platform" >&2; exit 1 ;;
 esac
-release_tag=nightly-2026.11.04-2b9e3ea
-if [ "$verification_profile" != runtime ] && [ "$verification_profile" != runtime-captured ]; then
-  release_tag=build-2b9e3ea
-  checksum=$pure_checksum
-fi
+# Source-built profiles also use this release's Lean library.
+release_tag=build-2b9e3ea
 mkdir -p "$1"
 install_dir=$(CDPATH= cd -- "$1" && pwd)
 archive="$install_dir/aeneas.tar.gz"
