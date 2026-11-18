@@ -16,7 +16,7 @@ private theorem read_choice (before : State) (count : Usize) (after : State) (up
       count.val = value ∧ value ≤ 1 ∧ value ≤ before.visible.size - before.position ∧
       ¬(value = 0 ∧ before.position < before.visible.size) := by
   unfold readStep at step
-  simp only [one, Slice.from_val, List.length_singleton] at step
+  simp only [one, Slice.from_val, List.length_singleton, Bool.false_eq_true, ↓reduceIte] at step
   split at step
   · contradiction
   · cases chosen : action "read" before.script with
@@ -57,7 +57,7 @@ private theorem read_byte (before : State) (byte : UInt8) (tail : List UInt8)
   simp only [List.length_drop, Array.length_toList, List.length_cons] at length
   have countOne : value = 1 := by have := before.visible.size_data; omega
   rw [countOne] at chosen
-  have same := persist_same before.visible mask after.durable (by simpa only [stable] using accepted)
+  have same := NativeFile.persist_same before.visible mask after.durable (by simpa only [stable] using accepted)
   have expected := read_one_step before byte tail mask before.visible rest contents chosen (by simpa only [same] using accepted)
   rw [expected] at step
   simp only [Option.some.injEq, Prod.mk.injEq, core.result.Result.Ok.injEq] at step
@@ -72,7 +72,7 @@ private theorem read_eof_return (before : State) (count : Usize) (after : State)
   obtain ⟨value, mask, rest, chosen, accepted, returned, size, available, progress⟩ := read_choice before count after updated step
   have zero : value = 0 := by omega
   rw [zero] at chosen
-  have same := persist_same before.visible mask after.durable (by simpa only [stable] using accepted)
+  have same := NativeFile.persist_same before.visible mask after.durable (by simpa only [stable] using accepted)
   have expected := eof_step before mask before.visible rest eof chosen (by simpa only [same] using accepted)
   rw [expected] at step
   simp only [Option.some.injEq, Prod.mk.injEq, core.result.Result.Ok.injEq] at step
@@ -95,11 +95,10 @@ theorem read_returns (file : NativeFile) (env : Environment)
       | error exception => cases rest
       | ok output =>
           cases rest
-          unfold pollRead at ready
-          rw [lookup_at env file before frame separate valid] at ready
+          simp only [pollRead, lookup_at env file before frame separate valid] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
-          · simp only [stopped] at ready
+          · simp only [stopped, Option.any, Option.elim, Option.isSome, Bool.false_eq_true, ↓reduceIte] at ready
             cases step : readStep before buffer with
             | none => simp [step] at ready
             | some outcome =>
@@ -457,7 +456,7 @@ private theorem seek_zero_step (before : State) (offset : U64) (after : State)
           simp only [accepted, Option.bind_some] at step
           cases success
           · simp at step
-          · have same := persist_same before.visible mask bytes (by simpa only [stable] using accepted)
+          · have same := NativeFile.persist_same before.visible mask bytes (by simpa only [stable] using accepted)
             subst bytes
             simp only [↓reduceIte] at step
             split at step

@@ -38,6 +38,7 @@ defmodule Lynx.Rust.RepairImageInvariantTest do
 
     options =
       base
+      |> Keyword.put(:owned_drops, true)
       |> Keyword.put(:proof_modules, modules)
       |> Keyword.put(:required_properties, properties)
 

@@ -25,6 +25,7 @@ defmodule Lynx.Rust.RecoveryScanInvariantTest do
 
     options =
       base
+      |> Keyword.put(:owned_drops, true)
       |> Keyword.put(:proof_modules, ["Record.RecoveryScanInvariant", "Record.RecoveryScanCrash"])
       |> Keyword.put(:required_properties, properties)
 

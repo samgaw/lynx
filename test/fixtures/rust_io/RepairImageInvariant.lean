@@ -64,6 +64,7 @@ private theorem sync_preserves (before : State)
     (step : syncStep before = some (reply, after)) :
     Admitted after ∧ LogImage values after.visible ∧ LogImage values after.durable := by
   unfold syncStep at step
+  simp only [Bool.false_eq_true, ↓reduceIte] at step
   cases chosen : action "sync_all" before.script with
   | none => simp [chosen] at step
   | some choice =>

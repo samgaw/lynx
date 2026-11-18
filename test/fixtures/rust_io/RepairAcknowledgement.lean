@@ -64,6 +64,7 @@ private theorem sync_step_returns (before after : State)
     (step : syncStep before = some (.Ok (), after)) :
     after.visible = before.visible ∧ after.durable = before.visible ∧ after.position = before.position := by
   unfold syncStep at step
+  simp only [Bool.false_eq_true, ↓reduceIte] at step
   cases chosen : action "sync_all" before.script with
   | none => simp [chosen] at step
   | some choice =>
@@ -96,8 +97,7 @@ theorem synchronize_returns [heapLayout : Record.Properties.HeapLayout] (file : 
       | error exception => cases continuation
       | ok output =>
           cases continuation
-          unfold pollSync at ready
-          rw [lookup_admitted env file before frame separate valid] at ready
+          simp only [pollSync, lookup_admitted env file before frame separate valid] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
           · simp only [stopped] at ready
@@ -260,7 +260,7 @@ theorem acknowledged_crash_image (env : Environment) (file : NativeFile)
   obtain ⟨bytes, accepted, equal⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj equal
   rw [v, d] at accepted
-  have exactImage := persist_same (disk (logBytes values)) mask bytes accepted
+  have exactImage := NativeFile.persist_same (disk (logBytes values)) mask bytes accepted
   exact ⟨records, exactImage, by simpa only [exactImage, v] using valid.1⟩
 
 /-- Two successful actual repairs under arbitrary host scripts return the same
