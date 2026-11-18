@@ -20,7 +20,7 @@ theorem constructed_image (env : Environment) (counter : Nat)
     filesystemCrashImage Record.ConstructorLogProperties.names [(1,mask)]
       (Record.ConstructedConcurrentProperties.world env counter phase mutex state) =
       some ⟨Record.ConstructorLogProperties.names,[(1,state.visible)],counter⟩ := by
-  have same := persist_same state.visible mask saved (stable ▸ accepted)
+  have same := NativeFile.persist_same state.visible mask saved (stable ▸ accepted)
   subst saved
   have decoded := Record.Properties.decode_encode {state with position := 0,script := .nil}
     ⟨valid.1,valid.2.1,Nat.zero_le _⟩

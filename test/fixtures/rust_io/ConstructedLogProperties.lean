@@ -92,7 +92,8 @@ theorem write_poll (env : Environment) (before after : State) (value : U16)
       some (.ok (.Ok 4#usize,⟨2⟩),locked env after) := by
   unfold pollWrite locked
   rw [file_lookup env 10 true (held env) before (by decide) valid]
-  simp only [ready,Bool.false_eq_true,↓reduceIte,step]
+  simp only [ready, Bool.false_eq_true, ↓reduceIte, Option.any_none, Option.elim_none,
+    Option.isSome_none, step]
   simp only [show getHandle (⟨2⟩ : NativeFile) handleTypeName (world env 10 true (held env) before) = none by
     simp [getHandle,world,owners,NativeResourceArc.vmCells,handleTypeName,writableHandleTypeName]]
   congr 2

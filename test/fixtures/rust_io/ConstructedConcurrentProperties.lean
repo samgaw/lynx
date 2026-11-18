@@ -94,7 +94,8 @@ theorem write_poll (env : Environment) (counter : Nat) (phase : Phase) (mutex : 
       some (.ok (.Ok 4#usize,⟨2⟩),world env counter phase mutex after) := by
   unfold pollWrite
   rw [file_lookup env counter phase mutex before bound valid]
-  simp only [ready,Bool.false_eq_true,↓reduceIte,step]
+  simp only [ready, Bool.false_eq_true, ↓reduceIte, Option.any_none, Option.elim_none,
+    Option.isSome_none, step]
   simp only [show getHandle (⟨2⟩ : NativeFile) handleTypeName (world env counter phase mutex before) = none by
     cases phase <;> simp [getHandle,world,shared,frame,pinnedFrame,decodedFrame,overlappingFrame,remainingFrame,NativeResourceArc.vmCells,handleTypeName,writableHandleTypeName]]
   congr 2

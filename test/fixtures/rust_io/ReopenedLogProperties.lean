@@ -27,22 +27,25 @@ attribute [local cbv_eval] Record.OverlappingLogProperties.caller_contract
       .cons (.tuple #[.atom "open",.bitstring fileName 0,.atom "ok",.integer 0,fileScript rest]) .nil⟩),
     (1,inodeTypeName,encode ⟨torn,torn,0,.nil⟩)] }
 @[expose] def initial : Environment := initialFor .nil
+@[expose] def finalEnvironment {α : Type} : Concurrent.Config α → Environment
+  | .start env _ _ => env
+  | .running state .. => state.nativeView []
+
+@[expose] def repairedState (env : Environment) : Bool :=
+  match lookup ⟨2⟩ env with
+  | some file =>
+    let payload : shared_log.LogResource := ⟨⟨3⟩⟩
+    file.visible.data == repaired.data && file.durable.data == repaired.data &&
+    file.position == 6 && env.nativeRefCounter == 7 &&
+    (NativeResourceArc.vmCells payload 4 6 7).all (fun cell => env.nativeHeap.contains cell) &&
+    !env.nativeHeap.any (fun cell => cell.1 == 5) &&
+    env.nativeHeap.contains (3, NativeMutex.typeName NativeFile,
+      .tuple #[.atom "unlocked", .atom "unpoisoned", .nativeReference 2])
+  | none => false
+
 @[expose] def accepted (config : Concurrent.Config Term) : Bool :=
   match config.outcome with
-  | .ok (.nativeReference 7) =>
-    let env := match config with
-      | .start env _ => env
-      | .running state .. => state.nativeView []
-    match lookup ⟨2⟩ env with
-    | some file =>
-      let payload : shared_log.LogResource := ⟨⟨3⟩⟩
-      file.visible.data == repaired.data && file.durable.data == repaired.data &&
-      file.position == 6 && env.nativeRefCounter == 7 &&
-      (NativeResourceArc.vmCells payload 4 6 7).all (fun cell => env.nativeHeap.contains cell) &&
-      !env.nativeHeap.any (fun cell => cell.1 == 5) &&
-      env.nativeHeap.contains (3,NativeMutex.typeName NativeFile,
-        .tuple #[.atom "unlocked",.atom "unpoisoned",.nativeReference 2])
-    | none => false
+  | .ok (.nativeReference 7) => repairedState (finalEnvironment config)
   | _ => false
 
 set_option maxRecDepth 8192 in
@@ -86,9 +89,7 @@ rollback must retain exactly the repaired prefix. -/
 
 @[expose] def appendAccepted (success : Bool) (config : Concurrent.Config Bool) : Bool :=
   match config.outcome with
-  | .ok returned => returned == success && appendState success (match config with
-      | .start env _ => env
-      | .running state .. => state.nativeView [])
+  | .ok returned => returned == success && appendState success (finalEnvironment config)
   | _ => false
 
 set_option maxRecDepth 8192 in
@@ -119,9 +120,7 @@ theorem short_checked : Concurrent.checkPost (appendAccepted false) 768
 state established by its implementation-linked properties. -/
 @[expose] def appendedLawAccepted (success : Bool) (config : Concurrent.Config Term) : Bool :=
   match config.outcome with
-  | .ok (.atom "true") => appendState success (match config with
-      | .start env _ => env
-      | .running state .. => state.nativeView [])
+  | .ok (.atom "true") => appendState success (finalEnvironment config)
   | _ => false
 
 theorem appended_law_outcome (config : Concurrent.Config Term)
@@ -133,7 +132,7 @@ theorem appended_law_outcome (config : Concurrent.Config Term)
 
 @[expose] def lawAccepted (config : Concurrent.Config Term) : Bool :=
   match config.outcome with
-  | .ok (.atom "true") => true
+  | .ok (.atom "true") => repairedState (finalEnvironment config)
   | _ => false
 
 theorem accepted_outcome (config : Concurrent.Config Term)

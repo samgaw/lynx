@@ -20,7 +20,7 @@ theorem stable_lookup_image (file : NativeFile) (env : Environment)
     some (⟨durable, env.nativeRefCounter⟩ : Image)) = some image at captured
   obtain ⟨durable, accepted, record⟩ := Option.bind_eq_some_iff.mp captured
   cases Option.some.inj record
-  exact ⟨persist_same state.visible mask durable (stable ▸ accepted), rfl⟩
+  exact ⟨NativeFile.persist_same state.visible mask durable (stable ▸ accepted), rfl⟩
 
 /-- The actual extracted recovery loop returns every acknowledged payload from
 an admitted synchronized inode image, irrespective of resource owners and locks
