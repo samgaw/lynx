@@ -3,6 +3,37 @@ public import Resource.Extraction.Funs
 public section
 open Lynx Aeneas Aeneas.Std effects_native
 namespace Resource.Properties
+open NativeResourceArc
+
+-- The compiler-certified scalar payload has no observable finalizer.
+private theorem plain_cleanup (value : ScalarResource) :
+    NativeResourceCleanup.cleanup value = Result.ok () := rfl
+
+private theorem drop_scalar (handle : NativeResourceArc ScalarResource) :
+    NativeOwnedDrop.drop handle = release handle := by
+  change releaseOwned handle = release handle
+  simp only [releaseOwned, release, takeOwner, Result.nativeModify_bind]
+  have state : ownedState handle = ownerState handle := by
+    funext env
+    unfold ownedState ownerState
+    cases found : ownership handle env with
+    | none => rfl
+    | some own =>
+      obtain ⟨count, value⟩ := own
+      by_cases last : count = 1 <;>
+        simp [last, show NativeResourceCleanup.observable (α := ScalarResource) = false from rfl]
+  rw [state]
+  congr 1
+  funext result
+  cases result with
+  | error error => rfl
+  | ok final => cases final <;> simp [plain_cleanup]
+
+private theorem allocation_next {α : Type} (value : ScalarResource)
+    (next : NativeResourceArc ScalarResource → NativeM α) (env : Environment) :
+    (newOwned value >>= next) env = (new value >>= next) env := by
+  by_cases registered : typeName ScalarResource ∈ env.nativeResourceTypes <;>
+    simp [newOwned, new, registered, plain_cleanup, Result.nativeGet_bind, bind_assoc, NativeM.fail]
 
 theorem counter_reader (counter : effects_core.Counter) :
     effects_core.counter_value counter = Result.ok counter.value := by
@@ -23,14 +54,14 @@ theorem retained_value (value : U64) (env : Environment)
     (ScalarResource.mk (effects_core.Counter.mk value))
     (fun resource => Result.ok resource.counter.value) env registered empty
   simpa [scalar_resource_cycle, scalar_resource_new, scalar_resource_clone,
-    resource_reader, NativeDrop.drop, NativeM.ok] using cycle
+    resource_reader, drop_scalar, allocation_next, bind_assoc, NativeM.ok] using cycle
 
 theorem unregistered_panics (value : U64) (env : Environment)
     (absent : NativeResourceArc.typeName ScalarResource ∉ env.nativeResourceTypes) :
     scalar_resource_cycle value env =
       (.error (.error (.atom "rust_panicked")), env) := by
-  simp [scalar_resource_cycle, scalar_resource_new, NativeResourceArc.new,
-    absent, NativeM.fail]
+  simp [scalar_resource_cycle, scalar_resource_new, allocation_next,
+    NativeResourceArc.new, absent, NativeM.fail]
 
 theorem scope_value (value : U64) (env : Environment)
     (registered : NativeResourceArc.typeName ScalarResource ∈ env.nativeResourceTypes)
@@ -66,6 +97,6 @@ theorem vm_owned_roundtrip (value : U64) (env : Environment)
   have cycle := NativeResourceArc.vm_roundtrip_next
     (ScalarResource.mk (effects_core.Counter.mk value))
     (fun resource same => Result.ok (resource.counter.value, same)) env registered empty
-  simpa [scalar_resource_new, resource_reader, bind_assoc, NativeM.ok] using cycle
+  simpa [scalar_resource_new, resource_reader, allocation_next, bind_assoc, NativeM.ok] using cycle
 
 end Resource.Properties

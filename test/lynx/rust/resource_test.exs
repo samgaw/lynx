@@ -4,12 +4,14 @@ defmodule Lynx.Rust.ResourceTest do
   @tools System.get_env("LYNX_AENEAS_DIR")
   @moduletag timeout: 900_000
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
-               String.contains?(
-                 File.read!(Path.join(@tools, "lynx-toolchain")),
-                 "effectful-calls-v1"
+               (
+                 manifest = File.read!(Path.join(@tools, "lynx-toolchain"))
+
+                 String.contains?(manifest, "+owned-drops-v1") and
+                   String.contains?(manifest, "+effectful-calls-v1")
                )
   unless @available,
-    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned native runtime backend")
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned owned-drops runtime backend")
 
   @tag :tmp_dir
   test "verifies extracted resource aliasing, final destruction and cross-crate reads", %{
@@ -38,6 +40,7 @@ defmodule Lynx.Rust.ResourceTest do
         Enum.map(~w(scalar_resource_cycle scalar_resource_scope), &("effects_native::" <> &1)),
       tools: @tools,
       execution: :runtime,
+      owned_drops: true,
       lean_project: project,
       module_prefix: "Resource.Extraction",
       build_dir: Path.join(tmp, "build"),
@@ -115,6 +118,7 @@ defmodule Lynx.Rust.ResourceTest do
       Lynx.Rustler.prepare!(workspace, "effects-native",
         tools: @tools,
         execution: :runtime,
+        owned_drops: true,
         lean_project: project,
         module_prefix: "Resource.Facade",
         build_dir: Path.join(tmp, "nif-build"),
