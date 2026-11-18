@@ -73,6 +73,7 @@ source_dir="$install_dir/charon-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/charon "$source_dir"
 git -C "$source_dir" checkout --detach 7b462d9159db2ed3015162352183906a30bfafc6
 git -C "$source_dir" apply "$script_dir/patches/charon-nested-proof-roots.patch"
+cp "$script_dir/tests/nested_root_aliases.rs" "$source_dir/charon/tests/nested_root_aliases.rs"
 if [ "$verification_profile" = runtime ] || [ "$verification_profile" = runtime-captured ]; then
   git -C "$source_dir" apply "$script_dir/patches/charon-needs-drop.patch"
   git -C "$source_dir" apply "$script_dir/patches/charon-immediate-futures.patch"
@@ -101,6 +102,8 @@ rustup run nightly-2026-09-17 cargo build --locked --release \
   --no-default-features --features rustc --bin charon --bin charon-driver
 IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
   --no-default-features --features rustc --test ui -- nested-function-proof-root
+IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
+  --no-default-features --features rustc --test nested_root_aliases
 if [ "$verification_profile" = runtime ] || [ "$verification_profile" = runtime-captured ]; then
   IN_CI=1 rustup run nightly-2026-09-17 cargo test --locked --release \
     --no-default-features --features rustc --test crate_data -- needs_drop

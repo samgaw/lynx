@@ -1,7 +1,7 @@
 diff --git i/charon/src/bin/charon-driver/translate/resolve_path.rs w/charon/src/bin/charon-driver/translate/resolve_path.rs
 --- i/charon/src/bin/charon-driver/translate/resolve_path.rs
 +++ w/charon/src/bin/charon-driver/translate/resolve_path.rs
-@@ -150,7 +150,38 @@ pub fn def_path_def_ids<'a, 'tcx>(
+@@ -150,7 +150,48 @@ pub fn def_path_def_ids<'a, 'tcx>(
          } else {
              let nameable_children = items.iter().copied().flat_map(|def_id| {
                  let hax_def: Arc<hax::FullDef<'tcx>> = def_id.sinto(s).full_def(s);
@@ -31,13 +31,23 @@ diff --git i/charon/src/bin/charon-driver/translate/resolve_path.rs w/charon/src
 +                            let name = tcx
 +                                .opt_item_name(child)
 +                                .unwrap_or_else(|| Symbol::intern("_"));
-+                            children.push((name, child.sinto(s)));
++                            let matches_segment = match elem {
++                                PatElem::Ident { name: target, .. } => name.as_str() == target,
++                                PatElem::Glob => true,
++                                PatElem::Impl(_) => false,
++                            };
++                            if matches_segment
++                                && !children.iter().any(|(existing_name, existing)| {
++                                    *existing_name == name
++                                        && existing.as_real_def_id() == Some(child)
++                                })
++                            {
++                                children.push((name, child.sinto(s)));
++                            }
 +                        }
 +                    }
 +                }
 +                children
-+                    .into_iter()
-+                    .unique_by(|(_, child)| child.as_real_def_id())
              });
              match elem {
                  PatElem::Ident { name: elem, .. } => {
