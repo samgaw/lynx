@@ -5,6 +5,7 @@ defmodule LynxWorkspaceExample do
     [
       workspace: Path.join(@root, "native"),
       package: "example-nif",
+      root_attribute: "verify::start_from",
       lean_project: Path.join(@root, "proofs"),
       module_prefix: "WorkspaceExample.Extraction",
       build_dir: Path.join(@root, ".build"),

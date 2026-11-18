@@ -1,12 +1,12 @@
 #!/bin/sh
-# Install pinned extractors. --unpatched and --captured install release binaries.
-# The default adds exact nested Charon roots. Codec and runtime profiles add
-# compiler changes for the features they support. All use the release Lean library.
+# Install pinned release extractors by default. --pure adds exact nested Charon
+# roots. Codec and runtime profiles add compiler changes for the features they
+# support. All use the release Lean library.
 set -eu
 
-verification_profile=pure
+verification_profile=unpatched
 case "${1-}" in
-  --pure) shift ;;
+  --pure) verification_profile=pure; shift ;;
   --unpatched) verification_profile=unpatched; shift ;;
   --captured) verification_profile=captured; shift ;;
   --recover-joins) verification_profile=join-recovery; shift ;;
@@ -62,7 +62,7 @@ if [ "$verification_profile" = unpatched ] || [ "$verification_profile" = captur
   printf '%s\n' "profile=$verification_profile" 'aeneas=build-2b9e3ea' \
     'charon=build-2b9e3ea-release' 'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
   echo "Installed release binaries without Lynx patches. Set LYNX_AENEAS_DIR to $install_dir"
-  echo "Nested NIF roots require root_attribute selection and annotated Rust functions."
+  echo "For nested Rustler bodies, configure root_attribute and annotate the selected Rust functions."
   exit 0
 fi
 source_dir="$install_dir/charon-source"
