@@ -178,7 +178,8 @@ defmodule LynxDerivedNativeFixture.Laws do
     set_option maxRecDepth 8192 in
     have decoded : atomic_nif.derived.Request.Insts.RustlerTypesDecoder.decode (.tuple #[.atom "false", .integer 11]) =
         Lynx.NativeM.ok (.Err (.encoded true (fun _ =>
-          Aeneas.Std.RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0)))) := by
+          Aeneas.Std.RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0))
+          (Aeneas.Std.RustM.ok ()))) := by
       have size : "Could not decode field expected on Request".utf8ByteSize ≤ 4294967295 := by decide +kernel
       have encoded (env : Lynx.Rustler.Env) :
           Lynx.Rustler.Encoding.string "Could not decode field expected on Request" env =
@@ -221,7 +222,8 @@ defmodule LynxDerivedNativeFixture.Laws do
     set_option maxRecDepth 8192 in
     have decoded : atomic_nif.derived.Request.Insts.RustlerTypesDecoder.decode (.tuple #[.integer 7, .integer (-1)]) =
         Lynx.NativeM.ok (.Err (.encoded true (fun _ =>
-          Aeneas.Std.RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 114, 101, 112, 108, 97, 99, 101, 109, 101, 110, 116, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0)))) := by
+          Aeneas.Std.RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 114, 101, 112, 108, 97, 99, 101, 109, 101, 110, 116, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0))
+          (Aeneas.Std.RustM.ok ()))) := by
       have size : "Could not decode field replacement on Request".utf8ByteSize ≤ 4294967295 := by decide +kernel
       have encoded (env : Lynx.Rustler.Env) :
           Lynx.Rustler.Encoding.string "Could not decode field replacement on Request" env =
@@ -266,7 +268,8 @@ defmodule LynxDerivedNativeFixture.Laws do
     set_option maxRecDepth 8192 in
     have decoded : atomic_nif.derived.Request.Insts.RustlerTypesDecoder.decode (.tuple #[.atom "false", .atom "invalid"]) =
         Lynx.NativeM.ok (.Err (.encoded true (fun _ =>
-          Aeneas.Std.RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0)))) := by
+          Aeneas.Std.RustM.ok (.bitstring ⟨#[67, 111, 117, 108, 100, 32, 110, 111, 116, 32, 100, 101, 99, 111, 100, 101, 32, 102, 105, 101, 108, 100, 32, 101, 120, 112, 101, 99, 116, 101, 100, 32, 111, 110, 32, 82, 101, 113, 117, 101, 115, 116]⟩ 0))
+          (Aeneas.Std.RustM.ok ()))) := by
       have size : "Could not decode field expected on Request".utf8ByteSize ≤ 4294967295 := by decide +kernel
       have encoded (env : Lynx.Rustler.Env) :
           Lynx.Rustler.Encoding.string "Could not decode field expected on Request" env =
