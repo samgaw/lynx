@@ -30,7 +30,8 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
 
     modules =
       ~w(ReopenedLogProperties ReopenedRepairPrefix RepeatedRepairProperties
-      EncodedPrefixRecovery ConcurrentRollback SerialRepair CompleteNamedRepair NamedSerialRecovery)
+      EncodedPrefixRecovery ConcurrentRollback SerialRepair CompleteNamedRepair NamedSerialRecovery
+      CompleteReopenAppend ContinueSerialJournal)
 
     for module <- modules do
       source =
@@ -51,7 +52,8 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
       ) ++
         [
           "Record.SerialRepair.retry_serial_log",
-          "Record.NamedSerialRecovery.named_retry_after_serial_writes"
+          "Record.NamedSerialRecovery.named_retry_after_serial_writes",
+          "Record.ContinueSerialJournal.survives_append_after_serial_recovery"
         ]
 
     options =
@@ -85,12 +87,37 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
              end)
     end
 
-    for implementation <- [append["lean_name"], reopen["lean_name"]] do
+    for implementation <- [append["lean_name"], reopen["lean_name"]],
+        theorem <- [
+          "Record.NamedSerialRecovery.named_retry_after_serial_writes",
+          "Record.ContinueSerialJournal.survives_append_after_serial_recovery"
+        ] do
       assert Enum.any?(prepared.verification.guarantees, fn evidence ->
                evidence.kind == :rust_implementation and evidence.lean_name == implementation and
-                 evidence.theorem ==
-                   "Record.NamedSerialRecovery.named_retry_after_serial_writes"
+                 evidence.theorem == theorem
              end)
+    end
+
+    continuation = Path.join(project, "Record/ContinueSerialJournal.lean")
+    original_continuation = File.read!(continuation)
+
+    lost_commit =
+      String.replace(
+        original_continuation,
+        "final = ⟨names, [(1, finalBytes left committed)], final.highWater⟩",
+        "final = ⟨names, [(1, completeBytes left)], final.highWater⟩"
+      )
+
+    refute lost_commit == original_continuation
+
+    try do
+      File.write!(continuation, lost_commit)
+
+      assert_raise RuntimeError, ~r/ContinueSerialJournal\.lean:\d+:/, fn ->
+        Lynx.Rust.Project.build!(project, ["Record.ContinueSerialJournal"])
+      end
+    after
+      File.write!(continuation, original_continuation)
     end
 
     specification = Path.join(project, "Record/ConcurrentRollback.lean")

@@ -67,7 +67,8 @@ private theorem checked_complete (counter : Nat) (left : Bool) (positive : 1 ≤
       (.start (registered (cold counter bytes true)) (finishComplete __REOPEN__) elapsed) = true := by
   cases left <;> cbv
 
-private theorem capture_exact (counter : Nat) (bytes : ByteArray) (config : Concurrent.Config Term)
+/-- A crash of the synchronized named journal retains both the namespace and exact bytes. -/
+theorem capture_exact (counter : Nat) (bytes : ByteArray) (config : Concurrent.Config Term)
     (safe : exactState counter bytes config = true) (chosen : Names)
     (masks : List (Nat × ByteArray)) (image : FilesystemImage)
     (crash : filesystemCrashImage chosen masks (finalEnvironment config) = some image) :
