@@ -30,7 +30,7 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
 
     modules =
       ~w(ReopenedLogProperties ReopenedRepairPrefix RepeatedRepairProperties
-      EncodedPrefixRecovery ConcurrentRollback SerialRepair)
+      EncodedPrefixRecovery ConcurrentRollback SerialRepair CompleteNamedRepair NamedSerialRecovery)
 
     for module <- modules do
       source =
@@ -48,7 +48,11 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
         ~w(reopening_supplies_resource prefixes_checked all_prefixes_safe recover_observed
         terminal_serializes recover_serial_log),
         &("Record.ConcurrentRollback." <> &1)
-      ) ++ ["Record.SerialRepair.retry_serial_log"]
+      ) ++
+        [
+          "Record.SerialRepair.retry_serial_log",
+          "Record.NamedSerialRecovery.named_retry_after_serial_writes"
+        ]
 
     options =
       options
@@ -78,6 +82,14 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
       assert Enum.any?(prepared.verification.guarantees, fn evidence ->
                evidence.kind == :rust_implementation and evidence.lean_name == implementation and
                  evidence.theorem == "Record.SerialRepair.retry_serial_log"
+             end)
+    end
+
+    for implementation <- [append["lean_name"], reopen["lean_name"]] do
+      assert Enum.any?(prepared.verification.guarantees, fn evidence ->
+               evidence.kind == :rust_implementation and evidence.lean_name == implementation and
+                 evidence.theorem ==
+                   "Record.NamedSerialRecovery.named_retry_after_serial_writes"
              end)
     end
 
