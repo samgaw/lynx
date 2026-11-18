@@ -55,6 +55,21 @@ fn observe_nif(resource: ResourceArc<OffsetFile>, offset: u64) -> Option<u8> {
     }
 }
 
+/// Return a complete little-endian record, or no record on a read failure.
+#[cfg(feature = "positional-exact-read")]
+#[rustler::nif(name = "observe_word_at", schedule = "DirtyIo")]
+fn observe_word_nif(resource: ResourceArc<OffsetFile>, offset: u64) -> Option<u16> {
+    let reply = io_protocol::positional::observe_word(&resource.file, offset);
+    drop(resource);
+    match reply {
+        Ok(word) => Some(word),
+        Err(error) => {
+            drop(error);
+            None
+        }
+    }
+}
+
 /// Acknowledge a whole byte range only after the last write is synchronized.
 #[cfg(feature = "positional-write-all")]
 #[rustler::nif(name = "patch_all_at", schedule = "DirtyIo")]
