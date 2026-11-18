@@ -14,7 +14,7 @@ private theorem bytes_equal (left right : ByteArray) (equal : (left == right) = 
 
 private theorem same_prefix (data : ByteArray) : Prefix data data := ⟨le_rfl, fun _ _ => rfl⟩
 
-private theorem base_image (data : ByteArray) (admitted : admittedBytes data = true) :
+theorem base_image (data : ByteArray) (admitted : admittedBytes data = true) :
     Prefix original data ∧ data.size ≤ limit := by
   simp only [admittedBytes, Bool.or_eq_true] at admitted
   rcases admitted with ((((a | a) | a) | a) | a) | a
@@ -49,17 +49,17 @@ private theorem second_prefix (data : ByteArray) (admitted : (data == secondOnly
 
 /-- A shared encoded prefix contains every observed acknowledgement. Observation
 order is irrelevant, and a prefix may also include an unobserved durable append. -/
-private theorem common_records (env : Environment) (file : State)
+theorem common_records (hasFirst hasSecond : Bool) (file : State)
     (v : admittedBytes file.visible = true) (d : admittedBytes file.durable = true)
-    (first : (!acknowledged 19 env || firstProtected file.visible file.durable) = true)
-    (second : (!acknowledged 23 env || secondProtected file.visible file.durable) = true)
-    (both : (!(acknowledged 19 env && acknowledged 23 env) || bothProtected file.visible file.durable) = true) :
+    (first : (!hasFirst || firstProtected file.visible file.durable) = true)
+    (second : (!hasSecond || secondProtected file.visible file.durable) = true)
+    (both : (!(hasFirst && hasSecond) || bothProtected file.visible file.durable) = true) :
     ∃ values : List U16, values.length ≤ 262144 ∧ 13#u16 ∈ values ∧
-      (acknowledged 19 env = true → 19#u16 ∈ values) ∧
-      (acknowledged 23 env = true → 23#u16 ∈ values) ∧
+      (hasFirst = true → 19#u16 ∈ values) ∧
+      (hasSecond = true → 23#u16 ∈ values) ∧
       Prefix (disk (logBytes values)) file.visible ∧ Prefix (disk (logBytes values)) file.durable := by
-  by_cases a : acknowledged 19 env = true
-  · by_cases b : acknowledged 23 env = true
+  by_cases a : hasFirst = true
+  · by_cases b : hasSecond = true
     · have protectedImages : bothProtected file.visible file.durable = true := by simpa [a, b] using both
       simp only [bothProtected, Bool.or_eq_true, Bool.and_eq_true] at protectedImages
       rcases protectedImages with pair | pair
@@ -83,7 +83,7 @@ private theorem common_records (env : Environment) (file : State)
         refine ⟨[13#u16,23#u16,19#u16], by decide, by simp, by simp, by simp, ?_, ?_⟩
         · rw [v]; exact same_prefix _
         · rw [d]; exact same_prefix _
-  · by_cases b : acknowledged 23 env = true
+  · by_cases b : hasSecond = true
     · have protectedImages : secondProtected file.visible file.durable = true := by simpa [b] using second
       simp only [secondProtected, Bool.or_eq_true, Bool.and_eq_true] at protectedImages
       rcases protectedImages with pair | pair
@@ -122,7 +122,8 @@ theorem recover_acknowledgements (elapsed : PID → Nat → Nat) (events : List 
   split at retained
   · rename_i file found
     simp only [Bool.and_eq_true] at retained
-    obtain ⟨values, capacity, original, first, second, v, d⟩ := common_records (snapshot last) file
+    obtain ⟨values, capacity, original, first, second, v, d⟩ := common_records
+      (acknowledged 19 (snapshot last)) (acknowledged 23 (snapshot last)) file
       retained.1.1.1.1 retained.1.1.1.2 retained.1.1.2 retained.1.2 retained.2
     unfold crashImage at captured
     rw [found] at captured

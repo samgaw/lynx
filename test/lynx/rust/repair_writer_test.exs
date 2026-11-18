@@ -22,13 +22,20 @@ defmodule Lynx.Rust.RepairWriterTest do
         "RepairWriterObserver",
         "ConcurrentRepairWriterInvariant",
         "EncodedPrefixRecovery",
-        "ConcurrentRepairWriterRecovery"
+        "ConcurrentRepairWriterRecovery",
+        "NamedJournalCrash",
+        "NamedConcurrentRepairWriter",
+        "NamedConcurrentWriterCrash",
+        "SharedReadProperties",
+        "NamedConcurrentWriterRecovery"
       ])
 
     modules =
       ~w(Record.RepairWriterProperties Record.RepairWriterObserver
       Record.ConcurrentRepairWriterInvariant Record.EncodedPrefixRecovery
-      Record.ConcurrentRepairWriterRecovery)
+      Record.ConcurrentRepairWriterRecovery Record.NamedJournalCrash
+      Record.NamedConcurrentRepairWriter Record.NamedConcurrentWriterCrash
+      Record.SharedReadProperties Record.NamedConcurrentWriterRecovery)
 
     properties = ~w(Record.RepairWriterProperties.repair_append_contract
       Record.RepairWriterProperties.critical_contract
@@ -36,10 +43,15 @@ defmodule Lynx.Rust.RepairWriterTest do
       Record.EncodedPrefixRecovery.recover_prefix
       Record.EncodedPrefixRecovery.restart_prefix
       Record.ConcurrentRepairWriterRecovery.recover_acknowledgements
-      Record.ConcurrentRepairWriterRecovery.terminal_recovery)
+      Record.ConcurrentRepairWriterRecovery.terminal_recovery
+      Record.NamedConcurrentRepairWriter.named_prefixes_checked
+      Record.NamedConcurrentWriterCrash.prefix_crash
+      Record.NamedConcurrentWriterCrash.terminal_crash
+      Record.NamedConcurrentWriterRecovery.recover_acknowledgements)
 
     options =
       base
+      |> Keyword.update!(:roots, &["io_core::open_readonly" | &1])
       |> Keyword.put(:proof_modules, modules)
       |> Keyword.put(:required_properties, properties)
 
@@ -51,6 +63,16 @@ defmodule Lynx.Rust.RepairWriterTest do
                result.verification.guarantees,
                &(&1.kind == :cross_crate_contract and &1.theorem == property)
              )
+    end
+
+    recovery = "Record.NamedConcurrentWriterRecovery.recover_acknowledgements"
+
+    for implementation <- ~w(io_protocol::locked_repair_and_append io_core::open_readonly
+          io_protocol::recover_log) do
+      assert Enum.any?(result.verification.guarantees, fn evidence ->
+               evidence.kind == :rust_implementation and evidence.theorem == recovery and
+                 evidence.rust_name == implementation
+             end)
     end
 
     assert [%{status: :ok, cached: true}] =
@@ -66,16 +88,35 @@ defmodule Lynx.Rust.RepairWriterTest do
     property = Path.join(project, "Record/ConcurrentRepairWriterRecovery.lean")
     source = File.read!(property)
 
-    for {correct, wrong} <- [
-          {"13#u16 ∈ values", "14#u16 ∈ values"},
-          {"image.bytes = disk (logBytes values)", "image.bytes = torn"}
-        ] do
-      broken = String.replace(source, correct, wrong)
-      refute broken == source
-      File.write!(property, broken)
-      error = assert_raise RuntimeError, fn -> Project.build!(project, modules) end
-      assert error.message =~ "ConcurrentRepairWriterRecovery.lean:"
-      refute error.message =~ "Unknown identifier"
+    try do
+      for {correct, wrong} <- [
+            {"13#u16 ∈ values", "14#u16 ∈ values"},
+            {"image.bytes = disk (logBytes values)", "image.bytes = torn"}
+          ] do
+        broken = String.replace(source, correct, wrong)
+        refute broken == source
+        File.write!(property, broken)
+        error = assert_raise RuntimeError, fn -> Project.build!(project, modules) end
+        assert error.message =~ "ConcurrentRepairWriterRecovery.lean:"
+        refute error.message =~ "Unknown identifier"
+      end
+    after
+      File.write!(property, source)
+    end
+
+    named = Path.join(project, "Record/NamedConcurrentWriterRecovery.lean")
+    original_named = File.read!(named)
+
+    try do
+      false_record = String.replace(original_named, "13#u16 ∈ values", "14#u16 ∈ values")
+      refute false_record == original_named
+      File.write!(named, false_record)
+
+      assert_raise RuntimeError, ~r/NamedConcurrentWriterRecovery\.lean:\d+:/, fn ->
+        Project.build!(project, ["Record.NamedConcurrentWriterRecovery"])
+      end
+    after
+      File.write!(named, original_named)
     end
 
     for extra <- [
