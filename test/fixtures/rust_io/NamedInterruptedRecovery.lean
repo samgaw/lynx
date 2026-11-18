@@ -8,9 +8,9 @@ open Aeneas Aeneas.Std Lynx io_native io_native.io_protocol
 namespace Record.NamedInterruptedRecovery
 open NativeFile
 open Record.NamedRepairCrash (JournalImage InterruptedRepair interrupted_preserves boot_from_image registerLog)
-open Record.NamedCloseInvariant (typed_close_crash_preserves)
+open Record.NamedCloseInvariant (typed_close_crash_preserves typed_repair_error_reports ioErrorCell openedWithError)
 open Record.NamedJournalCrash (namedJournal)
-open Record.NamedRustlerRepair (nameBytes boot opened openScript arbitrary_repair_persists)
+open Record.NamedRustlerRepair (nameBytes boot bootWithFrame opened openScript arbitrary_repair_persists)
 
 /-- A crash observes the actual consuming close reached after the typed
 facade's extracted repair reports an error or rejects its record budget. -/
@@ -44,12 +44,56 @@ private theorem close_interruption_preserves (values : List U16)
   rw [captured]
   exact ⟨⟨by simp, bytes, retained, fits, rfl⟩, rfl⟩
 
+/-- A restart after the compiled Rustler call has reported a repair error.
+The host admits a fresh error capability above the captured high-water mark.
+The descriptor open, close and typed conversion complete before power loss. -/
+@[expose] def ReportedRepairFailure (before after : FilesystemImage) : Prop :=
+  ∃ (data : ByteArray) (choices rest : Term) (maximum : U32) (middle closed world : Environment)
+    (encode : NativeResourceArc shared_log.LogResource → Result Term) (names : Names)
+    (masks : List (Nat × ByteArray)),
+    before = ⟨namedJournal nameBytes, [(1, data)], before.highWater⟩ ∧
+    Result.ReadyPrefix
+      (repair_log ⟨before.highWater + 2⟩ (UScalar.cast .Usize maximum))
+      (openedWithError (before.highWater + 1) (before.highWater + 1) data choices rest)
+      (.ok (.Err (.os (before.highWater + 1)), ⟨before.highWater + 2⟩)) middle ∧
+    Result.ReadyPrefix (NativeOwnedDrop.drop (⟨before.highWater + 2⟩ : NativeFile)) middle (.ok ()) closed ∧
+    (Rustler.withNativeResult (__TRY_REOPEN__ maximum) encode)
+      (bootWithFrame (before.highWater + 1) data choices rest [ioErrorCell (before.highWater + 1)]) =
+      (.error (.error (.atom "journal_io")), world) ∧
+    filesystemCrashImage names masks world = some after
+
+private theorem reported_failure_preserves (values : List U16)
+    (before after : FilesystemImage) (image : JournalImage values before)
+    (attempt : ReportedRepairFailure before after) :
+    JournalImage values after ∧ after.highWater = before.highWater + 2 := by
+  obtain ⟨positive, start, valid, bounded, initial⟩ := image
+  obtain ⟨data, choices, rest, maximum, middle, closed, world, encode, names, masks,
+    started, repair, cleanup, reported, crash⟩ := attempt
+  have equal : start = data := by
+    simpa only [FilesystemImage.mk.injEq, List.cons.injEq, Prod.mk.injEq, true_and, and_true] using
+      initial.symm.trans started
+  subst start
+  obtain ⟨final, ran, _, _, _, safe⟩ := typed_repair_error_reports (before.highWater + 1) (before.highWater + 1)
+    data choices rest values maximum (by omega) (by omega) bounded valid middle closed repair cleanup encode
+  have result := ran.apply
+  rw [reported] at result
+  have same : world = final := by
+    simpa only [Result.error_apply] using congrArg Prod.snd result
+  subst world
+  obtain ⟨bytes, kept, fits, captured⟩ := safe names masks after crash
+  rw [captured]
+  exact ⟨⟨by simp, bytes, kept, fits, rfl⟩, rfl⟩
+
 /-- Any number of restarts may be interrupted during repair or while its
-typed caller is closing the file. Each new attempt uses the prior disk image. -/
+typed caller is closing the file, or follow a reported I/O failure. Each new
+attempt uses the prior disk image. The index counts allocations: one for
+each descriptor, plus one for each reported OS error. -/
 inductive InterruptedAttempts : Nat → FilesystemImage → FilesystemImage → Prop where
   | zero : InterruptedAttempts 0 image image
   | next : (InterruptedRepair before middle ∨ InterruptedClose before middle) →
       InterruptedAttempts count middle after → InterruptedAttempts (count + 1) before after
+  | reported : ReportedRepairFailure before middle → InterruptedAttempts count middle after →
+      InterruptedAttempts (count + 2) before after
 
 theorem interrupted_attempts_preserve (values : List U16) (before after : FilesystemImage)
     (count : Nat) (image : JournalImage values before)
@@ -64,9 +108,14 @@ theorem interrupted_attempts_preserve (values : List U16) (before after : Filesy
       · exact close_interruption_preserves values before middle image closing
     obtain ⟨last, fresh⟩ := ih still.1
     exact ⟨last, by have := still.2; omega⟩
+  | @reported before middle count after step rest ih =>
+    obtain ⟨kept, advance⟩ := reported_failure_preserves values before middle image step
+    obtain ⟨last, fresh⟩ := ih kept
+    exact ⟨last, by omega⟩
 
 /-- Every actual successful typed retry after any admitted series of repair
-or close interruptions synchronizes exactly the acknowledged records. -/
+or close interruptions and reported failures synchronizes exactly the
+acknowledged records. -/
 theorem typed_retry_after_interruptions (values : List U16) (before after : FilesystemImage) (count : Nat)
     (image : JournalImage values before) (attempts : InterruptedAttempts count before after) :
     ∃ bytes, after.highWater = before.highWater + count ∧
