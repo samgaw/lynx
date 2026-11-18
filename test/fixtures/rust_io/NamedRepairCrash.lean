@@ -170,4 +170,73 @@ theorem typed_retry_after_prefix_crashes (values : List U16) (before after : Fil
       arbitrary_repair_persists after.highWater bytes choices rest values maximum positive bounded
         kept owner world trace chosen masks next crash
 
+
+/-- A real ready prefix of repair is reachable inside the compiled typed
+Rustler call, after its compiled open and before allocation or cleanup. -/
+private theorem typed_contains_repair_prefix (counter : Nat) (bytes : ByteArray) (choices rest : Term)
+    (maximum : U32) (positive : 1 ≤ counter) (bounded : bytes.size ≤ limit)
+    (residual : Result Reply) (after : Environment)
+    (trace : Result.ReadyPrefix (repair_log ⟨counter + 1⟩ (UScalar.cast .Usize maximum))
+      (opened counter bytes choices rest) residual after) :
+    ∃ inside, Result.ReadyPrefix (__TRY_REOPEN__ maximum)
+      (boot counter bytes choices rest) inside after := by
+  simp only [__TRY_REOPEN__, monadLift_self, NativeM.lift,
+    Result.ok_bind]
+  apply Exists.intro
+  apply Result.ReadyPrefix.bind
+  simp only [shared_log.reopen, monadLift_self]
+  have starts := open_existing_prefix counter bytes choices rest positive bounded
+  apply Result.ReadyPrefix.trans (starts.bind _)
+  simp only [Result.ok_bind, core.result.Result.Insts.CoreOpsTry.branch,
+    NativeM.monadLift_eq, NativeM.fromRust_ok]
+  exact trace.bind _
+
+
+/-- Every finite workspace repair run, including a blocked wait, exposes the
+same crash environment at a ready prefix of the actual compiled typed NIF. -/
+private theorem typed_reaches_repair_snapshot (counter : Nat) (data : ByteArray) (choices rest : Term)
+    (values : List U16) (maximum : U32) (positive : 1 ≤ counter)
+    (bounded : data.size ≤ limit) (initial : LogImage values data)
+    (elapsed : PID → Nat → Nat) (events : List Concurrent.Event) (last : Concurrent.Config Reply)
+    (executed : Concurrent.Run (.start (opened counter data choices rest)
+      (repair_log ⟨counter + 1⟩ (UScalar.cast .Usize maximum)) elapsed) events last) :
+    ∃ inside, Result.ReadyPrefix (__TRY_REOPEN__ maximum)
+      (boot counter data choices rest) inside (snapshot (boot counter data choices rest).currentPid last) := by
+  have admitted : Admitted (openingState data choices) := ⟨bounded, bounded, Nat.zero_le _⟩
+  have separate := (named_separated 1 _ _).mpr (opened_frame counter rest positive)
+  have safe := Record.RepairImageInvariant.repair_log_invariant (view := Record.FileView.named 1)
+    (boot counter data choices rest) ⟨counter + 1⟩ [namespaceCell rest] values
+    (openingState data choices) (UScalar.cast .Usize maximum) separate admitted rfl initial
+  obtain ⟨world, residual, trace, ending⟩ := safe.run_prefix elapsed executed
+  have exposed := typed_contains_repair_prefix counter data choices rest maximum positive bounded residual world trace
+  rcases ending with rfl | rfl
+  · simpa only [snapshot] using exposed
+  · obtain ⟨state, rfl, _, _, _⟩ := (safe residual world trace).1
+    have same := @Record.FileView.initial_view (Record.FileView.named 1)
+      (boot counter data choices rest) ⟨counter + 1⟩ state [namespaceCell rest] elapsed
+    simpa only [snapshot, same] using exposed
+
+
+/-- The captured state is reachable in the actual typed NIF and retains the
+acknowledged bytes. This ranges over every repair prefix reached between
+successful descriptor open and the caller's return handling. -/
+theorem typed_repair_prefix_crash (counter : Nat) (data : ByteArray) (choices rest : Term)
+    (values : List U16) (maximum : U32) (positive : 1 ≤ counter)
+    (bounded : data.size ≤ limit) (initial : LogImage values data)
+    (elapsed : PID → Nat → Nat) (events : List Concurrent.Event) (last : Concurrent.Config Reply)
+    (executed : Concurrent.Run (.start (opened counter data choices rest)
+      (repair_log ⟨counter + 1⟩ (UScalar.cast .Usize maximum)) elapsed) events last)
+    (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
+    (crash : filesystemCrashImage chosen masks (snapshot (boot counter data choices rest).currentPid last) =
+      some image) :
+    ∃ inside bytes, Result.ReadyPrefix (__TRY_REOPEN__ maximum)
+      (boot counter data choices rest) inside (snapshot (boot counter data choices rest).currentPid last) ∧
+      LogImage values bytes ∧ bytes.size ≤ limit ∧
+      image = ⟨namedJournal nameBytes, [(1, bytes)], counter + 1⟩ := by
+  obtain ⟨inside, reached⟩ := typed_reaches_repair_snapshot counter data choices rest values maximum
+    positive bounded initial elapsed events last executed
+  obtain ⟨bytes, kept, length, captured⟩ := arbitrary_repair_prefix_crash counter data choices rest values
+    (UScalar.cast .Usize maximum) positive bounded initial elapsed events last executed chosen masks image crash
+  exact ⟨inside, bytes, reached, kept, length, captured⟩
+
 end Record.NamedRepairCrash
