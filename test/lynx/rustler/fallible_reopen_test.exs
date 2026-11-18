@@ -158,6 +158,64 @@ defmodule Lynx.Rustler.FallibleReopenTest do
     ])
   end
 
+  @tag :tmp_dir
+  test "recovers after a mixed-mask crash during typed repair", %{tmp_dir: tmp} do
+    {_workspace, project, options, bindings} = prepare_reopen!(tmp)
+
+    witness = [
+      {"FallibleReopen", nil},
+      {"NamedJournalCrash", nil},
+      {"TornSyncFailure", nil},
+      {"TornSyncRecovery", nil},
+      {"MixedRepairScripts", nil},
+      {"MixedRepairWitness", "restart_from_witness"}
+    ]
+
+    law_options = install_proofs!(options, bindings, witness)
+    assert_linkage!(law_options, bindings.try_reopen)
+
+    path = Path.join(project, "Record/MixedRepairWitness.lean")
+    source = File.read!(path)
+    wrong = String.replace(source, "[0,77]", "[99,77]")
+    refute wrong == source
+
+    try do
+      File.write!(path, wrong)
+
+      assert_raise RuntimeError, ~r/MixedRepairWitness\.lean:\d+:/, fn ->
+        Lynx.Rust.Project.build!(project, ["Record.MixedRepairWitness"])
+      end
+    after
+      File.write!(path, source)
+    end
+
+    Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
+    beams = Map.new(Code.compile_file(Path.join(@fixture, "MixedRepairRestartLaw.exs")))
+
+    verify_laws!(tmp, project, law_options, beams, [
+      {LynxIoFixture.MixedRepairRestartLaws, "MixedRepairWitness", "restartBoot"}
+    ])
+
+    proofs =
+      witness ++
+        [
+          {"MixedRepairRecovery", "all_admitted_masks"},
+          {"MixedRepairRecovery", "reopens_after_prefix_crash"}
+        ]
+
+    options = install_proofs!(options, bindings, proofs)
+    prepared = assert_linkage!(options, bindings.try_reopen)
+
+    audit =
+      Lynx.Rust.Proofs.file!(prepared.extraction, options[:proof_modules],
+        required_properties: options[:required_properties]
+      )
+
+    export = Path.join(tmp, "mixed-repair.export")
+    assert [%{status: :ok}] = Lynx.Commands.verify!(project, [audit], export: export)
+    assert_export!(project, export)
+  end
+
   defp prepare_reopen!(tmp, only \\ [log_try_reopen: 1]) do
     {workspace, project, _fixture} = Lynx.Rust.IoFixture.prepare!(tmp, @tools)
 
@@ -236,8 +294,6 @@ defmodule Lynx.Rustler.FallibleReopenTest do
   end
 
   defp verify_laws!(tmp, project, options, beams, cases) do
-    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
-
     for {module, environment, boot} <- cases do
       beam = Map.fetch!(beams, module)
       export = Path.join(tmp, boot <> ".export")
@@ -253,10 +309,13 @@ defmodule Lynx.Rustler.FallibleReopenTest do
       assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
       assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
 
-      {status, output} =
-        Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
-
-      assert status == 0, output
+      assert_export!(project, export)
     end
+  end
+
+  defp assert_export!(project, export) do
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
   end
 end

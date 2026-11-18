@@ -100,14 +100,12 @@ theorem image_shape (left : Bool) (data : ByteArray)
 @[expose] def registered (env : Environment) : Environment :=
   {env with nativeResourceTypes := [NativeResourceArc.typeName shared_log.LogResource]}
 
-@[expose] def repaired (counter : Nat) (left : Bool) (eof : Nat)
-    (last : Concurrent.Config Term) : Bool :=
-  let env := environment last
-  match last.outcome, getHandle ⟨counter + 1⟩ writableHandleTypeName env,
-      inode 1 env, namespaceSnapshot env with
-  | .ok (.nativeReference pin), some handle, some file, some table =>
+@[expose] def repairState (counter : Nat) (left : Bool) (eof : Nat) (env : Environment) : Bool :=
+  match getHandle ⟨counter + 1⟩ writableHandleTypeName env, inode 1 env, namespaceSnapshot env with
+  | some handle, some file, some table =>
     let payload : shared_log.LogResource := ⟨⟨counter + 2⟩⟩
-    pin == counter + 6 && env.nativeRefCounter == pin &&
+    let pin := counter + 6
+    env.nativeRefCounter == pin &&
     handle.inode == 1 && handle.position == eof && handle.script == .nil &&
     file.visible.data == (contents left).data && file.durable.data == (contents left).data &&
     tablesEqual table.names names && tablesEqual table.committed names &&
@@ -116,7 +114,13 @@ theorem image_shape (left : Bool) (data : ByteArray)
     env.nativeHeap.contains (counter + 2, NativeMutex.typeName NativeFile,
       .tuple #[.atom "unlocked", .atom "unpoisoned", .nativeReference (counter + 1)]) &&
     !env.nativeHeap.any (fun cell => cell.1 == counter + 4)
-  | _, _, _, _ => false
+  | _, _, _ => false
+
+@[expose] def repaired (counter : Nat) (left : Bool) (eof : Nat) (last : Concurrent.Config Term) : Bool :=
+  match last.outcome with
+  | .ok (.nativeReference pin) =>
+    pin == counter + 6 && repairState counter left eof (environment last)
+  | _ => false
 
 set_option maxRecDepth 8192 in
 set_option maxHeartbeats 64000000 in
