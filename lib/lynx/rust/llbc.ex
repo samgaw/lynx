@@ -17,6 +17,7 @@ defmodule Lynx.Rust.LLBC do
   @tuple_pattern_backend @branch_backend_without_loop_patch <> "+tuple-patterns-v1"
   @local_defaults_backend String.replace(@tuple_pattern_backend, "+global-names-v1", "") <>
                             "+local-resource-defaults-v1"
+  @current_runtime_backend String.replace(@local_defaults_backend, "+workspace-roots-v1", "")
   @effectful_backends [
     @effectful_backend,
     @discriminant_backend,
@@ -24,7 +25,8 @@ defmodule Lynx.Rust.LLBC do
     @branch_backend,
     @branch_backend_without_loop_patch,
     @tuple_pattern_backend,
-    @local_defaults_backend
+    @local_defaults_backend,
+    @current_runtime_backend
   ]
   @unwind_backends [
     @unwind_backend,

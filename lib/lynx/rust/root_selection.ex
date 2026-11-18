@@ -63,6 +63,56 @@ defmodule Lynx.Rust.RootSelection do
     :ok
   end
 
+  # The pinned Aeneas pruning pass seeds its uses from local functions and impls.
+  # Treat selected first-party dependency items as local to this extraction.
+  # Only the backend input receives this marker. Rust identities and bodies stay
+  # intact, and the audit always reads the original compiler metadata.
+  def retain_workspace_roots(document, first_party) do
+    Enum.reduce(
+      [{"fun_decls", "functions"}, {"trait_impls", "trait_impls"}],
+      {document, %{}},
+      fn {llbc_key, translation_key}, {document, retained} ->
+        path = ["translated", llbc_key]
+
+        {items, ids} =
+          Enum.map_reduce(get_in(document, path), MapSet.new(), fn
+            %{
+              "def_id" => id,
+              "item_meta" => %{
+                "is_local" => false,
+                "started_from" => true,
+                "opacity" => "Transparent",
+                "name" => [%{"Ident" => [crate, _]} | _]
+              }
+            } = item,
+            ids ->
+              if crate in first_party,
+                do: {put_in(item, ["item_meta", "is_local"], true), MapSet.put(ids, id)},
+                else: {item, ids}
+
+            item, ids ->
+              {item, ids}
+          end)
+
+        if MapSet.size(ids) == 0,
+          do: {document, retained},
+          else: {put_in(document, path, items), Map.put(retained, translation_key, ids)}
+      end
+    )
+  end
+
+  def restore_workspace_origins(translation, retained) do
+    Enum.reduce(retained, translation, fn {key, ids}, translation ->
+      Map.update!(translation, key, fn rows ->
+        Enum.map(rows, fn row ->
+          if MapSet.member?(ids, row["def_id"]),
+            do: Map.replace!(row, "is_local", false),
+            else: row
+        end)
+      end)
+    end)
+  end
+
   defp literal_root?(root, local_crates) do
     Regex.match?(@path, root) and
       hd(String.split(root, "::")) in ["crate" | local_crates]

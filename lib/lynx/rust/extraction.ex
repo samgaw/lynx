@@ -471,11 +471,14 @@ defmodule Lynx.Rust.Extraction do
 
     {backend_document, unwind_input} = Lynx.Rust.NativeUnwind.input!(backend_document, unwind)
 
+    {backend_document, workspace_roots} =
+      Lynx.Rust.RootSelection.retain_workspace_roots(backend_document, first_party)
+
     backend_llbc =
       if formatting_aliases == [] and compiler_drop_queries == [] and native_guard_storage == [] and
            native_model_aliases == [] and option_aliases == [] and slice_model_aliases == [] and
            is_nil(string_pattern_projection) and is_nil(comparison_projection) and
-           is_nil(resource_projection) and is_nil(unwind_input) do
+           is_nil(resource_projection) and is_nil(unwind_input) and workspace_roots == %{} do
         backend_llbc
       else
         path = Path.rootname(llbc) <> ".aeneas.llbc"
@@ -617,9 +620,12 @@ defmodule Lynx.Rust.Extraction do
     translation =
       JSON.decode!(translation_bytes)
       |> Lynx.Rust.FormatModels.restore_report_names(formatting_aliases)
+      |> Lynx.Rust.RootSelection.restore_workspace_origins(workspace_roots)
 
     translation_bytes =
-      if formatting_aliases == [], do: translation_bytes, else: JSON.encode!(translation)
+      if formatting_aliases == [] and workspace_roots == %{},
+        do: translation_bytes,
+        else: JSON.encode!(translation)
 
     Lynx.Rust.Branching.validate_metadata!(translation, opts)
 

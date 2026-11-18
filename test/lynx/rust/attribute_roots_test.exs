@@ -7,7 +7,7 @@ defmodule Lynx.Rust.AttributeRootsTest do
     do: @moduletag(skip: "set LYNX_UNPATCHED_AENEAS_DIR for release-binary root selection")
 
   @tag :tmp_dir
-  test "proves an internal nested workspace root without a NIF or path-resolution patch", %{
+  test "proves a nested workspace function and an independent dependency root on stock tools", %{
     tmp_dir: tmp
   } do
     workspace = Path.join(tmp, "workspace")
@@ -36,7 +36,12 @@ defmodule Lynx.Rust.AttributeRootsTest do
     """)
 
     core = Path.join(workspace, "core/src/lib.rs")
-    File.write!(core, "pub fn invert(value: bool) -> bool { !value }\n")
+
+    File.write!(core, """
+    pub fn invert(value: bool) -> bool { !value }
+    pub fn both(left: bool, right: bool) -> bool { left & right }
+    """)
+
     analysis = Path.join(workspace, "analysis/src/lib.rs")
 
     source = """
@@ -78,23 +83,31 @@ defmodule Lynx.Rust.AttributeRootsTest do
         attribute_analysis.attribute_core.invert value = RustM.ok (!value) := by cases value <;> rfl
     theorem restore (value : Bool) : attribute_analysis.«_».restore value = RustM.ok value := by
       cases value <;> simp [attribute_analysis.«_».restore, invert, bind_tc_ok]
+    theorem both (left right : Bool) :
+        attribute_analysis.attribute_core.both left right = RustM.ok (left && right) := by
+      cases left <;> cases right <;> rfl
     end Attribute.Properties
     """)
 
     options = [
-      roots: ["attribute_analysis::_::restore"],
+      roots: ["attribute_analysis::_::restore", "attribute_core::both"],
       root_attribute: "verify::start_from",
       tools: @tools,
       lean_project: project,
       module_prefix: "Attribute.Extraction",
       build_dir: Path.join(tmp, "build"),
       proof_modules: ["Attribute.Properties"],
-      required_properties: ["Attribute.Properties.invert", "Attribute.Properties.restore"]
+      required_properties: Enum.map(~w(invert restore both), &("Attribute.Properties." <> &1))
     ]
 
     result = Lynx.Rust.verify!(workspace, "attribute-analysis", options)
     assert [%{status: :ok}] = result.reports
     assert Enum.any?(result.verification.guarantees, &(&1.kind == :cross_crate_contract))
+
+    assert [%{"is_local" => false, "is_opaque" => false}] =
+             Enum.filter(result.extraction.translation["functions"], fn function ->
+               function["rust_name"] == "attribute_core::both"
+             end)
 
     assert [%{status: :ok, cached: true}] =
              Lynx.Rust.verify!(workspace, "attribute-analysis", options).reports

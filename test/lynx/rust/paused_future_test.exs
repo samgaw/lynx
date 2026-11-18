@@ -5,15 +5,12 @@ defmodule Lynx.Rust.PausedFutureTest do
   @tools System.get_env("LYNX_AENEAS_DIR")
   @moduletag timeout: 900_000
   @available @tools && File.regular?(Path.join(@tools, "lynx-toolchain")) &&
-               Enum.all?(
-                 ~w(pin-borrow-transfer-v1 workspace-roots-v1),
-                 &String.contains?(File.read!(Path.join(@tools, "lynx-toolchain")), &1)
+               String.contains?(
+                 File.read!(Path.join(@tools, "lynx-toolchain")),
+                 "pin-borrow-transfer-v1"
                )
   unless @available,
-    do:
-      @moduletag(
-        skip: "set LYNX_AENEAS_DIR to the pinned borrow-transfer/workspace-roots backend"
-      )
+    do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned borrow-transfer backend")
 
   @tag :tmp_dir
   test "proves retained Pending state, later completion and an independent dependency root", %{
@@ -55,6 +52,11 @@ defmodule Lynx.Rust.PausedFutureTest do
 
     result = Lynx.Rust.verify!(workspace, "effects-native", options)
     assert [%{status: :ok}] = result.reports
+
+    assert [%{"is_local" => false, "is_opaque" => false}] =
+             Enum.filter(result.extraction.translation["functions"], fn function ->
+               function["rust_name"] == "effects_core::paused_counter"
+             end)
 
     assert Enum.any?(result.verification.guarantees, fn row ->
              row.kind == :cross_crate_contract && row.theorem == "Poll.Properties.two_polls" &&

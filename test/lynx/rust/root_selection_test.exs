@@ -213,4 +213,46 @@ defmodule Lynx.Rust.RootSelectionTest do
                ["demo"]
              )
   end
+
+  test "only selected transparent workspace declarations are retained as backend roots" do
+    selected = %{
+      "def_id" => 7,
+      "body" => %{"return" => true},
+      "item_meta" => %{
+        "name" => [%{"Ident" => ["dependency", 0]}, %{"Ident" => ["calculate", 0]}],
+        "is_local" => false,
+        "started_from" => true,
+        "opacity" => "Transparent"
+      }
+    }
+
+    others = [
+      nil,
+      put_in(selected, ["item_meta", "started_from"], false),
+      put_in(selected, ["item_meta", "opacity"], "Opaque"),
+      put_in(selected, ["item_meta", "name"], [%{"Ident" => ["external", 0]}])
+    ]
+
+    impl = Map.delete(selected, "body")
+    input = put_in(document([selected | others]), ["translated", "trait_impls"], [impl])
+    {projected, origins} = RootSelection.retain_workspace_roots(input, ["demo", "dependency"])
+    assert origins == %{"functions" => MapSet.new([7]), "trait_impls" => MapSet.new([7])}
+
+    assert projected["translated"]["fun_decls"] == [
+             put_in(selected, ["item_meta", "is_local"], true) | others
+           ]
+
+    assert projected["translated"]["trait_impls"] == [
+             put_in(impl, ["item_meta", "is_local"], true)
+           ]
+
+    row = %{"def_id" => 7, "is_local" => true}
+    origin = Map.put(row, "is_local", false)
+    local = %{"def_id" => 12, "is_local" => true}
+
+    assert RootSelection.restore_workspace_origins(
+             %{"functions" => [row, local], "trait_impls" => [row]},
+             origins
+           ) == %{"functions" => [origin, local], "trait_impls" => [origin]}
+  end
 end
