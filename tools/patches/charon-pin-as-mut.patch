@@ -32,7 +32,7 @@ index 297dbaa94086..a5a06dfcaa4c 100644
 +            let ty::FnDef(id, _) = func.ty(&body.local_decls, tcx).kind() else {
 +                continue;
 +            };
-+            if args.len() != 1 || !self.is_safe_pin_method(*id, "as_mut") {
++            if args.len() != 1 || self.safe_pin_receiver(*id, "as_mut").is_none() {
 +                continue;
 +            }
 +            let input = args[0].node.ty(&body.local_decls, tcx);

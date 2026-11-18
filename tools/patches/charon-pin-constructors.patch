@@ -2,7 +2,7 @@ diff --git i/charon/src/bin/charon-driver/translate/translate_bodies.rs w/charon
 index 17cd268f3026..297dbaa94086 100644
 --- i/charon/src/bin/charon-driver/translate/translate_bodies.rs
 +++ w/charon/src/bin/charon-driver/translate/translate_bodies.rs
-@@ -317,6 +317,362 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
+@@ -317,6 +317,347 @@ impl<'tcx> ItemTransCtx<'tcx, '_> {
          }
      }
 
@@ -45,21 +45,6 @@ index 17cd268f3026..297dbaa94086 100644
 +            && matches!(&values[rustc_abi::FieldIdx::from_usize(0)],
 +                mir::Operand::Copy(place) | mir::Operand::Move(place)
 +                if place.local == input && place.projection.is_empty())
-+    }
-+
-+    fn is_safe_pin_method(&self, id: rustc_hir::def_id::DefId, name: &str) -> bool {
-+        let tcx = self.tcx;
-+        if tcx.item_name(id).as_str() != name || tcx.fn_sig(id).skip_binder().safety().is_unsafe() {
-+            return false;
-+        }
-+        let Some(parent) = tcx.impl_of_assoc(id) else {
-+            return false;
-+        };
-+        let parent = tcx
-+            .type_of(parent)
-+            .instantiate_identity()
-+            .skip_normalization();
-+        matches!(parent.kind(), ty::Adt(adt, _) if Some(adt.did()) == tcx.lang_items().pin_type())
 +    }
 +
 +    /// Check the optimized helper's borrow of the sole field of its argument.
@@ -141,7 +126,7 @@ index 17cd268f3026..297dbaa94086 100644
 +                if *id != constructor {
 +                    continue;
 +                }
-+            } else if !self.is_safe_pin_method(*id, "new") {
++            } else if self.safe_pin_receiver(*id, "new").is_none() {
 +                continue;
 +            }
 +            let pointer = args[0].node.ty(&body.local_decls, tcx);

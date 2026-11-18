@@ -4,6 +4,26 @@
          }
      }
 
++    fn safe_pin_receiver(
++        &self,
++        id: rustc_hir::def_id::DefId,
++        name: &str,
++    ) -> Option<ty::GenericArgsRef<'tcx>> {
++        let tcx = self.tcx;
++        if tcx.item_name(id).as_str() != name || tcx.fn_sig(id).skip_binder().safety().is_unsafe() {
++            return None;
++        }
++        let parent = tcx.impl_of_assoc(id)?;
++        let parent = tcx
++            .type_of(parent)
++            .instantiate_identity()
++            .skip_normalization();
++        match parent.kind() {
++            ty::Adt(adt, args) if Some(adt.did()) == tcx.lang_items().pin_type() => Some(args),
++            _ => None,
++        }
++    }
++
 +    /// Transfer the mutable reference out of a consumed standard Pin wrapper.
 +    /// MIR spells this final use `Copy`; Aeneas must not duplicate a mutable loan.
 +    /// Validate the complete executable body before changing that operand.
@@ -14,65 +34,45 @@
 +        let Some(id) = def.def_id().as_real_def_id() else {
 +            return;
 +        };
-+        if self.tcx.item_name(id).as_str() != "get_mut" {
-+            return;
-+        }
-+        let Some(parent) = self.tcx.impl_of_assoc(id) else {
++        let Some(args) = self.safe_pin_receiver(id, "get_mut") else {
 +            return;
 +        };
-+        let parent_ty = self
-+            .tcx
-+            .type_of(parent)
-+            .instantiate_identity()
-+            .skip_normalization();
-+        let ty::Adt(pin, args) = parent_ty.kind() else {
-+            return;
-+        };
-+        if Some(pin.did()) != self.tcx.lang_items().pin_type()
-+            || !matches!(
-+                args.type_at(0).kind(),
-+                ty::Ref(_, _, rustc_hir::Mutability::Mut)
-+            )
-+            || self.tcx.fn_sig(id).skip_binder().safety().is_unsafe()
-+            || body.arg_count != 1
++        if !matches!(
++            args.type_at(0).kind(),
++            ty::Ref(_, _, rustc_hir::Mutability::Mut)
++        ) || body.arg_count != 1
 +            || body.basic_blocks.len() != 1
 +        {
 +            return;
 +        }
-+        let block = &body.basic_blocks[mir::START_BLOCK];
++        let block = &mut body.basic_blocks.as_mut()[mir::START_BLOCK];
 +        if !matches!(block.terminator().kind, mir::TerminatorKind::Return) {
 +            return;
 +        }
-+        let mut assignment = None;
-+        for (index, statement) in block.statements.iter().enumerate() {
-+            match &statement.kind {
++        let mut statements = block.statements.iter_mut().filter(|statement| {
++            !matches!(
++                statement.kind,
 +                mir::StatementKind::StorageLive(_)
-+                | mir::StatementKind::StorageDead(_)
-+                | mir::StatementKind::Nop => {}
-+                mir::StatementKind::Assign((
-+                    dest,
-+                    mir::Rvalue::Use(mir::Operand::Copy(source), _),
-+                )) if dest.local == mir::RETURN_PLACE
-+                    && dest.projection.is_empty()
-+                    && source.local.as_usize() == 1
-+                    && matches!(source.projection.as_ref(), [mir::ProjectionElem::Field(field, _)] if field.as_usize() == 0)
-+                    && assignment.is_none() =>
-+                {
-+                    assignment = Some(index);
-+                }
-+                _ => return,
-+            }
-+        }
-+        if let Some(index) = assignment {
-+            let statement = &mut body.basic_blocks.as_mut()[mir::START_BLOCK].statements[index];
-+            let mir::StatementKind::Assign((_, mir::Rvalue::Use(operand, _))) = &mut statement.kind
-+            else {
-+                unreachable!()
-+            };
-+            let mir::Operand::Copy(place) = operand else {
-+                unreachable!()
-+            };
-+            *operand = mir::Operand::Move(*place);
++                    | mir::StatementKind::StorageDead(_)
++                    | mir::StatementKind::Nop
++            )
++        });
++        let (Some(statement), None) = (statements.next(), statements.next()) else {
++            return;
++        };
++        let mir::StatementKind::Assign((dest, mir::Rvalue::Use(operand, _))) = &mut statement.kind
++        else {
++            return;
++        };
++        let mir::Operand::Copy(source) = operand else {
++            return;
++        };
++        if dest.local == mir::RETURN_PLACE
++            && dest.projection.is_empty()
++            && source.local.as_usize() == 1
++            && matches!(source.projection.as_ref(), [mir::ProjectionElem::Field(field, _)] if field.as_usize() == 0)
++        {
++            *operand = mir::Operand::Move(*source);
 +        }
 +    }
 +
