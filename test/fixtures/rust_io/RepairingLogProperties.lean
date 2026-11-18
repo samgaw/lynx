@@ -156,7 +156,7 @@ theorem acknowledged_crash (config : Concurrent.Config Term)
       obtain ⟨bytes, persisted, equal⟩ := Option.bind_eq_some_iff.mp captured
       cases Option.some.inj equal
       rw [bytes_equal _ _ v, bytes_equal _ _ d] at persisted
-      have same := persist_same complete mask bytes persisted
+      have same := NativeFile.persist_same complete mask bytes persisted
       refine ⟨same, ?_⟩
       apply Record.RepairCrashProperties.restart_repair [13#u16,19#u16,23#u16] _ rest 4#usize
       · rw [same]

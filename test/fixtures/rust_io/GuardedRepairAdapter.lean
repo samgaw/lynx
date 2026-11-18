@@ -251,7 +251,9 @@ private theorem error_release_safe (base : Environment) (poisoned : Bool) (state
     (durable : Prefix (disk (logBytes values)) state.durable) :
     Result.NativeInvariant (Safe values) (NativeOwnedDrop.drop error) (returned base poisoned false state) := by
   cases error with
-  | mk identity =>
+  | simple _ | staticMessage _ _ =>
+      exact .ok _ _ _ (returned_safe base poisoned state values valid visible durable)
+  | os identity =>
       simp only [NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability]
       apply Result.NativeInvariant.wait _ _ _ (returned_safe base poisoned state values valid visible durable)
       intro actual world ready
@@ -279,14 +281,19 @@ private theorem error_release_safe (base : Environment) (poisoned : Bool) (state
           (Result.NativeInvariant.error (Safe values) .exhausted _ (returned_safe base poisoned state values valid visible durable) :
             Result.NativeInvariant (Safe values) (Result.error .exhausted : Result Unit) (returned base poisoned false state))
 
-/-- A successful error destructor consumes exactly the admitted live capability.
-An unavailable or incorrectly typed capability cannot return successfully. -/
+/-- An admitted OS error consumes its live capability. Inline errors return
+with the same heap. An invalid OS capability cannot return successfully. -/
 private theorem error_release_returns (base : Environment) (poisoned : Bool) (state : State)
     (error : NativeIoError) (world : Environment)
     (trace : Result.ReadyPrefix (NativeOwnedDrop.drop error) (returned base poisoned false state)
-      (.ok ()) world) : world = returned base poisoned true state := by
+      (.ok ()) world) : ∃ consumed, world = returned base poisoned consumed state := by
   cases error with
-  | mk identity =>
+  | simple _ | staticMessage _ _ =>
+      change Result.ReadyPrefix (.ok ()) _ (.ok ()) world at trace
+      cases trace
+      exact ⟨false,rfl⟩
+  | os identity =>
+      refine ⟨true,?_⟩
       simp only [NativeOwnedDrop.drop,NativeIoError.dispose,Result.consumeNativeCapability] at trace
       cases trace with
       | wait _ _ actual _ updated _ _ ready continuation =>
@@ -332,10 +339,10 @@ theorem facade_returns (base : Environment) (poisoned : Bool) (before : State) (
       exact ⟨state,false,rfl,admitted,v,d⟩
   | Err error =>
       obtain ⟨releasedUnit,final,disposed,continuation⟩ := continuation.bind_returns
-      have identity := error_release_returns base poisoned state error final (by cases releasedUnit; exact disposed)
-      subst final
+      obtain ⟨consumed,rfl⟩ := error_release_returns base poisoned state error final
+        (by cases releasedUnit; exact disposed)
       cases continuation
-      exact ⟨state,true,rfl,admitted,v,d⟩
+      exact ⟨state,consumed,rfl,admitted,v,d⟩
 
 /-- Advance admission by the two fresh identities allocated by a completed
 resource call: its temporary Rust owner and its mutex lease. -/
