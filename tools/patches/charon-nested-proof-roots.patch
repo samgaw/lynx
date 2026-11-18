@@ -1,8 +1,7 @@
 diff --git i/charon/src/bin/charon-driver/translate/resolve_path.rs w/charon/src/bin/charon-driver/translate/resolve_path.rs
-index 9b57968ceb59..53a32a863cb8 100644
 --- i/charon/src/bin/charon-driver/translate/resolve_path.rs
 +++ w/charon/src/bin/charon-driver/translate/resolve_path.rs
-@@ -150,7 +150,33 @@ pub fn def_path_def_ids<'a, 'tcx>(
+@@ -150,7 +150,38 @@ pub fn def_path_def_ids<'a, 'tcx>(
          } else {
              let nameable_children = items.iter().copied().flat_map(|def_id| {
                  let hax_def: Arc<hax::FullDef<'tcx>> = def_id.sinto(s).full_def(s);
@@ -12,7 +11,12 @@ index 9b57968ceb59..53a32a863cb8 100644
 +                // named items too. They are not exposed by FullDef's module
 +                // traversal. Include direct local children so precise proof
 +                // roots can reach them without translating their containers.
-+                if def_id.is_local() {
++                // Preserve upstream resolution when it succeeds: extra rustc
++                // queries can consume promoted MIR from unrelated items.
++                let already_named = children.iter().any(|(name, _)| {
++                    matches!(elem, PatElem::Ident { name: target, .. } if name.as_str() == target)
++                });
++                if def_id.is_local() && !already_named {
 +                    for child in tcx.iter_local_def_id() {
 +                        let child = child.to_def_id();
 +                        if tcx.opt_parent(child) == Some(def_id)
