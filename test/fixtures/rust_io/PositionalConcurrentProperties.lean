@@ -72,7 +72,8 @@ theorem accepted_outcome {config : Lynx.Concurrent.Config Term} (checked : accep
   let owner ← NativeResourceArc.decode writer
   Rustler.executeNative (observe owner 0#u64) (Rustler.encodeOption Rustler.encodeUnsigned)
 
-@[expose] def program (patch : Patch) (observe : Observe) : Result Term := do
+@[expose] def patchReplies (patch : Patch) (observe : Observe)
+    (finish : Term → Term → Term → Term) : Result Term := do
   let _ ← Result.schedule {} (do
     let reply ← patchCall patch peer 7#u8
     Result.send [] (.tuple #[.atom "patched", reply]) (.ok Term.true)) .ok
@@ -81,7 +82,11 @@ theorem accepted_outcome {config : Lynx.Concurrent.Config Term} (checked : accep
     | .tuple fields => if fields[0]? == some (.atom "patched") then fields[1]? else none
     | _ => none) (fun reply => .ok (reply.getD Term.false))
   let read ← observeCall observe
-  Result.ok (if wrote == Term.true && peerReply == Term.true then read else Term.false)
+  Result.ok (finish wrote peerReply read)
+
+@[expose] def program (patch : Patch) (observe : Observe) : Result Term :=
+  patchReplies patch observe fun wrote peerReply read =>
+    if wrote == Term.true && peerReply == Term.true then read else Term.false
 
 set_option maxHeartbeats 64000000 in
 set_option maxRecDepth 8192 in
@@ -97,29 +102,27 @@ theorem patches_agree_with_serial_image (elapsed : PID → Nat → Nat)
 
 open Lynx.Concurrent (Config Event Run Step Terminal)
 
-private def ordered (lastFirst : Bool) (config : Config Term) : List (Event × Config Term) :=
-  if lastFirst then config.successors.reverse else config.successors
-
-private def follow (lastFirst : Bool) : Nat → Config Term → Option (List Event × Config Term)
+@[expose] def follow (lastFirst : Config Term → Bool) : Nat → Config Term →
+    Option (List Event × Config Term)
   | 0, _ => none
   | fuel + 1, config =>
-      match ordered lastFirst config with
+      match if lastFirst config then config.successors.reverse else config.successors with
       | [] => some ([], config)
       | (event, next) :: _ => do
           let (events, final) ← follow lastFirst fuel next
           some (event :: events, final)
 
-private theorem follow_sound {lastFirst : Bool} {fuel : Nat} {first last : Config Term}
+theorem follow_sound {lastFirst : Config Term → Bool} {fuel : Nat} {first last : Config Term}
     {events : List Event} (found : follow lastFirst fuel first = some (events, last)) :
     Run first events last ∧ last.successors = [] := by
   induction fuel generalizing first last events with
   | zero => simp [follow] at found
   | succ fuel ih =>
-    cases order : ordered lastFirst first with
+    cases order : (if lastFirst first then first.successors.reverse else first.successors) with
     | nil =>
       simp [follow, order] at found
       obtain ⟨rfl, rfl⟩ := found
-      exact ⟨.refl, by cases lastFirst <;> simpa [ordered] using order⟩
+      exact ⟨.refl, by cases selected : lastFirst first <;> simpa [selected] using order⟩
     | cons head tail =>
       obtain ⟨event, next⟩ := head
       cases result : follow lastFirst fuel next with
@@ -129,11 +132,12 @@ private theorem follow_sound {lastFirst : Bool} {fuel : Nat} {first last : Confi
         simp [follow, order, result] at found
         obtain ⟨rfl, rfl⟩ := found
         obtain ⟨run, done⟩ := ih result
-        have member : (event, next) ∈ ordered lastFirst first := by
+        have member : (event, next) ∈
+            (if lastFirst first then first.successors.reverse else first.successors) := by
           rw [order]
           exact List.mem_cons_self
         have nextStep : Step first event next := by
-          cases lastFirst <;> simpa [Step, ordered] using member
+          cases selected : lastFirst first <;> simpa [Step, selected] using member
         exact ⟨.step nextStep run, done⟩
 
 private def returns (expected : Int) (config : Config Term) : Bool :=
@@ -151,9 +155,9 @@ private theorem returns_eq {expected : Int} {config : Config Term}
   next => simp at matched
 
 private theorem terminal_witness {first : Config Term} {expected : Int} {lastFirst : Bool}
-    (checked : (follow lastFirst 64 first).any (fun (_, last) => returns expected last) = true) :
+    (checked : (follow (fun _ => lastFirst) 64 first).any (fun (_, last) => returns expected last) = true) :
     ∃ events last, Run first events last ∧ Terminal last (.ok (.integer expected)) := by
-  cases found : follow lastFirst 64 first with
+  cases found : follow (fun _ => lastFirst) 64 first with
   | none => simp [found] at checked
   | some terminal =>
     obtain ⟨events, last⟩ := terminal

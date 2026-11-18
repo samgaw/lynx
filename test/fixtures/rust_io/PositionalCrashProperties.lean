@@ -61,13 +61,13 @@ theorem single_eq {table : Names} (valid : singleName table = true) : table = na
 @[expose] def nodeIds (env : Environment) : List Nat :=
   (env.nativeHeap.filter (fun cell => cell.2.1 == inodeTypeName)).map (·.1)
 
-@[expose] def namedState (config : Concurrent.Config Term) : Bool :=
+@[expose] def namedState (minimum maximum : Nat) (config : Concurrent.Config Term) : Bool :=
   let env := snapshot config
   match namespaceSnapshot env, inode 1 env, NativeFile.lookup ⟨2⟩ env with
   | some table, some disk, some writer =>
       singleName table.names && singleName table.committed && table.pending.isEmpty &&
         table.script == .nil && nodeIds env == [1] &&
-        (11 ≤ env.nativeRefCounter && env.nativeRefCounter ≤ 14) &&
+        (minimum ≤ env.nativeRefCounter && env.nativeRefCounter ≤ maximum) &&
         disk.durable.data == writer.durable.data && disk.visible.data == writer.visible.data
   | _, _, _ => false
 
@@ -91,7 +91,7 @@ private theorem persisted_byte (old visible mask result : ByteArray)
     rfl
   · contradiction
 
-private theorem persists_with (first : UInt8 → Bool) (old visible mask bytes : ByteArray)
+theorem persists_with (first : UInt8 → Bool) (old visible mask bytes : ByteArray)
     (durable : imageWith first old = true) (current : imageWith first visible = true)
     (accepted : persist old visible mask = some bytes) : imageWith first bytes = true := by
   simp only [imageWith, Bool.and_eq_true, beq_iff_eq] at durable current ⊢
@@ -120,7 +120,7 @@ private theorem persists_with (first : UInt8 → Bool) (old visible mask bytes :
 set_option maxRecDepth 8192 in
 set_option maxHeartbeats 256000000 in
 private theorem prefixes_checked (elapsed : PID → Nat → Nat) :
-    Concurrent.checkInvariant (fun cfg => retainsFile cfg && Positional.NamedPrefix.namedState cfg) 64
+    Concurrent.checkInvariant (fun cfg => retainsFile cfg && Positional.NamedPrefix.namedState 11 14 cfg) 64
       (.start ready (program
         __PATCH__
         __OBSERVE__) elapsed) = true := by
@@ -175,21 +175,13 @@ open Positional.Opened (names)
 open Positional.Concurrent (ready program)
 open Positional.CrashPrefix (snapshot)
 
-/-- Every prefix retains its committed name, the sole named inode and exactly
-the persisted and visible bytes seen by the writer capability. -/
-theorem retains_named_inode (elapsed : PID → Nat → Nat)
-    {events : List Concurrent.Event} {last : Concurrent.Config Term}
-    (run : Concurrent.Run (.start ready (program
-      __PATCH__
-      __OBSERVE__) elapsed) events last) :
+theorem namedState_sound {minimum maximum : Nat} {last : Concurrent.Config Term}
+    (checked : namedState minimum maximum last = true) :
     let env := snapshot last
     namespaceSnapshot env = some checkpoint ∧ nodeIds env = [1] ∧
-    11 ≤ env.nativeRefCounter ∧ env.nativeRefCounter ≤ 14 ∧
+    minimum ≤ env.nativeRefCounter ∧ env.nativeRefCounter ≤ maximum ∧
     ∃ disk writer, inode 1 env = some disk ∧ NativeFile.lookup ⟨2⟩ env = some writer ∧
       disk.durable = writer.durable ∧ disk.visible = writer.visible := by
-  have combined := Concurrent.checkInvariant_sound (Positional.CrashPrefix.prefixes_checked elapsed) run
-  simp only [Bool.and_eq_true] at combined
-  have checked := combined.2
   unfold namedState at checked
   dsimp only at checked ⊢
   cases tables : namespaceSnapshot (snapshot last) with
@@ -214,6 +206,22 @@ theorem retains_named_inode (elapsed : PID → Nat → Nat)
           rfl
         exact ⟨congrArg some same, ids, lower, upper, disk, writer, rfl, rfl,
           ByteArray.ext durable, ByteArray.ext visible⟩
+
+/-- Every prefix retains its committed name, the sole named inode and exactly
+the persisted and visible bytes seen by the writer capability. -/
+theorem retains_named_inode (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config Term}
+    (run : Concurrent.Run (.start ready (program
+      __PATCH__
+      __OBSERVE__) elapsed) events last) :
+    let env := snapshot last
+    namespaceSnapshot env = some checkpoint ∧ nodeIds env = [1] ∧
+    11 ≤ env.nativeRefCounter ∧ env.nativeRefCounter ≤ 14 ∧
+    ∃ disk writer, inode 1 env = some disk ∧ NativeFile.lookup ⟨2⟩ env = some writer ∧
+      disk.durable = writer.durable ∧ disk.visible = writer.visible := by
+  have combined := Concurrent.checkInvariant_sound (Positional.CrashPrefix.prefixes_checked elapsed) run
+  simp only [Bool.and_eq_true] at combined
+  exact namedState_sound combined.2
 
 end Positional.NamedPrefix
 

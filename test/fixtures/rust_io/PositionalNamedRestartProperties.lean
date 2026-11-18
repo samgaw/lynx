@@ -123,7 +123,7 @@ private theorem one_node {α : Type} (items : List α) (identity : α → Nat)
     simp only [List.map_cons, List.cons.injEq, List.map_eq_nil_iff] at ids
     exact ⟨node, by simp [ids.2], ids.1⟩
 
-private theorem disk_captured (env : Environment) (disk : NativeFile.State) {script : Term}
+theorem disk_captured (env : Environment) (disk : NativeFile.State) {script : Term}
     (tables : namespaceSnapshot env = some { checkpoint with script := script })
     (ids : nodeIds env = [1]) (found : inode 1 env = some disk)
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
@@ -161,7 +161,7 @@ private theorem disk_captured (env : Environment) (disk : NativeFile.State) {scr
         simp [choice, names] at admitted
         exact ⟨mask, bytes, by simp [choice], admitted.symm⟩
 
-private theorem image_shape (bytes : ByteArray) (valid : allowedImage bytes = true) :
+theorem image_shape (bytes : ByteArray) (valid : allowedImage bytes = true) :
     bytes = serialImage bytes[0]! ∧ (bytes[0]! = 1 ∨ bytes[0]! = 7 ∨ bytes[0]! = 9) := by
   simp only [allowedImage, imageWith, writtenByte, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at valid
   refine ⟨?_, valid.1.2⟩

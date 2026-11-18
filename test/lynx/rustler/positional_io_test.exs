@@ -14,6 +14,12 @@ defmodule Lynx.Rustler.PositionalIoTest do
     {"PositionalOpenedProperties.lean", "Opened"}
   ]
 
+  @restart_sources [
+    {"PositionalConcurrentProperties.lean", "Concurrent"},
+    {"PositionalCrashProperties.lean", "Crash"},
+    {"PositionalNamedRestartProperties.lean", "NamedRestart"}
+  ]
+
   @tag :tmp_dir
   test "compiled positional calls preserve resource ownership and share the named inode",
        %{
@@ -271,13 +277,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
     prepared = Lynx.Rustler.prepare!(base)
     bindings = Map.new(prepared.bindings.bindings, &{&1["name"], &1})
 
-    sources =
-      @proof_sources ++
-        [
-          {"PositionalConcurrentProperties.lean", "Concurrent"},
-          {"PositionalCrashProperties.lean", "Crash"},
-          {"PositionalNamedRestartProperties.lean", "NamedRestart"}
-        ]
+    sources = @proof_sources ++ @restart_sources
 
     write_proofs!(project, bindings, sources)
 
@@ -336,6 +336,82 @@ defmodule Lynx.Rustler.PositionalIoTest do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
     {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
     assert status == 0, output
+  end
+
+  @tag :tmp_dir
+  @tag timeout: 3_600_000
+  test "a failed positional synchronization composes with peer writes and crash recovery", %{
+    tmp_dir: tmp
+  } do
+    base = fixture!(tmp)
+    project = base[:lean_project]
+    prepared = Lynx.Rustler.prepare!(base)
+    bindings = Map.new(prepared.bindings.bindings, &{&1["name"], &1})
+
+    sources =
+      @proof_sources ++
+        @restart_sources ++ [{"PositionalFailedSyncProperties.lean", "FailedSync"}]
+
+    write_proofs!(project, bindings, sources)
+
+    properties = ~w(terminal_frame visible_only_reachable peer_flushes_failed_write)
+    writer_roots = MapSet.new(~w(patch_at observe_at), &bindings[&1]["lean_name"])
+    facade_roots = MapSet.put(writer_roots, bindings["open_slots"]["lean_name"])
+
+    expected =
+      properties
+      |> Map.new(&{"Positional.FailedSync." <> &1, writer_roots})
+      |> Map.put("Positional.FailedSync.crash_reopens", facade_roots)
+
+    required = ["Positional.Proofs.patch_sync_error" | Map.keys(expected)]
+    modules = Enum.map(sources, fn {_, name} -> "Positional." <> name end)
+    options = base ++ [proof_modules: modules, required_properties: required]
+    load_and_calibrate(prepared, tmp)
+
+    [{_, beam}] = Code.compile_file(Path.join(@fixture, "positional_failed_sync_laws.ex"))
+    export = Path.join(tmp, "positional-failed-sync.export")
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      initial_environment: "Positional.FailedSync.withoutTear",
+      options: [maxHeartbeats: 32_000_000, maxRecDepth: 8192]
+    ]
+
+    reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+    assert [%{name: "failed_sync_leaves_write_visible/0"}] = Enum.flat_map(reports, & &1.theorems)
+
+    proven = Lynx.Rust.Proofs.properties!(reports)
+
+    for {theorem, roots} <- expected do
+      assert [%{"implementations" => implementations}] =
+               Enum.filter(proven, &(&1["theorem"] == theorem))
+
+      assert MapSet.new(implementations) == roots
+    end
+
+    assert Enum.all?(
+             Lynx.Laws.verify([beam], law_options),
+             &(&1.status == :ok and &1.cached)
+           )
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    source = Path.join(base[:workspace], "native/src/offset_file.rs")
+    original = File.read!(source)
+
+    mutation =
+      String.replace(original, "            false\n", "            true\n", global: false)
+
+    refute mutation == original
+    File.write!(source, mutation)
+
+    error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+    assert error.message =~ "Positional/FailedSync.lean:"
+    assert error.message =~ "postcondition rejected at a terminal configuration"
+    File.write!(source, original)
   end
 
   defp fixture!(tmp) do
