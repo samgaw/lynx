@@ -72,7 +72,6 @@ defmodule Lynx.Rust.Extraction do
            "captured unwind requires pure explicit ownership or runtime execution"
          )
 
-    Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools)
     Lynx.Rust.Branching.backend_arguments!(opts, tools)
 
     if Enum.any?(
@@ -596,7 +595,6 @@ defmodule Lynx.Rust.Extraction do
     run!(
       Path.join(tools, "aeneas"),
       runtime_args ++
-        Lynx.Rust.NativeUnwind.backend_arguments!(unwind, tools) ++
         Lynx.Rust.Branching.backend_arguments!(opts, tools) ++
         model_args ++
         [

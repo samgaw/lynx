@@ -226,8 +226,8 @@ defmodule Lynx.Rust do
   runtime-only compiler lowering.
 
   `unwind: :captured, owned_drops: :explicit` preserves borrowed updates on panic
-  using the cleanup-preserving Charon installation (`--captured`). Aeneas and its
-  Lean library remain unmodified. Fallible ordinary functions return an explicit
+  using explicit Charon extraction flags. `--captured` installs the unmodified
+  extractors and Lean library. Fallible ordinary functions return an explicit
   `core.result.Result`: `Ok` contains the Rust return value; `Err ()` denotes panic
   after actual compiler cleanup. This is an exceptional-exit model, not a change
   to the native Rust API. Original and captured signatures appear in the report.
@@ -239,7 +239,8 @@ defmodule Lynx.Rust do
 
   `execution: :runtime, unwind: :captured` additionally supports compiler-validated
   standard MutexGuard and destructor-free Mutex cleanup. Aeneas needs its existing
-  runtime-monad/effectful-call extensions; Charon must preserve assertion cleanup.
+  runtime-monad and effectful-call extensions. Charon retains explicit assertion
+  cleanup edges with the same flags.
   The reconstructed guard payload is committed before unlocking and poisoning on
   panic. Disposing an unlocked poisoned mutex is supported. Entry is modelled as
   nonpanicking, including acquisition of incoming guards; nested cleanup calls,
@@ -262,7 +263,8 @@ defmodule Lynx.Rust do
   unselected exports are reported explicitly.
 
   `execution: :runtime, unwind: :captured, owned_drops: true` uses optimized MIR
-  from the combined `--runtime-captured` toolchain. Mutex and default Resource
+  from the `--runtime` toolchain. `--runtime-captured` additionally runs a
+  compiler regression for cleanup of the owning payload. Mutex and default Resource
   payloads can use their actual extracted, admitted nonpanicking structural owning
   destructors. Guard updates and poisoning precede resource-owner release on panic.
   Failed resource registration executes the moved payload cleanup before capture.

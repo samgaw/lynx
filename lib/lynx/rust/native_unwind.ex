@@ -2,11 +2,16 @@ defmodule Lynx.Rust.NativeUnwind do
   @moduledoc false
   alias Lynx.Rust.{CallModels, FileDrops, LLBC, NativeDrops}
 
-  # Reuse the Aeneas preset's operations without the two assertion-resugaring
-  # passes, which can erase cleanup. This is deliberately an explicit opt-in.
   def charon_arguments(:reject), do: ["--preset=aeneas"]
-  def charon_arguments(:captured), do: ["--preset=aeneas", "--start-from", "core::result::Result"]
 
+  # Keep explicit panic branches, including their unwind edges. Captured
+  # ownership separately audits reconstructed arithmetic and bounds checks.
+  def charon_arguments(:captured) do
+    charon_arguments(:assertions) ++
+      ["--reconstruct-fallible-operations", "--start-from", "core::result::Result"]
+  end
+
+  # Keep both kinds of checks explicit for assertion-only runtime cleanup.
   def charon_arguments(:assertions) do
     [
       "--lift-associated-types",
@@ -29,21 +34,6 @@ defmodule Lynx.Rust.NativeUnwind do
   def charon_arguments(other),
     do: raise(ArgumentError, "unsupported Rust unwind model: #{inspect(other)}")
 
-  def backend_arguments!(:reject, _tools), do: []
-
-  def backend_arguments!(:captured, tools) do
-    unless "charon_cleanup_edges=preserved-v1" in String.split(
-             File.read!(Path.join(tools, "lynx-toolchain")),
-             "\n"
-           ),
-           do:
-             raise(ArgumentError, "captured unwind requires the cleanup-preserving Charon build")
-
-    []
-  end
-
-  def backend_arguments!(:assertions, _tools), do: []
-
   @assertion_options Map.merge(
                        Map.new(
                          ~w(treat_box_as_builtin ops_to_function_calls index_to_function_calls
@@ -64,23 +54,46 @@ defmodule Lynx.Rust.NativeUnwind do
   # Validate the explicit compatibility flags before changing that label.
   # No executable body is changed.
   def input!(document, :assertions) do
-    options = get_in(document, ["translated", "options"]) || %{}
-    checked = Map.take(options, Map.keys(@assertion_options))
-
-    unless checked == @assertion_options,
-      do: raise(ArgumentError, "invalid assertion unwind extraction options")
-
-    record = %{kind: :validated_assertion_options, options: checked, backend_preset: "Aeneas"}
-    {put_in(document, ["translated", "options", "preset"], "Aeneas"), record}
+    normalize_input!(document, @assertion_options, :assertion)
   end
 
-  def input!(document, mode) when mode in [:reject, :captured], do: {document, nil}
+  def input!(document, :captured) do
+    case get_in(document, ["translated", "options"]) do
+      %{"desugar_drops" => explicit, "precise_drops" => explicit} when is_boolean(explicit) ->
+        expected = %{
+          @assertion_options
+          | "reconstruct_fallible_operations" => true,
+            "desugar_drops" => explicit
+        }
+
+        normalize_input!(document, Map.put(expected, "precise_drops", explicit), :captured)
+
+      _ ->
+        raise ArgumentError, "invalid captured unwind extraction options"
+    end
+  end
+
+  def input!(document, :reject), do: {document, nil}
+
+  defp normalize_input!(document, expected, mode) do
+    options = get_in(document, ["translated", "options"]) || %{}
+    checked = Map.take(options, Map.keys(expected))
+
+    unless checked == expected,
+      do: raise(ArgumentError, "invalid #{mode} unwind extraction options")
+
+    kind =
+      if mode == :captured, do: :validated_captured_options, else: :validated_assertion_options
+
+    record = %{kind: kind, options: checked, backend_preset: "Aeneas"}
+    {put_in(document, ["translated", "options", "preset"], "Aeneas"), record}
+  end
 
   def validate_input!(document, mode, record) do
     {_, expected} = input!(document, mode)
 
     unless expected == record,
-      do: raise(ArgumentError, "assertion unwind input does not match extraction")
+      do: raise(ArgumentError, "Rust unwind input does not match extraction")
 
     :ok
   end

@@ -67,10 +67,37 @@ defmodule Lynx.Rust.UnwindInputTest do
     end
   end
 
-  test "ordinary and captured extraction do not normalize options" do
-    for mode <- [:reject, :captured] do
-      original = document()
-      assert {^original, nil} = NativeUnwind.input!(original, mode)
+  test "captured unwind admits both supported drop modes with assertion resugaring disabled" do
+    for explicit <- [false, true] do
+      original =
+        update_in(document(), ["translated", "options"], fn options ->
+          %{options | "reconstruct_fallible_operations" => true, "desugar_drops" => explicit}
+          |> Map.put("precise_drops", explicit)
+        end)
+
+      assert {normalized, %{kind: :validated_captured_options} = record} =
+               NativeUnwind.input!(original, :captured)
+
+      assert put_in(normalized, ["translated", "options", "preset"], nil) == original
+      assert :ok = NativeUnwind.validate_input!(original, :captured, record)
+
+      for {option, invalid} <- [
+            {"reconstruct_asserts", true},
+            {"reconstruct_fallible_operations", false},
+            {"precise_drops", !explicit},
+            {"preset", "Aeneas"}
+          ] do
+        changed = put_in(original, ["translated", "options", option], invalid)
+
+        assert_raise ArgumentError, ~r/invalid captured unwind extraction options/, fn ->
+          NativeUnwind.input!(changed, :captured)
+        end
+      end
     end
+  end
+
+  test "ordinary extraction keeps the original options" do
+    original = document()
+    assert {^original, nil} = NativeUnwind.input!(original, :reject)
   end
 end

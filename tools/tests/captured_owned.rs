@@ -9,7 +9,7 @@ mod util;
 #[test]
 fn owning_payload_retains_panic_cleanup_and_compiler_destructor() -> anyhow::Result<()> {
     let data = util::translate_rust_text(
-        r#"//@ charon-args=--preset=aeneas --owned-drops --mir=optimized --sysroot=default --opaque=core --opaque=std --opaque=alloc --start-from=crate::checked
+        r#"//@ charon-args=--lift-associated-types=* --treat-box-as-builtin --ops-to-function-calls --index-to-function-calls --reconstruct-fallible-operations --reconstruct-panic-calls --reconstruct-matches --hide-marker-traits --hide-allocator --remove-unused-self-clauses --remove-adt-clauses --unbind-item-vars --deallocate-all-locals --no-gen-tuple-structs --owned-drops --mir=optimized --sysroot=default --opaque=core --opaque=std --opaque=alloc --start-from=crate::checked
 pub struct Payload { pub bytes: Vec<u8> }
 pub fn checked(payload: Payload, accepted: bool) -> usize {
     assert!(accepted);
