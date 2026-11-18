@@ -92,4 +92,23 @@ theorem create_env {rest : Term} {α : Type} (script : Term) (next : Term → Re
 
 /-- The filesystem is admitted, but no resource or file handle exists initially. -/
 @[expose] def seed : Environment := initial {} .nil
+
+@[expose] def accepted (config : Concurrent.Config Term) : Bool :=
+  match config.outcome with
+  | .ok (.atom "true") =>
+    let env := match config with
+      | .start env .. => env
+      | .running state .. => state.nativeView []
+    env.nativeRefCounter == 6 &&
+    (NativeResourceArc.vmCells payload 3 5 6).all env.nativeHeap.contains &&
+    env.nativeHeap.contains (2, writableHandleTypeName, encodeHandle ⟨1, 0, .nil⟩)
+  | _ => false
+
+theorem accepted_outcome (config : Concurrent.Config Term) (checked : accepted config = true) :
+    config.outcome = .ok Term.true := by
+  unfold accepted at checked
+  split at checked
+  · assumption
+  · contradiction
+
 end FileResource.Creation
