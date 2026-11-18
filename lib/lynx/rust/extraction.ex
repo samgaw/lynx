@@ -809,7 +809,7 @@ defmodule Lynx.Rust.Extraction do
     describe!(context, tools, roots, output, module, opts, opaque)
   end
 
-  defp describe!(context, tools, roots, output, module, opts, opaque, complete_methods \\ false) do
+  defp describe!(context, tools, roots, output, module, opts, opaque, comparison_methods \\ []) do
     unless is_list(roots) and Enum.all?(roots, &is_binary/1) and
              (roots != [] or Keyword.get(opts, :item_roots, []) != []),
            do:
@@ -857,15 +857,14 @@ defmodule Lynx.Rust.Extraction do
 
     # Metadata discovery also selects non-function items. Their consumers audit
     # the resolved identities; requested function roots retain the body check.
-    root_args =
-      root_args ++ Enum.flat_map(Keyword.get(opts, :item_roots, []), &["--start-from", &1])
+    item_roots = Keyword.get(opts, :item_roots, []) ++ comparison_methods
+    root_args = root_args ++ Enum.flat_map(item_roots, &["--start-from", &1])
 
     includes = Enum.flat_map(first_party, &["--include", &1])
     llbc = Path.join(output, String.replace(module, ".", "_") <> ".llbc")
 
     args =
       ["rustc", "--sysroot", if(context[:sysroot], do: context.sysroot.path, else: "default")] ++
-        if(complete_methods, do: ["--translate-all-methods"], else: []) ++
         Lynx.Rust.Futures.arguments!(Keyword.get(opts, :futures, :reject), tools) ++
         Lynx.Rust.NativeOwnedDrops.arguments!(Keyword.get(opts, :owned_drops, false), tools) ++
         Lynx.Rust.Mir.arguments!(opts) ++
@@ -932,8 +931,10 @@ defmodule Lynx.Rust.Extraction do
 
     document = read_llbc!(llbc, diagnostics)
 
-    if not complete_methods and incomplete_comparison?(document) do
-      describe!(context, tools, roots, output, module, opts, opaque, true)
+    missing_methods = missing_comparison_methods(document)
+
+    if comparison_methods == [] and missing_methods != [] do
+      describe!(context, tools, roots, output, module, opts, opaque, missing_methods)
     else
       validate_target!(document)
 
@@ -985,13 +986,13 @@ defmodule Lynx.Rust.Extraction do
 
   # The slice model calls ne even when Rust's optimized comparison calls eq.
   # Ask Charon for the actual omitted methods; never invent a dictionary slot.
-  defp incomplete_comparison?(document) do
-    Enum.any?(document["translated"]["trait_decls"] || [], fn trait ->
-      trait &&
-        trait["item_meta"]["name"] ==
-          Enum.map(~w(core cmp PartialEq), &%{"Ident" => [&1, 0]}) &&
-        Enum.any?(trait["methods"], &is_nil/1)
-    end)
+  defp missing_comparison_methods(document) do
+    name = Enum.map(~w(core cmp PartialEq), &%{"Ident" => [&1, 0]})
+
+    for %{"item_meta" => %{"name" => ^name}, "methods" => methods} <-
+          document["translated"]["trait_decls"],
+        {nil, method} <- Enum.zip(methods, ~w(eq ne)),
+        do: "core::cmp::PartialEq::" <> method
   end
 
   @doc false

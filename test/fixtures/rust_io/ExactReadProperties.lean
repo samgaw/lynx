@@ -235,10 +235,20 @@ theorem read_poll_bounds (file returned : NativeFile) (buffer updated : Slice U8
     (before after : Environment) (count : Usize)
     (read : NativeFile.pollRead file buffer before = some (.ok (.Ok count,returned,updated),after)) :
     count.val ≤ updated.val.length := by
-  simp only [NativeFile.pollRead] at read
-  repeat' first | split at read | simp_all
-  obtain ⟨rfl,rfl,rfl⟩ := read.1
-  exact read_step_bounds _ _ _ _ _ (by assumption)
+  cases found : NativeFile.lookup file before with
+  | none => simp [NativeFile.pollRead, found] at read
+  | some state =>
+    cases blocked : NativeFile.blocked state with
+    | true => simp [NativeFile.pollRead, found, blocked] at read
+    | false =>
+      cases step : NativeFile.readStep state buffer with
+      | none => simp [NativeFile.pollRead, found, blocked, step] at read
+      | some reply =>
+        obtain ⟨result, next, slice⟩ := reply
+        simp [NativeFile.pollRead, found, blocked, step] at read
+        rw [← read.2.2.1]
+        rw [read.1] at step
+        exact read_step_bounds _ _ _ _ _ step
 
 theorem read_poll_error (file : NativeFile) (buffer : Slice U8)
     (before after : Environment) (exception : Exception)

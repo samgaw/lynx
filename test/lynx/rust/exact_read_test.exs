@@ -58,6 +58,7 @@ defmodule Lynx.Rust.ExactReadTest do
              Lynx.Rust.verify!(workspace, "io-protocol", options).reports
 
     audit = result.extraction.audit
+    assert %{"translate_all_methods" => false} = audit.translated["options"]
     helpers = Enum.filter(audit.functions, &ExactRead.selected?(&1, audit.translated))
     assert Enum.any?(helpers, &(inspect(&1["item_meta"]["name"]) =~ "default_read_exact"))
 
