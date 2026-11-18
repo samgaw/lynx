@@ -70,7 +70,12 @@ defmodule Lynx.Rust.Runtime do
   def configuration!(other, _output, _prefix),
     do: raise(ArgumentError, "unsupported Rust execution model: #{inspect(other)}")
 
-  def install_extracted_notation!(output, prefix, %{"aeneas_version" => version}, calls) do
+  def install_extracted_notation!(
+        output,
+        prefix,
+        %{"aeneas_version" => version} = translation,
+        calls
+      ) do
     features = String.split(version, "+")
 
     # Lean 4.35 must know the length in a borrowed array's back-function
@@ -84,6 +89,8 @@ defmodule Lynx.Rust.Runtime do
       if "local-resource-defaults-v1" in features,
         do: notation <> Lynx.Rust.ResourceModels.default_notation(calls),
         else: notation
+
+    notation = notation <> Lynx.Rust.ResourceModels.constructor_notation(calls, translation)
 
     if notation != "" do
       path = Path.join(output, String.replace(prefix, ".", "/") <> "/Funs.lean")

@@ -43,6 +43,11 @@ defmodule Lynx.Rustler.ResourceReturnTest do
 
     prepared = Lynx.Rustler.prepare!(options)
 
+    generated = File.read!(Path.join(project, "Returned/Extraction/Funs.lean"))
+
+    assert generated =~
+             ~r/newCaptured\s+UnwindResource\.Insts\.RustlerResourceTraitsResource\s+\(?\{/
+
     assert length(prepared.bindings.bindings) == 2
     allocated = Enum.find(prepared.bindings.bindings, &(&1["name"] == "resource_allocate"))
     checked = Enum.find(prepared.bindings.bindings, &(&1["name"] == "resource_checked"))

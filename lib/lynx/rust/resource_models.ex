@@ -49,7 +49,7 @@ defmodule Lynx.Rust.ResourceModels do
         can_fail: true,
         lift: true,
         keep_params: [true],
-        keep_trait_clauses: [false],
+        keep_trait_clauses: [method == "new"],
         native_resource_type: arc["def_id"],
         resource_trait: resource["def_id"],
         resource_operation: method,
@@ -120,6 +120,33 @@ defmodule Lynx.Rust.ResourceModels do
     Enum.map_join(Map.get(external_names(calls), "globals", []), "", fn model ->
       name = String.replace(model["rust_pattern"], "::", ".") <> ".default"
       "local notation \"#{name}\" => #{model["extract_name"]}\n"
+    end)
+  end
+
+  # Aeneas infers an allocation's payload type from the extracted Resource
+  # dictionary. Keep that argument through Lean elaboration, then use the same
+  # audited allocator. The dictionary carries a type, so constructing a record
+  # here needs no special Aeneas printer.
+  def constructor_notation(calls, translation) do
+    calls
+    |> Map.values()
+    |> Enum.filter(&(&1[:resource_operation] == "new"))
+    |> Enum.uniq_by(& &1.lean)
+    |> Enum.sort_by(& &1.lean)
+    |> Enum.map_join(fn model ->
+      case Enum.filter(translation["trait_decls"], &(&1["def_id"] == model.resource_trait)) do
+        [%{"lean_name" => trait, "rust_name" => "rustler::resource::traits::Resource"}] ->
+          cleanup = if model.native_transfer, do: " [Lynx.NativeResourceCleanup α]", else: ""
+
+          """
+          local notation "#{model.lean}" =>
+            (fun {α : Type} (_ : _root_.#{trait} α) [Lynx.NativeCodec α]#{cleanup}
+              (value : α) => #{model.lean} value)
+          """
+
+        _ ->
+          raise ArgumentError, "missing or ambiguous extracted Rustler Resource dictionary"
+      end
     end)
   end
 
