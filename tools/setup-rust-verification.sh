@@ -1,5 +1,7 @@
 #!/bin/sh
-# Install pinned extractors; runtime profiles opt into the patched native stack.
+# Install pinned extractors. --unpatched and --captured install release binaries.
+# The default adds exact nested Charon roots. Codec and runtime profiles add
+# compiler changes for the features they support. All use the release Lean library.
 set -eu
 
 verification_profile=pure
@@ -132,19 +134,16 @@ fi
 aeneas_source="$install_dir/aeneas-source"
 git clone --no-checkout --filter=blob:none https://github.com/AeneasVerif/aeneas "$aeneas_source"
 git -C "$aeneas_source" checkout --detach 2b9e3ea4662b48c19262be759dbb704f20c24364
-if [ "$verification_profile" = join-recovery ]; then
-  # Preserve native enum-tag reads after a move and keep codec branches separate.
-  git -C "$aeneas_source" apply "$script_dir/patches/aeneas-partial-discriminants.patch"
-  git -C "$aeneas_source" apply "$script_dir/patches/aeneas-duplicate-branches.patch"
-else
+if [ "$verification_profile" != join-recovery ]; then
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-static-shared-loans.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-lean-result-monad.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-immediate-futures.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-undefined-behavior.patch"
   git -C "$aeneas_source" apply "$script_dir/patches/aeneas-effectful-calls.patch"
-  git -C "$aeneas_source" apply "$script_dir/patches/aeneas-partial-discriminants.patch"
-  git -C "$aeneas_source" apply "$script_dir/patches/aeneas-duplicate-branches.patch"
 fi
+# Both source-built Aeneas profiles support tag reads after moves and codec joins.
+git -C "$aeneas_source" apply "$script_dir/patches/aeneas-partial-discriminants.patch"
+git -C "$aeneas_source" apply "$script_dir/patches/aeneas-duplicate-branches.patch"
 ln -s "$source_dir" "$aeneas_source/charon"
 cp "$script_dir/aeneas.opam.locked" "$aeneas_source/src/aeneas.opam.locked"
 # Keep compiler packages and configuration inside this installation.
@@ -171,8 +170,6 @@ if [ "$verification_profile" = join-recovery ]; then
 fi
 printf '%s\n' "profile=$verification_profile" 'aeneas_branching=duplicate-v1' "aeneas=$aeneas_version" \
   'charon=7b462d9159db2ed3015162352183906a30bfafc6+lynx-nested-proof-roots+needs-drop-v1+pin-borrow-transfer-v1+immediate-futures-v1+suspending-futures-v1+cancelling-futures-v1+owned-drops-v1+owned-captures-v1+safe-pin-new-v1+pin-macro-v1+pin-as-mut-v1' \
-  'aeneas_effects=effectful-calls-v1' \
-  'aeneas_discriminants=partial-discriminants-v1' \
   'rust=nightly-2026-09-17' > "$install_dir/lynx-toolchain"
 if [ "$verification_profile" = runtime-captured ]; then
   echo "Installed combined owning-drop and captured-cleanup extraction support."
