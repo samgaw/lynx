@@ -103,6 +103,86 @@ open Record.RecoveryProperties (zeroMask)
     (append : NativeResourceArc shared_log.LogResource → U16 → NativeM Bool) : Result Term :=
   reopenThenStore reopen >>= bothWriters append
 
+/-- The abstract append changes the log only on commitment. A completed
+rollback leaves the previous records and returns a negative acknowledgement. -/
+@[expose] def serialAppend (log : List U16) (value : U16) (commit : Bool) : List U16 × Bool :=
+  if commit then (log ++ [value], true) else (log, false)
+
+structure SerialResult where
+  log : List U16
+  left : Bool
+  right : Bool
+
+/-- Under the declared script, the first serial call commits and the second
+rolls back. The replies retain the identities of the original callers. -/
+@[expose] def serialOrder (leftFirst : Bool) : SerialResult :=
+  let firstValue := if leftFirst then 19#u16 else 23#u16
+  let secondValue := if leftFirst then 23#u16 else 19#u16
+  let (committed, firstReply) := serialAppend [13#u16] firstValue true
+  let (log, secondReply) := serialAppend committed secondValue false
+  if leftFirst then ⟨log, firstReply, secondReply⟩ else ⟨log, secondReply, firstReply⟩
+
+private def replyAtom (ack : Bool) : String := if ack then "true" else "false"
+
+def SerialResult.reply (result : SerialResult) : Term :=
+  .tuple #[.atom (replyAtom result.left), .atom (replyAtom result.right)]
+
+private def atomName : Term → Option String
+  | .atom text => some text
+  | _ => none
+
+private def matchesReply (result : SerialResult) : Outcome Term → Bool
+  | .ok (.tuple fields) =>
+    fields.toList.map atomName == [some (replyAtom result.left), some (replyAtom result.right)]
+  | _ => false
+
+private theorem matchesReply_exact (result : SerialResult) (outcome : Outcome Term)
+    (matched : matchesReply result outcome = true) : outcome = .ok result.reply := by
+  cases outcome with
+  | error exception => contradiction
+  | deadlock => contradiction
+  | ok reply =>
+    cases reply <;> try contradiction
+    rename_i fields
+    simp only [matchesReply] at matched
+    simp only [beq_iff_eq] at matched
+    obtain ⟨left, rest, fieldList, leftAtom, restList⟩ := List.map_eq_cons_iff.mp matched
+    obtain ⟨right, tail, restEq, rightAtom, tailList⟩ := List.map_eq_cons_iff.mp restList
+    have empty : tail = [] := List.map_eq_nil_iff.mp tailList
+    have atomName_exact (value : Term) (text : String) (same : atomName value = some text) :
+        value = .atom text := by cases value <;> simp_all [atomName]
+    rw [restEq, empty, atomName_exact _ _ leftAtom, atomName_exact _ _ rightAtom] at fieldList
+    have tuple : fields = #[.atom (replyAtom result.left), .atom (replyAtom result.right)] :=
+      _root_.Array.toList_inj.mp fieldList
+    rw [tuple]
+    rfl
+
+private def matchesLog (result : SerialResult) (env : Environment) : Bool :=
+  match inode 1 env with
+  | some file =>
+    let bytes := disk (logBytes result.log)
+    file.visible.data == bytes.data && file.durable.data == bytes.data
+  | none => false
+
+private theorem matchesLog_exact (result : SerialResult) (env : Environment)
+    (matched : matchesLog result env = true) :
+    ∃ file, inode 1 env = some file ∧
+      file.visible = disk (logBytes result.log) ∧ file.durable = disk (logBytes result.log) := by
+  unfold matchesLog at matched
+  split at matched
+  · rename_i file found
+    simp only [Bool.and_eq_true, beq_iff_eq] at matched
+    exact ⟨file, found, ByteArray.ext matched.1, ByteArray.ext matched.2⟩
+  · contradiction
+
+private def matchesOrder (leftFirst : Bool) (config : Concurrent.Config Term) : Bool :=
+  let result := serialOrder leftFirst
+  matchesReply result config.outcome && matchesLog result (finalEnvironment config)
+
+def certified (config : Concurrent.Config Term) : Bool :=
+  retained config &&
+    (!config.successors.isEmpty || matchesOrder true config || matchesOrder false config)
+
 private def startsScheduling : Concurrent.Config α → Bool
   | .start env computation _ => Concurrent.isRequest env computation
   | .running .. => false
@@ -125,7 +205,8 @@ private theorem checkReopen_sound {first checkpoint : Concurrent.Config α} {dep
     (checked : checkReopen accept depth first = some checkpoint) :
     ∃ events, Concurrent.Run first events checkpoint ∧
       ∀ {laterEvents last}, Concurrent.Run first laterEvents last →
-        accept last = true ∨ ∃ remaining, Concurrent.Run checkpoint remaining last := by
+        (accept last = true ∧ last.successors ≠ []) ∨
+          ∃ remaining, Concurrent.Run checkpoint remaining last := by
   induction depth generalizing first with
   | zero => simp [checkReopen] at checked
   | succ depth ih =>
@@ -141,7 +222,7 @@ private theorem checkReopen_sound {first checkpoint : Concurrent.Config α} {dep
           refine ⟨event :: events, .step (by simp [Concurrent.Step, single]) reaches, ?_⟩
           intro laterEvents last run
           cases run with
-          | refl => exact .inl intact
+          | refl => exact .inl ⟨intact, by simp [single]⟩
           | step step rest =>
             simp [Concurrent.Step, single] at step
             obtain ⟨rfl, rfl⟩ := step
@@ -162,11 +243,10 @@ theorem reopening_supplies_resource (elapsed : PID → Nat → Nat) :
   obtain ⟨events, run, _⟩ := checkReopen_sound (reopening_checked elapsed)
   exact ⟨events, run⟩
 
-
 set_option maxHeartbeats 128000000 in
 set_option maxRecDepth 8192 in
 theorem prefixes_checked (elapsed : PID → Nat → Nat) :
-    Concurrent.checkInvariant retained 256
+    Concurrent.checkInvariant certified 256
       (.start afterReopen (bothWriters __APPEND__ (.nativeReference 7)) elapsed) = true := by
   lynx_check_invariant
 
@@ -176,8 +256,39 @@ theorem all_prefixes_safe (elapsed : PID → Nat → Nat)
       events last) : retained last = true := by
   obtain ⟨_, _, covers⟩ := checkReopen_sound (reopening_checked elapsed)
   rcases covers run with preserved | ⟨_, afterReopening⟩
-  · exact preserved
-  · exact Concurrent.checkInvariant_sound (prefixes_checked elapsed) afterReopening
+  · exact preserved.1
+  · have checked := Concurrent.checkInvariant_sound (prefixes_checked elapsed) afterReopening
+    simp only [certified, Bool.and_eq_true] at checked
+    exact checked.1
+
+/-- Every completed scheduler run refines one of the two abstract serial
+orders, with the exact replies and synchronized bytes of the same order. -/
+theorem terminal_serializes (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config Term} {outcome : Outcome Term}
+    (run : Concurrent.Run (.start initial (reopenAndWrite __REOPEN__ __APPEND__) elapsed) events last)
+    (terminal : Concurrent.Terminal last outcome) :
+    ∃ leftFirst file, let result := serialOrder leftFirst
+      outcome = .ok result.reply ∧ inode 1 (finalEnvironment last) = some file ∧
+        file.visible = disk (logBytes result.log) ∧ file.durable = disk (logBytes result.log) := by
+  obtain ⟨_, _, covers⟩ := checkReopen_sound (reopening_checked elapsed)
+  rcases covers run with preserved | ⟨_, afterReopening⟩
+  · exact False.elim (preserved.2 terminal.successors_eq_nil)
+  · have checked := Concurrent.checkInvariant_sound (prefixes_checked elapsed) afterReopening
+    simp only [certified, Bool.and_eq_true, terminal.successors_eq_nil, List.isEmpty_nil,
+      Bool.not_true, Bool.false_or, Bool.or_eq_true] at checked
+    have exactOrder (leftFirst : Bool) (matched : matchesOrder leftFirst last = true) :
+        ∃ file, let result := serialOrder leftFirst
+          outcome = .ok result.reply ∧ inode 1 (finalEnvironment last) = some file ∧
+            file.visible = disk (logBytes result.log) ∧ file.durable = disk (logBytes result.log) := by
+      simp only [matchesOrder, Bool.and_eq_true] at matched
+      obtain ⟨file, found, visible, durable⟩ := matchesLog_exact _ _ matched.2
+      exact ⟨file, terminal.outcome_eq.symm.trans (matchesReply_exact _ _ matched.1),
+        found, visible, durable⟩
+    rcases checked.2 with left | right
+    · obtain ⟨file, same⟩ := exactOrder true left
+      exact ⟨true, file, same⟩
+    · obtain ⟨file, same⟩ := exactOrder false right
+      exact ⟨false, file, same⟩
 
 @[expose] def lawAccepted (config : Concurrent.Config Term) : Bool :=
   config.outcome.isTrue &&
@@ -230,12 +341,14 @@ private theorem safe_images (winner : Option Bool) (env : Environment) (file : S
     · change acknowledged "left_ack" env = true at known
       simpa only [known, Bool.not_true, Bool.false_or, Bool.and_eq_true, records, bytesFor] using left
 
-private theorem kept_crash (config : Concurrent.Config Term) (intact : retained config = true)
-    (winner : Option Bool) (observedWinner : observed winner (finalEnvironment config) = true)
+private theorem captured_log (config : Concurrent.Config Term) (intact : retained config = true)
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
     (captured : filesystemCrashImage chosen masks (finalEnvironment config) = some image) :
-    ∃ bytes, image = ⟨names, [(1, bytes)], (finalEnvironment config).nativeRefCounter⟩ ∧
-      1 ≤ image.highWater ∧ Prefix (disk (logBytes (records winner))) bytes ∧ bytes.size ≤ 10 := by
+    ∃ state mask bytes, inode 1 (finalEnvironment config) = some state ∧
+      holdsAcknowledged (finalEnvironment config) state = true ∧
+      persist state.durable state.visible mask = some bytes ∧
+      image = ⟨names, [(1, bytes)], (finalEnvironment config).nativeRefCounter⟩ ∧
+      1 ≤ image.highWater := by
   unfold retained at intact
   dsimp only at intact
   simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at intact
@@ -255,14 +368,24 @@ private theorem kept_crash (config : Concurrent.Config Term) (intact : retained 
     · rename_i state found
       obtain ⟨mask, bytes, persisted, same⟩ :=
         captured_journal _ state snapshot.script fixed ids found chosen masks image captured
-      obtain ⟨v, d⟩ := safe_images winner _ _ contents observedWinner
-      have visible := data_prefix _ _ v
-      have durable := data_prefix _ _ d
-      have sizes := persist_lengths _ _ _ _ persisted
-      exact ⟨bytes, same, by simpa [same] using positive,
-        persist_prefix _ _ _ _ _ durable.1 visible.1 persisted, by omega⟩
+      exact ⟨state, mask, bytes, found, contents, persisted, same, by simpa [same] using positive⟩
     · contradiction
   · contradiction
+
+private theorem kept_crash (config : Concurrent.Config Term) (intact : retained config = true)
+    (winner : Option Bool) (observedWinner : observed winner (finalEnvironment config) = true)
+    (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
+    (captured : filesystemCrashImage chosen masks (finalEnvironment config) = some image) :
+    ∃ bytes, image = ⟨names, [(1, bytes)], (finalEnvironment config).nativeRefCounter⟩ ∧
+      1 ≤ image.highWater ∧ Prefix (disk (logBytes (records winner))) bytes ∧ bytes.size ≤ 10 := by
+  obtain ⟨state, mask, bytes, _, kept, persisted, same, positive⟩ :=
+    captured_log config intact chosen masks image captured
+  obtain ⟨v, d⟩ := safe_images winner _ state kept observedWinner
+  have visible := data_prefix _ _ v
+  have durable := data_prefix _ _ d
+  have sizes := persist_lengths _ _ _ _ persisted
+  exact ⟨bytes, same, positive,
+    persist_prefix _ _ _ _ _ durable.1 visible.1 persisted, by omega⟩
 
 private theorem record_count (winner : Option Bool) : (records winner).length ≤ 262144 := by
   cases winner with
@@ -291,5 +414,41 @@ theorem recover_observed (elapsed : PID → Nat → Nat)
     chosen masks image captured
   exact ⟨bytes, named, restart_prefix (records winner) ⟨bytes, image.highWater⟩ rest present
     (by dsimp; unfold limit; omega) (record_count winner)⟩
+
+private theorem serial_count (leftFirst : Bool) : (serialOrder leftFirst).log.length ≤ 262144 := by
+  cases leftFirst <;> decide
+
+/-- A crash after both replies preserves the exact abstract serial log under
+every admitted crash mask. A fresh bounded read returns that log through
+the extracted cross-crate Rust recovery implementation. -/
+theorem recover_serial_log (elapsed : PID → Nat → Nat)
+    {events : List Concurrent.Event} {last : Concurrent.Config Term} {outcome : Outcome Term}
+    (run : Concurrent.Run (.start initial (reopenAndWrite __REOPEN__ __APPEND__) elapsed) events last)
+    (terminal : Concurrent.Terminal last outcome)
+    (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
+    (captured : filesystemCrashImage chosen masks (finalEnvironment last) = some image)
+    (rest : Term) :
+    ∃ leftFirst, let result := serialOrder leftFirst
+      let bytes := disk (logBytes result.log)
+      let file : NativeFile := ⟨image.highWater + 1⟩
+      outcome = .ok result.reply ∧
+        image = ⟨names, [(1, bytes)], (finalEnvironment last).nativeRefCounter⟩ ∧
+        recover_log file (Usize.ofNatCore result.log.length (by have := serial_count leftFirst; scalar_tac))
+          (restarted ⟨bytes, image.highWater⟩ (recoveryScript bytes rest)) =
+          (.ok (.Ok (alloc.vec.Vec.from result.log (by have := serial_count leftFirst; scalar_tac)), file),
+            fileEnv ({} : Environment) file (scanning bytes rest (4 * result.log.length)) []) := by
+  obtain ⟨leftFirst, file, reply, found, visible, durable⟩ := terminal_serializes elapsed run terminal
+  obtain ⟨state, mask, bytes, sameFile, _, persisted, named, _⟩ :=
+    captured_log last (all_prefixes_safe elapsed run) chosen masks image captured
+  have equal := Option.some.inj (found.symm.trans sameFile)
+  subst state
+  rw [visible, durable] at persisted
+  have stable := NativeFile.persist_same _ _ _ persisted
+  subst bytes
+  refine ⟨leftFirst, reply, named, restart_prefix (serialOrder leftFirst).log
+    ⟨disk (logBytes (serialOrder leftFirst).log), image.highWater⟩ rest
+    ⟨le_rfl, fun _ _ => rfl⟩ ?_ (serial_count leftFirst)⟩
+  change (disk (logBytes (serialOrder leftFirst).log)).size ≤ limit
+  cases leftFirst <;> decide +kernel
 
 end Record.ConcurrentRollback

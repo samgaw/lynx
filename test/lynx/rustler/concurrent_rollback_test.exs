@@ -13,7 +13,7 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
          do: @moduletag(skip: "set LYNX_AENEAS_DIR to the pinned runtime backend")
 
   @tag :tmp_dir
-  test "protects the observed winner when the competing Rustler append rolls back",
+  test "serializes concurrent Rustler append and rollback and recovers their durable log",
        %{tmp_dir: tmp} do
     %{options: options, project: project, workspace: workspace} =
       Lynx.Rust.IoFixture.prepare_shared!(tmp, @tools, ["SharedRecoveryProperties"])
@@ -45,7 +45,8 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
 
     properties =
       Enum.map(
-        ~w(reopening_supplies_resource prefixes_checked all_prefixes_safe recover_observed),
+        ~w(reopening_supplies_resource prefixes_checked all_prefixes_safe recover_observed
+        terminal_serializes recover_serial_log),
         &("Record.ConcurrentRollback." <> &1)
       )
 
@@ -63,12 +64,36 @@ defmodule Lynx.Rustler.ConcurrentRollbackTest do
           {"reopening_supplies_resource", reopen["lean_name"]},
           {"prefixes_checked", append["lean_name"]},
           {"recover_observed", append["lean_name"]},
-          {"recover_observed", "io_native.io_protocol.recover_log"}
+          {"recover_observed", "io_native.io_protocol.recover_log"},
+          {"terminal_serializes", append["lean_name"]},
+          {"recover_serial_log", "io_native.io_protocol.recover_log"}
         ] do
       assert Enum.any?(prepared.verification.guarantees, fn evidence ->
                evidence.kind == :rust_implementation and evidence.lean_name == implementation and
                  evidence.theorem == "Record.ConcurrentRollback." <> theorem
              end)
+    end
+
+    specification = Path.join(project, "Record/ConcurrentRollback.lean")
+    source = File.read!(specification)
+
+    swapped_replies =
+      String.replace(
+        source,
+        "if leftFirst then ⟨log, firstReply, secondReply⟩ else ⟨log, secondReply, firstReply⟩",
+        "if leftFirst then ⟨log, secondReply, firstReply⟩ else ⟨log, firstReply, secondReply⟩"
+      )
+
+    refute swapped_replies == source
+
+    try do
+      File.write!(specification, swapped_replies)
+
+      assert_raise RuntimeError, ~r/prefix invariant rejected at a reachable configuration/, fn ->
+        Lynx.Rust.Project.build!(project, ["Record.ConcurrentRollback"])
+      end
+    after
+      File.write!(specification, source)
     end
 
     core = Path.join(workspace, "core/src/lib.rs")
