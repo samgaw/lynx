@@ -1,14 +1,16 @@
 module
 public import Record.RecoveryScanInvariant
 public import Record.RepeatedRepairProperties
+public import Record.FileView
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RepairReturnProperties
-variable [heapLayout : Record.Properties.HeapLayout]
+open Record.FileView
+variable [view : FileView]
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.IntegrityProperties Record.CrashProperties Record.LogProperties Record.TailProperties Record.ResizeProperties Record.RepairCrashProperties
 
-omit heapLayout in
+omit view in
 private theorem read_choice (before : State) (count : Usize) (after : State) (updated : Slice U8)
     (step : readStep before (one 0#u8) = some (.Ok count, after, updated)) :
     ∃ value mask rest, action "read" before.script = some (true, value, mask, rest) ∧
@@ -83,10 +85,10 @@ private theorem read_eof_return (before : State) (count : Usize) (after : State)
 theorem read_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (buffer : Slice U8)
     (output : core.result.Result Usize NativeIoError × NativeFile × Slice U8) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before)
-    (trace : Result.ReadyPrefix (io_core.read_once file buffer) (fileEnv env file before frame) (.ok output) world) :
+    (separate : Separated file frame) (valid : Valid before)
+    (trace : Result.ReadyPrefix (io_core.read_once file buffer) (render env file before frame) (.ok output) world) :
     ∃ reply after updated, output = (reply, file, updated) ∧
-      world = fileEnv env file after frame ∧ blocked before = false ∧
+      world = render env file after frame ∧ blocked before = false ∧
       readStep before buffer = some (reply, after, updated) := by
   simp only [io_core.read_once, monadLift_self, NativeFile.read] at trace
   cases trace with
@@ -95,7 +97,7 @@ theorem read_returns (file : NativeFile) (env : Environment)
       | error exception => cases rest
       | ok output =>
           cases rest
-          simp only [pollRead, lookup_at env file before frame separate valid] at ready
+          simp only [pollRead, load_rendered env file before frame separate (admits_valid before valid)] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
           · simp only [stopped, Option.any, Option.elim, Option.isSome, Bool.false_eq_true, ↓reduceIte] at ready
@@ -105,23 +107,22 @@ theorem read_returns (file : NativeFile) (env : Environment)
                 obtain ⟨reply, after, updated⟩ := outcome
                 simp only [step] at ready
                 obtain ⟨rfl, rfl⟩ := ready
-                exact ⟨reply, after, updated, rfl, store_at env file before after frame separate,
+                exact ⟨reply, after, updated, rfl, store_rendered env file before after frame separate (admits_valid before valid),
                   by simpa only [Bool.not_eq_true] using stopped, rfl⟩
 
 
 private theorem word_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (low high : UInt8) (tail : List UInt8)
     (option : Option U16) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
+    (separate : Separated file frame) (valid : Valid before) (stable : before.durable = before.visible)
     (contents : before.visible.data.toList.drop before.position = low :: high :: tail)
-    (trace : Result.ReadyPrefix (read_word file) (fileEnv env file before frame)
+    (trace : Result.ReadyPrefix (read_word file) (render env file before frame)
       (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world) :
     option = some (word (byteValue low) (byteValue high)) ∧ returnedFile = file ∧
-      ∃ rest, world = fileEnv env file (readState before 2 before.visible rest) frame := by
-  have originalTrace := trace
+      ∃ rest, world = render env file (readState before 2 before.visible rest) frame := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind] at trace
   change Result.ReadyPrefix (io_core.read_once file (one 0#u8) >>= _)
-    (fileEnv env file before frame) (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world at trace
+    (render env file before frame) (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world at trace
   obtain ⟨first, midway, firstTrace, continuation⟩ := trace.bind_returns
   obtain ⟨first, middle, buffer, rfl, rfl, ready0, step0⟩ :=
     read_returns file env frame before (one 0#u8) _ _ separate valid firstTrace
@@ -143,7 +144,7 @@ private theorem word_returns (file : NativeFile) (env : Environment)
         rw [← List.drop_drop, contents]
         rfl
       change Result.ReadyPrefix (io_core.read_once file (one 0#u8) >>= _)
-        (fileEnv env file (readState before 1 before.visible rest1) frame)
+        (render env file (readState before 1 before.visible rest1) frame)
         (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world at continuation
       obtain ⟨second, midway, secondTrace, continuation⟩ := continuation.bind_returns
       obtain ⟨second, after, buffer, rfl, rfl, ready1, step1⟩ :=
@@ -154,30 +155,25 @@ private theorem word_returns (file : NativeFile) (env : Environment)
           cases continuation
       | Ok count =>
           obtain ⟨rest2, rfl, rfl, rfl⟩ := read_byte _ high tail count after buffer rfl remaining step1
-          have expected := parser_ready file env frame before
-            (readState before 1 before.visible rest1)
-            (readState (readState before 1 before.visible rest1) 1 before.visible rest2)
-            (byteValue low) (byteValue high) separate valid middleValid ready0 ready1 step0 step1
-          have observed := originalTrace.run []
-          rw [Result.ok_apply] at observed
-          have equality := expected.symm.trans observed
-          simp only [Prod.mk.injEq, Outcome.ok.injEq, core.result.Result.Ok.injEq] at equality
-          refine ⟨equality.1.1.symm, equality.1.2.symm, rest2, ?_⟩
-          simpa only [readState, Nat.add_assoc] using equality.2.symm
+          simp [NativeM.ok, NativeM.lift, Array.from_slice, Array.to_slice_mut, one,
+            Array.make_val, Array.index_usize, NativeM.monadLift_eq, NativeM.fromRust,
+            word, Result.ok_bind, Result.ok_apply] at continuation
+          cases continuation
+          exact ⟨rfl, rfl, rest2, by simp only [readState, Nat.add_assoc]⟩
 
 
 private theorem word_short_return (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (tail : List UInt8)
     (option : Option U16) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
+    (separate : Separated file frame) (valid : Valid before) (stable : before.durable = before.visible)
     (contents : before.visible.data.toList.drop before.position = tail) (short : tail.length < 2)
-    (trace : Result.ReadyPrefix (read_word file) (fileEnv env file before frame)
+    (trace : Result.ReadyPrefix (read_word file) (render env file before frame)
       (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world) :
     option = none ∧ returnedFile = file ∧
-      ∃ rest, world = fileEnv env file (readState before tail.length before.visible rest) frame := by
+      ∃ rest, world = render env file (readState before tail.length before.visible rest) frame := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind] at trace
   change Result.ReadyPrefix (io_core.read_once file (one 0#u8) >>= _)
-    (fileEnv env file before frame)
+    (render env file before frame)
     (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world at trace
   obtain ⟨first, midway, firstTrace, continuation⟩ := trace.bind_returns
   obtain ⟨first, middle, buffer, rfl, rfl, ready0, step0⟩ :=
@@ -211,7 +207,7 @@ private theorem word_short_return (file : NativeFile) (env : Environment)
           have middleValid : Valid (readState before 1 before.visible rest1) :=
             ⟨valid.1, le_rfl, by dsimp [readState]; have := valid.1; omega⟩
           change Result.ReadyPrefix (io_core.read_once file (one 0#u8) >>= _)
-            (fileEnv env file (readState before 1 before.visible rest1) frame)
+            (render env file (readState before 1 before.visible rest1) frame)
             (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world at continuation
           obtain ⟨second, midway, secondTrace, continuation⟩ := continuation.bind_returns
           obtain ⟨second, after, buffer, rfl, rfl, ready1, step1⟩ :=
@@ -231,12 +227,12 @@ private theorem word_short_return (file : NativeFile) (env : Environment)
 theorem record_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (value : U16) (tail : List U8)
     (option : Option U16) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
+    (separate : Separated file frame) (valid : Valid before) (stable : before.durable = before.visible)
     (contents : before.visible.data.toList.drop before.position = ((layout value).val ++ tail).map rawByte)
-    (trace : Result.ReadyPrefix (read_record file) (fileEnv env file before frame)
+    (trace : Result.ReadyPrefix (read_record file) (render env file before frame)
       (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world) :
     option = some value ∧ returnedFile = file ∧
-      ∃ rest, world = fileEnv env file (readState before 4 before.visible rest) frame := by
+      ∃ rest, world = render env file (readState before 4 before.visible rest) frame := by
   have bytes0 : before.visible.data.toList.drop before.position =
       rawByte (low value) :: rawByte (high value) :: rawByte (low (~~~value)) ::
         rawByte (high (~~~value)) :: tail.map rawByte := by
@@ -266,7 +262,7 @@ theorem record_returns (file : NativeFile) (env : Environment)
         rw [← List.drop_drop, bytes0]
         rfl
       change Result.ReadyPrefix (read_word file >>= _)
-        (fileEnv env file (readState before 2 before.visible rest1) frame)
+        (render env file (readState before 2 before.visible rest1) frame)
         (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world at continuation
       obtain ⟨second, midway, secondTrace, continuation⟩ := continuation.bind_returns
       obtain ⟨second, secondFile⟩ := second
@@ -287,12 +283,12 @@ theorem record_returns (file : NativeFile) (env : Environment)
 private theorem record_short_return (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (tail : List UInt8)
     (option : Option U16) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
+    (separate : Separated file frame) (valid : Valid before) (stable : before.durable = before.visible)
     (contents : before.visible.data.toList.drop before.position = tail) (short : tail.length < 4)
-    (trace : Result.ReadyPrefix (read_record file) (fileEnv env file before frame)
+    (trace : Result.ReadyPrefix (read_record file) (render env file before frame)
       (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world) :
     option = none ∧ returnedFile = file ∧
-      ∃ rest, world = fileEnv env file (readState before tail.length before.visible rest) frame := by
+      ∃ rest, world = render env file (readState before tail.length before.visible rest) frame := by
   simp only [read_record, monadLift_self] at trace
   obtain ⟨first, midway, firstTrace, continuation⟩ := trace.bind_returns
   obtain ⟨first, firstFile⟩ := first
@@ -331,7 +327,7 @@ private theorem record_short_return (file : NativeFile) (env : Environment)
                   rw [← List.drop_drop, contents]
                   rfl
                 change Result.ReadyPrefix (read_word file >>= _)
-                  (fileEnv env file (readState before 2 before.visible rest1) frame)
+                  (render env file (readState before 2 before.visible rest1) frame)
                   (.ok ((core.result.Result.Ok option : core.result.Result (Option U16) NativeIoError), returnedFile)) world at continuation
                 obtain ⟨second, midway, secondTrace, continuation⟩ := continuation.bind_returns
                 obtain ⟨second, secondFile⟩ := second
@@ -353,13 +349,13 @@ private theorem loop_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (remaining : List U16) (tail : List U8)
     (accumulated : alloc.vec.Vec U16) (maxRecords : Usize) (fuel : Nat)
     (returned : alloc.vec.Vec U16) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
+    (separate : Separated file frame) (valid : Valid before) (stable : before.durable = before.visible)
     (contents : before.visible.data.toList.drop before.position = (logBytes remaining ++ tail).map rawByte)
     (short : tail.length < 4) (countBound : accumulated.val.length ≤ maxRecords.val)
     (trace : Result.ReadyPrefix
       (NativeM.loopFuel (fun (file, values) => recover_log_loop.body maxRecords file values)
-        fuel (file, accumulated)) (fileEnv env file before frame) (.ok (.Ok returned, returnedFile)) world) :
-    returnedFile = file ∧ ∃ after, world = fileEnv env file after frame ∧
+        fuel (file, accumulated)) (render env file before frame) (.ok (.Ok returned, returnedFile)) world) :
+    returnedFile = file ∧ ∃ after, world = render env file after frame ∧
       after.visible = before.visible ∧ after.durable = before.visible ∧ Valid after ∧
       (returned.val.length = maxRecords.val ∨ returned.val = accumulated.val ++ remaining) := by
   induction fuel generalizing remaining before accumulated with
@@ -439,7 +435,7 @@ private theorem loop_returns (file : NativeFile) (env : Environment)
         cases trace
         exact ⟨rfl, before, rfl, rfl, stable, valid, .inl equal⟩
 
-omit heapLayout in
+omit view in
 private theorem seek_zero_step (before : State) (offset : U64) (after : State)
     (stable : before.durable = before.visible)
     (step : seekStep before (.start 0#u64) = some (.Ok offset, after)) :
@@ -469,10 +465,10 @@ private theorem seek_zero_step (before : State) (offset : U64) (after : State)
 theorem seek_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (offset : U64) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
-    (trace : Result.ReadyPrefix (io_core.seek_to file 0#u64) (fileEnv env file before frame)
+    (separate : Separated file frame) (valid : Valid before) (stable : before.durable = before.visible)
+    (trace : Result.ReadyPrefix (io_core.seek_to file 0#u64) (render env file before frame)
       (.ok ((core.result.Result.Ok offset : core.result.Result U64 NativeIoError), returnedFile)) world) :
-    returnedFile = file ∧ ∃ rest, world = fileEnv env file (sought before 0 before.visible rest) frame := by
+    returnedFile = file ∧ ∃ rest, world = render env file (sought before 0 before.visible rest) frame := by
   simp only [io_core.seek_to, io_core.seek_from, Record.Extraction.FileModel.seek,
     NativeFile.seek, monadLift_self] at trace
   cases trace with
@@ -482,7 +478,7 @@ theorem seek_returns (file : NativeFile) (env : Environment)
       | ok output =>
           cases continuation
           unfold pollSeek at ready
-          rw [lookup_at env file before frame separate valid] at ready
+          rw [load_rendered env file before frame separate (admits_valid before valid)] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
           · simp only [stopped] at ready
@@ -493,7 +489,7 @@ theorem seek_returns (file : NativeFile) (env : Environment)
                 simp only [step] at ready
                 obtain ⟨rfl, rfl⟩ := ready
                 obtain ⟨rest, _, rfl⟩ := seek_zero_step before offset after stable step
-                exact ⟨rfl, rest, store_at env file before _ frame separate⟩
+                exact ⟨rfl, rest, store_rendered env file before _ frame separate (admits_valid before valid)⟩
 
 /-- Successful completion of the actual cross-crate recovery scan on a stable
 reopened image. Host choices and the initial cursor are arbitrary. The result
@@ -502,11 +498,11 @@ errors, blocking and exhaustion do not satisfy the successful-return premise. -/
 theorem recover_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (values : List U16) (tail : List U8)
     (maxRecords : Usize) (returned : alloc.vec.Vec U16) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Valid before) (stable : before.durable = before.visible)
+    (separate : Separated file frame) (valid : Valid before) (stable : before.durable = before.visible)
     (contents : before.visible = disk (logBytes values ++ tail)) (short : tail.length < 4)
-    (trace : Result.ReadyPrefix (recover_log file maxRecords) (fileEnv env file before frame)
+    (trace : Result.ReadyPrefix (recover_log file maxRecords) (render env file before frame)
       (.ok (.Ok returned, returnedFile)) world) :
-    returnedFile = file ∧ ∃ after, world = fileEnv env file after frame ∧
+    returnedFile = file ∧ ∃ after, world = render env file after frame ∧
       after.visible = before.visible ∧ after.durable = before.visible ∧ Valid after ∧
       (returned.val.length = maxRecords.val ∨ returned.val = values) := by
   simp only [recover_log, monadLift_self] at trace

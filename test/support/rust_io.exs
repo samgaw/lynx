@@ -5,16 +5,7 @@ defmodule Lynx.Rust.IoFixture do
   def prepare_shared!(tmp, tools, extra_modules \\ []) do
     {workspace, project, fixture} = prepare!(tmp, tools)
 
-    for module <- fixture[:proof_modules] do
-      path = Path.join(project, String.replace(module, ".", "/") <> ".lean")
-
-      source =
-        File.read!(path)
-        |> String.replace("Lynx io_protocol", "Lynx io_native io_native.io_protocol")
-        |> String.replace("NativeDrop.drop", "NativeOwnedDrop.drop")
-
-      File.write!(path, source)
-    end
+    qualify_shared_proofs!(project, fixture[:proof_modules])
 
     options = [
       workspace: workspace,
@@ -85,6 +76,11 @@ defmodule Lynx.Rust.IoFixture do
     extra_modules =
       if "FileReturnIdentity" in extra_modules,
         do: Enum.uniq(extra_modules ++ ~w(RecoveryVisibleFrame RepairVisibleInvariant)),
+        else: extra_modules
+
+    extra_modules =
+      if "RecoveryScanInvariant" in extra_modules,
+        do: Enum.uniq(["FileView" | extra_modules]),
         else: extra_modules
 
     sources =
@@ -162,11 +158,26 @@ defmodule Lynx.Rust.IoFixture do
     {workspace, project, options}
   end
 
+  def qualify_shared_proofs!(project, modules) do
+    qualify_proofs!(project, modules, fn source ->
+      source
+      |> String.replace("Lynx io_protocol", "Lynx io_native io_native.io_protocol")
+      |> String.replace("NativeDrop.drop", "NativeOwnedDrop.drop")
+    end)
+  end
+
   def qualify_owned_drops!(project, modules) do
+    qualify_proofs!(
+      project,
+      modules,
+      &String.replace(&1, "NativeDrop.drop", "NativeOwnedDrop.drop")
+    )
+  end
+
+  defp qualify_proofs!(project, modules, qualify) do
     for module <- modules do
       path = Path.join(project, String.replace(module, ".", "/") <> ".lean")
-      source = File.read!(path)
-      File.write!(path, String.replace(source, "NativeDrop.drop", "NativeOwnedDrop.drop"))
+      File.write!(path, qualify.(File.read!(path)))
     end
   end
 end

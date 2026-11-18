@@ -1,8 +1,11 @@
 module
 public import Record.RepairCrashProperties
+public import Record.FileView
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RecoveryScanInvariant
+open Record.FileView
+variable [view : FileView]
 open NativeFile Record.Properties Record.ReadProperties Record.ResizeProperties
   Record.RepairCrashProperties
 
@@ -10,7 +13,7 @@ open NativeFile Record.Properties Record.ReadProperties Record.ResizeProperties
 images, while offsets, partial tails, persistence choices and host scripts vary. -/
 @[expose] def ImageInvariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (world : Environment) : Prop :=
-  ∃ state, world = fileEnv env file state frame ∧ Admitted state ∧
+  ∃ state, world = render env file state frame ∧ Admitted state ∧
     LogImage values state.visible ∧ LogImage values state.durable
 
 private theorem read_step_preserves (before : State) (buffer : Slice U8)
@@ -87,22 +90,22 @@ private theorem seek_step_preserves (before : State) (origin : SeekFrom)
 private theorem seek_next_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State)
     (next : core.result.Result U64 NativeIoError × NativeFile → NativeM α)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable)
     (continuation : ∀ reply after, Admitted after → LogImage values after.visible →
       LogImage values after.durable →
       Result.NativeInvariant (ImageInvariant env file frame values) (next (reply, file))
-        (fileEnv env file after frame)) :
+        (render env file after frame)) :
     Result.NativeInvariant (ImageInvariant env file frame values)
-      (io_core.seek_to file 0#u64 >>= next) (fileEnv env file before frame) := by
-  have initial : ImageInvariant env file frame values (fileEnv env file before frame) :=
+      (io_core.seek_to file 0#u64 >>= next) (render env file before frame) := by
+  have initial : ImageInvariant env file frame values (render env file before frame) :=
     ⟨before, rfl, valid, visible, durable⟩
   simp only [io_core.seek_to, io_core.seek_from, Record.Extraction.FileModel.seek,
     NativeFile.seek, monadLift_self, Result.wait_bind]
   apply Result.NativeInvariant.wait _ _ _ initial
   intro actual world ready
   unfold pollSeek at ready
-  rw [lookup_admitted env file before frame separate valid] at ready
+  rw [load_rendered env file before frame separate valid] at ready
   by_cases stopped : blocked before = true
   · simp [stopped] at ready
   · simp only [stopped] at ready
@@ -116,7 +119,7 @@ private theorem seek_next_invariant (env : Environment) (file : NativeFile)
         obtain ⟨reply, after⟩ := outcome
         simp only [step] at ready
         obtain ⟨rfl, rfl⟩ := ready
-        rw [store_at env file before after frame separate]
+        rw [store_rendered env file before after frame separate valid]
         simp only [Result.ok_bind]
         have kept := seek_step_preserves before _ reply after values valid visible durable step
         exact continuation reply after kept.1 kept.2.1 kept.2.2
@@ -124,21 +127,21 @@ private theorem seek_next_invariant (env : Environment) (file : NativeFile)
 private theorem read_next_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State)
     (buffer : Slice U8) (next : core.result.Result Usize NativeIoError × NativeFile × Slice U8 → NativeM α)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable)
     (continuation : ∀ reply buffer after, Admitted after → LogImage values after.visible →
       LogImage values after.durable →
       Result.NativeInvariant (ImageInvariant env file frame values) (next (reply, file, buffer))
-        (fileEnv env file after frame)) :
+        (render env file after frame)) :
     Result.NativeInvariant (ImageInvariant env file frame values)
-      (io_core.read_once file buffer >>= next) (fileEnv env file before frame) := by
-  have initial : ImageInvariant env file frame values (fileEnv env file before frame) :=
+      (io_core.read_once file buffer >>= next) (render env file before frame) := by
+  have initial : ImageInvariant env file frame values (render env file before frame) :=
     ⟨before, rfl, valid, visible, durable⟩
   simp only [io_core.read_once, monadLift_self, NativeFile.read, Result.wait_bind]
   apply Result.NativeInvariant.wait _ _ _ initial
   intro actual world ready
   unfold pollRead at ready
-  rw [lookup_admitted env file before frame separate valid] at ready
+  rw [load_rendered env file before frame separate valid] at ready
   by_cases stopped : blocked before = true
   · simp [stopped] at ready
   · simp only [stopped, Option.any, Option.elim, Option.isSome, Bool.false_eq_true, ↓reduceIte] at ready
@@ -152,7 +155,7 @@ private theorem read_next_invariant (env : Environment) (file : NativeFile)
         obtain ⟨reply, after, updated⟩ := outcome
         simp only [step] at ready
         obtain ⟨rfl, rfl⟩ := ready
-        rw [store_at env file before after frame separate]
+        rw [store_rendered env file before after frame separate valid]
         simp only [Result.ok_bind]
         have kept := read_step_preserves before buffer reply after updated values valid visible durable step
         exact continuation reply updated after kept.1 kept.2.1 kept.2.2
@@ -174,14 +177,14 @@ private theorem from_rust_invariant (holds : Environment → Prop) (before : Env
 private theorem word_next_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State)
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable)
     (continuation : ∀ reply after, Admitted after → LogImage values after.visible →
       LogImage values after.durable →
       Result.NativeInvariant (ImageInvariant env file frame values) (next (reply, file))
-        (fileEnv env file after frame)) :
+        (render env file after frame)) :
     Result.NativeInvariant (ImageInvariant env file frame values)
-      (read_word file >>= next) (fileEnv env file before frame) := by
+      (read_word file >>= next) (render env file before frame) := by
   simp only [read_word, NativeM.lift, monadLift_self, Result.ok_bind, bind_assoc]
   apply read_next_invariant env file frame values before _ _ separate valid visible durable
   intro first buffer middle admitted firstVisible firstDurable
@@ -220,14 +223,14 @@ private theorem word_next_invariant (env : Environment) (file : NativeFile)
 private theorem record_next_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State)
     (next : core.result.Result (Option U16) NativeIoError × NativeFile → NativeM α)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable)
     (continuation : ∀ reply after, Admitted after → LogImage values after.visible →
       LogImage values after.durable →
       Result.NativeInvariant (ImageInvariant env file frame values) (next (reply, file))
-        (fileEnv env file after frame)) :
+        (render env file after frame)) :
     Result.NativeInvariant (ImageInvariant env file frame values)
-      (read_record file >>= next) (fileEnv env file before frame) := by
+      (read_record file >>= next) (render env file before frame) := by
   simp only [read_record, monadLift_self, bind_assoc]
   apply word_next_invariant env file frame values before _ separate valid visible durable
   intro first middle admitted v d
@@ -259,15 +262,15 @@ private theorem loop_next_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State)
     (accumulated : alloc.vec.Vec U16) (maxRecords : Usize) (fuel : Nat)
     (next : core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFile → NativeM α)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable)
     (continuation : ∀ reply after, Admitted after → LogImage values after.visible →
       LogImage values after.durable →
       Result.NativeInvariant (ImageInvariant env file frame values) (next (reply, file))
-        (fileEnv env file after frame)) :
+        (render env file after frame)) :
     Result.NativeInvariant (ImageInvariant env file frame values)
       (NativeM.loopFuel (fun (file, accumulated) => recover_log_loop.body maxRecords file accumulated)
-        fuel (file, accumulated) >>= next) (fileEnv env file before frame) := by
+        fuel (file, accumulated) >>= next) (render env file before frame) := by
   induction fuel generalizing before accumulated with
   | zero =>
       simp only [NativeM.loopFuel, Result.error_bind]
@@ -301,10 +304,10 @@ private theorem loop_next_invariant (env : Environment) (file : NativeFile)
 host read choices, including short reads, errors, malformed choices and blocking. -/
 theorem read_once_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State)
-    (buffer : Slice U8) (separate : Separate file frame) (valid : Admitted before)
+    (buffer : Slice U8) (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable) :
     Result.NativeInvariant (ImageInvariant env file frame values)
-      (io_core.read_once file buffer) (fileEnv env file before frame) := by
+      (io_core.read_once file buffer) (render env file before frame) := by
   have safe := read_next_invariant env file frame values before buffer Result.ok
     separate valid visible durable (fun reply updated after admitted v d =>
       Result.NativeInvariant.ok _ _ _ ⟨after, rfl, admitted, v, d⟩)
@@ -315,10 +318,10 @@ theorem read_once_invariant (env : Environment) (file : NativeFile)
 without assuming successful reads or well-formed host scripts. -/
 theorem record_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable) :
     Result.NativeInvariant (ImageInvariant env file frame values)
-      (read_record file) (fileEnv env file before frame) := by
+      (read_record file) (render env file before frame) := by
   have safe := record_next_invariant env file frame values before Result.ok
     separate valid visible durable (fun reply after admitted v d =>
       Result.NativeInvariant.ok _ _ _ ⟨after, rfl, admitted, v, d⟩)
@@ -328,10 +331,10 @@ theorem record_invariant (env : Environment) (file : NativeFile)
 host seek/read choices. Completion and returned records are separate properties. -/
 theorem recover_log_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State) (maxRecords : Usize)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable) :
     Result.NativeInvariant (ImageInvariant env file frame values)
-      (recover_log file maxRecords) (fileEnv env file before frame) := by
+      (recover_log file maxRecords) (render env file before frame) := by
   simp only [recover_log, monadLift_self]
   apply seek_next_invariant env file frame values before _ separate valid visible durable
   intro reply after admitted v d
@@ -354,10 +357,10 @@ abbrev Reply := core.result.Result (alloc.vec.Vec U16) NativeIoError × NativeFi
 configuration entered by a blocked native wait. No terminality is assumed. -/
 theorem recover_prefix_invariant (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (values : List U16) (before : State) (maxRecords : Usize)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (visible : LogImage values before.visible) (durable : LogImage values before.durable)
     (elapsed : PID → Nat → Nat) (events : List Concurrent.Event) (last : Concurrent.Config Reply)
-    (executed : Concurrent.Run (.start (fileEnv env file before frame)
+    (executed : Concurrent.Run (.start (render env file before frame)
       (recover_log file maxRecords) elapsed) events last) :
     ImageInvariant env file frame values (snapshot env.currentPid last) := by
   have safe := recover_log_invariant env file frame values before maxRecords separate valid visible durable
@@ -365,12 +368,11 @@ theorem recover_prefix_invariant (env : Environment) (file : NativeFile)
   rcases ending with ⟨residual, rfl⟩ | ⟨residual, rfl⟩
   · exact kept
   · obtain ⟨state, rfl, admitted, v, d⟩ := kept
-    have observed : (Concurrent.State.initial (fileEnv env file state frame) elapsed).nativeView env.currentPid =
-        fileEnv env file state frame := by
-      simp [Concurrent.State.nativeView, Concurrent.State.view, Concurrent.State.process,
-        Concurrent.State.initial, fileEnv]
+    have observed : (Concurrent.State.initial (render env file state frame) elapsed).nativeView env.currentPid =
+        render env file state frame := by
+      exact initial_view env file state frame elapsed
     simpa only [snapshot, observed] using
-      (show ImageInvariant env file frame values (fileEnv env file state frame) from
+      (show ImageInvariant env file frame values (render env file state frame) from
         ⟨state, rfl, admitted, v, d⟩)
 
 end Record.RecoveryScanInvariant

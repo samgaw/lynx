@@ -28,6 +28,7 @@ theorem recover_after_repair_crash (env : Environment) (file : NativeFile)
     stable visible elapsed events last executed
   obtain ⟨state, equal, admitted, v, d⟩ := kept
   rw [equal] at captured
+  change crashImage file mask (fileEnv env file state frame) = some image at captured
   unfold crashImage at captured
   rw [lookup_admitted env file state frame separate admitted] at captured
   change (persist state.durable state.visible mask).bind

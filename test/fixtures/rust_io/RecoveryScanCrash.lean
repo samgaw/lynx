@@ -27,6 +27,7 @@ theorem recover_after_scan_crash (env : Environment) (file : NativeFile)
   have kept := recover_prefix_invariant env file frame values before maxRecords separate valid
     visible durable elapsed events last executed
   obtain ⟨state, equal, admitted, v, d⟩ := kept
+  change snapshot env.currentPid last = fileEnv env file state frame at equal
   rw [equal] at captured
   unfold crashImage at captured
   rw [lookup_admitted env file state frame separate admitted] at captured

@@ -1,11 +1,16 @@
 module
 public import Record.RepairImageInvariant
+public import Record.FileView
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RepairAcknowledgement
+open Record.FileView
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.CrashProperties Record.LogProperties Record.ResizeProperties
   Record.RepairCrashProperties Record.RecoveryScanInvariant
+
+section
+variable [view : FileView]
 
 private theorem resize_step_returns (before : State) (length : U64) (after : State)
     (valid : Admitted before) (step : setLenStep before length = some (.Ok (), after)) :
@@ -33,12 +38,12 @@ private theorem resize_step_returns (before : State) (length : U64) (after : Sta
                 obtain ⟨_, rfl⟩ := step
                 exact ⟨rfl, rfl, resize_admitted before length mask data rest valid (by omega) accepted⟩
 
-private theorem resize_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (length : U64) (env : Environment)
+private theorem resize_returns (file : NativeFile) (length : U64) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result Unit NativeIoError) (world : Environment)
-    (separate : Separate file frame) (valid : Admitted before)
-    (trace : Result.ReadyPrefix (io_core.resize_to file length) (fileEnv env file before frame) (.ok reply) world) :
-    ∃ after, world = fileEnv env file after frame ∧ setLenStep before length = some (reply, after) := by
+    (separate : Separated file frame) (valid : Admitted before)
+    (trace : Result.ReadyPrefix (io_core.resize_to file length) (render env file before frame) (.ok reply) world) :
+    ∃ after, world = render env file after frame ∧ setLenStep before length = some (reply, after) := by
   simp only [io_core.resize_to, NativeFile.setLen, monadLift_self] at trace
   cases trace with
   | wait _ _ actual _ middle _ _ ready continuation =>
@@ -47,8 +52,8 @@ private theorem resize_returns [heapLayout : Record.Properties.HeapLayout] (file
       | ok output =>
           cases continuation
           unfold pollSetLen at ready
-          rw [no_shared_handle_at env file before frame separate,
-            lookup_admitted env file before frame separate valid] at ready
+          rw [readOnly_rendered env file before frame separate,
+            load_rendered env file before frame separate valid] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
           · simp only [stopped] at ready
@@ -58,7 +63,7 @@ private theorem resize_returns [heapLayout : Record.Properties.HeapLayout] (file
                 obtain ⟨reply, after⟩ := outcome
                 simp only [step] at ready
                 obtain ⟨rfl, rfl⟩ := ready
-                exact ⟨after, store_at env file before after frame separate, rfl⟩
+                exact ⟨after, store_rendered env file before after frame separate valid, rfl⟩
 
 private theorem sync_step_returns (before after : State)
     (step : syncStep before = some (.Ok (), after)) :
@@ -83,12 +88,12 @@ private theorem sync_step_returns (before after : State)
 
 /-- Successful synchronization preserves the visible bytes and cursor and makes
 the durable image exactly those bytes, for every admitted host script. -/
-theorem synchronize_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (env : Environment)
+theorem synchronize_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (world : Environment)
-    (separate : Separate file frame) (valid : Admitted before)
-    (trace : Result.ReadyPrefix (io_core.synchronize file) (fileEnv env file before frame)
+    (separate : Separated file frame) (valid : Admitted before)
+    (trace : Result.ReadyPrefix (io_core.synchronize file) (render env file before frame)
       (.ok (.Ok ())) world) :
-    ∃ after, world = fileEnv env file after frame ∧
+    ∃ after, world = render env file after frame ∧
       after.visible = before.visible ∧ after.durable = before.visible ∧ after.position = before.position := by
   simp only [io_core.synchronize, NativeFile.syncAll, monadLift_self] at trace
   cases trace with
@@ -97,7 +102,7 @@ theorem synchronize_returns [heapLayout : Record.Properties.HeapLayout] (file : 
       | error exception => cases continuation
       | ok output =>
           cases continuation
-          simp only [pollSync, lookup_admitted env file before frame separate valid] at ready
+          simp only [pollSync, load_rendered env file before frame separate valid] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
           · simp only [stopped] at ready
@@ -107,17 +112,17 @@ theorem synchronize_returns [heapLayout : Record.Properties.HeapLayout] (file : 
                 obtain ⟨reply, after⟩ := outcome
                 simp only [step] at ready
                 obtain ⟨rfl, rfl⟩ := ready
-                exact ⟨after, store_at env file before after frame separate, sync_step_returns before after step⟩
+                exact ⟨after, store_rendered env file before after frame separate valid, sync_step_returns before after step⟩
 
 /-- A successful actual resize/sync call has made both images exactly the
 requested resize, under every admitted host script. A failed or blocked sync
 cannot provide the successful-prefix premise. -/
-theorem resize_then_sync_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (length : U64) (env : Environment)
+theorem resize_then_sync_returns (file : NativeFile) (length : U64) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (world : Environment)
-    (separate : Separate file frame) (valid : Admitted before)
-    (trace : Result.ReadyPrefix (resize_then_sync file length) (fileEnv env file before frame)
+    (separate : Separated file frame) (valid : Admitted before)
+    (trace : Result.ReadyPrefix (resize_then_sync file length) (render env file before frame)
       (.ok (.Ok ())) world) :
-    ∃ after, world = fileEnv env file after frame ∧
+    ∃ after, world = render env file after frame ∧
       after.visible = resize before.visible length.val ∧ after.durable = resize before.visible length.val ∧
       after.position = before.position ∧ Admitted after := by
   simp only [resize_then_sync, monadLift_self] at trace
@@ -141,12 +146,12 @@ supply a successful Some result. The initial image is stable, as after reopen. -
 theorem repair_returns (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (values : List U16)
     (maxRecords : Usize) (returned : alloc.vec.Vec U16) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (admitted : Admitted before)
+    (separate : Separated file frame) (admitted : Admitted before)
     (stable : before.durable = before.visible) (visible : LogImage values before.visible)
-    (trace : Result.ReadyPrefix (repair_log file maxRecords) (fileEnv env file before frame)
+    (trace : Result.ReadyPrefix (repair_log file maxRecords) (render env file before frame)
       (.ok (.Ok (some returned), returnedFile)) world) :
     returnedFile = file ∧ returned.val = values ∧ ∃ after,
-      world = fileEnv env file after frame ∧ after.visible = disk (logBytes values) ∧
+      world = render env file after frame ∧ after.visible = disk (logBytes values) ∧
       after.durable = disk (logBytes values) ∧ Admitted after := by
   have valid : Valid before := ⟨admitted.1, by rw [stable], admitted.2.2⟩
   simp only [repair_log, monadLift_self] at trace
@@ -216,15 +221,15 @@ runtime execution. It does not select a host script or assert termination. -/
 theorem repair_run_acknowledges (env : Environment) (file : NativeFile)
     (frame : List (Nat × String × Term)) (before : State) (values : List U16)
     (maxRecords : Usize) (returned : alloc.vec.Vec U16) (returnedFile : NativeFile)
-    (separate : Separate file frame) (admitted : Admitted before)
+    (separate : Separated file frame) (admitted : Admitted before)
     (stable : before.durable = before.visible) (visible : LogImage values before.visible)
     (elapsed : PID → Nat → Nat) (events : List Concurrent.Event)
     (last : Concurrent.Config Record.RepairImageInvariant.Reply)
-    (executed : Concurrent.Run (.start (fileEnv env file before frame)
+    (executed : Concurrent.Run (.start (render env file before frame)
       (repair_log file maxRecords) elapsed) events last)
     (terminal : Concurrent.Terminal last (.ok (.Ok (some returned), returnedFile))) :
     returnedFile = file ∧ returned.val = values ∧ ∃ after,
-      last = .start (fileEnv env file after frame) (.ok (.Ok (some returned), returnedFile)) elapsed ∧
+      last = .start (render env file after frame) (.ok (.Ok (some returned), returnedFile)) elapsed ∧
       after.visible = disk (logBytes values) ∧ after.durable = disk (logBytes values) ∧ Admitted after := by
   have safe := Record.RepairImageInvariant.repair_log_invariant env file frame values before maxRecords
     separate admitted stable visible
@@ -233,6 +238,8 @@ theorem repair_run_acknowledges (env : Environment) (file : NativeFile)
     repair_returns file env frame before values maxRecords returned returnedFile world
       separate admitted stable visible trace
   exact ⟨identity, records, after, ending, v, d, valid⟩
+
+end
 
 /-- After any successful runtime acknowledgement every admitted crash image is
 exactly the repaired log, including its truncated length. The old partial tail
@@ -253,6 +260,7 @@ theorem acknowledged_crash_image (env : Environment) (file : NativeFile)
   obtain ⟨identity, records, after, rfl, v, d, valid⟩ := repair_run_acknowledges env file frame before values
     maxRecords returned returnedFile separate admitted stable visible elapsed events last executed terminal
   simp only [Record.RepairImageInvariant.snapshot] at captured
+  change crashImage file mask (fileEnv env file after frame) = some image at captured
   unfold crashImage at captured
   rw [lookup_admitted env file after frame separate valid] at captured
   change (persist after.durable after.visible mask).bind
