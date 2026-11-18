@@ -114,4 +114,16 @@ theorem reopens_after_failed_attempts (left : Bool) (count : Nat) (before after 
     rw [← captured] at restarted
     exact restarted
 
+/-- One actual failed-sync run supplies a nonempty instance of the repeated
+failure relation, including the fresh host capability after restart. -/
+theorem failed_attempt_witness :
+    FailedAttempts __TRY_REOPEN__ true 1
+      ⟨names, [(1, withTail true [99,0])], 1⟩ Record.TornSyncRecovery.restartImage := by
+  obtain ⟨events, last, outcome, run, terminal, crash⟩ := Record.TornSyncRecovery.reboot_witness.1
+  refine .next ?_ .zero
+  refine ⟨[99,0], 2, 1, false, Record.TornSyncFailure.failedSyncBoot, (fun _ _ => 0),
+    events, last, outcome, names, Record.TornSyncRecovery.witnessMask,
+    by decide, by decide, by decide, rfl, ?_, run, terminal, crash⟩
+  exact boot_from_image 1 true [99,0] (by decide) 2 1 false (by decide)
+
 end Record.TornSyncChains

@@ -11,7 +11,7 @@ defmodule Lynx.Rustler.FallibleReopenTest do
 
   @tag :tmp_dir
   test "verifies typed reopen failures and preserves completed records", %{tmp_dir: tmp} do
-    {workspace, project, options, implementation} = prepare_reopen!(tmp)
+    {workspace, project, options, bindings} = prepare_reopen!(tmp)
 
     proofs = [
       {"FallibleReopen", "errors_preserve_completed_records"},
@@ -19,8 +19,8 @@ defmodule Lynx.Rustler.FallibleReopenTest do
       {"RepairIoFailures", "repair_failure_consumes_owners"}
     ]
 
-    options = install_proofs!(options, implementation, proofs)
-    assert_linkage!(options, implementation)
+    options = install_proofs!(options, bindings, proofs)
+    assert_linkage!(options, bindings.try_reopen)
 
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
 
@@ -57,7 +57,7 @@ defmodule Lynx.Rustler.FallibleReopenTest do
 
   @tag :tmp_dir
   test "recovers the named journal after typed sync failure and crash", %{tmp_dir: tmp} do
-    {workspace, project, options, implementation} = prepare_reopen!(tmp)
+    {workspace, project, options, bindings} = prepare_reopen!(tmp)
 
     proofs = [
       {"FallibleReopen", "errors_preserve_completed_records"},
@@ -70,8 +70,8 @@ defmodule Lynx.Rustler.FallibleReopenTest do
       {"TornSyncChains", "reopens_after_failed_attempts"}
     ]
 
-    options = install_proofs!(options, implementation, proofs)
-    assert_linkage!(options, implementation)
+    options = install_proofs!(options, bindings, proofs)
+    assert_linkage!(options, bindings.try_reopen)
 
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
     beams = Map.new(Code.compile_file(Path.join(@fixture, "TornSyncLaws.exs")))
@@ -103,10 +103,62 @@ defmodule Lynx.Rustler.FallibleReopenTest do
       File.write!(path, source)
     end
 
-    assert_linkage!(options, implementation)
+    assert_linkage!(options, bindings.try_reopen)
   end
 
-  defp prepare_reopen!(tmp) do
+  @tag :tmp_dir
+  test "continues a typed restarted journal and preserves the next crash image", %{tmp_dir: tmp} do
+    {workspace, project, options, bindings} =
+      prepare_reopen!(tmp, log_try_reopen: 1, log_append: 2)
+
+    composition =
+      ~w(typed_reopen_append crash_after_typed_append crash_after_repeated_failed_sync)
+
+    proofs =
+      [
+        {"FallibleReopen", nil},
+        {"NamedJournalCrash", nil},
+        {"TornSyncFailure", "failed_sync_preserves_acknowledgements"},
+        {"TornSyncRecovery", "reboot_witness"},
+        {"TornSyncChains", "failed_attempt_witness"},
+        {"TypedRestartAppend", "boot_after_failed_sync"}
+      ] ++ Enum.map(composition, &{"TypedRestartAppend", &1})
+
+    options = install_proofs!(options, bindings, proofs)
+    prepared = assert_linkage!(options, bindings.try_reopen)
+
+    for property <- composition do
+      assert_linkage!(prepared, bindings.append, "Record.TypedRestartAppend." <> property)
+    end
+
+    path = Path.join(workspace, "protocol/src/lib.rs")
+    source = File.read!(path)
+    full_write = "Ok(4) => match io_core::synchronize(file)"
+    wrong = String.replace(source, full_write, "Ok(3) => match io_core::synchronize(file)")
+    refute wrong == source
+
+    try do
+      File.write!(path, wrong)
+
+      assert_raise RuntimeError, ~r/TypedRestartAppend\.lean:\d+:/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    after
+      File.write!(path, source)
+    end
+
+    assert_linkage!(options, bindings.try_reopen)
+
+    Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
+    beams = Map.new(Code.compile_file(Path.join(@fixture, "TypedRestartAppendLaws.exs")))
+
+    verify_laws!(tmp, project, options, beams, [
+      {LynxIoFixture.TypedRestartCommitLaws, "TypedRestartAppend", "commitBoot"},
+      {LynxIoFixture.TypedRestartRollbackLaws, "TypedRestartAppend", "rollbackBoot"}
+    ])
+  end
+
+  defp prepare_reopen!(tmp, only \\ [log_try_reopen: 1]) do
     {workspace, project, _fixture} = Lynx.Rust.IoFixture.prepare!(tmp, @tools)
 
     options = [
@@ -118,7 +170,7 @@ defmodule Lynx.Rustler.FallibleReopenTest do
       owned_drops: true,
       branching: :duplicate,
       cargo: [features: ["fallible-reopen"]],
-      only: [log_try_reopen: 1],
+      only: only,
       lean_project: project,
       module_prefix: "Record.Extraction",
       build_dir: Path.join(tmp, "build")
@@ -126,30 +178,37 @@ defmodule Lynx.Rustler.FallibleReopenTest do
 
     discovered = Lynx.Rustler.prepare!(options)
 
-    assert [
-             %{
-               "name" => "log_try_reopen",
-               "arity" => 1,
-               "flags" => 2,
-               "lean_name" => implementation
-             }
-           ] =
-             discovered.bindings.bindings
+    bindings =
+      for binding <- discovered.bindings.bindings, into: %{} do
+        assert %{"name" => name, "arity" => arity, "flags" => 2, "lean_name" => target} = binding
+        {{name, arity}, target}
+      end
 
-    {workspace, project, options, implementation}
+    assert Enum.sort(Map.keys(bindings)) ==
+             Enum.sort(for {name, arity} <- only, do: {Atom.to_string(name), arity})
+
+    {workspace, project, options,
+     %{
+       try_reopen: Map.fetch!(bindings, {"log_try_reopen", 1}),
+       append: bindings[{"log_append", 2}]
+     }}
   end
 
-  defp install_proofs!(options, implementation, proofs) do
+  defp install_proofs!(options, bindings, proofs) do
     project = Keyword.fetch!(options, :lean_project)
     modules = proofs |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
 
     for module <- modules do
       source = File.read!(Path.join(@fixture, module <> ".lean"))
 
-      File.write!(
-        Path.join(project, "Record/" <> module <> ".lean"),
-        String.replace(source, "__TRY_REOPEN__", implementation)
-      )
+      source = String.replace(source, "__TRY_REOPEN__", bindings.try_reopen)
+
+      source =
+        if bindings.append,
+          do: String.replace(source, "__APPEND__", bindings.append),
+          else: source
+
+      File.write!(Path.join(project, "Record/" <> module <> ".lean"), source)
     end
 
     Keyword.merge(options,
@@ -163,11 +222,17 @@ defmodule Lynx.Rustler.FallibleReopenTest do
     prepared = Lynx.Rustler.prepare!(options)
 
     for property <- Keyword.fetch!(options, :required_properties) do
-      assert Enum.any?(prepared.verification.guarantees, fn evidence ->
-               evidence.kind == :cross_crate_contract && evidence.lean_name == implementation &&
-                 evidence.theorem == property
-             end)
+      assert_linkage!(prepared, implementation, property)
     end
+
+    prepared
+  end
+
+  defp assert_linkage!(prepared, implementation, property) do
+    assert Enum.any?(prepared.verification.guarantees, fn evidence ->
+             evidence.kind == :cross_crate_contract && evidence.lean_name == implementation &&
+               evidence.theorem == property
+           end)
   end
 
   defp verify_laws!(tmp, project, options, beams, cases) do

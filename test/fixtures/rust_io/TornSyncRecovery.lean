@@ -57,7 +57,8 @@ private theorem capture_after_failure (counter : Nat) (left : Bool) (tailLength 
     exact ⟨kept, captured.trans (by rw [high]; rfl), persist_journal _ _ _ _ _ durable current accepted⟩
   · contradiction
 
-private theorem image_shape (left : Bool) (data : ByteArray)
+/-- Expose the short suffix of a captured image for the next repair. -/
+theorem image_shape (left : Bool) (data : ByteArray)
     (shape : JournalBytes (contents left) data) :
     ∃ tail : List UInt8, tail.length < 4 ∧ data = withTail left tail := by
   let head := contents left
@@ -83,17 +84,17 @@ private theorem image_shape (left : Bool) (data : ByteArray)
     rw [equal] at reconstructed
     simpa [withTail, head, tail] using reconstructed.symm
 
-@[expose] def script (data : ByteArray) : Term :=
+@[expose] def script (data : ByteArray) (afterSync : Term := .nil) : Term :=
   let mask := zeros data.size
   let finished := choose "read" true 0 mask
-    (choose "set_len" true 0 mask (choose "sync_all" true 0 ByteArray.empty .nil))
+    (choose "set_len" true 0 mask (choose "sync_all" true 0 ByteArray.empty afterSync))
   openScript true 0 (choose "seek" true 0 mask
     ((List.range data.size).foldr (fun _ => choose "read" true 1 mask) finished)) .nil
 
-@[expose] def cold (counter : Nat) (data : ByteArray) : Environment := {
+@[expose] def cold (counter : Nat) (data : ByteArray) (afterSync : Term := .nil) : Environment := {
   nativeRefCounter := counter
   nativeHeap := [
-    (0, namespaceTypeName, encodeNamespace ⟨names, names, [], script data⟩),
+    (0, namespaceTypeName, encodeNamespace ⟨names, names, [], script data afterSync⟩),
     (1, inodeTypeName, encode ⟨data, data, 0, .nil⟩)] }
 
 @[expose] def registered (env : Environment) : Environment :=
