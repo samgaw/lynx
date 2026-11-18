@@ -14,7 +14,7 @@ defmodule Lynx.Rustler.ReopenedLogTest do
   @tag :tmp_dir
   test "repairs a torn log and returns a verified shared Rustler resource", %{tmp_dir: tmp} do
     %{options: options, workspace: workspace, project: project} =
-      Lynx.Rust.IoFixture.prepare_shared!(tmp, @tools)
+      Lynx.Rust.IoFixture.prepare_shared!(tmp, @tools, ["SharedRecoveryProperties"])
 
     options = Keyword.put(options, :only, log_create: 0, log_append: 2, log_reopen: 1)
 
@@ -22,16 +22,14 @@ defmodule Lynx.Rustler.ReopenedLogTest do
       Lynx.Rustler.prepare!(Keyword.drop(options, [:proof_modules, :required_properties]))
 
     binding = Enum.find(prepared.bindings.bindings, &(&1["name"] == "log_reopen"))
+    append = Enum.find(prepared.bindings.bindings, &(&1["name"] == "log_append"))
     assert %{"arity" => 1, "flags" => 2} = binding
     property = Path.join(project, "Record/ReopenedLogProperties.lean")
 
     source =
       File.read!(Path.join(@fixture, "ReopenedLogProperties.lean"))
       |> String.replace("__REOPEN__", binding["lean_name"])
-      |> String.replace(
-        "__APPEND__",
-        Enum.find(prepared.bindings.bindings, &(&1["name"] == "log_append"))["lean_name"]
-      )
+      |> String.replace("__APPEND__", append["lean_name"])
 
     File.write!(property, source)
 
@@ -41,9 +39,12 @@ defmodule Lynx.Rustler.ReopenedLogTest do
       |> Keyword.update!(
         :required_properties,
         &(&1 ++
-            Enum.map(~w(reopened_checked append_checked short_checked), fn name ->
-              "Record.ReopenedLogProperties." <> name
-            end))
+            Enum.map(
+              ~w(reopened_checked append_checked short_checked append_then_recover),
+              fn name ->
+                "Record.ReopenedLogProperties." <> name
+              end
+            ))
       )
 
     prepared = Lynx.Rustler.prepare!(options)
@@ -60,6 +61,28 @@ defmodule Lynx.Rustler.ReopenedLogTest do
                evidence.theorem == "Record.ReopenedLogProperties." <> theorem &&
                  "Record.OverlappingLogProperties.caller_contract" in evidence.contracts_used
              end)
+    end
+
+    restart_proofs =
+      for %{
+            kind: :rust_implementation,
+            theorem: "Record.ReopenedLogProperties.append_then_recover"
+          } =
+            evidence <- prepared.verification.guarantees,
+          do: evidence
+
+    for implementation <- [
+          binding["lean_name"],
+          append["lean_name"],
+          "io_native.io_protocol.recover_log"
+        ] do
+      assert Enum.any?(restart_proofs, &(&1.lean_name == implementation))
+    end
+
+    for property <-
+          ~w(Record.ReopenedLogProperties.append_checked
+      Record.ReopenedLogProperties.short_checked Record.SharedRecoveryProperties.recover_shared_log) do
+      assert Enum.all?(restart_proofs, &(property in &1.contracts_used))
     end
 
     calibrate(prepared.library, tmp)

@@ -1,11 +1,11 @@
 module
 public import Record.Extraction.Funs
-public import Record.OverlappingLogProperties
+public import Record.SharedRecoveryProperties
 public import Record.RustlerBridge
 public section
 open Aeneas Aeneas.Std Lynx io_native
 namespace Record.ReopenedLogProperties
-open NativeFile
+open NativeFile Record.CrashProperties
 attribute [local cbv_eval] Record.OverlappingLogProperties.caller_contract
   Record.RollbackProperties.append_contract
 @[expose] def fileName : ByteArray := ⟨#[106,111,117,114,110,97,108]⟩
@@ -115,6 +115,76 @@ theorem short_checked : Concurrent.checkPost (appendAccepted false) 768
       let decoded ← NativeResourceArc.decode term
       __APPEND__ decoded 19#u16)) = true := by
   set_option cbv.maxSteps 32000000 in cbv
+
+/-- Records that must survive a crash after the admitted append outcome. -/
+@[expose] def survivingRecords (success : Bool) : List U16 :=
+  if success then [13#u16, 19#u16] else [13#u16]
+
+private theorem surviving_bound (success : Bool) :
+    (survivingRecords success).length ≤ 262144 := by
+  cases success <;> decide
+
+private theorem surviving_image (success : Bool) :
+    (if success then appended else repaired) =
+      disk (Record.LogProperties.logBytes (survivingRecords success)) := by
+  cases success <;> decide +kernel
+
+/-- For every admitted crash mask, the actual recovery loop reads exactly the
+acknowledged records after the repaired resource's append or rollback. -/
+theorem append_then_recover (success : Bool) {last : Concurrent.Config Bool}
+    {events : List Concurrent.Event} {outcome : Outcome Bool}
+    (run : Concurrent.Run
+      (.start (if success then appendInitial else shortInitial) (do
+        let owner ← __REOPEN__ 2#u32
+        let term ← NativeResourceArc.encode owner
+        NativeOwnedDrop.drop owner
+        let decoded ← NativeResourceArc.decode term
+        __APPEND__ decoded 19#u16)) events last)
+    (terminal : Concurrent.Terminal last outcome)
+    (mask : ByteArray) (image : Image) (rest : Term)
+    (captured : crashImage ⟨2⟩ mask (finalEnvironment last) = some image) :
+    let values := survivingRecords success
+    io_native.io_protocol.recover_log ⟨image.highWater + 1⟩
+      (Usize.ofNatCore values.length (by have := surviving_bound success; scalar_tac))
+      (Record.RecoveryProperties.restarted image (recoveryScript image.bytes rest)) =
+      (.ok (.Ok (alloc.vec.Vec.from values (by have := surviving_bound success; scalar_tac)),
+        ⟨image.highWater + 1⟩),
+        Record.Properties.fileEnv ({} : Environment) ⟨image.highWater + 1⟩
+          (scanning image.bytes rest (4 * values.length)) []) := by
+  have checked : Concurrent.checkPost (appendAccepted success) 768
+    (.start (if success then appendInitial else shortInitial) (do
+      let owner ← __REOPEN__ 2#u32
+      let term ← NativeResourceArc.encode owner
+      NativeOwnedDrop.drop owner
+      let decoded ← NativeResourceArc.decode term
+      __APPEND__ decoded 19#u16)) = true := by
+    cases success
+    · exact short_checked
+    · exact append_checked
+  have accepted := Concurrent.checkPost_sound checked run terminal
+  have state : appendState success (finalEnvironment last) = true := by
+    unfold appendAccepted at accepted
+    split at accepted
+    · simp only [Bool.and_eq_true] at accepted
+      exact accepted.2
+    · contradiction
+  unfold appendState at state
+  split at state
+  · rename_i file snapshot found named
+    simp only [Bool.and_eq_true] at state
+    let expected := if success then appended else repaired
+    have visible : file.visible.data = expected.data := by
+      simp only [beq_iff_eq] at state
+      tauto
+    have durable : file.durable.data = expected.data := by
+      simp only [beq_iff_eq] at state
+      tauto
+    have visibleBytes := ByteArray.ext visible
+    have durableBytes := ByteArray.ext durable
+    exact Record.SharedRecoveryProperties.recover_shared_log ⟨2⟩ _ file
+      (survivingRecords success) mask image rest found (durableBytes.trans visibleBytes.symm)
+      (visibleBytes.trans (surviving_image success)) (surviving_bound success) captured
+  · contradiction
 
 /-- The ordinary Elixir law must acknowledge the result and preserve the native
 state established by its implementation-linked properties. -/
