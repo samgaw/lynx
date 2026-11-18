@@ -261,6 +261,56 @@ defmodule Lynx.Rustler.PositionalIoTest do
     File.write!(source, rust)
   end
 
+  @tag :tmp_dir
+  test "every admitted crash at a positional writer prefix permits a fresh Rust read", %{
+    tmp_dir: tmp
+  } do
+    base = fixture!(tmp)
+    project = base[:lean_project]
+    prepared = Lynx.Rustler.prepare!(base)
+    bindings = Map.new(prepared.bindings.bindings, &{&1["name"], &1})
+
+    sources =
+      @proof_sources ++
+        [
+          {"PositionalConcurrentProperties.lean", "Concurrent"},
+          {"PositionalCrashProperties.lean", "Crash"}
+        ]
+
+    write_proofs!(project, bindings, sources)
+
+    implementation_counts = %{
+      "Positional.CrashPrefix.crashes_preserve_positional_bytes" => 2,
+      "Positional.CrashRead.observes_after_restart" => 1,
+      "Positional.CrashRecovery.crashes_recover_positional_byte" => 3
+    }
+
+    proof_modules = Enum.map(sources, fn {_, module} -> "Positional." <> module end)
+    required = Map.keys(implementation_counts)
+
+    prepared =
+      Lynx.Rustler.prepare!(base ++ [proof_modules: proof_modules, required_properties: required])
+
+    file =
+      Lynx.Rust.Proofs.file!(prepared.extraction, proof_modules, required_properties: required)
+
+    export = Path.join(tmp, "positional-crash.export")
+    reports = Lynx.Commands.verify!(project, [file], export: export)
+    assert [%{status: :ok}] = reports
+
+    reported =
+      reports
+      |> Lynx.Rust.Proofs.properties!()
+      |> Map.new(&{&1["theorem"], length(&1["implementations"])})
+      |> Map.take(required)
+
+    assert reported == implementation_counts
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+  end
+
   defp fixture!(tmp) do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
