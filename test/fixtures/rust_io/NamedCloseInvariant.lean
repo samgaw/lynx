@@ -68,12 +68,12 @@ private theorem closed_handle_rejected (number : Nat) (env : Environment) (file 
     List.filter_append, absent, different, Ne.symm different, nonzero, not_lt.mpr fileBound,
     directoryTypeName, closedHandleTypeName]
 
-private theorem close_return_retires (number : Nat) (env : Environment) (file : NativeFile)
+private theorem close_return_step (number : Nat) (env : Environment) (file : NativeFile)
     (before : State) (frame : List (Nat × String × Term)) (after : Environment)
     (separate : NamedSeparated number file frame) (valid : Admitted before)
     (closed : Result.ReadyPrefix (NativeOwnedDrop.drop file) (namedWorld number env file before frame)
       (.ok ()) after) :
-    lookup file after = none ∧ pollClose file after = some (.error .exhausted, after) := by
+    ∃ state, closeStep before = some state ∧ after = closedWorld number env file state frame := by
   simp only [NativeOwnedDrop.drop, NativeFile.close] at closed
   obtain ⟨reply, middle, ready, tail⟩ := closed.wait_returns
   cases reply with
@@ -90,7 +90,7 @@ private theorem close_return_retires (number : Nat) (env : Environment) (file : 
         simp only [stepped, Option.some.injEq, Prod.mk.injEq,
           retire_named number env file before state frame separate valid] at ready
         obtain ⟨_, rfl⟩ := ready
-        exact closed_handle_rejected number env file state frame separate
+        exact ⟨state, rfl, rfl⟩
 
 /-- An admitted close consumes the descriptor and preserves the acknowledged
 log even if the host close fails or changes which suffix bytes persist. -/
@@ -184,7 +184,8 @@ private theorem typed_close_retains_journal (counter : Nat) (data : ByteArray) (
   refine ⟨(close_invariant 1 _ _ _ state values separate valid visible durable _ after cleanup).1, ?_, ?_⟩
   · intro done
     subst residual
-    exact close_return_retires 1 _ _ state _ after separate valid cleanup
+    obtain ⟨closed, _, rfl⟩ := close_return_step 1 _ _ state _ after separate valid cleanup
+    exact closed_handle_rejected 1 _ _ closed _ separate
   rcases closing with rfl | ⟨error, rfl⟩
   all_goals
     simp only [__TRY_REOPEN__, monadLift_self, NativeM.lift, Result.ok_bind]
@@ -282,5 +283,109 @@ theorem typed_close_rejects_reuse (counter : Nat) (data : ByteArray) (choices re
     typed_close_retains_journal counter data choices rest values maximum positive bounded initial
       reply closing middle after _ repair cleanup
   exact ⟨reached, retired rfl⟩
+
+@[expose] def ioErrorCell (id : Nat) : Nat × String × Term :=
+  (id, NativeIoError.typeName, .atom "live")
+
+private theorem error_disposal (counter id : Nat) (data : ByteArray) (choices rest : Term)
+    (state : State) (positive : 1 < id) (allocated : id ≤ counter) :
+    Result.ReadyPrefix (NativeOwnedDrop.drop (.os id : NativeIoError))
+      (closedWorld 1 (Record.NamedRustlerRepair.bootWithFrame counter data choices rest [ioErrorCell id])
+        ⟨counter + 1⟩ state [namespaceCell rest, ioErrorCell id])
+      (.ok ()) (closedWorld 1 (boot counter data choices rest) ⟨counter + 1⟩ state [namespaceCell rest]) := by
+  let before := closedWorld 1
+    (Record.NamedRustlerRepair.bootWithFrame counter data choices rest [ioErrorCell id])
+    ⟨counter + 1⟩ state [namespaceCell rest, ioErrorCell id]
+  have nonzero : id ≠ 0 := by omega
+  have fileDistinct : counter + 1 ≠ id := by omega
+  have inodeDistinct : 1 ≠ id := by omega
+  have admitted : id ≤ before.nativeRefCounter := by
+    change id ≤ max counter (max (counter + 1) 1)
+    omega
+  have live : before.nativeHeap.filter (fun cell => cell.1 == id) = [ioErrorCell id] := by
+    simp [before, closedWorld, namedWorld, namespaceCell, inodeCell, ioErrorCell, fileDistinct,
+      inodeDistinct, Ne.symm nonzero]
+  simpa [NativeOwnedDrop.drop, NativeIoError.identity, before, closedWorld, namedWorld, namespaceCell,
+    inodeCell, ioErrorCell, fileDistinct, inodeDistinct, Ne.symm nonzero,
+    Record.NamedRustlerRepair.bootWithFrame] using
+      NativeIoError.dispose_prefix (.os id) before nonzero admitted live
+
+open Record.NamedRustlerRepair (bootWithFrame open_existing_framed)
+
+@[expose] def openedWithError (counter id : Nat) (data : ByteArray) (choices rest : Term) : Environment :=
+  namedWorld 1 (bootWithFrame counter data choices rest [ioErrorCell id])
+    ⟨counter + 1⟩ (openingState data choices) [namespaceCell rest, ioErrorCell id]
+
+set_option maxRecDepth 8192 in
+/-- An admitted OS error from the extracted repair and a completed consuming
+close reach the actual NIF error conversion. Every subsequent admitted crash
+keeps the same acknowledged records, even if the host close itself failed. -/
+theorem typed_repair_error_reports (counter id : Nat) (data : ByteArray) (choices rest : Term)
+    (values : List U16) (maximum : U32) (positive : 1 < id) (allocated : id ≤ counter)
+    (bounded : data.size ≤ limit) (initial : LogImage values data)
+    (middle closed : Environment) (repair : Result.ReadyPrefix
+      (repair_log ⟨counter + 1⟩ (UScalar.cast .Usize maximum))
+      (openedWithError counter id data choices rest) (.ok (.Err (.os id), ⟨counter + 1⟩)) middle)
+    (cleanup : Result.ReadyPrefix (NativeOwnedDrop.drop (⟨counter + 1⟩ : NativeFile)) middle (.ok ()) closed)
+    (encode : NativeResourceArc shared_log.LogResource → Result Term) :
+    ∃ after, Result.ReadyPrefix (Rustler.withNativeResult (__TRY_REOPEN__ maximum) encode)
+      (bootWithFrame counter data choices rest [ioErrorCell id])
+      (.error (.error (.atom "journal_io"))) after ∧
+      lookup ⟨counter + 1⟩ after = none ∧
+      pollClose ⟨counter + 1⟩ after = some (.error .exhausted, after) ∧
+      after.nativeHeap.filter (fun cell => cell.1 == id) = [] ∧
+      ∀ chosen masks captured, filesystemCrashImage chosen masks after = some captured →
+        ∃ bytes, LogImage values bytes ∧ bytes.size ≤ limit ∧
+          captured = ⟨namedJournal nameBytes, [(1, bytes)], counter + 1⟩ := by
+  have counterPositive : 1 ≤ counter := by omega
+  have separate : NamedSeparated 1 (⟨counter + 1⟩ : NativeFile) [namespaceCell rest, ioErrorCell id] := by
+    simp [NamedSeparated, Record.Properties.Separate, namespaceCell, ioErrorCell]
+    omega
+  have admitted : Admitted (openingState data choices) := ⟨bounded, bounded, Nat.zero_le _⟩
+  have safe := Record.RepairImageInvariant.repair_log_invariant (view := Record.FileView.named 1)
+    (bootWithFrame counter data choices rest [ioErrorCell id]) ⟨counter + 1⟩
+    [namespaceCell rest, ioErrorCell id] values (openingState data choices) (UScalar.cast .Usize maximum)
+    ((Record.FileView.named_separated 1 _ _).mpr separate) admitted rfl initial
+  obtain ⟨state, equal, valid, visible, durable⟩ := (safe _ _ repair).1
+  rw [Record.FileView.named_render] at equal
+  subst middle
+  obtain ⟨last, step, rfl⟩ := close_return_step 1 _ _ state _ closed separate valid cleanup
+  have opened := open_existing_framed counter data choices rest [ioErrorCell id] counterPositive bounded
+    (by simpa [ioErrorCell] using And.intro positive allocated)
+  let after := closedWorld 1 (boot counter data choices rest) ⟨counter + 1⟩ last [namespaceCell rest]
+  have reopened : Result.ReadyPrefix (shared_log.reopen (UScalar.cast .Usize maximum))
+      (bootWithFrame counter data choices rest [ioErrorCell id])
+      (.ok (.Err (.os id))) (closedWorld 1 (bootWithFrame counter data choices rest [ioErrorCell id])
+        ⟨counter + 1⟩ last [namespaceCell rest, ioErrorCell id]) := by
+    simp only [shared_log.reopen, monadLift_self]
+    apply (opened.bind _).trans
+    simp only [Result.ok_bind, core.result.Result.Insts.CoreOpsTry.branch,
+      NativeM.monadLift_eq, NativeM.fromRust_ok]
+    apply (repair.bind _).trans
+    simp only [Result.ok_bind]
+    exact cleanup.bind _
+  have raw : Result.ReadyPrefix (__TRY_REOPEN__ maximum)
+      (bootWithFrame counter data choices rest [ioErrorCell id])
+      (.ok (.Err (.error (.error (.atom "journal_io"))))) after := by
+    simp only [__TRY_REOPEN__, monadLift_self, NativeM.lift, Result.ok_bind]
+    apply (reopened.bind _).trans
+    simp only [Result.ok_bind]
+    exact (error_disposal counter id data choices rest last positive allocated).bind _
+  have reported : Result.ReadyPrefix (Rustler.withNativeResult (__TRY_REOPEN__ maximum) encode)
+      (bootWithFrame counter data choices rest [ioErrorCell id])
+      (.error (.error (.atom "journal_io"))) after := by
+    unfold Rustler.withNativeResult
+    exact (((raw.bind _).handle _).bind _)
+  obtain ⟨missing, stale⟩ := closed_handle_rejected 1 (boot counter data choices rest)
+    ⟨counter + 1⟩ last [namespaceCell rest] (opened_frame counter rest counterPositive)
+  refine ⟨after, reported, missing, stale, ?_, ?_⟩
+  · have nonzero : 0 ≠ id := by omega
+    have different : counter + 1 ≠ id := by omega
+    have node : 1 ≠ id := by omega
+    simp [after, closedWorld, namedWorld, namespaceCell, inodeCell, nonzero, different, node]
+  · intro chosen masks captured crash
+    obtain ⟨lastValid, lastVisible, lastDurable⟩ := close_step_preserves values state last valid visible durable step
+    exact journal_capture counter data choices rest values after
+      ⟨last, .inr rfl, lastValid, lastVisible, lastDurable⟩ counterPositive chosen masks captured crash
 
 end Record.NamedCloseInvariant

@@ -1,5 +1,6 @@
 module
 public import Record.NamedRustlerAdapterProof
+public import Record.NamedCloseInvariant
 import Lynx.Runner.NativeArithmetic
 
 public section
@@ -9,10 +10,13 @@ open Aeneas Aeneas.Std Lynx io_native
 namespace Record.NamedRustlerLaw
 open NativeFile
 open scoped Lynx.NativeArithmetic
-open Record.NamedRustlerRepair (nameBytes boot)
+open Record.NamedRustlerRepair (nameBytes boot bootWithFrame)
+open Record.NamedCloseInvariant (ioErrorCell)
 open Record.NamedJournalCrash (namedJournal inodeIds)
+open Record.Properties (outcome)
 open Record.CrashProperties (disk)
 open Record.LogProperties (logBytes)
+open Record.RecoveryProperties (zeroMask)
 open Record.RepeatedRepairProperties (repairScript)
 
 @[expose] def records : List U16 := [7#u16, 129#u16, 1027#u16]
@@ -50,6 +54,33 @@ theorem concrete_raw_result (elapsed : PID → Nat → Nat) :
 theorem law_outcome (last : Concurrent.Config Term) (good : accepted last = true) :
     last.outcome = .ok Term.true := by
   unfold accepted at good
+  dsimp only at good
+  split at good
+  · assumption
+  · contradiction
+
+@[expose] def errorBoot : Environment :=
+  let mask := zeroMask torn
+  let script := outcome "seek" false 2 mask (outcome "close" false 5 mask .nil)
+  bootWithFrame 2 torn script .nil [ioErrorCell 2]
+
+@[expose] def errorAccepted (last : Concurrent.Config Term) : Bool :=
+  let env := match last with
+    | .start env .. => env
+    | .running state .. => state.nativeView []
+  match last.outcome, inode 1 env, getHandle ⟨3⟩ closedHandleTypeName env, namespaceSnapshot env with
+  | .ok (.atom "true"), some file, some descriptor, some table =>
+    file.visible.data == torn.data && file.durable.data == torn.data &&
+    descriptor.inode == 1 && descriptor.position == 0 && descriptor.script == .nil &&
+    table.pending.isEmpty && table.script == .nil &&
+    tablesEqual table.names (namedJournal nameBytes) && tablesEqual table.committed (namedJournal nameBytes) &&
+    inodeIds env == [1] && env.nativeRefCounter == 3 &&
+    !env.nativeHeap.any (fun cell => cell.1 == 2)
+  | _, _, _, _ => false
+
+theorem error_law_outcome (last : Concurrent.Config Term) (good : errorAccepted last = true) :
+    last.outcome = .ok Term.true := by
+  unfold errorAccepted at good
   dsimp only at good
   split at good
   · assumption

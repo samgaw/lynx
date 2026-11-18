@@ -35,8 +35,12 @@ private theorem path_valid : supportedPath nameBytes = true := by decide
 @[expose] def boot (counter : Nat) (data : ByteArray) (choices rest : Term) : Environment := {
   nativeRefCounter := counter
   nativeResourceTypes := [NativeResourceArc.typeName shared_log.LogResource]
-  nativeHeap := [namespaceCell (openScript choices rest),
-    inodeCell 1 (openingState data choices)] }
+  nativeHeap := [namespaceCell (openScript choices rest), inodeCell 1 (openingState data choices)] }
+
+@[expose] def bootWithFrame (counter : Nat) (data : ByteArray) (choices rest : Term)
+    (frame : List (Nat × String × Term)) : Environment :=
+  { boot counter data choices rest with
+    nativeHeap := namespaceCell (openScript choices rest) :: frame ++ [inodeCell 1 (openingState data choices)] }
 
 @[expose] def opened (counter : Nat) (data : ByteArray) (choices rest : Term) : Environment :=
   namedWorld 1 (boot counter data choices rest) ⟨counter + 1⟩
@@ -49,15 +53,54 @@ theorem opened_frame (counter : Nat) (rest : Term) (positive : 1 ≤ counter) :
 
 set_option maxRecDepth 8192 in
 private theorem poll_success (counter : Nat) (data : ByteArray) (choices rest : Term)
-    (positive : 1 ≤ counter) (bounded : data.size ≤ NativeFile.limit) :
-    pollOpenReadWrite (toStr "journal") (boot counter data choices rest) =
-      some (.ok (.Ok ⟨counter + 1⟩), opened counter data choices rest) := by
+    (frame : List (Nat × String × Term)) (positive : 1 ≤ counter)
+    (bounded : data.size ≤ NativeFile.limit)
+    (allocated : ∀ cell ∈ frame, 1 < cell.1 ∧ cell.1 ≤ counter) :
+    pollOpenReadWrite (toStr "journal") (bootWithFrame counter data choices rest frame) =
+      some (.ok (.Ok ⟨counter + 1⟩), namedWorld 1 (bootWithFrame counter data choices rest frame)
+        ⟨counter + 1⟩ (openingState data choices) (namespaceCell rest :: frame)) := by
   have nonzero : counter ≠ 0 := by omega
-  simp [pollOpenReadWrite, actual_path, path_valid, boot, opened, openingState, namedWorld,
+  have noZero : frame.filter (fun cell => cell.1 == 0) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro cell member
+    simpa using (show cell.1 ≠ 0 by have := (allocated cell member).1; omega)
+  have noInode : frame.filter (fun cell => cell.1 == 1) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro cell member
+    simpa using (show cell.1 ≠ 1 by have := (allocated cell member).1; omega)
+  have fresh : frame.any (fun cell => cell.1 == counter + 1) = false := by
+    apply List.any_eq_false.mpr
+    intro cell member
+    simpa using (show cell.1 ≠ counter + 1 by have := (allocated cell member).2; omega)
+  have unchanged : frame.map (fun cell =>
+      if cell.1 = 0 then match cell.2.2 with
+        | .tuple fields => (0, namespaceTypeName, .tuple (fields.setIfInBounds 3 rest))
+        | _ => cell
+      else cell) = frame := by
+    conv_rhs => rw [← List.map_id frame]
+    exact List.map_congr_left (fun cell member => by
+      have different : cell.1 ≠ 0 := by have := (allocated cell member).1; omega
+      simp [different])
+  simp [pollOpenReadWrite, actual_path, path_valid, bootWithFrame, boot, openingState, namedWorld,
     namespaceCell, namespaceState, namespaceSnapshot, namespaceTable, namespaceHistory,
     encodeNamespace, encodeNames, tablesEqual, namespaceEntry, List.eraseDups_cons,
     openScript, openChoice, pathChoice, inode, decode, encode, inodeCell, handleCell, encodeHandle,
-    not_lt.mpr positive, not_lt.mpr bounded, replaceNamespaceScript, nonzero]
+    not_lt.mpr positive, not_lt.mpr bounded, replaceNamespaceScript, nonzero, List.filter_append,
+    List.any_append, List.map_append, noZero, noInode, fresh]
+  exact unchanged
+
+/-- Opening the named journal preserves already allocated, disjoint capabilities. -/
+theorem open_existing_framed (counter : Nat) (data : ByteArray) (choices rest : Term)
+    (frame : List (Nat × String × Term)) (positive : 1 ≤ counter)
+    (bounded : data.size ≤ NativeFile.limit)
+    (allocated : ∀ cell ∈ frame, 1 < cell.1 ∧ cell.1 ≤ counter) :
+    Result.ReadyPrefix (io_protocol.open_readwrite (toStr "journal"))
+      (bootWithFrame counter data choices rest frame) (.ok (.Ok ⟨counter + 1⟩))
+      (namedWorld 1 (bootWithFrame counter data choices rest frame)
+        ⟨counter + 1⟩ (openingState data choices) (namespaceCell rest :: frame)) := by
+  simp only [io_protocol.open_readwrite, io_core.open_readwrite, NativeFile.OpenOptions.read,
+    NativeFile.OpenOptions.write, NativeFile.OpenOptions.openFile, monadLift_self, openReadWrite, ite_true]
+  exact .wait _ _ _ _ _ _ _ (poll_success counter data choices rest frame positive bounded allocated) (.refl _ _)
 
 /-- The open uses an authenticated ready poll of the compiled Rust caller. -/
 theorem open_existing_prefix (counter : Nat) (data : ByteArray) (choices rest : Term)
@@ -65,9 +108,7 @@ theorem open_existing_prefix (counter : Nat) (data : ByteArray) (choices rest : 
     Result.ReadyPrefix (io_protocol.open_readwrite (toStr "journal"))
       (boot counter data choices rest) (.ok (.Ok ⟨counter + 1⟩))
       (opened counter data choices rest) := by
-  simp only [io_protocol.open_readwrite, io_core.open_readwrite, NativeFile.OpenOptions.read,
-    NativeFile.OpenOptions.write, NativeFile.OpenOptions.openFile, monadLift_self, openReadWrite, ite_true]
-  exact .wait _ _ _ _ _ _ _ (poll_success counter data choices rest positive bounded) (.refl _ _)
+  exact open_existing_framed counter data choices rest [] positive bounded (by simp)
 
 theorem open_existing (counter : Nat) (data : ByteArray) (choices rest : Term)
     (positive : 1 ≤ counter) (bounded : data.size ≤ NativeFile.limit) :

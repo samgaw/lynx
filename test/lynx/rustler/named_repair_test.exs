@@ -59,6 +59,7 @@ defmodule Lynx.Rustler.NamedRepairTest do
       Record.NamedRustlerRepair.arbitrary_repair_persists
       Record.NamedCloseInvariant.typed_close_crash_preserves
       Record.NamedCloseInvariant.typed_close_rejects_reuse
+      Record.NamedCloseInvariant.typed_repair_error_reports
       Record.NamedRepairCrash.typed_repair_prefix_crash
       Record.NamedRepairCrash.typed_retry_after_prefix_crashes
       Record.NamedInterruptedRecovery.typed_retry_after_interruptions
@@ -107,23 +108,48 @@ defmodule Lynx.Rustler.NamedRepairTest do
       end
     end
 
+    facade = Path.join(workspace, "native/src/journal_reopen.rs")
+    rust = File.read!(facade)
+    correct = ~s/Err(Error::RaiseAtom("journal_io"))/
+    assert [_] = :binary.matches(rust, correct)
+
+    try do
+      File.write!(
+        facade,
+        String.replace(rust, correct, ~s/Err(Error::RaiseAtom("journal_failed"))/)
+      )
+
+      error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+      assert error.message =~ ~r/NamedCloseInvariant\.lean:\d+:/
+      refute error.message =~ ~r/Unknown (identifier|constant)/
+    after
+      File.write!(facade, rust)
+    end
+
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
-    [{_, beam}] = Code.compile_file(Path.join(@fixture, "NamedRustlerLaw.exs"))
 
-    law_options = [
-      native: {Lynx.Rustler, options},
-      initial_environment: "Record.NamedRustlerLaw.repairBoot",
-      options: [maxHeartbeats: 64_000_000, maxRecDepth: 8192]
-    ]
-
-    export = Path.join(tmp, "named-repair.export")
-    reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
-    assert Enum.any?(reports, &(&1.theorems != []))
-    assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
-    assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok && &1.cached))
+    [{LynxIoFixture.NamedRepairLaws, success}, {LynxIoFixture.NamedRepairErrorLaws, failure}] =
+      Code.compile_file(Path.join(@fixture, "NamedRustlerLaw.exs"))
 
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
-    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
-    assert status == 0, output
+
+    for {beam, boot} <- [{success, "repairBoot"}, {failure, "errorBoot"}] do
+      law_options = [
+        native: {Lynx.Rustler, options},
+        initial_environment: "Record.NamedRustlerLaw." <> boot,
+        options: [maxHeartbeats: 64_000_000, maxRecDepth: 8192]
+      ]
+
+      export = Path.join(tmp, boot <> ".export")
+      reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
+      assert Enum.any?(reports, &(&1.theorems != []))
+      assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
+      assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok && &1.cached))
+
+      {status, output} =
+        Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+
+      assert status == 0, output
+    end
   end
 end
