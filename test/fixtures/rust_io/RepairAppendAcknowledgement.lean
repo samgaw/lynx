@@ -3,6 +3,7 @@ public import Record.AppendAcknowledgement
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.RepairAppendAcknowledgement
+open Record.FileView
 open NativeFile Record.Properties Record.CrashProperties Record.LogProperties
   Record.RecoveryProperties Record.ResizeProperties Record.IntegrityProperties Record.AppendProperties Record.RepairCrashProperties
   Record.RecoveryScanInvariant Record.AppendAcknowledgement
@@ -18,14 +19,14 @@ private theorem encoded_append (values : List U16) (value : U16) :
 /-- Under arbitrary admitted host outcomes, a true return from the actual
 repair/append caller acknowledges all old records followed by exactly its value.
 The successful prefix is evidence, not an assumed first-party contract. -/
-theorem repair_append_returns (file : NativeFile) (value : U16) (env : Environment)
+theorem repair_append_returns [view : FileView] (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (values : List U16) (maximum : Usize)
     (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (stable : before.durable = before.visible) (image : LogImage values before.visible)
-    (trace : Result.ReadyPrefix (repair_and_append file maximum value) (fileEnv env file before frame)
+    (trace : Result.ReadyPrefix (repair_and_append file maximum value) (render env file before frame)
       (.ok (.Ok true, returnedFile)) world) :
-    returnedFile = file ∧ ∃ after, world = fileEnv env file after frame ∧
+    returnedFile = file ∧ ∃ after, world = render env file after frame ∧
       after.visible = disk (logBytes (values ++ [value])) ∧
       after.durable = disk (logBytes (values ++ [value])) ∧ Admitted after := by
   rw [Record.RepairWriterProperties.repair_append_contract] at trace
@@ -56,12 +57,12 @@ private theorem forget_invariant {holds : Environment → Prop} {computation : R
   intro residual after trace
   exact ⟨trivial, (safe residual after trace).2⟩
 
-private theorem repair_append_fragment (file : NativeFile) (value : U16) (env : Environment)
+private theorem repair_append_fragment [view : FileView] (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (values : List U16) (maximum : Usize)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (stable : before.durable = before.visible) (image : LogImage values before.visible) :
     Result.NativeInvariant (fun _ => True) (repair_and_append file maximum value)
-      (fileEnv env file before frame) := by
+      (render env file before frame) := by
   rw [Record.RepairWriterProperties.repair_append_contract]
   have repair := forget_invariant (Record.RepairImageInvariant.repair_log_invariant env file frame values
     before maximum separate valid stable image)
@@ -77,17 +78,17 @@ private theorem repair_append_fragment (file : NativeFile) (value : U16) (env : 
 
 /-- This is a postcondition for every successful terminal raw runtime execution
 of actual Rust repair and append. Blocking and failure cannot supply success. -/
-theorem repair_append_run_acknowledges (file : NativeFile) (value : U16) (env : Environment)
+theorem repair_append_run_acknowledges [view : FileView] (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (values : List U16) (maximum : Usize)
-    (returnedFile : NativeFile) (separate : Separate file frame) (valid : Admitted before)
+    (returnedFile : NativeFile) (separate : Separated file frame) (valid : Admitted before)
     (stable : before.durable = before.visible) (image : LogImage values before.visible)
     (elapsed : PID → Nat → Nat) (events : List Concurrent.Event)
     (last : Concurrent.Config (core.result.Result Bool NativeIoError × NativeFile))
-    (run : Concurrent.Run (.start (fileEnv env file before frame)
+    (run : Concurrent.Run (.start (render env file before frame)
       (repair_and_append file maximum value) elapsed) events last)
     (terminal : Concurrent.Terminal last (.ok (.Ok true, returnedFile))) :
     returnedFile = file ∧ ∃ after,
-      last = .start (fileEnv env file after frame) (.ok (.Ok true, returnedFile)) elapsed ∧
+      last = .start (render env file after frame) (.ok (.Ok true, returnedFile)) elapsed ∧
       after.visible = disk (logBytes (values ++ [value])) ∧
       after.durable = disk (logBytes (values ++ [value])) ∧ Admitted after := by
   have localTrace := repair_append_fragment file value env frame before values maximum separate valid stable image
@@ -98,16 +99,16 @@ theorem repair_append_run_acknowledges (file : NativeFile) (value : U16) (env : 
 
 /-- Each successful call consumes the previous call's actual resulting file
 state. The two scripts and bounds need not agree or be selected in advance. -/
-theorem repair_append_twice (file : NativeFile) (first second : U16) (env : Environment)
+theorem repair_append_twice [view : FileView] (file : NativeFile) (first second : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (values : List U16)
     (firstMaximum secondMaximum : Usize) (middleFile returnedFile : NativeFile)
-    (middle world : Environment) (separate : Separate file frame) (valid : Admitted before)
+    (middle world : Environment) (separate : Separated file frame) (valid : Admitted before)
     (stable : before.durable = before.visible) (image : LogImage values before.visible)
     (firstTrace : Result.ReadyPrefix (repair_and_append file firstMaximum first)
-      (fileEnv env file before frame) (.ok (.Ok true, middleFile)) middle)
+      (render env file before frame) (.ok (.Ok true, middleFile)) middle)
     (secondTrace : Result.ReadyPrefix (repair_and_append middleFile secondMaximum second)
       middle (.ok (.Ok true, returnedFile)) world) :
-    middleFile = file ∧ returnedFile = file ∧ ∃ after, world = fileEnv env file after frame ∧
+    middleFile = file ∧ returnedFile = file ∧ ∃ after, world = render env file after frame ∧
       after.visible = disk (logBytes (values ++ [first,second])) ∧
       after.durable = disk (logBytes (values ++ [first,second])) ∧ Admitted after := by
   obtain ⟨identity, afterFirst, rfl, firstVisible, firstDurable, firstValid⟩ :=
@@ -150,8 +151,10 @@ theorem acknowledged_crash_retry (file : NativeFile) (value : U16) (env : Enviro
           fileEnv ({} : Environment) ⟨crash.highWater + 1⟩
             ⟨disk (logBytes (values ++ [value])), disk (logBytes (values ++ [value])), crash.bytes.size, rest⟩ []) := by
   obtain ⟨identity, after, ending, visible, durable, admitted⟩ :=
-    repair_append_run_acknowledges file value env frame before values maximum returnedFile
+    repair_append_run_acknowledges (view := Record.FileView.independent)
+      file value env frame before values maximum returnedFile
       separate valid stable image elapsed events last run terminal
+  change last = .start (fileEnv env file after frame) (.ok (.Ok true, returnedFile)) elapsed at ending
   rw [ending] at captured
   simp only [snapshot] at captured
   unfold crashImage at captured

@@ -21,11 +21,14 @@ defmodule Lynx.Rust.AppendAcknowledgementTest do
         "RepairWriterProperties",
         "AppendAcknowledgement",
         "RepairAppendAcknowledgement",
-        "AppendAcknowledgementWitness"
+        "AppendAcknowledgementWitness",
+        "NamedJournalCrash",
+        "NamedAppendAcknowledgement"
       ])
 
     modules = ~w(Record.RepairAcknowledgement Record.AppendAcknowledgement
-      Record.RepairAppendAcknowledgement Record.AppendAcknowledgementWitness)
+      Record.RepairAppendAcknowledgement Record.AppendAcknowledgementWitness
+      Record.NamedJournalCrash Record.NamedAppendAcknowledgement)
     properties = ~w(Record.RepairAcknowledgement.synchronize_returns
       Record.AppendAcknowledgement.append_returns
       Record.AppendAcknowledgement.append_run_acknowledges
@@ -35,7 +38,9 @@ defmodule Lynx.Rust.AppendAcknowledgementTest do
       Record.RepairAppendAcknowledgement.acknowledged_crash_retry
       Record.AppendAcknowledgementWitness.full_acknowledges
       Record.AppendAcknowledgementWitness.short_rolls_back
-      Record.AppendAcknowledgementWitness.repair_acknowledges)
+      Record.AppendAcknowledgementWitness.repair_acknowledges
+      Record.NamedAppendAcknowledgement.named_append_persists
+      Record.NamedAppendAcknowledgement.named_torn_append)
 
     options =
       base

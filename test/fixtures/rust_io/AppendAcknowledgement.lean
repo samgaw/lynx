@@ -3,18 +3,19 @@ public import Record.RepairWriterProperties
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.AppendAcknowledgement
+open Record.FileView
 open NativeFile Record.Properties Record.ReadProperties Record.RecoveryProperties
   Record.IntegrityProperties Record.CrashProperties Record.AppendProperties Record.LogProperties Record.ResizeProperties
   Record.RepairCrashProperties Record.RecoveryScanInvariant
 
 /-- Every actual end seek return retains the borrowed file and exposes its model step. -/
-theorem seek_end_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (env : Environment)
+theorem seek_end_returns [view : FileView] (file : NativeFile) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result U64 NativeIoError) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Admitted before)
-    (trace : Result.ReadyPrefix (NativeFile.seek file (.end_ 0#i64)) (fileEnv env file before frame)
+    (separate : Separated file frame) (valid : Admitted before)
+    (trace : Result.ReadyPrefix (NativeFile.seek file (.end_ 0#i64)) (render env file before frame)
       (.ok (reply, returnedFile)) world) :
-    returnedFile = file ∧ ∃ after, world = fileEnv env file after frame ∧
+    returnedFile = file ∧ ∃ after, world = render env file after frame ∧
       seekStep before (.end_ 0#i64) = some (reply, after) := by
   simp only [NativeFile.seek] at trace
   cases trace with
@@ -24,7 +25,7 @@ theorem seek_end_returns [heapLayout : Record.Properties.HeapLayout] (file : Nat
       | ok output =>
           cases continuation
           unfold pollSeek at ready
-          rw [lookup_admitted env file before frame separate valid] at ready
+          rw [load_rendered env file before frame separate valid] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
           · simp only [stopped] at ready
@@ -34,7 +35,7 @@ theorem seek_end_returns [heapLayout : Record.Properties.HeapLayout] (file : Nat
                 obtain ⟨reply, after⟩ := output
                 simp only [step] at ready
                 obtain ⟨rfl, rfl⟩ := ready
-                exact ⟨rfl, after, store_at env file before after frame separate, rfl⟩
+                exact ⟨rfl, after, store_rendered env file before after frame separate valid, rfl⟩
 
 /-- A successful end-relative seek returns the actual visible length and cursor. -/
 theorem seek_end_shape (before : State) (offset : U64) (after : State)
@@ -65,13 +66,13 @@ theorem seek_end_shape (before : State) (offset : U64) (after : State)
                 vb, by dsimp; omega, by simpa [seekTarget] using vb⟩
 
 /-- Every actual write return retains the borrowed file and exposes its model step. -/
-theorem write_returns [heapLayout : Record.Properties.HeapLayout] (file : NativeFile) (value : U16) (env : Environment)
+theorem write_returns [view : FileView] (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State)
     (reply : core.result.Result Usize NativeIoError) (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Admitted before)
-    (trace : Result.ReadyPrefix (NativeFile.write file (payload value)) (fileEnv env file before frame)
+    (separate : Separated file frame) (valid : Admitted before)
+    (trace : Result.ReadyPrefix (NativeFile.write file (payload value)) (render env file before frame)
       (.ok (reply, returnedFile)) world) :
-    returnedFile = file ∧ ∃ after, world = fileEnv env file after frame ∧
+    returnedFile = file ∧ ∃ after, world = render env file after frame ∧
       writeStep before (payload value) = some (reply, after) := by
   simp only [NativeFile.write] at trace
   cases trace with
@@ -81,8 +82,8 @@ theorem write_returns [heapLayout : Record.Properties.HeapLayout] (file : Native
       | ok output =>
           cases continuation
           simp only [pollWrite, Option.any, Option.elim, Option.isSome,
-            lookup_admitted env file before frame separate valid,
-            no_shared_handle_at env file before frame separate] at ready
+            load_rendered env file before frame separate valid,
+            readOnly_rendered env file before frame separate] at ready
           by_cases stopped : blocked before = true
           · simp [stopped] at ready
           · simp only [stopped] at ready
@@ -92,7 +93,7 @@ theorem write_returns [heapLayout : Record.Properties.HeapLayout] (file : Native
                 obtain ⟨reply, after⟩ := output
                 simp only [step] at ready
                 obtain ⟨rfl, rfl⟩ := ready
-                exact ⟨rfl, after, store_at env file before after frame separate, rfl⟩
+                exact ⟨rfl, after, store_rendered env file before after frame separate valid, rfl⟩
 
 /-- Successful writes retain the actual count, resulting bytes and cursor bounds. -/
 theorem write_shape (before : State) (value : U16) (amount : Usize) (after : State)
@@ -145,14 +146,14 @@ theorem write_shape (before : State) (value : U16) (amount : Usize) (after : Sta
 
 /-- Every actual successful return distinguishes a durable append from a durable
 rollback. Host scripts, masks, cursors and the initial durable image vary freely
-within the bounded independent-file admission. No success or termination is assumed. -/
-theorem append_returns (file : NativeFile) (value : U16) (env : Environment)
+under the declared file-view admission. No success or termination is assumed. -/
+theorem append_returns [view : FileView] (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (accepted : Bool)
     (returnedFile : NativeFile) (world : Environment)
-    (separate : Separate file frame) (valid : Admitted before)
-    (trace : Result.ReadyPrefix (append_record_or_rollback file value) (fileEnv env file before frame)
+    (separate : Separated file frame) (valid : Admitted before)
+    (trace : Result.ReadyPrefix (append_record_or_rollback file value) (render env file before frame)
       (.ok (.Ok accepted, returnedFile)) world) :
-    returnedFile = file ∧ ∃ after, world = fileEnv env file after frame ∧
+    returnedFile = file ∧ ∃ after, world = render env file after frame ∧
       after.visible = (if accepted then overwrite before.visible before.visible.size (bytes (payload value)) 4 else before.visible) ∧
       after.durable = after.visible ∧ Admitted after := by
   rw [Record.RollbackProperties.append_contract] at trace
@@ -284,16 +285,16 @@ theorem append_fragment (file : NativeFile) (value : U16) (env : Environment) :
 
 /-- Every successful raw runtime completion, rather than only a selected ready
 trace or host script, satisfies the actual append/rollback acknowledgement. -/
-theorem append_run_acknowledges (file : NativeFile) (value : U16) (env : Environment)
+theorem append_run_acknowledges [view : FileView] (file : NativeFile) (value : U16) (env : Environment)
     (frame : List (Nat × String × Term)) (before : State) (accepted : Bool) (returnedFile : NativeFile)
-    (separate : Separate file frame) (valid : Admitted before)
+    (separate : Separated file frame) (valid : Admitted before)
     (elapsed : PID → Nat → Nat) (events : List Concurrent.Event)
     (last : Concurrent.Config (core.result.Result Bool NativeIoError × NativeFile))
-    (run : Concurrent.Run (.start (fileEnv env file before frame)
+    (run : Concurrent.Run (.start (render env file before frame)
       (append_record_or_rollback file value) elapsed) events last)
     (terminal : Concurrent.Terminal last (.ok (.Ok accepted, returnedFile))) :
     returnedFile = file ∧ ∃ after,
-      last = .start (fileEnv env file after frame) (.ok (.Ok accepted, returnedFile)) elapsed ∧
+      last = .start (render env file after frame) (.ok (.Ok accepted, returnedFile)) elapsed ∧
       after.visible = (if accepted then overwrite before.visible before.visible.size (bytes (payload value)) 4 else before.visible) ∧
       after.durable = after.visible ∧ Admitted after := by
   obtain ⟨world, trace, ending⟩ := (append_fragment file value _).run_returns elapsed run terminal
