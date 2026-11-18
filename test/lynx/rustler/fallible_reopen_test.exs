@@ -11,6 +11,102 @@ defmodule Lynx.Rustler.FallibleReopenTest do
 
   @tag :tmp_dir
   test "verifies typed reopen failures and preserves completed records", %{tmp_dir: tmp} do
+    {workspace, project, options, implementation} = prepare_reopen!(tmp)
+
+    proofs = [
+      {"FallibleReopen", "errors_preserve_completed_records"},
+      {"FallibleRetry", "reopens_after_typed_failure"},
+      {"RepairIoFailures", "repair_failure_consumes_owners"}
+    ]
+
+    options = install_proofs!(options, implementation, proofs)
+    assert_linkage!(options, implementation)
+
+    Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
+
+    beams =
+      for fixture <- ~w(FallibleReopenLaws FallibleRetryLaws),
+          {module, beam} <- Code.compile_file(Path.join(@fixture, fixture <> ".exs")),
+          into: %{},
+          do: {module, beam}
+
+    verify_laws!(tmp, project, options, beams, [
+      {LynxIoFixture.RecordLimitLaws, "FallibleReopen", "limitedBoot"},
+      {LynxIoFixture.JournalIoLaws, "FallibleReopen", "failedOpenBoot"},
+      {LynxIoFixture.RecordLimitRetryLaws, "FallibleRetry", "limitedRetry"},
+      {LynxIoFixture.JournalIoRetryLaws, "FallibleRetry", "failedOpenRetry"}
+    ])
+
+    path = Path.join(workspace, "native/src/journal_reopen.rs")
+    source = File.read!(path)
+    wrong = String.replace(source, ~s|RaiseAtom("record_limit")|, ~s|RaiseAtom("journal_io")|)
+    refute wrong == source
+
+    try do
+      File.write!(path, wrong)
+
+      assert_raise RuntimeError, ~r/FallibleReopen\.lean:\d+:/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    after
+      File.write!(path, source)
+    end
+
+    assert %{verification: %{guarantees: [_ | _]}} = Lynx.Rustler.prepare!(options)
+  end
+
+  @tag :tmp_dir
+  test "recovers the named journal after typed sync failure and crash", %{tmp_dir: tmp} do
+    {workspace, project, options, implementation} = prepare_reopen!(tmp)
+
+    proofs = [
+      {"FallibleReopen", "errors_preserve_completed_records"},
+      {"NamedJournalCrash", nil},
+      {"TornSyncFailure", "failed_sync_preserves_acknowledgements"},
+      {"TornSyncRecovery", "reopens_captured_image"},
+      {"TornSyncRecovery", "failed_sync_crash_reopens"},
+      {"TornSyncRecovery", "reboot_witness"},
+      {"TornSyncChains", "repeated_failed_sync"},
+      {"TornSyncChains", "reopens_after_failed_attempts"}
+    ]
+
+    options = install_proofs!(options, implementation, proofs)
+    assert_linkage!(options, implementation)
+
+    Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
+    beams = Map.new(Code.compile_file(Path.join(@fixture, "TornSyncLaws.exs")))
+
+    verify_laws!(tmp, project, options, beams, [
+      {LynxIoFixture.TornSyncFailureLaws, "TornSyncFailure", "failedSyncBoot"},
+      {LynxIoFixture.TornSyncRestartLaws, "TornSyncRecovery", "retryBoot"}
+    ])
+
+    path = Path.join(workspace, "protocol/src/lib.rs")
+    source = File.read!(path)
+
+    wrong =
+      String.replace(
+        source,
+        "(values.len() as u64).checked_mul(4)",
+        "(values.len() as u64).checked_mul(3)"
+      )
+
+    refute wrong == source
+
+    try do
+      File.write!(path, wrong)
+
+      assert_raise RuntimeError, ~r/TornSync(Failure|Recovery)\.lean:\d+:/, fn ->
+        Lynx.Rustler.prepare!(options)
+      end
+    after
+      File.write!(path, source)
+    end
+
+    assert_linkage!(options, implementation)
+  end
+
+  defp prepare_reopen!(tmp) do
     {workspace, project, _fixture} = Lynx.Rust.IoFixture.prepare!(tmp, @tools)
 
     options = [
@@ -40,13 +136,14 @@ defmodule Lynx.Rustler.FallibleReopenTest do
            ] =
              discovered.bindings.bindings
 
-    proofs = [
-      {"FallibleReopen", "errors_preserve_completed_records"},
-      {"FallibleRetry", "reopens_after_typed_failure"},
-      {"RepairIoFailures", "repair_failure_consumes_owners"}
-    ]
+    {workspace, project, options, implementation}
+  end
 
-    for {module, _} <- proofs do
+  defp install_proofs!(options, implementation, proofs) do
+    project = Keyword.fetch!(options, :lean_project)
+    modules = proofs |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+
+    for module <- modules do
       source = File.read!(Path.join(@fixture, module <> ".lean"))
 
       File.write!(
@@ -55,39 +152,28 @@ defmodule Lynx.Rustler.FallibleReopenTest do
       )
     end
 
-    properties = for {module, name} <- proofs, do: "Record." <> module <> "." <> name
+    Keyword.merge(options,
+      proof_modules: Enum.map(modules, &("Record." <> &1)),
+      required_properties:
+        for({module, name} <- proofs, name != nil, do: "Record." <> module <> "." <> name)
+    )
+  end
 
-    options =
-      Keyword.merge(options,
-        proof_modules: for({module, _} <- proofs, do: "Record." <> module),
-        required_properties: properties
-      )
-
+  defp assert_linkage!(options, implementation) do
     prepared = Lynx.Rustler.prepare!(options)
 
-    for property <- properties do
+    for property <- Keyword.fetch!(options, :required_properties) do
       assert Enum.any?(prepared.verification.guarantees, fn evidence ->
                evidence.kind == :cross_crate_contract && evidence.lean_name == implementation &&
                  evidence.theorem == property
              end)
     end
+  end
 
-    Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
-
-    beams =
-      for fixture <- ~w(FallibleReopenLaws FallibleRetryLaws),
-          {module, beam} <- Code.compile_file(Path.join(@fixture, fixture <> ".exs")),
-          into: %{},
-          do: {module, beam}
-
+  defp verify_laws!(tmp, project, options, beams, cases) do
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
 
-    for {module, environment, boot} <- [
-          {LynxIoFixture.RecordLimitLaws, "FallibleReopen", "limitedBoot"},
-          {LynxIoFixture.JournalIoLaws, "FallibleReopen", "failedOpenBoot"},
-          {LynxIoFixture.RecordLimitRetryLaws, "FallibleRetry", "limitedRetry"},
-          {LynxIoFixture.JournalIoRetryLaws, "FallibleRetry", "failedOpenRetry"}
-        ] do
+    for {module, environment, boot} <- cases do
       beam = Map.fetch!(beams, module)
       export = Path.join(tmp, boot <> ".export")
 
@@ -107,22 +193,5 @@ defmodule Lynx.Rustler.FallibleReopenTest do
 
       assert status == 0, output
     end
-
-    path = Path.join(workspace, "native/src/journal_reopen.rs")
-    source = File.read!(path)
-    wrong = String.replace(source, ~s|RaiseAtom("record_limit")|, ~s|RaiseAtom("journal_io")|)
-    refute wrong == source
-
-    try do
-      File.write!(path, wrong)
-
-      assert_raise RuntimeError, ~r/FallibleReopen\.lean:\d+:/, fn ->
-        Lynx.Rustler.prepare!(options)
-      end
-    after
-      File.write!(path, source)
-    end
-
-    assert %{verification: %{guarantees: [_ | _]}} = Lynx.Rustler.prepare!(options)
   end
 end
