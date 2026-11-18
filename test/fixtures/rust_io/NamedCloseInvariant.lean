@@ -46,6 +46,52 @@ private theorem retire_named (number : Nat) (env : Environment) (file : NativeFi
     Bool.false_eq_true, ↓reduceIte, Bool.false_or, Bool.or_true, changes]
   simp [closedWorld, namedWorld, handleCell, inodeCell, List.map_append, fixed, Ne.symm different]
 
+private theorem closed_handle_rejected (number : Nat) (env : Environment) (file : NativeFile)
+    (state : State) (frame : List (Nat × String × Term))
+    (separate : NamedSeparated number file frame) :
+    lookup file (closedWorld number env file state frame) = none ∧
+    pollClose file (closedWorld number env file state frame) =
+      some (.error .exhausted, closedWorld number env file state frame) := by
+  obtain ⟨nonzero, _, different, fileFrame, _⟩ := separate
+  have absent : frame.filter (fun cell => cell.1 == file.id) = [] := by
+    apply List.filter_eq_nil_iff.mpr
+    intro cell member
+    simpa using fileFrame cell member
+  have fileBound : file.id ≤ max env.nativeRefCounter (max file.id number) := by omega
+  have missing : lookup file (closedWorld number env file state frame) = none := by
+    simp [lookup, sharedLookup, getHandle, closedWorld, namedWorld, inodeCell,
+      List.filter_append, absent, different, Ne.symm different, nonzero, not_lt.mpr fileBound,
+      typeName, handleTypeName, writableHandleTypeName, closedHandleTypeName]
+  refine ⟨missing, ?_⟩
+  simp only [pollClose, missing]
+  simp [pollDirectoryClose, directoryHandle, closedWorld, namedWorld, inodeCell, encodeHandle,
+    List.filter_append, absent, different, Ne.symm different, nonzero, not_lt.mpr fileBound,
+    directoryTypeName, closedHandleTypeName]
+
+private theorem close_return_retires (number : Nat) (env : Environment) (file : NativeFile)
+    (before : State) (frame : List (Nat × String × Term)) (after : Environment)
+    (separate : NamedSeparated number file frame) (valid : Admitted before)
+    (closed : Result.ReadyPrefix (NativeOwnedDrop.drop file) (namedWorld number env file before frame)
+      (.ok ()) after) :
+    lookup file after = none ∧ pollClose file after = some (.error .exhausted, after) := by
+  simp only [NativeOwnedDrop.drop, NativeFile.close] at closed
+  obtain ⟨reply, middle, ready, tail⟩ := closed.wait_returns
+  cases reply with
+  | error exception => cases tail
+  | ok unit =>
+    obtain ⟨rfl, rfl⟩ := tail.ok_returns
+    simp only [pollClose, named_load number env file before frame separate valid] at ready
+    by_cases stopped : blocked before = true
+    · simp [stopped] at ready
+    · simp only [stopped] at ready
+      cases stepped : closeStep before with
+      | none => simp [stepped] at ready
+      | some state =>
+        simp only [stepped, Option.some.injEq, Prod.mk.injEq,
+          retire_named number env file before state frame separate valid] at ready
+        obtain ⟨_, rfl⟩ := ready
+        exact closed_handle_rejected number env file state frame separate
+
 /-- An admitted close consumes the descriptor and preserves the acknowledged
 log even if the host close fails or changes which suffix bytes persist. -/
 private theorem close_step_preserves (values : List U16) (before after : State)
@@ -122,6 +168,8 @@ private theorem typed_close_retains_journal (counter : Nat) (data : ByteArray) (
       middle residual after) :
     JournalState 1 (boot counter data choices rest) ⟨counter + 1⟩
       [namespaceCell rest] values after ∧
+    (residual = .ok () → lookup ⟨counter + 1⟩ after = none ∧
+      pollClose ⟨counter + 1⟩ after = some (.error .exhausted, after)) ∧
     ∃ inside, Result.ReadyPrefix (__TRY_REOPEN__ maximum)
       (boot counter data choices rest) inside after := by
   have admitted : Admitted (openingState data choices) := ⟨bounded, bounded, Nat.zero_le _⟩
@@ -133,7 +181,10 @@ private theorem typed_close_retains_journal (counter : Nat) (data : ByteArray) (
   obtain ⟨state, equal, valid, visible, durable⟩ := (safe _ _ repair).1
   rw [Record.FileView.named_render] at equal
   subst middle
-  refine ⟨(close_invariant 1 _ _ _ state values separate valid visible durable _ after cleanup).1, ?_⟩
+  refine ⟨(close_invariant 1 _ _ _ state values separate valid visible durable _ after cleanup).1, ?_, ?_⟩
+  · intro done
+    subst residual
+    exact close_return_retires 1 _ _ state _ after separate valid cleanup
   rcases closing with rfl | ⟨error, rfl⟩
   all_goals
     simp only [__TRY_REOPEN__, monadLift_self, NativeM.lift, Result.ok_bind]
@@ -202,11 +253,34 @@ theorem typed_close_crash_preserves (counter : Nat) (data : ByteArray) (choices 
     ∃ inside bytes, Result.ReadyPrefix (__TRY_REOPEN__ maximum)
       (boot counter data choices rest) inside after ∧
       LogImage values bytes ∧ bytes.size ≤ limit ∧ image = ⟨namedJournal nameBytes, [(1, bytes)], counter + 1⟩ := by
-  obtain ⟨safe, inside, reached⟩ :=
+  obtain ⟨safe, _, inside, reached⟩ :=
     typed_close_retains_journal counter data choices rest values maximum positive bounded initial
       reply closing middle after residual repair cleanup
   obtain ⟨bytes, state, bounded, captured⟩ :=
     journal_capture counter data choices rest values after safe positive chosen masks image crash
   exact ⟨inside, bytes, reached, state, bounded, captured⟩
+
+
+/-- A completed consuming close inside the actual Rustler error or budget
+rejection path retires its writable descriptor. The stale handle can neither
+look up the file as an open capability nor close it again. -/
+theorem typed_close_rejects_reuse (counter : Nat) (data : ByteArray) (choices rest : Term)
+    (values : List U16) (maximum : U32) (positive : 1 ≤ counter)
+    (bounded : data.size ≤ limit) (initial : LogImage values data)
+    (reply : core.result.Result (Option (alloc.vec.Vec U16)) NativeIoError)
+    (closing : reply = .Ok none ∨ ∃ error, reply = .Err error) (middle after : Environment)
+    (repair : Result.ReadyPrefix
+      (repair_log ⟨counter + 1⟩ (UScalar.cast .Usize maximum)) (opened counter data choices rest)
+      (.ok (reply, ⟨counter + 1⟩)) middle)
+    (cleanup : Result.ReadyPrefix (NativeOwnedDrop.drop (⟨counter + 1⟩ : NativeFile))
+      middle (.ok ()) after) :
+    (∃ inside, Result.ReadyPrefix (__TRY_REOPEN__ maximum)
+      (boot counter data choices rest) inside after) ∧
+      lookup ⟨counter + 1⟩ after = none ∧
+      pollClose ⟨counter + 1⟩ after = some (.error .exhausted, after) := by
+  obtain ⟨_, retired, reached⟩ :=
+    typed_close_retains_journal counter data choices rest values maximum positive bounded initial
+      reply closing middle after _ repair cleanup
+  exact ⟨reached, retired rfl⟩
 
 end Record.NamedCloseInvariant

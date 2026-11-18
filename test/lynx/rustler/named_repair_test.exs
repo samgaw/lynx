@@ -58,6 +58,7 @@ defmodule Lynx.Rustler.NamedRepairTest do
       ~w(Record.NamedRustlerRepair.arbitrary_repair_result
       Record.NamedRustlerRepair.arbitrary_repair_persists
       Record.NamedCloseInvariant.typed_close_crash_preserves
+      Record.NamedCloseInvariant.typed_close_rejects_reuse
       Record.NamedRepairCrash.typed_repair_prefix_crash
       Record.NamedRepairCrash.typed_retry_after_prefix_crashes
       Record.NamedRustlerAdapterProof.arbitrary_repair_encodes
