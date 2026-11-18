@@ -414,7 +414,146 @@ defmodule Lynx.Rustler.PositionalIoTest do
     File.write!(source, original)
   end
 
-  defp fixture!(tmp) do
+  @tag :tmp_dir
+  @tag skip:
+         System.get_env("LYNX_FULL_MIR") != "1" &&
+           "set LYNX_FULL_MIR=1 for standard positional writes"
+  test "compiled binary writes retry standard short writes and interruptions before synchronizing",
+       %{tmp_dir: tmp} do
+    base =
+      fixture!(tmp,
+        module_prefix: "ExactWrite.Extraction",
+        cargo: [features: ["positional-write-all"]],
+        only: [open_slots: 0, patch_all_at: 3, observe_at: 2],
+        sysroot: :full_mir,
+        proof_roots: []
+      )
+
+    project = base[:lean_project]
+    File.mkdir_p!(Path.join(project, "ExactWrite"))
+
+    properties =
+      File.read!(Path.join(@fixture, "ExactWriteProperties.lean"))
+      |> String.replace("Lynx.NativeFile io_protocol", "Lynx.NativeFile io_native")
+      |> String.replace("io_protocol.io_core.", "io_native.io_core.")
+      |> String.replace("io_protocol.positional.", "io_native.io_protocol.positional.")
+
+    File.write!(Path.join(project, "ExactWrite/Properties.lean"), properties)
+
+    required =
+      Enum.map(
+        ~w(writes_all synchronizes_after_all caller_no_panic two_short_writes_synchronize
+          write_zero_preserves_prefix interrupted_write_retries_same_range fatal_write_preserves_prefix
+          sync_error_after_complete_write),
+        &("ExactWrite.Properties." <> &1)
+      )
+
+    options =
+      base ++
+        [
+          nonpanicking: [
+            {"io_protocol::positional::write_all_and_sync",
+             "ExactWrite.Properties.caller_no_panic"}
+          ],
+          proof_modules: ["ExactWrite.Properties"],
+          required_properties: required
+        ]
+
+    prepared = Lynx.Rustler.prepare!(options)
+    binding = Enum.find(prepared.bindings.bindings, &(&1["name"] == "patch_all_at"))
+    assert %{"arity" => 3, "flags" => 2, "lean_name" => implementation} = binding
+
+    assert Enum.any?(prepared.verification.implementations, fn row ->
+             row.rust_name == "std::os::unix::fs::FileExt::write_all_at" &&
+               row.source_kind == :included_library_helper
+           end)
+
+    assert Enum.any?(prepared.verification.unverified_external_calls, fn
+             %{lean: "Lynx.NativeFile.writeAt", implementation_verified: false} -> true
+             _ -> false
+           end)
+
+    audit = prepared.extraction.audit
+
+    {write_id, _} =
+      Enum.find(audit.external_calls, fn {_, m} -> m.lean == "Lynx.NativeFile.writeAt" end)
+
+    write = Enum.find(audit.external_functions, &(&1["def_id"] == write_id))
+    impl_id = get_in(write, ["src", "TraitImpl", "impl_ref", "id"])
+
+    broken_dictionary =
+      Map.update!(audit.translated, "trait_impls", fn entries ->
+        Enum.map(entries, fn
+          %{"def_id" => ^impl_id} = impl -> Map.put(impl, "methods", [])
+          entry -> entry
+        end)
+      end)
+
+    assert {:error, _, "missing or inconsistent standard I/O dictionary" <> _} =
+             Lynx.Rust.IoDefaults.audit(
+               audit.functions,
+               audit.external_calls,
+               broken_dictionary,
+               audit.references
+             )
+
+    native_proof =
+      File.read!(Path.join(@fixture, "ExactWriteNifProperties.lean"))
+      |> String.replace("__WRITE_ALL__", implementation)
+
+    File.write!(Path.join(project, "ExactWrite/Nif.lean"), native_proof)
+    theorem = "ExactWrite.Nif.acknowledged_range"
+
+    options =
+      options
+      |> Keyword.update!(:proof_modules, &(&1 ++ ["ExactWrite.Nif"]))
+      |> Keyword.update!(:required_properties, &[theorem | &1])
+
+    load_and_calibrate(prepared, tmp, """
+    File.write!("slots", <<1, 2>>)
+    true = Native.patch_all_at(file, 1, <<7, 8>>)
+    <<1, 7, 8>> = File.read!("slots")
+    7 = Native.observe_at(reader, 1)
+    8 = Native.observe_at(reader, 2)
+    """)
+
+    [{_, beam}] = Code.compile_file(Path.join(@fixture, "positional_write_all_laws.ex"))
+    export = Path.join(tmp, "positional-write-all.export")
+
+    law_options = [
+      native: {Lynx.Rustler, options},
+      initial_environment: "ExactWrite.Nif.ready",
+      options: [maxHeartbeats: 32_000_000, maxRecDepth: 8192]
+    ]
+
+    reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
+    assert Enum.all?(reports, &(&1.status == :ok)), inspect(reports, limit: :infinity)
+    assert [%{name: "acknowledged_range_is_readable/0"}] = Enum.flat_map(reports, & &1.theorems)
+
+    assert [%{"implementations" => [^implementation]}] =
+             Enum.filter(Lynx.Rust.Proofs.properties!(reports), &(&1["theorem"] == theorem))
+
+    assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
+
+    sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
+    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+    assert status == 0, output
+
+    source = Path.join(base[:workspace], "native/src/offset_file.rs")
+    original = File.read!(source)
+    mutation = String.replace(original, "Ok(()) => true", "Ok(()) => false")
+    refute mutation == original
+    File.write!(source, mutation)
+
+    try do
+      error = assert_raise RuntimeError, fn -> Lynx.Rustler.prepare!(options) end
+      assert error.message =~ "ExactWrite/Nif.lean:"
+    after
+      File.write!(source, original)
+    end
+  end
+
+  defp fixture!(tmp, overrides \\ []) do
     workspace = Path.join(tmp, "workspace")
     File.mkdir_p!(workspace)
 
@@ -437,20 +576,23 @@ defmodule Lynx.Rustler.PositionalIoTest do
       File.ln_s!(packages, Path.join(project, ".lake/packages"))
     end
 
-    [
-      workspace: workspace,
-      package: "io-native",
-      tools: @tools,
-      cargo: [features: ["positional-file"]],
-      only: [open_slots: 0, patch_at: 3, observe_at: 2],
-      execution: :runtime,
-      files: :regular,
-      owned_drops: true,
-      proof_roots: ["io_protocol::write_then_sync"],
-      module_prefix: "Positional.Extraction",
-      lean_project: project,
-      build_dir: Path.join(tmp, "build")
-    ]
+    Keyword.merge(
+      [
+        workspace: workspace,
+        package: "io-native",
+        tools: @tools,
+        cargo: [features: ["positional-file"]],
+        only: [open_slots: 0, patch_at: 3, observe_at: 2],
+        execution: :runtime,
+        files: :regular,
+        owned_drops: true,
+        proof_roots: ["io_protocol::write_then_sync"],
+        module_prefix: "Positional.Extraction",
+        lean_project: project,
+        build_dir: Path.join(tmp, "build")
+      ],
+      overrides
+    )
   end
 
   defp write_proofs!(project, bindings, sources) do
@@ -472,7 +614,7 @@ defmodule Lynx.Rustler.PositionalIoTest do
     end
   end
 
-  defp load_and_calibrate(prepared, tmp) do
+  defp load_and_calibrate(prepared, tmp, extra \\ "") do
     library = Path.join(tmp, "positional-native")
     File.cp!(prepared.library, library <> ".so")
     source = Path.join(tmp, "native.ex")
@@ -532,6 +674,8 @@ defmodule Lynx.Rustler.PositionalIoTest do
     observed = Native.observe_at(file, 0)
     true = observed in [7, 9]
     <<^observed, 2>> = File.read!("slots")
+
+    #{extra}
     """)
 
     {output, status} =

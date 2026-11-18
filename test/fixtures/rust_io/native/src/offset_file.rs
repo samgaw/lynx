@@ -54,3 +54,23 @@ fn observe_nif(resource: ResourceArc<OffsetFile>, offset: u64) -> Option<u8> {
         }
     }
 }
+
+/// Acknowledge a whole byte range only after the last write is synchronized.
+#[cfg(feature = "positional-write-all")]
+#[rustler::nif(name = "patch_all_at", schedule = "DirtyIo")]
+fn patch_all_nif(
+    resource: ResourceArc<OffsetFile>,
+    offset: u64,
+    bytes: rustler::Binary<'_>,
+) -> bool {
+    let reply =
+        io_protocol::positional::write_all_and_sync(&resource.file, bytes.as_slice(), offset);
+    drop(resource);
+    match reply {
+        Ok(()) => true,
+        Err(error) => {
+            drop(error);
+            false
+        }
+    }
+}
