@@ -216,6 +216,59 @@ defmodule Lynx.Rustler.FallibleReopenTest do
     assert_export!(project, export)
   end
 
+  @tag :tmp_dir
+  test "continues a typed journal after repeated interrupted repairs", %{tmp_dir: tmp} do
+    {_workspace, project, options, bindings} =
+      prepare_reopen!(tmp, log_try_reopen: 1, log_append: 2)
+
+    proofs = [
+      {"FallibleReopen", nil},
+      {"NamedJournalCrash", nil},
+      {"TornSyncFailure", nil},
+      {"TornSyncRecovery", nil},
+      {"TornSyncChains", nil},
+      {"MixedRepairScripts", nil},
+      {"MixedRepairRecovery", nil},
+      {"MixedRepairWitness", nil},
+      {"MixedRepairChains", "repeated_prefix_crashes"},
+      {"MixedRepairChains", "reopens_after_repeated_prefix_crashes"},
+      {"TypedRestartAppend", nil},
+      {"MixedRepairAppend", "appends_after_mixed_interruptions"},
+      {"MixedRepairAppend", "boot_after_two_interruptions"}
+    ]
+
+    options = install_proofs!(options, bindings, proofs)
+    prepared = assert_linkage!(options, bindings.try_reopen)
+
+    assert_linkage!(
+      prepared,
+      bindings.append,
+      "Record.MixedRepairAppend.appends_after_mixed_interruptions"
+    )
+
+    path = Path.join(project, "Record/MixedRepairAppend.lean")
+    source = File.read!(path)
+    wrong = String.replace(source, "after.highWater + 8", "after.highWater + 7")
+    refute wrong == source
+
+    try do
+      File.write!(path, wrong)
+
+      assert_raise RuntimeError, ~r/MixedRepairAppend\.lean:\d+:/, fn ->
+        Lynx.Rust.Project.build!(project, ["Record.MixedRepairAppend"])
+      end
+    after
+      File.write!(path, source)
+    end
+
+    Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
+    beams = Map.new(Code.compile_file(Path.join(@fixture, "MixedRepairAppendLaw.exs")))
+
+    verify_laws!(tmp, project, options, beams, [
+      {LynxIoFixture.MixedRepairAppendLaws, "MixedRepairAppend", "commitBoot"}
+    ])
+  end
+
   defp prepare_reopen!(tmp, only \\ [log_try_reopen: 1]) do
     {workspace, project, _fixture} = Lynx.Rust.IoFixture.prepare!(tmp, @tools)
 
