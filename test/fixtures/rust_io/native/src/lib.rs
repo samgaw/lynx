@@ -8,6 +8,9 @@ fn commit_nif(value: u16) -> bool {
 
 rustler::init!("Elixir.LynxIoFixture.Native");
 
+#[cfg(feature = "fallible-reopen")]
+mod journal_reopen;
+
 #[cfg(feature = "shared-log")]
 pub mod shared_log {
     //! Shared file ownership and locked append callers for cross-crate proofs.
