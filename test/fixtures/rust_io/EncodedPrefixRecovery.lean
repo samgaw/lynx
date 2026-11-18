@@ -1,5 +1,5 @@
 module
-public import Record.RepairWriterProperties
+public import Record.RepairCrashProperties
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.EncodedPrefixRecovery

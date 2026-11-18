@@ -149,7 +149,7 @@ private theorem one_inode {α : Type} (items : List α) (tag : α → Nat)
     simp only [List.map_cons, List.cons.injEq, List.map_eq_nil_iff] at ids
     exact ⟨node, by simp [ids.2], ids.1⟩
 
-private theorem captured_journal (env : Environment) (disk : State) (script : Term)
+theorem captured_journal (env : Environment) (disk : State) (script : Term)
     (tables : namespaceSnapshot env = some ⟨names, names, [], script⟩)
     (ids : inodeIds env = [1]) (found : inode 1 env = some disk)
     (chosen : Names) (masks : List (Nat × ByteArray)) (image : FilesystemImage)
@@ -200,7 +200,7 @@ private theorem bytes_protected (bytes : ByteArray) (allowed : retainedBytes byt
   intro i inside
   exact checked i (List.mem_range.mpr inside)
 
-private theorem names_equal (left right : NativeFile.Names)
+theorem names_equal (left right : NativeFile.Names)
     (equal : NativeFile.tablesEqual left right = true) : left = right := by
   have mapped : left.map (fun entry => (entry.1.data,entry.2)) =
       right.map (fun entry => (entry.1.data,entry.2)) := by

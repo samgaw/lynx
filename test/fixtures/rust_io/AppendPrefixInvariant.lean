@@ -1,6 +1,7 @@
 module
 public import Record.RepairAppendAcknowledgement
 public import Record.EncodedPrefixRecovery
+public import Record.RepairWriterProperties
 public section
 open Aeneas Aeneas.Std Lynx io_protocol
 namespace Record.AppendPrefixInvariant
