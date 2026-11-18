@@ -27,7 +27,10 @@ defmodule Lynx.Rustler.ReopenedRepairTest do
     append = Enum.find(prepared.bindings.bindings, &(&1["name"] == "log_append"))
     assert %{"arity" => 1, "flags" => 2} = reopen
 
-    for module <- ~w(ReopenedLogProperties ReopenedRepairPrefix RepeatedRepairProperties) do
+    modules =
+      ~w(ReopenedLogProperties ReopenedRepairPrefix RepeatedRepairProperties CompleteNamedRepair)
+
+    for module <- modules do
       source =
         File.read!(Path.join(@fixture, module <> ".lean"))
         |> String.replace("__REOPEN__", reopen["lean_name"])
@@ -42,14 +45,17 @@ defmodule Lynx.Rustler.ReopenedRepairTest do
         ~w(blocked_sync_checked restart_prefixes_checked named_retry_checked
         retry_after_crashes blocked_reboot_witness),
         &("Record.ReopenedRepairPrefix." <> &1)
-      )
+      ) ++
+        Enum.map(
+          ~w(retry_complete_log blocked_complete complete_attempts_witness complete_boot_reachable),
+          &("Record.CompleteNamedRepair." <> &1)
+        )
 
     options =
       options
       |> Keyword.update!(
         :proof_modules,
-        &(&1 ++
-            ~w(Record.ReopenedLogProperties Record.RepeatedRepairProperties Record.ReopenedRepairPrefix))
+        &(&1 ++ Enum.map(modules, fn module -> "Record." <> module end))
       )
       |> Keyword.update!(:required_properties, &(&1 ++ properties))
 
@@ -65,22 +71,55 @@ defmodule Lynx.Rustler.ReopenedRepairTest do
 
     calibrate(prepared.library, tmp)
     Code.compile_file(Path.join(@fixture, "NativeLogBindings.exs"))
-    [{_, beam}] = Code.compile_file(Path.join(@fixture, "ReopenedRepairLaws.exs"))
-
-    law_options = [
-      native: {Lynx.Rustler, options},
-      initial_environment: "Record.ReopenedRepairPrefix.recoveredBoot",
-      options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192]
-    ]
-
-    export = Path.join(tmp, "repaired-after-reboot.export")
-    reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
-    assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
-    assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
 
     sandbox = if :os.type() == {:unix, :darwin}, do: ["--inadvisably-no-sandbox"], else: []
-    {status, output} = Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
-    assert status == 0, output
+
+    for {mod, boot, export_name} <- [
+          {"ReopenedRepairLaws", "Record.ReopenedRepairPrefix.recoveredBoot",
+           "repaired-after-reboot.export"},
+          {"CompleteNamedRepairLaws", "Record.CompleteNamedRepair.completeBoot",
+           "complete-after-reboot.export"}
+        ] do
+      [{_, beam}] = Code.compile_file(Path.join(@fixture, mod <> ".exs"))
+
+      law_options = [
+        native: {Lynx.Rustler, options},
+        initial_environment: boot,
+        options: [maxHeartbeats: 16_000_000, maxRecDepth: 8192]
+      ]
+
+      export = Path.join(tmp, export_name)
+      reports = Lynx.Laws.verify([beam], Keyword.put(law_options, :export, export))
+      assert [] == for(report <- reports, report.status != :ok, do: report.diagnostics)
+      assert Enum.all?(Lynx.Laws.verify([beam], law_options), &(&1.status == :ok and &1.cached))
+
+      {status, output} =
+        Lynx.Commands.lake(project, ["check", "--from-export", export] ++ sandbox)
+
+      assert status == 0, output
+    end
+
+    complete_proof = Path.join(project, "Record/CompleteNamedRepair.lean")
+    complete_source = File.read!(complete_proof)
+
+    wrong =
+      String.replace(
+        complete_source,
+        "file.position == bytes.size &&",
+        "file.position == bytes.size + 1 &&"
+      )
+
+    refute wrong == complete_source
+
+    try do
+      File.write!(complete_proof, wrong)
+
+      assert_raise RuntimeError, ~r/CompleteNamedRepair\.lean:/, fn ->
+        Lynx.Rust.Project.build!(project, ["Record.CompleteNamedRepair"])
+      end
+    after
+      File.write!(complete_proof, complete_source)
+    end
 
     proof = Path.join(project, "Record/ReopenedRepairPrefix.lean")
     original = File.read!(proof)
