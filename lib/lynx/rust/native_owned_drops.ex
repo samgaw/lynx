@@ -199,47 +199,60 @@ defmodule Lynx.Rust.NativeOwnedDrops do
     end
   end
 
-  # Insert a concrete dictionary immediately after the actual Aeneas declaration.
-  # No default dictionary exists for a dropful resource. Order or formatting changes
-  # fail closed instead of silently using the old destructor-free release path.
+  # Allocation acquires an implicit dependency on its cleanup dictionary in Lean.
+  # The native heap codec plan visits field types before their owners. Emit the
+  # audited structural bodies and their instances in that order ahead of users.
   def install_instances!(plan, translation, source) do
-    Enum.reduce(plan, source, fn type, source ->
-      if is_integer(type.native_cleanup) do
-        {mapping, typename} =
-          case {Enum.filter(translation["functions"], &(&1["def_id"] == type.native_cleanup)),
-                Enum.filter(translation["types"], &(&1["def_id"] == type["def_id"]))} do
-            {[mapping], [typename]} -> {mapping, typename}
-            _ -> raise ArgumentError, "missing or ambiguous owning cleanup correspondence"
-          end
+    case Enum.filter(plan, &is_integer(&1.native_cleanup)) do
+      [] ->
+        source
 
-        if mapping["is_opaque"] or mapping["is_rec"],
-          do: raise(ArgumentError, "unsupported owning destructor declaration")
+      cleanup ->
+        case Regex.split(~r/^namespace [^\n]+\n/m, source, include_captures: true) do
+          [header, namespace, body] ->
+            {definitions, body} =
+              Enum.map_reduce(cleanup, body, &take_cleanup!(&1, translation, &2))
 
-        marker = "/-- [#{mapping["rust_name"]}]:"
-
-        case String.split(source, marker) do
-          [before, body] ->
-            case Regex.run(~r/\n(?=\/--|end |namespace )/, body, return: :index) do
-              [{offset, _}] ->
-                {definition, rest} = String.split_at(body, offset)
-
-                dictionary =
-                  "\ninstance : Lynx.NativeResourceCleanup #{typename["lean_name"]} where\n  cleanup := #{mapping["lean_name"]}\n" <>
-                    "\ninstance : Lynx.NativeMutexDrop #{typename["lean_name"]} where\n  drop := Lynx.NativeMutex.disposeWith #{mapping["lean_name"]}\n"
-
-                before <> marker <> definition <> dictionary <> rest
-
-              _ ->
-                raise ArgumentError, "missing owning destructor declaration boundary"
-            end
+            header <> namespace <> "\n" <> Enum.join(definitions, "\n") <> body
 
           _ ->
-            raise ArgumentError, "missing or ambiguous emitted owning destructor"
+            raise ArgumentError, "missing or ambiguous extracted cleanup namespace"
         end
-      else
-        source
+    end
+  end
+
+  defp take_cleanup!(type, translation, source) do
+    {mapping, typename} =
+      case {Enum.filter(translation["functions"], &(&1["def_id"] == type.native_cleanup)),
+            Enum.filter(translation["types"], &(&1["def_id"] == type["def_id"]))} do
+        {[mapping], [typename]} -> {mapping, typename}
+        _ -> raise ArgumentError, "missing or ambiguous owning cleanup correspondence"
       end
-    end)
+
+    if mapping["is_opaque"] or mapping["is_rec"],
+      do: raise(ArgumentError, "unsupported owning destructor declaration")
+
+    marker = "/-- [#{mapping["rust_name"]}]:"
+
+    case String.split(source, marker) do
+      [before, body] ->
+        case Regex.run(~r/\n(?=\/--|end |namespace )/, body, return: :index) do
+          [{offset, _}] ->
+            <<definition::binary-size(^offset), rest::binary>> = body
+
+            dictionary =
+              "\ninstance : Lynx.NativeResourceCleanup #{typename["lean_name"]} where\n  cleanup := #{mapping["lean_name"]}\n" <>
+                "\ninstance : Lynx.NativeMutexDrop #{typename["lean_name"]} where\n  drop := Lynx.NativeMutex.disposeWith #{mapping["lean_name"]}\n"
+
+            {marker <> definition <> dictionary, before <> rest}
+
+          _ ->
+            raise ArgumentError, "missing owning destructor declaration boundary"
+        end
+
+      _ ->
+        raise ArgumentError, "missing or ambiguous emitted owning destructor"
+    end
   end
 
   def arguments!(false, _), do: []

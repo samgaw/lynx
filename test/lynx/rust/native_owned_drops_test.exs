@@ -54,19 +54,36 @@ defmodule Lynx.Rust.NativeOwnedDropsTest do
 
     source = """
     namespace probe
-    /-- [probe::Payload::drop_owned]: compiler body -/
+    /-- [probe::make]: compiler body -/
+    def make (payload : Payload) := NativeResourceArc.newOwned payload
+
+    /-- [probe::Payload::drop_owned]: compiler body in δ.rs -/
     def Payload.drop_owned (payload : Payload) := NativeOwnedDrop.drop payload.mutex
     end probe
     """
 
     installed = NativeOwnedDrops.install_instances!(plan, translation, source)
-    assert String.contains?(installed, "cleanup := probe.Payload.drop_owned")
-    assert String.contains?(installed, "NativeOwnedDrop.drop payload.mutex")
+    assert [cleanup, constructor] = String.split(installed, "/-- [probe::make]:")
+    assert cleanup =~ "def Payload.drop_owned"
+    assert cleanup =~ "NativeOwnedDrop.drop payload.mutex"
+    assert cleanup =~ "cleanup := probe.Payload.drop_owned"
+    assert constructor =~ "NativeResourceArc.newOwned payload"
 
-    for invalid <- [source <> source, "namespace probe\nend probe\n"] do
+    duplicate =
+      String.replace(source, "end probe", """
+      /-- [probe::Payload::drop_owned]: duplicate compiler body -/
+      def Payload.drop_owned (payload : Payload) := NativeOwnedDrop.drop payload.mutex
+      end probe
+      """)
+
+    for invalid <- [duplicate, "namespace probe\nend probe\n"] do
       assert_raise ArgumentError, ~r/missing or ambiguous emitted/, fn ->
         NativeOwnedDrops.install_instances!(plan, translation, invalid)
       end
+    end
+
+    assert_raise ArgumentError, ~r/missing or ambiguous extracted cleanup namespace/, fn ->
+      NativeOwnedDrops.install_instances!(plan, translation, source <> source)
     end
 
     for invalid <- [put_in(translation, ["functions"], []), put_in(translation, ["types"], [])] do
